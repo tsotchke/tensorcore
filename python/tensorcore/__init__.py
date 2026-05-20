@@ -630,64 +630,67 @@ def gguf_open(path):
 
 
 def gguf_close(gguf):
-    _lib.tc_gguf_close(gguf)
+    _lib.tc_gguf_close(_as_handle(gguf))
 
 
 def gguf_tensor_count(gguf):
-    return int(_lib.tc_gguf_tensor_count(gguf))
+    return int(_lib.tc_gguf_tensor_count(_as_handle(gguf)))
 
 
 def gguf_metadata_count(gguf):
-    return int(_lib.tc_gguf_metadata_count(gguf))
+    return int(_lib.tc_gguf_metadata_count(_as_handle(gguf)))
 
 
 def gguf_meta_get_str(gguf, key):
-    value = _lib.tc_gguf_meta_get_str(gguf, _bytes(key))
+    value = _lib.tc_gguf_meta_get_str(_as_handle(gguf), _bytes(key))
     return value.decode("utf-8", "replace") if value else None
 
 
 def gguf_meta_get_i64(gguf, key, default=0):
-    return int(_lib.tc_gguf_meta_get_i64(gguf, _bytes(key), int(default)))
+    return int(_lib.tc_gguf_meta_get_i64(_as_handle(gguf), _bytes(key), int(default)))
 
 
 def gguf_meta_get_f64(gguf, key, default=0.0):
-    return float(_lib.tc_gguf_meta_get_f64(gguf, _bytes(key), float(default)))
+    return float(_lib.tc_gguf_meta_get_f64(_as_handle(gguf), _bytes(key), float(default)))
 
 
 def gguf_meta_array_count(gguf, key):
-    return int(_lib.tc_gguf_meta_array_count(gguf, _bytes(key)))
+    return int(_lib.tc_gguf_meta_array_count(_as_handle(gguf), _bytes(key)))
 
 
 def gguf_meta_array_get_str(gguf, key, index):
     ptr = c_void_p()
     n = c_size_t()
-    _check(_lib.tc_gguf_meta_array_get_str(gguf, _bytes(key), c_uint64(index), byref(ptr), byref(n)))
+    _check(_lib.tc_gguf_meta_array_get_str(_as_handle(gguf), _bytes(key),
+                                           c_uint64(index), byref(ptr), byref(n)))
     return ctypes.string_at(ptr, n.value).decode("utf-8", "replace")
 
 
 def gguf_meta_array_get_i64(gguf, key, index, default=0):
-    return int(_lib.tc_gguf_meta_array_get_i64(gguf, _bytes(key), c_uint64(index), int(default)))
+    return int(_lib.tc_gguf_meta_array_get_i64(_as_handle(gguf), _bytes(key),
+                                               c_uint64(index), int(default)))
 
 
 def gguf_meta_array_get_f64(gguf, key, index, default=0.0):
-    return float(_lib.tc_gguf_meta_array_get_f64(gguf, _bytes(key), c_uint64(index), float(default)))
+    return float(_lib.tc_gguf_meta_array_get_f64(_as_handle(gguf), _bytes(key),
+                                                 c_uint64(index), float(default)))
 
 
 def gguf_get_llama_config(gguf):
     config = TCGGufLlamaConfig()
-    _check(_lib.tc_gguf_get_llama_config(gguf, byref(config)))
+    _check(_lib.tc_gguf_get_llama_config(_as_handle(gguf), byref(config)))
     return _llama_config_dict(config)
 
 
 def gguf_get_tensor(gguf, name):
     info = TCGGufTensorInfo()
-    _check(_lib.tc_gguf_get_tensor(gguf, _bytes(name), byref(info)))
+    _check(_lib.tc_gguf_get_tensor(_as_handle(gguf), _bytes(name), byref(info)))
     return _tensor_info_dict(info)
 
 
 def gguf_tensor_at(gguf, index):
     info = TCGGufTensorInfo()
-    _check(_lib.tc_gguf_tensor_at(gguf, c_uint64(index), byref(info)))
+    _check(_lib.tc_gguf_tensor_at(_as_handle(gguf), c_uint64(index), byref(info)))
     return _tensor_info_dict(info)
 
 
@@ -728,22 +731,22 @@ def gguf_loaded_model_free(ctx, model):
 
 
 def gguf_loaded_tensor_count(model):
-    return int(_lib.tc_gguf_loaded_tensor_count(model))
+    return int(_lib.tc_gguf_loaded_tensor_count(_as_handle(model)))
 
 
 def gguf_loaded_skipped_tensor_count(model):
-    return int(_lib.tc_gguf_loaded_skipped_tensor_count(model))
+    return int(_lib.tc_gguf_loaded_skipped_tensor_count(_as_handle(model)))
 
 
 def gguf_loaded_tensor_at(model, index):
     info = TCGGufLoadedTensorInfo()
-    _check(_lib.tc_gguf_loaded_tensor_at(model, c_uint64(index), byref(info)))
+    _check(_lib.tc_gguf_loaded_tensor_at(_as_handle(model), c_uint64(index), byref(info)))
     return _loaded_tensor_info_dict(info)
 
 
 def gguf_loaded_get_tensor(model, name):
     info = TCGGufLoadedTensorInfo()
-    _check(_lib.tc_gguf_loaded_get_tensor(model, _bytes(name), byref(info)))
+    _check(_lib.tc_gguf_loaded_get_tensor(_as_handle(model), _bytes(name), byref(info)))
     return _loaded_tensor_info_dict(info)
 
 
@@ -913,6 +916,117 @@ class Stream:
             self.handle = None
         if hasattr(self.ctx, "_forget_stream"):
             self.ctx._forget_stream(self)
+
+
+class GgufFile:
+    """Owned GGUF file handle."""
+
+    def __init__(self, path):
+        self.path = os.fspath(path)
+        self.handle = gguf_open(path)
+        self._closed = False
+
+    def __bool__(self):
+        return self.handle is not None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def close(self):
+        if not self._closed and self.handle is not None:
+            gguf_close(self.handle)
+            self.handle = None
+            self._closed = True
+
+    def tensor_count(self):
+        return gguf_tensor_count(self)
+
+    def metadata_count(self):
+        return gguf_metadata_count(self)
+
+    def get_tensor(self, name):
+        return gguf_get_tensor(self, name)
+
+    def tensor_at(self, index):
+        return gguf_tensor_at(self, index)
+
+    def meta_get_str(self, key):
+        return gguf_meta_get_str(self, key)
+
+    def meta_get_i64(self, key, default=0):
+        return gguf_meta_get_i64(self, key, default)
+
+    def meta_get_f64(self, key, default=0.0):
+        return gguf_meta_get_f64(self, key, default)
+
+    def meta_array_count(self, key):
+        return gguf_meta_array_count(self, key)
+
+    def meta_array_get_str(self, key, index):
+        return gguf_meta_array_get_str(self, key, index)
+
+    def llama_config(self):
+        return gguf_get_llama_config(self)
+
+    def tensor_to_buffer(self, ctx, name, owned=True):
+        handle = gguf_tensor_to_buffer(ctx, self, name)
+        return Buffer(ctx, handle=handle, owned=owned)
+
+    def load_supported_tensors(self, ctx):
+        return LoadedModel(ctx, self)
+
+
+class LoadedModel:
+    """Owned tc_gguf_loaded_model wrapper."""
+
+    def __init__(self, ctx, gguf):
+        self.ctx = ctx
+        self.handle = gguf_load_supported_tensors(ctx, gguf)
+        self._closed = False
+
+    def __bool__(self):
+        return self.handle is not None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def close(self):
+        if not self._closed and self.handle is not None:
+            gguf_loaded_model_free(self.ctx, self.handle)
+            self.handle = None
+            self._closed = True
+
+    def tensor_count(self):
+        return gguf_loaded_tensor_count(self)
+
+    def skipped_tensor_count(self):
+        return gguf_loaded_skipped_tensor_count(self)
+
+    def tensor_at(self, index):
+        return gguf_loaded_tensor_at(self, index)
+
+    def get_tensor(self, name):
+        return gguf_loaded_get_tensor(self, name)
 
 
 def version():

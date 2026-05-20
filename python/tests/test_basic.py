@@ -433,6 +433,19 @@ def main():
             tc.buffer_map(loaded_tensor["buffer"]),
             loaded_tensor["n_bytes"],
         )
+        with tc.GgufFile(gguf_path) as owned_g:
+            owned_tensor = owned_g.get_tensor("weight.test")
+            with owned_g.tensor_to_buffer(ctx, "weight.test") as owned_gb:
+                owned_copied = ctypes.string_at(owned_gb.map(), owned_gb.size())
+            with owned_g.load_supported_tensors(ctx) as owned_loaded:
+                owned_loaded_tensor = owned_loaded.get_tensor("weight.test")
+                owned_loaded_qinfo = tc.gguf_loaded_tensor_quantized_matrix_info(owned_loaded_tensor)
+                owned_loaded_ok = (
+                    owned_loaded.tensor_count() == 1 and
+                    owned_loaded.skipped_tensor_count() == 0 and
+                    owned_loaded_qinfo["N"] == 1 and
+                    owned_loaded_qinfo["K"] == 32
+                )
         gguf_ok = (
             tc.gguf_tensor_count(g) == 1 and
             tc.gguf_metadata_count(g) == 12 and
@@ -456,6 +469,10 @@ def main():
             tensor["dims"] == (32, 1) and
             tensor["type"] == tc.TC_GGUF_TYPE_Q4_0 and
             tensor["n_bytes"] == 18 and
+            owned_tensor["name"] == "weight.test" and
+            owned_tensor["dims"] == (32, 1) and
+            owned_copied == copied and
+            owned_loaded_ok and
             qinfo["N"] == 1 and
             qinfo["K"] == 32 and
             qinfo["quant_type"] == tc.TC_QUANT_Q4_0 and
