@@ -301,6 +301,10 @@ def _check(status):
         raise TensorcoreError(status)
 
 
+def _as_handle(value):
+    return getattr(value, "handle", value)
+
+
 def _bytes(value):
     if isinstance(value, bytes):
         return value
@@ -418,50 +422,50 @@ def init():
 
 
 def shutdown(ctx):
-    _check(_lib.tc_shutdown(ctx))
+    _check(_lib.tc_shutdown(_as_handle(ctx)))
 
 
 def device_info(ctx):
     info = TCDeviceInfo()
-    _check(_lib.tc_device_info_get(ctx, byref(info)))
+    _check(_lib.tc_device_info_get(_as_handle(ctx), byref(info)))
     info.name_str = info.name.decode("utf-8", "replace")
     return info
 
 
 def buffer_alloc(ctx, nbytes):
     buf = c_void_p()
-    _check(_lib.tc_buffer_alloc(ctx, c_size_t(nbytes), byref(buf)))
+    _check(_lib.tc_buffer_alloc(_as_handle(ctx), c_size_t(nbytes), byref(buf)))
     return buf
 
 
 def buffer_free(ctx, buf):
-    _check(_lib.tc_buffer_free(ctx, buf))
+    _check(_lib.tc_buffer_free(_as_handle(ctx), _as_handle(buf)))
 
 
 def buffer_map(buf):
     """Return a void* (ctypes c_void_p) to the buffer's host-visible memory.
     On Apple Silicon unified memory this is the same backing as the GPU."""
     p = c_void_p()
-    _check(_lib.tc_buffer_map(buf, byref(p)))
+    _check(_lib.tc_buffer_map(_as_handle(buf), byref(p)))
     return p
 
 
 def buffer_size(buf):
-    return _lib.tc_buffer_size(buf)
+    return _lib.tc_buffer_size(_as_handle(buf))
 
 
 def stream_create(ctx):
     stream = c_void_p()
-    _check(_lib.tc_stream_create(ctx, byref(stream)))
+    _check(_lib.tc_stream_create(_as_handle(ctx), byref(stream)))
     return stream
 
 
 def stream_sync(stream):
-    _check(_lib.tc_stream_sync(stream))
+    _check(_lib.tc_stream_sync(_as_handle(stream)))
 
 
 def stream_destroy(ctx, stream):
-    _check(_lib.tc_stream_destroy(ctx, stream))
+    _check(_lib.tc_stream_destroy(_as_handle(ctx), _as_handle(stream)))
 
 
 def buffer_write(buf, arr):
@@ -482,14 +486,17 @@ def gemm(ctx, A, B, C, M, N, K, dtype="f16", accum="f32",
          alpha=1.0, beta=0.0, transpose_a=False, transpose_b=False):
     """Compute C = alpha * op(A) @ op(B) + beta * C."""
     desc = _gemm_desc(M, N, K, dtype, accum, alpha, beta, transpose_a, transpose_b)
-    _check(_lib.tc_gemm(ctx, byref(desc), A, B, C))
+    _check(_lib.tc_gemm(_as_handle(ctx), byref(desc),
+                        _as_handle(A), _as_handle(B), _as_handle(C)))
 
 
 def gemm_async(ctx, A, B, C, M, N, K, stream, dtype="f16", accum="f32",
                alpha=1.0, beta=0.0, transpose_a=False, transpose_b=False):
     """Encode C = alpha * op(A) @ op(B) + beta * C into stream."""
     desc = _gemm_desc(M, N, K, dtype, accum, alpha, beta, transpose_a, transpose_b)
-    _check(_lib.tc_gemm_async(ctx, byref(desc), A, B, C, stream))
+    _check(_lib.tc_gemm_async(_as_handle(ctx), byref(desc),
+                              _as_handle(A), _as_handle(B), _as_handle(C),
+                              _as_handle(stream)))
 
 
 def _gemm_desc(M, N, K, dtype, accum, alpha, beta, transpose_a, transpose_b):
@@ -511,66 +518,87 @@ def quantized_size(fmt, N, K):
 
 def quantize_weights(ctx, W_fp16, W_quant, fmt, N, K):
     """Quantize an [N, K] fp16 weight matrix into Q4_0 or Q8_0 storage."""
-    _check(_lib.tc_quantize_weights(ctx, W_fp16, W_quant, _quant(fmt), int(N), int(K)))
+    _check(_lib.tc_quantize_weights(_as_handle(ctx), _as_handle(W_fp16),
+                                    _as_handle(W_quant), _quant(fmt),
+                                    int(N), int(K)))
 
 
 def gemv_quantized(ctx, X, W_quant, Y, fmt, M, N, K):
     """Compute Y[M, N] = X[M, K] @ W_quant[N, K]^T."""
-    _check(_lib.tc_gemv_quantized(ctx, X, W_quant, Y, _quant(fmt), int(M), int(N), int(K)))
+    _check(_lib.tc_gemv_quantized(_as_handle(ctx), _as_handle(X),
+                                  _as_handle(W_quant), _as_handle(Y),
+                                  _quant(fmt), int(M), int(N), int(K)))
 
 
 def gemv_quantized_async(ctx, X, W_quant, Y, fmt, M, N, K, stream):
     """Encode quantized GEMV into stream."""
     _check(_lib.tc_gemv_quantized_async(
-        ctx, X, W_quant, Y, _quant(fmt), int(M), int(N), int(K), stream
+        _as_handle(ctx), _as_handle(X), _as_handle(W_quant), _as_handle(Y),
+        _quant(fmt), int(M), int(N), int(K), _as_handle(stream)
     ))
 
 
 def rmsnorm_forward(ctx, X, gamma, Y, rstd_out, N, D, eps=1e-5):
     """Compute Llama-style RMSNorm on fp16 X[N, D]."""
     _check(_lib.tc_rmsnorm_forward(
-        ctx, X, gamma, Y, rstd_out, int(N), int(D), c_float(float(eps))
+        _as_handle(ctx), _as_handle(X), _as_handle(gamma), _as_handle(Y),
+        _as_handle(rstd_out), int(N), int(D), c_float(float(eps))
     ))
 
 
 def rmsnorm_backward(ctx, X, gamma, dY, rstd, dX, dgamma, N, D):
-    _check(_lib.tc_rmsnorm_backward(ctx, X, gamma, dY, rstd, dX, dgamma, int(N), int(D)))
+    _check(_lib.tc_rmsnorm_backward(_as_handle(ctx), _as_handle(X),
+                                    _as_handle(gamma), _as_handle(dY),
+                                    _as_handle(rstd), _as_handle(dX),
+                                    _as_handle(dgamma), int(N), int(D)))
 
 
 def layernorm_forward(ctx, X, gamma, beta, Y, mean_out, rstd_out, N, D, eps=1e-5):
     """Compute LayerNorm on fp16 X[N, D]."""
     _check(_lib.tc_layernorm_forward(
-        ctx, X, gamma, beta, Y, mean_out, rstd_out, int(N), int(D), c_float(float(eps))
+        _as_handle(ctx), _as_handle(X), _as_handle(gamma), _as_handle(beta),
+        _as_handle(Y), _as_handle(mean_out), _as_handle(rstd_out),
+        int(N), int(D), c_float(float(eps))
     ))
 
 
 def layernorm_backward(ctx, X, gamma, dY, mean, rstd, dX, N, D):
-    _check(_lib.tc_layernorm_backward(ctx, X, gamma, dY, mean, rstd, dX, int(N), int(D)))
+    _check(_lib.tc_layernorm_backward(_as_handle(ctx), _as_handle(X),
+                                      _as_handle(gamma), _as_handle(dY),
+                                      _as_handle(mean), _as_handle(rstd),
+                                      _as_handle(dX), int(N), int(D)))
 
 
 def rope_forward(ctx, X, cos_t, sin_t, batch, heads, seq, head_dim):
     """Apply RoPE in-place to fp16 X[batch, heads, seq, head_dim]."""
     _check(_lib.tc_rope_forward(
-        ctx, X, cos_t, sin_t, int(batch), int(heads), int(seq), int(head_dim)
+        _as_handle(ctx), _as_handle(X), _as_handle(cos_t), _as_handle(sin_t),
+        int(batch), int(heads), int(seq), int(head_dim)
     ))
 
 
 def swiglu_forward(ctx, gate, up, out, n):
     """Compute fp16 out = silu(gate) * up."""
-    _check(_lib.tc_swiglu_forward(ctx, gate, up, out, int(n)))
+    _check(_lib.tc_swiglu_forward(_as_handle(ctx), _as_handle(gate),
+                                  _as_handle(up), _as_handle(out), int(n)))
 
 
 def swiglu_backward(ctx, gate, up, dout, dgate, dup, n):
-    _check(_lib.tc_swiglu_backward(ctx, gate, up, dout, dgate, dup, int(n)))
+    _check(_lib.tc_swiglu_backward(_as_handle(ctx), _as_handle(gate),
+                                   _as_handle(up), _as_handle(dout),
+                                   _as_handle(dgate), _as_handle(dup), int(n)))
 
 
 def softmax_forward(ctx, X, Y, N, D):
     """Compute row-wise fp16 softmax for X[N, D]."""
-    _check(_lib.tc_softmax_forward(ctx, X, Y, int(N), int(D)))
+    _check(_lib.tc_softmax_forward(_as_handle(ctx), _as_handle(X),
+                                   _as_handle(Y), int(N), int(D)))
 
 
 def softmax_backward(ctx, Y, dY, dX, N, D):
-    _check(_lib.tc_softmax_backward(ctx, Y, dY, dX, int(N), int(D)))
+    _check(_lib.tc_softmax_backward(_as_handle(ctx), _as_handle(Y),
+                                    _as_handle(dY), _as_handle(dX),
+                                    int(N), int(D)))
 
 
 def adamw_step(ctx, params_fp32, m_fp32, v_fp32, grads, grad_dtype, n,
@@ -578,7 +606,8 @@ def adamw_step(ctx, params_fp32, m_fp32, v_fp32, grads, grad_dtype, n,
                bias_correction2):
     """Apply one AdamW optimizer step to fp32 params/moments."""
     _check(_lib.tc_adamw_step(
-        ctx, params_fp32, m_fp32, v_fp32, grads, _dtype(grad_dtype), int(n),
+        _as_handle(ctx), _as_handle(params_fp32), _as_handle(m_fp32),
+        _as_handle(v_fp32), _as_handle(grads), _dtype(grad_dtype), int(n),
         c_float(float(lr)), c_float(float(beta1)), c_float(float(beta2)),
         c_float(float(eps)), c_float(float(weight_decay)),
         c_float(float(bias_correction1)), c_float(float(bias_correction2))
@@ -588,7 +617,8 @@ def adamw_step(ctx, params_fp32, m_fp32, v_fp32, grads, grad_dtype, n,
 def fused_rmsnorm_gemv(ctx, X, gamma, W, Y, M, N, K, eps=1e-5):
     """Compute Y[M, N] = RMSNorm(X[M, K], gamma[K]) @ W[K, N]."""
     _check(_lib.tc_fused_rmsnorm_gemv(
-        ctx, X, gamma, W, Y, int(M), int(N), int(K), c_float(float(eps))
+        _as_handle(ctx), _as_handle(X), _as_handle(gamma), _as_handle(W),
+        _as_handle(Y), int(M), int(N), int(K), c_float(float(eps))
     ))
 
 
@@ -664,7 +694,8 @@ def gguf_tensor_at(gguf, index):
 def gguf_tensor_to_buffer(ctx, gguf, name):
     """Copy a named GGUF tensor into a tensorcore buffer."""
     buf = c_void_p()
-    _check(_lib.tc_gguf_tensor_to_buffer(ctx, gguf, _bytes(name), byref(buf)))
+    _check(_lib.tc_gguf_tensor_to_buffer(_as_handle(ctx), _as_handle(gguf),
+                                         _bytes(name), byref(buf)))
     return buf
 
 
@@ -687,12 +718,13 @@ def gguf_loaded_tensor_quantized_matrix_info(tensor):
 def gguf_load_supported_tensors(ctx, gguf):
     """Copy all supported GGUF tensors into tensorcore buffers."""
     model = c_void_p()
-    _check(_lib.tc_gguf_load_supported_tensors(ctx, gguf, byref(model)))
+    _check(_lib.tc_gguf_load_supported_tensors(_as_handle(ctx), _as_handle(gguf),
+                                               byref(model)))
     return model
 
 
 def gguf_loaded_model_free(ctx, model):
-    _lib.tc_gguf_loaded_model_free(ctx, model)
+    _lib.tc_gguf_loaded_model_free(_as_handle(ctx), _as_handle(model))
 
 
 def gguf_loaded_tensor_count(model):
@@ -713,6 +745,174 @@ def gguf_loaded_get_tensor(model, name):
     info = TCGGufLoadedTensorInfo()
     _check(_lib.tc_gguf_loaded_get_tensor(model, _bytes(name), byref(info)))
     return _loaded_tensor_info_dict(info)
+
+
+class Context:
+    """Owned tensorcore context for Python scripts.
+
+    The raw-handle API remains available; this wrapper just gives predictable
+    cleanup and accepts Buffer/Stream objects in the operation methods.
+    """
+
+    def __init__(self):
+        self.handle = init()
+        self._buffers = set()
+        self._streams = set()
+        self._closed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def _remember_buffer(self, buf):
+        self._buffers.add(buf)
+
+    def _forget_buffer(self, buf):
+        self._buffers.discard(buf)
+
+    def _remember_stream(self, stream):
+        self._streams.add(stream)
+
+    def _forget_stream(self, stream):
+        self._streams.discard(stream)
+
+    def close(self):
+        if self._closed:
+            return
+        for stream in list(self._streams):
+            stream.close()
+        for buf in list(self._buffers):
+            buf.close()
+        shutdown(self.handle)
+        self.handle = None
+        self._closed = True
+
+    def device_info(self):
+        return device_info(self)
+
+    def buffer(self, nbytes):
+        return Buffer(self, nbytes)
+
+    def stream(self):
+        return Stream(self)
+
+    def gemm(self, A, B, C, M, N, K, **kwargs):
+        return gemm(self, A, B, C, M, N, K, **kwargs)
+
+    def gemm_async(self, A, B, C, M, N, K, stream, **kwargs):
+        return gemm_async(self, A, B, C, M, N, K, stream, **kwargs)
+
+    def quantize_weights(self, W_fp16, W_quant, fmt, N, K):
+        return quantize_weights(self, W_fp16, W_quant, fmt, N, K)
+
+    def gemv_quantized(self, X, W_quant, Y, fmt, M, N, K):
+        return gemv_quantized(self, X, W_quant, Y, fmt, M, N, K)
+
+    def rmsnorm_forward(self, X, gamma, Y, rstd_out, N, D, eps=1e-5):
+        return rmsnorm_forward(self, X, gamma, Y, rstd_out, N, D, eps)
+
+    def fused_rmsnorm_gemv(self, X, gamma, W, Y, M, N, K, eps=1e-5):
+        return fused_rmsnorm_gemv(self, X, gamma, W, Y, M, N, K, eps)
+
+
+class Buffer:
+    """Owned tc_buffer wrapper."""
+
+    def __init__(self, ctx, nbytes=None, handle=None, owned=True):
+        if handle is None and nbytes is None:
+            raise ValueError("Buffer requires nbytes or an existing handle")
+        self.ctx = ctx
+        self.handle = handle if handle is not None else buffer_alloc(ctx, nbytes)
+        self.owned = owned
+        if hasattr(ctx, "_remember_buffer"):
+            ctx._remember_buffer(self)
+
+    def __bool__(self):
+        return self.handle is not None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def close(self):
+        if self.handle is not None:
+            if self.owned:
+                buffer_free(self.ctx, self.handle)
+            self.handle = None
+        if hasattr(self.ctx, "_forget_buffer"):
+            self.ctx._forget_buffer(self)
+
+    def map(self):
+        return buffer_map(self)
+
+    def size(self):
+        return buffer_size(self)
+
+    @property
+    def nbytes(self):
+        return self.size()
+
+    def write(self, arr):
+        buffer_write(self, arr)
+        return self
+
+    def read(self, arr):
+        buffer_read(self, arr)
+        return arr
+
+
+class Stream:
+    """Owned tc_stream wrapper."""
+
+    def __init__(self, ctx):
+        self.ctx = ctx
+        self.handle = stream_create(ctx)
+        if hasattr(ctx, "_remember_stream"):
+            ctx._remember_stream(self)
+
+    def __bool__(self):
+        return self.handle is not None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def sync(self):
+        stream_sync(self)
+
+    def close(self):
+        if self.handle is not None:
+            stream_destroy(self.ctx, self.handle)
+            self.handle = None
+        if hasattr(self.ctx, "_forget_stream"):
+            self.ctx._forget_stream(self)
 
 
 def version():

@@ -283,6 +283,31 @@ def _run_training_wrapper_checks(ctx):
             tc.buffer_free(ctx, b)
 
 
+def _run_owned_api_check():
+    M, N, K = 32, 32, 32
+    A = np.random.randn(M, K).astype(np.float16)
+    B = np.random.randn(K, N).astype(np.float16)
+    C = np.zeros((M, N), dtype=np.float16)
+    C_async = np.zeros_like(C)
+    C_ref = (A.astype(np.float32) @ B.astype(np.float32)).astype(np.float16)
+
+    with tc.Context() as ctx:
+        a = ctx.buffer(A.nbytes).write(A)
+        b = ctx.buffer(B.nbytes).write(B)
+        c = ctx.buffer(C.nbytes)
+        ctx.gemm(a, b, c, M, N, K)
+        c.read(C)
+
+        with ctx.stream() as stream:
+            ctx.gemm_async(a, b, c, M, N, K, stream)
+            stream.sync()
+        c.read(C_async)
+
+    err = np.max(np.abs(C.astype(np.float32) - C_ref.astype(np.float32)))
+    err_async = np.max(np.abs(C_async.astype(np.float32) - C_ref.astype(np.float32)))
+    return err == 0.0 and err_async == 0.0, max(float(err), float(err_async))
+
+
 def main():
     print(f"tensorcore: {tc.version()}")
     try:
@@ -462,7 +487,20 @@ def main():
     tc.buffer_free(ctx, b)
     tc.buffer_free(ctx, c)
     tc.shutdown(ctx)
-    ok = scaled < 1e-2 and scaled_async < 1e-2 and q_ok and q8_ok and training_ok and gguf_ok
+
+    owned_ok, owned_err = _run_owned_api_check()
+    print(f"Owned Python API:     max_abs={owned_err:.3e}  "
+          f"{'OK' if owned_ok else 'FAIL'}")
+
+    ok = (
+        scaled < 1e-2 and
+        scaled_async < 1e-2 and
+        q_ok and
+        q8_ok and
+        training_ok and
+        gguf_ok and
+        owned_ok
+    )
     return 0 if ok else 5
 
 if __name__ == "__main__":
