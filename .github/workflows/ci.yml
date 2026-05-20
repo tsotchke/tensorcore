@@ -40,6 +40,12 @@ jobs:
             -DLANGUAGE=C \
             -DMODE=EXIST \
             -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/tensorcore-install"
+          if command -v pkg-config >/dev/null 2>&1; then
+            PKG_CONFIG_PATH="$RUNNER_TEMP/tensorcore-install/lib/pkgconfig" \
+              pkg-config --modversion tensorcore
+          else
+            echo "pkg-config not found; skipping pkg-config smoke."
+          fi
       - name: Python package smoke
         run: |
           python3 -m pip install -e . --no-build-isolation
@@ -70,6 +76,12 @@ jobs:
             -DLANGUAGE=C \
             -DMODE=EXIST \
             -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/tensorcore-install"
+          if command -v pkg-config >/dev/null 2>&1; then
+            PKG_CONFIG_PATH="$RUNNER_TEMP/tensorcore-install/lib/pkgconfig" \
+              pkg-config --modversion tensorcore
+          else
+            echo "pkg-config not found; skipping pkg-config smoke."
+          fi
       - name: Python package smoke
         run: |
           python3 -m pip install -e . --no-build-isolation
