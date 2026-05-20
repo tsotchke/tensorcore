@@ -29,3 +29,8 @@ compile_commands.json
 
 # Autotune cache
 .tensorcore/
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
