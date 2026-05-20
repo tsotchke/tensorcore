@@ -122,6 +122,8 @@ hand-tuned kernels (which are our v0.2 target).
 
 For consuming tensorcore from another local project, see
 [`docs/integrating_tensorcore.md`](docs/integrating_tensorcore.md).
+The install exports both CMake package metadata and
+`lib/pkgconfig/tensorcore.pc` for Makefile-style consumers.
 
 The Python binding is installable as a pure-Python package:
 

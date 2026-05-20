@@ -19,6 +19,7 @@ The install contains:
 - `lib/libtensorcore.dylib`
 - `lib/tensorcore.metallib`
 - `lib/cmake/tensorcore/tensorcoreConfig.cmake`
+- `lib/pkgconfig/tensorcore.pc`
 
 At runtime, tensorcore loads kernels from this order:
 
@@ -66,6 +67,18 @@ tc_device_info_get(ctx, &info);
 
 tc_shutdown(ctx);
 ```
+
+## pkg-config consumer
+
+For Makefiles or direct compiler commands:
+
+```sh
+export PKG_CONFIG_PATH=/opt/tensorcore/lib/pkgconfig
+cc main.c $(pkg-config --cflags --libs tensorcore) -o my_inference
+```
+
+The `tensorcore.pc` file embeds an rpath to the installed library directory so
+small local tools can run without extra `DYLD_LIBRARY_PATH` setup.
 
 ## Python consumer
 

@@ -1,0 +1,11 @@
+prefix=${pcfiledir}/../..
+exec_prefix=${prefix}
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+
+Name: tensorcore
+Description: CUDA-equivalent tensor-core acceleration for Apple Silicon
+Version: @PROJECT_VERSION@
+Cflags: -I${includedir}
+Libs: -L${libdir} -Wl,-rpath,${libdir} -ltensorcore
+Libs.private: -framework Metal -framework Foundation -framework MetalKit -framework MetalPerformanceShaders -framework MetalPerformanceShadersGraph -framework Accelerate

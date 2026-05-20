@@ -105,4 +105,16 @@ cmake -S "$CONSUMER_DIR" -B "$CONSUMER_DIR/build" \
 cmake --build "$CONSUMER_DIR/build"
 "$CONSUMER_DIR/build/consumer"
 
+echo "[tensorcore] pkg-config consumer"
+if command -v pkg-config >/dev/null 2>&1; then
+    CC_BIN="${CC:-cc}"
+    PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" \
+        "$CC_BIN" "$CONSUMER_DIR/main.c" \
+        $(PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" pkg-config --cflags --libs tensorcore) \
+        -o "$CONSUMER_DIR/pkg-consumer"
+    "$CONSUMER_DIR/pkg-consumer"
+else
+    echo "pkg-config not found; skipping pkg-config consumer smoke."
+fi
+
 echo "[tensorcore] release smoke OK"

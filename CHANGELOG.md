@@ -42,6 +42,8 @@ something downstream projects can start consuming directly.
   inference calls avoid per-op command-buffer round trips.
 - Added installable CMake package export:
   `tensorcore::tensorcore` and `tensorcore::tensorcore_shared`.
+- Added installed `lib/pkgconfig/tensorcore.pc` for Makefile/direct-compiler
+  consumers.
 - Installed builds now ship `lib/tensorcore.metallib`, and the runtime finds it
   next to the loaded dylib without requiring `TC_METALLIB`.
 - Added `docs/integrating_tensorcore.md` with the CMake, C ABI, Python, and

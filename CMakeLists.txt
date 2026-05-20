@@ -259,6 +259,11 @@ write_basic_package_version_file(
     VERSION ${PROJECT_VERSION}
     COMPATIBILITY SameMajorVersion
 )
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/tensorcore.pc.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/tensorcore.pc"
+    @ONLY
+)
 install(EXPORT tensorcoreTargets
     NAMESPACE tensorcore::
     DESTINATION "${TC_CONFIG_INSTALL_DIR}"
@@ -267,6 +272,10 @@ install(FILES
     "${CMAKE_CURRENT_BINARY_DIR}/tensorcoreConfig.cmake"
     "${CMAKE_CURRENT_BINARY_DIR}/tensorcoreConfigVersion.cmake"
     DESTINATION "${TC_CONFIG_INSTALL_DIR}"
+)
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/tensorcore.pc"
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig"
 )
 
 message(STATUS "tensorcore: configured (Metal4=${TC_HAVE_METAL4}, tests=${TC_BUILD_TESTS}, bench=${TC_BUILD_BENCH})")
