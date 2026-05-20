@@ -281,6 +281,33 @@ kernel void tc_gemm_f16_f32(
                                      shared_mem, group_id, sgid, slid);
 }
 
+/* ----- Batched fp16 GEMM. group_id.z selects the batch index.
+ *       Each batch has its own (A, B, C) slice at strides supplied via buffers. */
+kernel void tc_gemm_f16_f32_batched(
+    device const half*  A     [[buffer(0)]],
+    device const half*  B     [[buffer(1)]],
+    device       half*  C     [[buffer(2)]],
+    constant uint& M          [[buffer(3)]],
+    constant uint& N          [[buffer(4)]],
+    constant uint& K          [[buffer(5)]],
+    constant float& alpha     [[buffer(6)]],
+    constant float& beta      [[buffer(7)]],
+    constant ulong& stride_a  [[buffer(8)]],   /* elements between batches */
+    constant ulong& stride_b  [[buffer(9)]],
+    constant ulong& stride_c  [[buffer(10)]],
+    uint3 group_id            [[threadgroup_position_in_grid]],
+    uint  sgid                [[simdgroup_index_in_threadgroup]],
+    uint  slid                [[thread_index_in_simdgroup]])
+{
+    threadgroup half shared_mem[SA_SIZE + SB_SIZE];
+    device const half* Ab = A + (ulong)group_id.z * stride_a;
+    device const half* Bb = B + (ulong)group_id.z * stride_b;
+    device       half* Cb = C + (ulong)group_id.z * stride_c;
+    uint2 tg2 = uint2(group_id.x, group_id.y);
+    gemm_simdgroup_impl<half, float>(Ab, Bb, Cb, M, N, K, alpha, beta,
+                                     shared_mem, tg2, sgid, slid);
+}
+
 /* ----- fp32 IO, fp32 accumulator (Apple7+, M1+) ----- */
 kernel void tc_gemm_f32_f32(
     device const float* A     [[buffer(0)]],

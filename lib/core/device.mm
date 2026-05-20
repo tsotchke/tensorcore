@@ -24,6 +24,11 @@ extern "C" void              tc_buffer_pool_destroy(TCBufferPool* p);
 extern "C" tc_status_t       tc_buffer_pool_alloc(TCBufferPool* p, size_t bytes, struct tc_buffer** out);
 extern "C" void              tc_buffer_pool_free (TCBufferPool* p, struct tc_buffer* buf);
 
+/* Autotune (lib/core/autotune.cpp). Called from tc_init when TC_AUTOTUNE=1. */
+extern "C" tc_status_t tc_autotune_load_cache(const char* device_name, char* out_json, size_t cap);
+extern "C" tc_status_t tc_autotune_save_cache(const char* device_name, const char* json);
+extern "C" tc_status_t tc_autotune_run_sweep(tc_context* ctx, char* out_json, size_t cap);
+
 /* ----------------------------------------------------------------- */
 /* Singleton context — only one MTLDevice per process for now.        */
 /* ----------------------------------------------------------------- */
@@ -190,6 +195,25 @@ extern "C" tc_status_t tc_init(tc_context** out_ctx) {
     }
     g_init_running.store(false);
     *out_ctx = g_ctx;
+
+    /* Bench-driven autotune: TC_AUTOTUNE=1 to trigger sweep; otherwise load
+     * cached config if present. The cache key is device name. */
+    if (const char* at = std::getenv("TC_AUTOTUNE")) {
+        if (at[0] == '1') {
+            char json[1024] = {0};
+            tc_status_t s = tc_autotune_load_cache(g_ctx->info.name, json, sizeof(json));
+            if (s == TC_OK && json[0]) {
+                fprintf(stderr, "[tensorcore] autotune: loaded cached config\n");
+            } else {
+                fprintf(stderr, "[tensorcore] autotune: running sweep (one-time)\n");
+                s = tc_autotune_run_sweep(g_ctx, json, sizeof(json));
+                if (s == TC_OK && json[0]) {
+                    tc_autotune_save_cache(g_ctx->info.name, json);
+                    fprintf(stderr, "[tensorcore] autotune: cached → %s\n", json);
+                }
+            }
+        }
+    }
     return TC_OK;
 }
 

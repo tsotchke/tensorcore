@@ -183,8 +183,8 @@ extern "C" tc_status_t tc_attention_backward(tc_context* ctx,
         return TC_ERR_INVALID_ARG;
     if (desc->io_dtype != TC_DTYPE_F16 || desc->accum_dtype != TC_DTYPE_F32)
         return TC_ERR_UNSUPPORTED_DTYPE;
-    if (desc->head_dim != 64)
-        return TC_ERR_UNSUPPORTED_DTYPE;   /* v0.1 backward: D=64 only */
+    if (desc->head_dim != 64 && desc->head_dim != 128)
+        return TC_ERR_UNSUPPORTED_DTYPE;
 
     const uint32_t batch    = (uint32_t)desc->batch;
     const uint32_t heads    = (uint32_t)desc->heads;
@@ -193,20 +193,26 @@ extern "C" tc_status_t tc_attention_backward(tc_context* ctx,
     const uint32_t seq_kv   = (uint32_t)desc->seq_kv;
     const float    sm_scale = desc->softmax_scale;
 
-    constexpr uint32_t BR = 32;
-    constexpr uint32_t BC = 32;
-    constexpr uint32_t TPG = 128;
+    const uint32_t BR  = (desc->head_dim == 64) ? 32 : 16;
+    const uint32_t BC  = BR;
+    const uint32_t TPG = 128;
+
+    NSString* dq_name  = (desc->head_dim == 64)
+        ? @"tc_flash_attention_backward_dq"
+        : @"tc_flash_attention_backward_dq_d128";
+    NSString* dkv_name = (desc->head_dim == 64)
+        ? @"tc_flash_attention_backward_dk_dv"
+        : @"tc_flash_attention_backward_dk_dv_d128";
 
     tc_status_t err = TC_OK;
 
-    /* Kernel A: dQ. */
     bool causal = desc->causal;
     MTLFunctionConstantValues* cv = [MTLFunctionConstantValues new];
     [cv setConstantValue:&causal type:MTLDataTypeBool atIndex:0];
 
     NSError* nserr = nil;
     id<MTLFunction> fn_dq =
-        [ctx->library newFunctionWithName:@"tc_flash_attention_backward_dq"
+        [ctx->library newFunctionWithName:dq_name
                            constantValues:cv error:&nserr];
     if (!fn_dq) return TC_ERR_KERNEL_NOT_FOUND;
     id<MTLComputePipelineState> pso_dq =
@@ -214,7 +220,7 @@ extern "C" tc_status_t tc_attention_backward(tc_context* ctx,
     if (!pso_dq) return TC_ERR_PIPELINE;
 
     id<MTLFunction> fn_dkv =
-        [ctx->library newFunctionWithName:@"tc_flash_attention_backward_dk_dv"
+        [ctx->library newFunctionWithName:dkv_name
                            constantValues:cv error:&nserr];
     if (!fn_dkv) return TC_ERR_KERNEL_NOT_FOUND;
     id<MTLComputePipelineState> pso_dkv =

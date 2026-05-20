@@ -145,7 +145,17 @@ static double rms_scaled(const uint16_t* got, const float* ref, int n) {
     return sqrt(sum_sq_err / n) / (sqrt(sum_sq_ref / n) + 1e-9);
 }
 
+static int run_backward_case(int B, int H, int Sq, int Sk, int D);
+
 int main(void) {
+    int rc = 0;
+    /* Reference handles 1 (batch, head). Use H=1 for both cases. */
+    rc |= run_backward_case(1, 1, 64, 64, 64);
+    rc |= run_backward_case(1, 1, 32, 32, 128);
+    return rc;
+}
+
+static int run_backward_case(int B, int H, int Sq, int Sk, int D) {
     tc_context* ctx = NULL;
     tc_status_t s = tc_init(&ctx);
     if (s != TC_OK && s != TC_ERR_ALREADY_INITIALIZED) {
@@ -153,7 +163,6 @@ int main(void) {
         return 1;
     }
 
-    const int B = 1, H = 1, Sq = 64, Sk = 64, D = 64;
     const float scale = 1.0f / sqrtf((float)D);
     const int causal = 1;
     const size_t qkv = (size_t)B * H * Sq * D;
@@ -240,9 +249,9 @@ int main(void) {
     const double dk_err = rms_scaled(dKp, dKr, qkv);
     const double dv_err = rms_scaled(dVp, dVr, qkv);
 
-    printf("attention_backward Sq=%d Sk=%d D=%d causal=%d   "
+    printf("attention_backward B=%d H=%d Sq=%d Sk=%d D=%d causal=%d   "
            "dQ_rms_scaled=%.3e  dK_rms_scaled=%.3e  dV_rms_scaled=%.3e\n",
-           Sq, Sk, D, causal, dq_err, dk_err, dv_err);
+           B, H, Sq, Sk, D, causal, dq_err, dk_err, dv_err);
 
     free(Qf); free(Kf); free(Vf); free(dOf);
     free(Or); free(LSEr); free(dQr); free(dKr); free(dVr);

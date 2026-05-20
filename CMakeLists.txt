@@ -97,8 +97,10 @@ set(TC_METAL_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/flash_attention.metal
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/flash_attention_d128.metal
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/flash_attention_backward.metal
+    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/flash_attention_backward_d128.metal
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/training_kernels.metal
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/conv2d.metal
+    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/conv2d_backward.metal
 )
 
 if(TC_HAVE_METAL4)

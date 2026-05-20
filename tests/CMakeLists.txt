@@ -12,6 +12,7 @@ set(TC_TESTS
     test_attention_backward
     test_training_kernels
     test_transformer_block
+    test_e2e_training
 )
 
 foreach(t IN LISTS TC_TESTS)

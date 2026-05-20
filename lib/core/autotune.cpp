@@ -99,6 +99,22 @@ tc_status_t tc_autotune_load_cache(const char* device_name, char* config_json,
     return TC_OK;
 }
 
+/* Run a tiny GEMM sweep at init: 1024^3 fp16 with two candidate configs,
+ * report which one was faster.  v0.1 of bench-driven tune is just a record
+ * of empirical baseline (since we currently only ship one tile config). */
+tc_status_t tc_autotune_run_sweep(tc_context* ctx, char* out_json, size_t cap) {
+    (void)ctx; (void)cap;
+    if (!out_json) return TC_ERR_INVALID_ARG;
+    /* Just record the default config — the proper sweep lands in v0.2 once
+     * we have multiple competing tile variants. */
+    snprintf(out_json, cap,
+        "{\"version\":1,"
+        "\"gemm\":{\"BM\":64,\"BN\":64,\"BK\":32,\"WM\":2,\"WN\":2,\"TM\":4,\"TN\":4,\"threads\":128},"
+        "\"attention_d64\":{\"Br\":32,\"Bc\":32,\"WM\":2,\"WN\":2,\"threads\":128},"
+        "\"attention_d128\":{\"Br\":16,\"Bc\":16,\"WM\":2,\"WN\":2,\"threads\":128}}");
+    return TC_OK;
+}
+
 tc_status_t tc_autotune_save_cache(const char* device_name, const char* config_json) {
     if (!device_name || !config_json) return TC_ERR_INVALID_ARG;
     char path[1280];

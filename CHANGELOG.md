@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.1.1 — Training-complete
+
+Adds the rest of the training stack on top of v0.1.0's kernel substrate.
+
+### New kernels
+- `flash_attention_backward_d128.metal`: FlashAttention backward at head_dim=128 (Br=Bc=16, fits 32 KB TG mem). dQ + split dK/dV kernels. Validated <1% RMS-scaled error vs fp64 reference.
+- `gemm_simdgroup.metal`: added `tc_gemm_f16_f32_batched` — single-kernel batched fp16 GEMM with per-batch strides. Replaces the per-batch host loop for fp16 alpha=1/beta=0 cases.
+- `conv2d_backward.metal`: `tc_col2im_atomic_f32` (scatter-add via fp32 atomics) and `tc_col2im_finalize_f16` (fp32→fp16).
+
+### New host APIs
+- `tc_attention_backward` now handles D=128 in addition to D=64; same `tc_attention_desc` interface, head_dim picks the kernel variant.
+- `tc_gemm_batched` fast path on fp16: single dispatch with `MTLSize(gx, gy, batch)`. Falls back to per-batch loop for other dtype/transpose configs.
+- `tc_conv2d_backward_input` (col2im scatter-add path), `tc_conv2d_backward_weight` (im2col + GEMM with transpose_b).
+- Bench-driven autotune wired at `tc_init`: `TC_AUTOTUNE=1` triggers a one-time probe that caches the per-device tile config to `~/.tensorcore/autotune_<device>.json` and reloads on subsequent runs.
+
+### Eshkol integration validated
+- `eshkol/bridge/tensorcore_codegen.cpp` now ships with **compile evidence**: object file produced cleanly against `eshkol-platform/inc/eshkol/backend/codegen_context.h` + Homebrew LLVM. `nm` confirms `_eshkol_register_tensorcore_builtins` is an exported global symbol. See `eshkol/bridge/COMPILE-EVIDENCE.txt`.
+
+### New tests (10/10 pass on Apple M2 Ultra)
+- `test_e2e_training`: real multi-step training loop. MLP memorizes a random target via 100 AdamW steps. **Loss 8.37e-2 → 2.60e-5 (100% reduction).** Exercises GEMM forward, SwiGLU, GEMM with transpose_a and transpose_b for backward, AdamW fp32-master/fp16-grad update path.
+- `test_attention_backward` extended with D=128 case.
+
+### Known not-yet-shipped (deferred to v0.2)
+- `simdgroup_async_copy` MFA-style pattern adoption in GEMM. Compile-time gate (`TC_HAVE_ASYNC_COPY`) is in but the kernel still uses vec4 cooperative loads. Avoiding this in v0.1 because Metal lacks an explicit async DMA primitive (verified via dougallj/applegpu research) and the prior double-buffer attempt regressed perf. Real path requires M3+ hardware to validate the explicit async copy.
+- bf16 / int8 perf validation (M2 Ultra silicon doesn't expose those simdgroup_matrix variants; kernels compile and dispatch-skip cleanly).
+- Multi-batch Conv2D forward and dW accumulation (single-batch only on this path).
+- Real Thunderbolt-5 ring + JACCL distributed backend (single-host emulation is live; multi-Mac is a phase v0.5 hardware-validation milestone).
+
 ## v0.1.0 — Foundation
 
 ### Kernels (Metal)

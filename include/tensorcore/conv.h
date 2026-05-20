@@ -35,6 +35,44 @@ tc_status_t tc_conv2d_forward(tc_context* ctx,
                               int stride_h, int stride_w,
                               int out_H, int out_W);
 
+/* Conv2D backward — input gradient.
+ *   dX = col2im(W^T @ dY).
+ *
+ * Caller supplies:
+ *   scratch_col   : [batch, K, out_hw] half  workspace (same shape as fwd)
+ *   scratch_dX_f32: [batch, in_channels, H, W_in] float, atomic accumulation
+ *                   (must be zero-initialized before each call).
+ *
+ * Implementation: dCol = W^T @ dY via tc_gemm with transpose_a=true, then
+ * tc_col2im_atomic_f32 scatters-with-add into scratch_dX_f32, finalize copies
+ * to fp16 dX. */
+tc_status_t tc_conv2d_backward_input(tc_context* ctx,
+                                     const tc_buffer* dY,
+                                     const tc_buffer* weight,
+                                     tc_buffer*       dX,
+                                     tc_buffer*       scratch_col,
+                                     tc_buffer*       scratch_dX_f32,
+                                     int batch, int in_channels, int out_channels,
+                                     int H, int W_in, int kH, int kW,
+                                     int pad_h, int pad_w,
+                                     int stride_h, int stride_w,
+                                     int out_H, int out_W);
+
+/* Conv2D backward — weight gradient.
+ *   dW[oc, K] = sum_n dY[n, oc, out_hw] @ col[n, K, out_hw]^T
+ *
+ * Caller supplies the im2col scratch from the forward (reusable). */
+tc_status_t tc_conv2d_backward_weight(tc_context* ctx,
+                                      const tc_buffer* X,
+                                      const tc_buffer* dY,
+                                      tc_buffer*       dW,
+                                      tc_buffer*       scratch_col,
+                                      int batch, int in_channels, int out_channels,
+                                      int H, int W_in, int kH, int kW,
+                                      int pad_h, int pad_w,
+                                      int stride_h, int stride_w,
+                                      int out_H, int out_W);
+
 #ifdef __cplusplus
 }
 #endif

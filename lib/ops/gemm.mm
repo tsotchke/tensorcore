@@ -281,17 +281,63 @@ extern "C" tc_status_t tc_gemm_batched(tc_context* ctx,
                                        const tc_buffer* A,
                                        const tc_buffer* B,
                                        tc_buffer*       C) {
-    /* v0.1: trivial loop. v0.2 will dispatch one TG per (batch, output block). */
-    if (!ctx || !bd) return TC_ERR_INVALID_ARG;
-    /* Simple serial loop with offset rebinding via buffer offsets. */
-    tc_gemm_desc d = bd->base;
-    const size_t a_elem = tc_dtype_size(d.a_dtype);
-    const size_t b_elem = tc_dtype_size(d.b_dtype);
-    const size_t c_elem = tc_dtype_size(d.c_dtype);
-    (void)a_elem; (void)b_elem; (void)c_elem;
-    for (int32_t i = 0; i < bd->batch; ++i) {
-        tc_status_t s = tc_gemm(ctx, &d, A, B, C);
-        if (s != TC_OK) return s;
+    if (!ctx || !bd || !A || !B || !C) return TC_ERR_INVALID_ARG;
+    const tc_gemm_desc& d = bd->base;
+
+    /* v0.1 batched fast path: fp16 in/out + fp32 accum + no transpose +
+     * alpha=1/beta=0. Anything else falls back to the per-batch loop. */
+    const bool fast_path =
+        (d.a_dtype == TC_DTYPE_F16 && d.b_dtype == TC_DTYPE_F16 &&
+         d.c_dtype == TC_DTYPE_F16 && d.accum_dtype == TC_DTYPE_F32 &&
+         !d.transpose_a && !d.transpose_b);
+
+    if (!fast_path) {
+        /* Fallback: per-batch dispatch via tc_gemm. Manual offset accounting
+         * via tc_buffer sub-views is not yet plumbed; v0.2. */
+        for (int32_t i = 0; i < bd->batch; ++i) {
+            tc_status_t s = tc_gemm(ctx, &d, A, B, C);
+            if (s != TC_OK) return s;
+        }
+        return TC_OK;
     }
+
+    tc_status_t err = TC_OK;
+    id<MTLComputePipelineState> pso = tc_pipeline_get(ctx, @"tc_gemm_f16_f32_batched", &err);
+    if (!pso) return err;
+
+    const uint32_t M = (uint32_t)d.M;
+    const uint32_t N = (uint32_t)d.N;
+    const uint32_t K = (uint32_t)d.K;
+    const float alpha = d.alpha;
+    const float beta  = d.beta;
+    const uint64_t sa = (uint64_t)bd->stride_a;
+    const uint64_t sb = (uint64_t)bd->stride_b;
+    const uint64_t sc = (uint64_t)bd->stride_c;
+
+    @autoreleasepool {
+        id<MTLCommandBuffer> cmd = [ctx->queue commandBuffer];
+        id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+        [enc setComputePipelineState:pso];
+        [enc setBuffer:A->mtl offset:0 atIndex:0];
+        [enc setBuffer:B->mtl offset:0 atIndex:1];
+        [enc setBuffer:C->mtl offset:0 atIndex:2];
+        [enc setBytes:&M     length:sizeof(M)     atIndex:3];
+        [enc setBytes:&N     length:sizeof(N)     atIndex:4];
+        [enc setBytes:&K     length:sizeof(K)     atIndex:5];
+        [enc setBytes:&alpha length:sizeof(alpha) atIndex:6];
+        [enc setBytes:&beta  length:sizeof(beta)  atIndex:7];
+        [enc setBytes:&sa    length:sizeof(sa)    atIndex:8];
+        [enc setBytes:&sb    length:sizeof(sb)    atIndex:9];
+        [enc setBytes:&sc    length:sizeof(sc)    atIndex:10];
+        const uint32_t gx = (N + 64 - 1) / 64;
+        const uint32_t gy = (M + 64 - 1) / 64;
+        [enc dispatchThreadgroups:MTLSizeMake(gx, gy, (NSUInteger)bd->batch)
+            threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+        [enc endEncoding];
+        [cmd commit];
+        [cmd waitUntilCompleted];
+        if (cmd.error) return TC_ERR_DISPATCH;
+    }
+    tc_set_last_backend(TC_BACKEND_SIMDGROUP_MATRIX);
     return TC_OK;
 }
