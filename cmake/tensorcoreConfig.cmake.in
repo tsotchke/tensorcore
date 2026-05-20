@@ -1,0 +1,5 @@
+@PACKAGE_INIT@
+
+include("${CMAKE_CURRENT_LIST_DIR}/tensorcoreTargets.cmake")
+
+set(tensorcore_VERSION "@PROJECT_VERSION@")

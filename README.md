@@ -42,8 +42,13 @@ projects can retire their bespoke kernels and consume one shared library.
 | `tc_gemm_*_128` 128×128 tile | env-flag opt-in | regresses v0.1; v0.2 tunes |
 | `tc_attention_forward` fp16 D=64 | scaled-RMS err 1e-3 vs fp64 ref | 6.70 TFLOPS @ S=4096 |
 | `tc_attention_forward` fp16 D=128 | correctness verified | (bench harness v0.2) |
+| Q4_0 / Q8_0 quantized GEMV | GPU quantize + GEMV verified | 7B decode-step bench harness |
+| RMSNorm / LayerNorm / RoPE / SwiGLU / softmax / AdamW | fused Metal kernels | C tests + Python smoke |
+| Fused RMSNorm+GEMV | inference projection primitive | correctness vs separate path |
+| GGUF reader | v3 metadata, tensors, bulk copy, Q4/Q8 descriptors | synthetic GGUF + Q4 GEMV verified |
+| Python bindings | buffers, streams, GEMM, training ops, quantized, GGUF | covered by CTest `python_basic` |
 | MPS + Accelerate fallback | wired, exercised by dispatch | — |
-| 6/6 correctness tests | pass on M2 Ultra | `ctest --test-dir build` |
+| correctness tests | pass on M2 Ultra | `ctest --test-dir build` |
 
 ### Public C ABI (`include/tensorcore/`)
 
@@ -52,6 +57,12 @@ projects can retire their bespoke kernels and consume one shared library.
 - `tc_gemm` / `tc_gemm_async` / `tc_gemm_batched` — fp16/bf16/fp32/int8 with
   alpha/beta scaling and transpose function constants
 - `tc_attention_forward` / `tc_attention_forward_async` — D=64 and D=128 today
+- `tc_rmsnorm_forward`, `tc_layernorm_forward`, `tc_rope_forward`,
+  `tc_swiglu_forward`, `tc_softmax_forward`, `tc_adamw_step`, and
+  `tc_fused_rmsnorm_gemv`
+- `tc_quantize_weights` / `tc_gemv_quantized` — Q4_0 and Q8_0 inference weights
+- `tc_gguf_open` / `tc_gguf_load_supported_tensors` plus metadata and
+  quantized-matrix descriptor helpers
 - `tc_last_backend` / `tc_backend_name` — diagnostic which path served the call
 
 ### Metal kernels (`kernels/metal/`)
@@ -76,7 +87,8 @@ All gating is runtime-detected via `MTLGPUFamily*`.
 
 - 20+ TFLOPS fp16 at 4096³ via double-buffered K-loads + 128×128 tile retune
 - FlashAttention backward (the LSE-saved scheme)
-- Fused training kernels: RMSnorm/LayerNorm fwd+bwd, RoPE, SwiGLU, AdamW
+- Training kernel polish: RoPE backward, larger-shape tuning, graph-level
+  fusion, and expanded Python examples
 - D=128 FlashAttention bench + Br=64 path on Apple9+ (M3+) using larger TG mem
 - Tile autotune per family (port the occupancy-aware scoring from
   `eshkol-platform/lib/backend/gpu/gpu_memory.mm:400-600`)
@@ -97,11 +109,27 @@ ctest --test-dir build --output-on-failure
 # Bench (sweeps 256..4096 square GEMM, fp16/fp32/bf16, plus attention)
 ./build/bench/bench_gemm
 ./build/bench/bench_attention
+./build/bench/bench_inference_7b
+
+# Inspect GGUF files
+./build/examples/gguf_inspect model.gguf
+./build/examples/gguf_inspect model.gguf --load-supported
 ```
 
 `bench_gemm` prints the median TFLOPS and the backend that served each call.
 On an M3 Max, fp16 simdgroup_matrix GEMM should land within ~10% of MLX's
 hand-tuned kernels (which are our v0.2 target).
+
+For consuming tensorcore from another local project, see
+[`docs/integrating_tensorcore.md`](docs/integrating_tensorcore.md).
+
+The Python binding is installable as a pure-Python package:
+
+```sh
+python3 -m pip install -e . --no-build-isolation
+export TENSORCORE_LIB=/opt/tensorcore/lib/libtensorcore.dylib
+python3 -c 'import tensorcore as tc; print(tc.version())'
+```
 
 ## Layout
 

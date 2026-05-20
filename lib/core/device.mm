@@ -12,6 +12,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <cstdio>
+#include <dlfcn.h>
 #include <new>
 
 /* Forward — implemented in pipeline_cache.mm / buffer_pool.mm. */
@@ -54,9 +55,18 @@ extern "C" const char* tc_backend_name(tc_backend_t b) {
     return "?";
 }
 
+#define TC_STRINGIFY_VERSION2(x) #x
+#define TC_STRINGIFY_VERSION(x) TC_STRINGIFY_VERSION2(x)
+
 extern "C" const char* tc_version(void) {
-    return "tensorcore 0.1.0";
+    return "tensorcore "
+        TC_STRINGIFY_VERSION(TENSORCORE_VERSION_MAJOR) "."
+        TC_STRINGIFY_VERSION(TENSORCORE_VERSION_MINOR) "."
+        TC_STRINGIFY_VERSION(TENSORCORE_VERSION_PATCH);
 }
+
+#undef TC_STRINGIFY_VERSION
+#undef TC_STRINGIFY_VERSION2
 
 /* ----------------------------------------------------------------- */
 /* Family detection — runtime probe of MTLGPUFamilyApple7..Apple11.   */
@@ -90,17 +100,27 @@ extern "C" tc_family_t tc_device_family_from_mtl(id<MTLDevice> dev) {
 }
 
 /* ----------------------------------------------------------------- */
-/* MTLLibrary load — prefers TC_METALLIB_PATH (absolute, baked in by  */
-/* CMake), then bundle's default.metallib, then $TC_METALLIB env.     */
+/* MTLLibrary load: env override, installed library/executable-relative paths,
+ * build-tree path baked by CMake, then a local default.metallib fallback. */
 /* ----------------------------------------------------------------- */
 static id<MTLLibrary> load_metallib(id<MTLDevice> dev) {
     NSError* err = nil;
 
     const char* env = std::getenv("TC_METALLIB");
-    NSString* candidates[3] = { nil, nil, nil };
+    NSString* candidates[8] = { nil, nil, nil, nil, nil, nil, nil, nil };
     int n = 0;
     if (env && *env) {
         candidates[n++] = [NSString stringWithUTF8String:env];
+    }
+
+    Dl_info dylib_info;
+    if (dladdr((const void*)&tc_init, &dylib_info) && dylib_info.dli_fname) {
+        NSString* dir = [[NSString stringWithUTF8String:dylib_info.dli_fname]
+                            stringByDeletingLastPathComponent];
+        candidates[n++] = [dir stringByAppendingPathComponent:@"tensorcore.metallib"];
+        candidates[n++] = [dir stringByAppendingPathComponent:@"default.metallib"];
+        candidates[n++] = [[dir stringByAppendingPathComponent:@"../lib/tensorcore.metallib"]
+                            stringByStandardizingPath];
     }
 #ifdef TC_METALLIB_PATH
     candidates[n++] = [NSString stringWithUTF8String:TC_METALLIB_PATH];
@@ -278,6 +298,7 @@ extern "C" tc_status_t tc_stream_create(tc_context* ctx, tc_stream** out) {
         tc_stream* s = new (std::nothrow) tc_stream();
         if (!s) return TC_ERR_ALLOC;
         s->queue = q;
+        s->pending_cmd = nil;
         s->owner = ctx;
         *out = s;
     }
@@ -287,17 +308,39 @@ extern "C" tc_status_t tc_stream_create(tc_context* ctx, tc_stream** out) {
 extern "C" tc_status_t tc_stream_destroy(tc_context* ctx, tc_stream* s) {
     (void)ctx;
     if (!s) return TC_ERR_INVALID_ARG;
+    if (s->pending_cmd) (void)tc_stream_sync(s);
     s->queue = nil;
+    s->pending_cmd = nil;
     delete s;
     return TC_OK;
+}
+
+extern "C" id<MTLCommandBuffer> tc_stream_command_buffer(tc_stream* s) {
+    if (!s) return nil;
+    if (!s->pending_cmd) {
+        s->pending_cmd = [s->queue commandBuffer];
+    }
+    return s->pending_cmd;
 }
 
 extern "C" tc_status_t tc_stream_sync(tc_stream* s) {
     if (!s) return TC_ERR_INVALID_ARG;
     @autoreleasepool {
-        id<MTLCommandBuffer> cmd = [s->queue commandBuffer];
+        id<MTLCommandBuffer> cmd = s->pending_cmd;
+        if (cmd) {
+            s->pending_cmd = nil;
+        } else {
+            /* Barrier for async work that was committed outside the pending
+             * stream buffer path. */
+            cmd = [s->queue commandBuffer];
+        }
         [cmd commit];
         [cmd waitUntilCompleted];
+        if (cmd.error) {
+            fprintf(stderr, "[tensorcore] stream sync error: %s\n",
+                    [[cmd.error localizedDescription] UTF8String]);
+            return TC_ERR_DISPATCH;
+        }
     }
     return TC_OK;
 }

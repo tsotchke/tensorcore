@@ -12,13 +12,15 @@ extern "C" {
 /* Quantized matrix-multiply (block-wise weight quantization, fp16 activations,
  * fp16 output). Format mirrors ggml's Q4_0 and Q8_0:
  *
- *   Q4_0: 32 weights per block, one fp16 scale, 4-bit weights packed two/byte.
+ *   Q4_0: 32 weights per block, one fp16 scale, 4-bit weights packed in GGML
+ *         order: byte i stores weight i in the low nibble and weight i+16 in
+ *         the high nibble.
  *         Bytes/block = 2 + 16 = 18. Bits/weight = 4.5.
  *   Q8_0: 32 weights per block, one fp16 scale, signed int8 weights.
  *         Bytes/block = 2 + 32 = 34. Bits/weight = 8.5.
  *
  * Used for LLM inference: weights pre-quantized once; activations stay fp16.
- * Memory bandwidth dominates → these win 4-8× over fp16 GEMV on inference.
+ * Memory bandwidth dominates, so these win 4-8x over fp16 GEMV on inference.
  */
 
 typedef enum {
@@ -35,7 +37,7 @@ tc_status_t tc_quantize_weights(tc_context* ctx,
                                 int N, int K);
 
 /* GEMV: Y[M, N] = X[M, K] @ W^T  where W is quantized [N, K].
- * Currently optimized for M small (≤ 4) — the LLM-inference path. Larger M
+ * Currently optimized for M small (<= 4), the LLM-inference path. Larger M
  * routes through dequant + tc_gemm in a future pass. */
 tc_status_t tc_gemv_quantized(tc_context* ctx,
                               const tc_buffer* X,
@@ -45,10 +47,8 @@ tc_status_t tc_gemv_quantized(tc_context* ctx,
                               int M, int N, int K);
 
 /* Async variant: encodes into the provided stream without sync. Caller must
- * call tc_stream_sync afterwards. The dominant cost of many small GEMVs is
- * per-call command-buffer round-trip; the async path keeps a single CB open
- * across calls. For decode-step inference this is the difference between
- * 6 tok/s (sync-per-call) and 40+ tok/s (batched). */
+ * call tc_stream_sync afterwards. The async path keeps a single command buffer
+ * open across calls, avoiding a per-GEMV command-buffer round trip. */
 tc_status_t tc_gemv_quantized_async(tc_context* ctx,
                                     const tc_buffer* X,
                                     const tc_buffer* W_quant,

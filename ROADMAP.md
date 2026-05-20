@@ -18,6 +18,7 @@ Apple has to ship hardware, and what software work closes the gap.
 | GEMM | 2048³ | fp16 | 10.79 | — | — |
 | FlashAttention | S=4096, D=64, H=32 | fp16 | 6.70 | — | MFA-pre-tuning baseline |
 | FlashAttention | D=128 | fp16 | correctness verified | — | — |
+| Q4_0/Q8_0 GEMV | 7B decode-step harness | fp16 activations | verified | — | — |
 
 Same kernels run unchanged on M1 (Apple7), M2 (Apple8), M3 (Apple9), M4 (Apple10),
 M5 (Apple11). bf16 path gated to Apple9+, int8 to Apple10+, Metal-4 TensorOps
@@ -87,8 +88,15 @@ to consume it on day one.**
 - [x] int8 kernel for Apple10+ (M4+) — gated
 - [x] 128×128 large-tile GEMM (env-flag opt-in; register-pressure tuning v0.2)
 - [x] **Fused FlashAttention forward** — fp16, D=64 and D=128
+- [x] Q4_0/Q8_0 quantized GEMV plus GPU quantization
+- [x] GGUF v3 reader, metadata helpers, bulk tensor loading, and quantized
+      matrix descriptors
+- [x] RMSNorm, LayerNorm, RoPE, SwiGLU, softmax, AdamW, and fused
+      RMSNorm+GEMV kernels
+- [x] Python binding for buffers, streams, GEMM, training ops, quantized GEMV,
+      and GGUF loading
 - [x] MPS + Accelerate fallback paths
-- [x] Correctness tests vs `cblas_sgemm` + fp64 reference (6/6 pass on M2 Ultra)
+- [x] Correctness tests vs `cblas_sgemm` + fp64 reference (17/17 pass on M2 Ultra)
 - [x] TFLOPS bench harness
 - [x] Eshkol binding skeleton + integration doc
 

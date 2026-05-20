@@ -254,14 +254,21 @@ extern "C" tc_status_t tc_gemm_async(tc_context* ctx,
     if (!A || !B || !C)        return TC_ERR_INVALID_ARG;
 
     tc_status_t err = TC_OK;
+    auto fallback_gemm = [&]() -> tc_status_t {
+        if (stream) {
+            tc_status_t ss = tc_stream_sync(stream);
+            if (ss != TC_OK) return ss;
+        }
+        return tc_mps_gemm(ctx, desc, A, B, C);
+    };
     TileChoice tile = kernel_for(desc, ctx->info.family, ctx, &err);
-    if (!tile.kernel_name) return tc_mps_gemm(ctx, desc, A, B, C);
+    if (!tile.kernel_name) return fallback_gemm();
 
     id<MTLComputePipelineState> pso = resolve_pipeline(ctx, tile.kernel_name,
                                                         desc->transpose_a,
                                                         desc->transpose_b,
                                                         &err);
-    if (!pso) return tc_mps_gemm(ctx, desc, A, B, C);
+    if (!pso) return fallback_gemm();
 
     const uint32_t M = (uint32_t)desc->M;
     const uint32_t N = (uint32_t)desc->N;
@@ -270,8 +277,9 @@ extern "C" tc_status_t tc_gemm_async(tc_context* ctx,
     const float beta  = desc->beta;
 
     @autoreleasepool {
-        id<MTLCommandQueue> q = stream ? stream->queue : ctx->queue;
-        id<MTLCommandBuffer> cmd = [q commandBuffer];
+        id<MTLCommandBuffer> cmd = stream ? tc_stream_command_buffer(stream)
+                                          : [ctx->queue commandBuffer];
+        if (!cmd) return TC_ERR_INTERNAL;
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
         [enc setComputePipelineState:pso];
         [enc setBuffer:A->mtl offset:0 atIndex:0];
@@ -288,8 +296,7 @@ extern "C" tc_status_t tc_gemm_async(tc_context* ctx,
         [enc dispatchThreadgroups:MTLSizeMake(groups_x, groups_y, 1)
             threadsPerThreadgroup:MTLSizeMake(tile.threads_per_tg, 1, 1)];
         [enc endEncoding];
-        [cmd commit];
-        /* do not wait */
+        if (!stream) [cmd commit];
     }
     tc_set_last_backend(TC_BACKEND_SIMDGROUP_MATRIX);
     return TC_OK;

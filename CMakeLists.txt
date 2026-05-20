@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(tensorcore
-    VERSION 0.1.0
+    VERSION 0.1.6
     LANGUAGES C CXX OBJC OBJCXX
     DESCRIPTION "CUDA-equivalent tensor-core acceleration for Apple Silicon"
 )
@@ -102,6 +102,7 @@ set(TC_METAL_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/conv2d.metal
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/conv2d_backward.metal
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/gemm_quantized.metal
+    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/gemm_quantized_v2.metal
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/fused_norm_gemv.metal
 )
 
@@ -156,6 +157,7 @@ set(TC_SOURCES
     lib/distributed/distributed.mm
     lib/distributed/ring_local.mm
     lib/ops/quantized.mm
+    lib/io/gguf.c
     lib/fallback/mps_gemm.mm
     lib/fallback/accelerate_gemm.c
     lib/c_api/c_api.mm
@@ -170,6 +172,7 @@ endif()
 add_library(tensorcore STATIC ${TC_SOURCES})
 add_library(tensorcore_shared SHARED ${TC_SOURCES})
 set_target_properties(tensorcore_shared PROPERTIES OUTPUT_NAME tensorcore)
+add_library(tensorcore::tensorcore_shared ALIAS tensorcore_shared)
 add_dependencies(tensorcore_shared tensorcore_metallib)
 target_include_directories(tensorcore_shared
     PUBLIC
@@ -233,14 +236,38 @@ endif()
 # Install
 # ----------------------------------------------------------------------------
 include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
 
-install(TARGETS tensorcore
+install(TARGETS tensorcore tensorcore_shared
     EXPORT  tensorcoreTargets
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 install(DIRECTORY include/tensorcore DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(FILES ${TC_METALLIB_PATH} DESTINATION ${CMAKE_INSTALL_LIBDIR})
+
+set(TC_CONFIG_INSTALL_DIR "${CMAKE_INSTALL_LIBDIR}/cmake/tensorcore")
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/tensorcoreConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/tensorcoreConfig.cmake"
+    INSTALL_DESTINATION "${TC_CONFIG_INSTALL_DIR}"
+)
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/tensorcoreConfigVersion.cmake"
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+install(EXPORT tensorcoreTargets
+    NAMESPACE tensorcore::
+    DESTINATION "${TC_CONFIG_INSTALL_DIR}"
+)
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/tensorcoreConfig.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/tensorcoreConfigVersion.cmake"
+    DESTINATION "${TC_CONFIG_INSTALL_DIR}"
+)
 
 message(STATUS "tensorcore: configured (Metal4=${TC_HAVE_METAL4}, tests=${TC_BUILD_TESTS}, bench=${TC_BUILD_BENCH})")
 message(STATUS "  metallib -> ${TC_METALLIB_PATH}")

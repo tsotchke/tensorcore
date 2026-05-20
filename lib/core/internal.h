@@ -55,6 +55,7 @@ struct tc_stream {
     /* Streams are encoded as per-stream MTLCommandQueue at first.
      * The default stream (NULL) routes to ctx->queue.                  */
     id<MTLCommandQueue>    queue;
+    id<MTLCommandBuffer>   pending_cmd;
     struct tc_context*     owner;
 };
 
@@ -82,6 +83,8 @@ void tc_set_last_backend(tc_backend_t b);
 id<MTLComputePipelineState> tc_pipeline_get(struct tc_context* ctx,
                                             NSString* name,
                                             tc_status_t* out_err);
+/* Returns a pending command buffer for batched async stream encoding. */
+id<MTLCommandBuffer> tc_stream_command_buffer(struct tc_stream* s);
 /* Returns the device family classifier this build saw at init. */
 tc_family_t tc_device_family_from_mtl(id<MTLDevice> dev);
 #endif

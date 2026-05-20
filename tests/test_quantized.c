@@ -1,10 +1,9 @@
 /*
- * tensorcore — Q4_0 quantized GEMV correctness vs CPU dequant + fp16 GEMV.
+ * tensorcore - quantized GEMV correctness vs CPU dequant + fp16 GEMV.
  *
- * Generates random fp16 weights, quantizes to Q4_0 via GPU kernel, computes
- * GEMV via tc_gemv_quantized, compares against CPU reference that dequantizes
- * the same Q4_0 blocks. RMS-scaled error should be within Q4_0 quantization
- * noise (~3-5% on typical inputs — 4 bits is genuinely lossy).
+ * Generates random fp16 weights, quantizes to Q4_0/Q8_0 via GPU kernels, computes
+ * GEMV via tc_gemv_quantized, compares against CPU references that dequantize
+ * the same blocks.
  */
 
 #include <stdio.h>
@@ -39,7 +38,7 @@ static float f16_to_f32(uint16_t h) {
 }
 
 /* CPU dequant + GEMV reference using the EXACT same Q4_0 blocks the kernel
- * produced (so we're testing kernel→kernel consistency, not the quantization
+ * produced (so we're testing kernel-to-kernel consistency, not the quantization
  * algorithm itself). */
 static void ref_q4_0_gemv(int M, int N, int K, const uint16_t* X, const uint8_t* Wq,
                           float* Y) {
@@ -53,8 +52,8 @@ static void ref_q4_0_gemv(int M, int N, int K, const uint16_t* X, const uint8_t*
                 const float scale = f16_to_f32(*(const uint16_t*)block);
                 for (int i = 0; i < 32; ++i) {
                     const int k = b * 32 + i;
-                    const uint8_t packed = block[2 + i/2];
-                    const int q = (i & 1) ? (packed >> 4) : (packed & 0xF);
+                    const uint8_t packed = block[2 + (i % 16)];
+                    const int q = (i < 16) ? (packed & 0xF) : (packed >> 4);
                     const float w = scale * (float)(q - 8);
                     acc += (double)f16_to_f32(X[m * K + k]) * (double)w;
                 }
@@ -64,40 +63,68 @@ static void ref_q4_0_gemv(int M, int N, int K, const uint16_t* X, const uint8_t*
     }
 }
 
-int main(void) {
-    tc_context* ctx = NULL;
-    tc_status_t s = tc_init(&ctx);
-    if (s != TC_OK && s != TC_ERR_ALREADY_INITIALIZED) {
-        fprintf(stderr, "tc_init failed: %s\n", tc_status_string(s));
-        return 1;
+static void ref_q8_0_gemv(int M, int N, int K, const uint16_t* X, const uint8_t* Wq,
+                          float* Y) {
+    const int nblocks = K / 32;
+    for (int m = 0; m < M; ++m) {
+        for (int n = 0; n < N; ++n) {
+            double acc = 0.0;
+            const uint8_t* W_row = Wq + (size_t)n * nblocks * 34;
+            for (int b = 0; b < nblocks; ++b) {
+                const uint8_t* block = W_row + (size_t)b * 34;
+                const float scale = f16_to_f32(*(const uint16_t*)block);
+                const int8_t* qs = (const int8_t*)(block + 2);
+                for (int i = 0; i < 32; ++i) {
+                    const int k = b * 32 + i;
+                    const float w = scale * (float)qs[i];
+                    acc += (double)f16_to_f32(X[m * K + k]) * (double)w;
+                }
+            }
+            Y[m * N + n] = (float)acc;
+        }
     }
+}
 
-    const int M = 1, N = 128, K = 256;
+static int run_q4_case(tc_context* ctx, int M, int N, int K) {
     const size_t q_bytes = tc_quantized_size(TC_QUANT_Q4_0, N, K);
 
-    tc_buffer *Xb, *Wfp16, *Wq, *Yb;
-    tc_buffer_alloc(ctx, M*K*2, &Xb);
-    tc_buffer_alloc(ctx, N*K*2, &Wfp16);
-    tc_buffer_alloc(ctx, q_bytes, &Wq);
-    tc_buffer_alloc(ctx, M*N*2, &Yb);
+    tc_buffer *Xb = NULL, *Wfp16 = NULL, *Wq = NULL, *Yb = NULL;
+    tc_stream* st = NULL;
+    float* Yref = NULL;
+    tc_status_t s = TC_OK;
+    int rc = 5;
+
+    if (tc_buffer_alloc(ctx, M*K*2, &Xb) != TC_OK ||
+        tc_buffer_alloc(ctx, N*K*2, &Wfp16) != TC_OK ||
+        tc_buffer_alloc(ctx, q_bytes, &Wq) != TC_OK ||
+        tc_buffer_alloc(ctx, M*N*2, &Yb) != TC_OK) {
+        fprintf(stderr, "buffer alloc failed\n");
+        rc = 2;
+        goto cleanup;
+    }
 
     uint16_t *Xp, *Wp, *Yp; uint8_t *Wqp;
-    tc_buffer_map(Xb,    (void**)&Xp);
-    tc_buffer_map(Wfp16, (void**)&Wp);
-    tc_buffer_map(Wq,    (void**)&Wqp);
-    tc_buffer_map(Yb,    (void**)&Yp);
+    if (tc_buffer_map(Xb,    (void**)&Xp)  != TC_OK ||
+        tc_buffer_map(Wfp16, (void**)&Wp)  != TC_OK ||
+        tc_buffer_map(Wq,    (void**)&Wqp) != TC_OK ||
+        tc_buffer_map(Yb,    (void**)&Yp)  != TC_OK) {
+        fprintf(stderr, "buffer map failed\n");
+        rc = 2;
+        goto cleanup;
+    }
 
     srand(0xD4);
     for (int i = 0; i < M*K; ++i) Xp[i] = f32_to_f16(((float)rand()/RAND_MAX - 0.5f));
     for (int i = 0; i < N*K; ++i) Wp[i] = f32_to_f16(((float)rand()/RAND_MAX - 0.5f) * 0.1f);
 
     s = tc_quantize_weights(ctx, Wfp16, Wq, TC_QUANT_Q4_0, N, K);
-    if (s != TC_OK) { fprintf(stderr, "quantize: %s\n", tc_status_string(s)); return 2; }
+    if (s != TC_OK) { fprintf(stderr, "quantize: %s\n", tc_status_string(s)); rc = 2; goto cleanup; }
 
     s = tc_gemv_quantized(ctx, Xb, Wq, Yb, TC_QUANT_Q4_0, M, N, K);
-    if (s != TC_OK) { fprintf(stderr, "gemv: %s\n", tc_status_string(s)); return 3; }
+    if (s != TC_OK) { fprintf(stderr, "gemv: %s\n", tc_status_string(s)); rc = 3; goto cleanup; }
 
-    float* Yref = malloc(M*N*sizeof(float));
+    Yref = malloc(M*N*sizeof(float));
+    if (!Yref) { fprintf(stderr, "malloc failed\n"); rc = 2; goto cleanup; }
     ref_q4_0_gemv(M, N, K, Xp, Wqp, Yref);
 
     double se = 0, sr = 0, max_abs = 0;
@@ -118,10 +145,124 @@ int main(void) {
            (double)q_bytes * 8.0 / (double)(N * K),
            (q_bytes == expected) ? "OK" : "FAIL");
 
+    memset(Yp, 0, (size_t)M*N*sizeof(uint16_t));
+    s = tc_stream_create(ctx, &st);
+    if (s != TC_OK) { fprintf(stderr, "stream create: %s\n", tc_status_string(s)); rc = 4; goto cleanup; }
+    s = tc_gemv_quantized_async(ctx, Xb, Wq, Yb, TC_QUANT_Q4_0, M, N, K, st);
+    if (s == TC_OK) s = tc_stream_sync(st);
+    if (s != TC_OK) { fprintf(stderr, "async gemv: %s\n", tc_status_string(s)); rc = 4; goto cleanup; }
+
+    double ase = 0, asr = 0, amax_abs = 0;
+    for (int i = 0; i < M*N; ++i) {
+        float got = f16_to_f32(Yp[i]);
+        double e = fabs((double)got - (double)Yref[i]);
+        ase += e * e; asr += (double)Yref[i] * Yref[i];
+        if (e > amax_abs) amax_abs = e;
+    }
+    const double async_scaled = sqrt(ase / (M*N)) / (sqrt(asr / (M*N)) + 1e-9);
+    printf("  q4_0_async M=%d N=%d K=%d max_abs=%.3e  rms_scaled=%.3e  %s\n",
+           M, N, K, amax_abs, async_scaled, (async_scaled < 5e-2) ? "OK" : "FAIL");
+
+    rc = (scaled < 5e-2 && async_scaled < 5e-2 && q_bytes == expected) ? 0 : 5;
+
+cleanup:
+    if (st) tc_stream_destroy(ctx, st);
     free(Yref);
-    tc_buffer_free(ctx, Xb); tc_buffer_free(ctx, Wfp16);
-    tc_buffer_free(ctx, Wq); tc_buffer_free(ctx, Yb);
+    if (Xb) tc_buffer_free(ctx, Xb);
+    if (Wfp16) tc_buffer_free(ctx, Wfp16);
+    if (Wq) tc_buffer_free(ctx, Wq);
+    if (Yb) tc_buffer_free(ctx, Yb);
+    return rc;
+}
+
+static int run_q8_case(tc_context* ctx, int M, int N, int K) {
+    const size_t q_bytes = tc_quantized_size(TC_QUANT_Q8_0, N, K);
+
+    tc_buffer *Xb = NULL, *Wfp16 = NULL, *Wq = NULL, *Yb = NULL;
+    float* Yref = NULL;
+    tc_status_t s = TC_OK;
+    int rc = 5;
+
+    if (tc_buffer_alloc(ctx, M*K*2, &Xb) != TC_OK ||
+        tc_buffer_alloc(ctx, N*K*2, &Wfp16) != TC_OK ||
+        tc_buffer_alloc(ctx, q_bytes, &Wq) != TC_OK ||
+        tc_buffer_alloc(ctx, M*N*2, &Yb) != TC_OK) {
+        fprintf(stderr, "buffer alloc failed\n");
+        rc = 2;
+        goto cleanup;
+    }
+
+    uint16_t *Xp, *Wp, *Yp; uint8_t *Wqp;
+    if (tc_buffer_map(Xb, (void**)&Xp) != TC_OK ||
+        tc_buffer_map(Wfp16, (void**)&Wp) != TC_OK ||
+        tc_buffer_map(Wq, (void**)&Wqp) != TC_OK ||
+        tc_buffer_map(Yb, (void**)&Yp) != TC_OK) {
+        fprintf(stderr, "buffer map failed\n");
+        rc = 2;
+        goto cleanup;
+    }
+
+    Yref = malloc((size_t)M*N*sizeof(float));
+    if (!Yref) { fprintf(stderr, "malloc failed\n"); rc = 2; goto cleanup; }
+
+    srand(0xE8);
+    for (int i = 0; i < M*K; ++i) Xp[i] = f32_to_f16(((float)rand()/RAND_MAX - 0.5f));
+    for (int i = 0; i < N*K; ++i) Wp[i] = f32_to_f16(((float)rand()/RAND_MAX - 0.5f) * 0.1f);
+
+    s = tc_quantize_weights(ctx, Wfp16, Wq, TC_QUANT_Q8_0, N, K);
+    if (s != TC_OK) { fprintf(stderr, "quantize q8_0: %s\n", tc_status_string(s)); rc = 2; goto cleanup; }
+
+    s = tc_gemv_quantized(ctx, Xb, Wq, Yb, TC_QUANT_Q8_0, M, N, K);
+    if (s != TC_OK) { fprintf(stderr, "gemv q8_0: %s\n", tc_status_string(s)); rc = 3; goto cleanup; }
+
+    ref_q8_0_gemv(M, N, K, Xp, Wqp, Yref);
+
+    double se = 0, sr = 0, max_abs = 0;
+    for (int i = 0; i < M*N; ++i) {
+        float got = f16_to_f32(Yp[i]);
+        double e = fabs((double)got - (double)Yref[i]);
+        se += e * e; sr += (double)Yref[i] * Yref[i];
+        if (e > max_abs) max_abs = e;
+    }
+    const double scaled = sqrt(se / (M*N)) / (sqrt(sr / (M*N)) + 1e-9);
+    printf("  q8_0_gemv M=%d N=%d K=%d   max_abs=%.3e  rms_scaled=%.3e  %s\n",
+           M, N, K, max_abs, scaled, (scaled < 5e-2) ? "OK" : "FAIL");
+
+    const size_t expected = (size_t)N * (K / 32) * 34;
+    printf("  q8_0 storage: %zu bytes (expected %zu) -> %.2f bits/weight  %s\n",
+           q_bytes, expected,
+           (double)q_bytes * 8.0 / (double)(N * K),
+           (q_bytes == expected) ? "OK" : "FAIL");
+
+    rc = (scaled < 5e-2 && q_bytes == expected) ? 0 : 5;
+
+cleanup:
+    free(Yref);
+    if (Xb) tc_buffer_free(ctx, Xb);
+    if (Wfp16) tc_buffer_free(ctx, Wfp16);
+    if (Wq) tc_buffer_free(ctx, Wq);
+    if (Yb) tc_buffer_free(ctx, Yb);
+    return rc;
+}
+
+int main(void) {
+    tc_context* ctx = NULL;
+    tc_status_t s = tc_init(&ctx);
+    if (s != TC_OK && s != TC_ERR_ALREADY_INITIALIZED) {
+        fprintf(stderr, "tc_init failed: %s\n", tc_status_string(s));
+        return 1;
+    }
+
+    int rc = run_q4_case(ctx, 1, 128, 256);
+    if (rc == 0) rc = run_q4_case(ctx, 1, 130, 256);
+    if (rc == 0) rc = run_q8_case(ctx, 1, 129, 256);
+    if (rc == 0) {
+        const size_t invalid = tc_quantized_size((tc_quant_t)99, 128, 256);
+        printf("  invalid quant size: %zu %s\n", invalid, (invalid == 0) ? "OK" : "FAIL");
+        if (invalid != 0) rc = 5;
+    }
+
     tc_shutdown(ctx);
 
-    return (scaled < 5e-2 && q_bytes == expected) ? 0 : 5;
+    return rc;
 }

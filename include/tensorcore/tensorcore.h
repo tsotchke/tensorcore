@@ -12,6 +12,7 @@
 #include "tensorcore/conv.h"
 #include "tensorcore/distributed.h"
 #include "tensorcore/quantized.h"
+#include "tensorcore/gguf.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -19,7 +20,7 @@ extern "C" {
 
 #define TENSORCORE_VERSION_MAJOR 0
 #define TENSORCORE_VERSION_MINOR 1
-#define TENSORCORE_VERSION_PATCH 0
+#define TENSORCORE_VERSION_PATCH 6
 
 const char* tc_version(void);
 

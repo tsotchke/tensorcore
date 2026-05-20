@@ -34,6 +34,11 @@ static double now_seconds(void) {
     return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
 
+static int cmp_double(const void* a, const void* b) {
+    double x = *(const double*)a, y = *(const double*)b;
+    return (x > y) - (x < y);
+}
+
 int main(void) {
     tc_context* ctx = NULL;
     tc_status_t s = tc_init(&ctx);
@@ -102,34 +107,43 @@ int main(void) {
     tc_stream_create(ctx, &st);
 
     const int N_TOKENS = 20;
-    double t0 = now_seconds();
-    for (int tk = 0; tk < N_TOKENS; ++tk) {
-        for (int layer = 0; layer < n_layers; ++layer) {
-            tc_gemv_quantized_async(ctx, x_h, Wq_hh, y_h, TC_QUANT_Q4_0, 1, hidden, hidden, st);
-            tc_gemv_quantized_async(ctx, x_h, Wq_hh, y_h, TC_QUANT_Q4_0, 1, hidden, hidden, st);
-            tc_gemv_quantized_async(ctx, x_h, Wq_hh, y_h, TC_QUANT_Q4_0, 1, hidden, hidden, st);
-            tc_gemv_quantized_async(ctx, x_h, Wq_hh, y_h, TC_QUANT_Q4_0, 1, hidden, hidden, st);
-            tc_gemv_quantized_async(ctx, x_h, Wq_hm, y_mlp, TC_QUANT_Q4_0, 1, mlp_dim, hidden, st);
-            tc_gemv_quantized_async(ctx, x_h, Wq_hm, y_mlp, TC_QUANT_Q4_0, 1, mlp_dim, hidden, st);
-            tc_gemv_quantized_async(ctx, x_mlp, Wq_mh, y_h, TC_QUANT_Q4_0, 1, hidden, mlp_dim, st);
+    const int N_REPEATS = 5;
+    double times[N_REPEATS];
+    for (int rep = 0; rep < N_REPEATS; ++rep) {
+        double t0 = now_seconds();
+        for (int tk = 0; tk < N_TOKENS; ++tk) {
+            for (int layer = 0; layer < n_layers; ++layer) {
+                tc_gemv_quantized_async(ctx, x_h, Wq_hh, y_h, TC_QUANT_Q4_0, 1, hidden, hidden, st);
+                tc_gemv_quantized_async(ctx, x_h, Wq_hh, y_h, TC_QUANT_Q4_0, 1, hidden, hidden, st);
+                tc_gemv_quantized_async(ctx, x_h, Wq_hh, y_h, TC_QUANT_Q4_0, 1, hidden, hidden, st);
+                tc_gemv_quantized_async(ctx, x_h, Wq_hh, y_h, TC_QUANT_Q4_0, 1, hidden, hidden, st);
+                tc_gemv_quantized_async(ctx, x_h, Wq_hm, y_mlp, TC_QUANT_Q4_0, 1, mlp_dim, hidden, st);
+                tc_gemv_quantized_async(ctx, x_h, Wq_hm, y_mlp, TC_QUANT_Q4_0, 1, mlp_dim, hidden, st);
+                tc_gemv_quantized_async(ctx, x_mlp, Wq_mh, y_h, TC_QUANT_Q4_0, 1, hidden, mlp_dim, st);
+            }
+            tc_stream_sync(st);   /* per-token sync */
         }
-        tc_stream_sync(st);   /* per-token sync */
+        times[rep] = now_seconds() - t0;
     }
-    double dt = now_seconds() - t0;
     tc_stream_destroy(ctx, st);
-    double per_token_ms = (dt / N_TOKENS) * 1000.0;
-    double tps = N_TOKENS / dt;
+    qsort(times, N_REPEATS, sizeof(double), cmp_double);
+    const double best_dt = times[0];
+    const double med_dt = times[N_REPEATS / 2];
+    double per_token_ms = (med_dt / N_TOKENS) * 1000.0;
+    double tps = N_TOKENS / med_dt;
 
     /* Weight read per token = 4 × hh + 2 × hm + 1 × mh, per layer × n_layers. */
     const double weight_bytes_per_token =
         (double)(4 * hh_q + 2 * hm_q + mh_q) * (double)n_layers;
     const double weight_gbps = weight_bytes_per_token * tps / (1024.0*1024.0*1024.0);
 
-    printf("\nResults (%d tokens, %d layers, Q4_0 GEMVs only):\n", N_TOKENS, n_layers);
-    printf("  total time     : %.3f s\n", dt);
-    printf("  per token      : %.2f ms\n", per_token_ms);
-    printf("  tokens / sec   : %.1f\n", tps);
-    printf("  weight bw used : %.1f GB/s\n", weight_gbps);
+    printf("\nResults (%d tokens x %d repeats, %d layers, Q4_0 GEMVs only):\n",
+           N_TOKENS, N_REPEATS, n_layers);
+    printf("  median time    : %.3f s\n", med_dt);
+    printf("  best time      : %.3f s\n", best_dt);
+    printf("  median/token   : %.2f ms\n", per_token_ms);
+    printf("  median tok/s   : %.1f\n", tps);
+    printf("  median weight bw: %.1f GB/s\n", weight_gbps);
     printf("\nReference: llama.cpp on M2 Ultra Q4_0 7B reports ~55-65 tok/s.\n");
     printf("Note: this bench excludes attention + softmax/RoPE/RMSnorm — pure GEMV.\n");
 

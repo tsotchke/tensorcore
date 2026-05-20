@@ -18,6 +18,7 @@ set(TC_TESTS
     test_quantized
     test_fused_norm_gemv
     test_distributed_ring_fork
+    test_gguf
 )
 
 foreach(t IN LISTS TC_TESTS)
@@ -30,3 +31,31 @@ foreach(t IN LISTS TC_TESTS)
         TIMEOUT 120
     )
 endforeach()
+
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    execute_process(
+        COMMAND ${Python3_EXECUTABLE} -c "import numpy"
+        RESULT_VARIABLE TC_PYTHON_NUMPY_RESULT
+        OUTPUT_QUIET
+        ERROR_QUIET
+    )
+    if(TC_PYTHON_NUMPY_RESULT EQUAL 0)
+        add_test(
+            NAME python_basic
+            COMMAND ${CMAKE_COMMAND} -E env
+                "TENSORCORE_LIB=$<TARGET_FILE:tensorcore_shared>"
+                "PYTHONPATH=${CMAKE_SOURCE_DIR}/python"
+                ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/python/tests/test_basic.py
+        )
+        set_tests_properties(python_basic PROPERTIES
+            SKIP_RETURN_CODE 77
+            TIMEOUT 120
+        )
+    else()
+        message(STATUS "tensorcore: Python tests disabled (numpy not importable)")
+    endif()
+else()
+    message(STATUS "tensorcore: Python tests disabled (Python3 interpreter not found)")
+endif()

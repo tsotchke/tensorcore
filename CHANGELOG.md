@@ -1,5 +1,68 @@
 # Changelog
 
+## v0.1.6 — GGUF loading, Q4 v2, Q8 quantization, installable package
+
+This checkpoint turns tensorcore from a build-tree kernel library into
+something downstream projects can start consuming directly.
+
+### GGUF reader and bulk tensor loading
+- Added `include/tensorcore/gguf.h` and `lib/io/gguf.c`: a memory-mapped GGUF
+  v3 reader with metadata lookup, tensor enumeration, and tensor-to-buffer
+  copy.
+- Added `tc_gguf_load_supported_tensors`: bulk-copies every supported GGUF
+  tensor into owned `tc_buffer` objects and reports skipped unsupported
+  encodings.
+- Added GGUF numeric and array metadata helpers for model config and tokenizer
+  fields: strings, integers, floats, string arrays, integer arrays, and float
+  arrays.
+- Added `tc_gguf_get_llama_config` / Python `gguf_get_llama_config` to extract
+  common LLaMA-family dimensions, head counts, RoPE settings, RMSNorm epsilon,
+  and vocab size in one call.
+- Added GGUF quantized matrix descriptor helpers in C and Python so runtimes
+  can safely map GGUF `[K, N]` Q4_0/Q8_0 tensors to
+  `tc_gemv_quantized(..., N, K)`.
+- Added `tests/test_gguf.c`: synthetic GGUF round-trip, metadata validation,
+  direct tensor copy, bulk load, unsupported-tensor skip count, and Q4 GEMV
+  from a GGUF-backed tensor.
+- Added `examples/gguf_inspect.c`: CLI inspection plus explicit
+  `--load-supported` GPU copy mode.
+
+### Quantized inference
+- Added `kernels/metal/gemm_quantized_v2.metal`: faster Q4_0 GEMV path used by
+  default; `TC_Q4_USE_V1=1` keeps the older kernel available for comparison.
+- Fixed Q4_0 packing to GGML/GGUF layout: low nibble is weight `i`, high
+  nibble is weight `i+16`.
+- Added GPU Q8_0 quantization via `tc_quantize_q8_0`; public
+  `tc_quantize_weights(..., TC_QUANT_Q8_0, ...)` now works.
+- `tests/test_quantized.c` now covers Q4_0 sync/async, tail N, Q8_0 GPU
+  quantize+GEMV, and invalid quant enum sizing.
+
+### Streams and installability
+- Stream-backed async ops now share a pending command buffer so batched
+  inference calls avoid per-op command-buffer round trips.
+- Added installable CMake package export:
+  `tensorcore::tensorcore` and `tensorcore::tensorcore_shared`.
+- Installed builds now ship `lib/tensorcore.metallib`, and the runtime finds it
+  next to the loaded dylib without requiring `TC_METALLIB`.
+- Added `docs/integrating_tensorcore.md` with the CMake, C ABI, Python, and
+  GGUF bulk-load integration paths.
+
+### Python binding
+- Expanded `python/tensorcore/__init__.py` beyond GEMM: streams, async GEMM,
+  RMSNorm/LayerNorm/RoPE/SwiGLU/softmax/AdamW/fused RMSNorm+GEMV wrappers,
+  Q4/Q8 quantized helpers, GGUF metadata/tensor access, single tensor copy,
+  matrix descriptors, and bulk loaded-model handles.
+- Added `pyproject.toml` so downstream projects can install the Python binding
+  with pip while using a CMake-installed `libtensorcore.dylib`.
+- `python/tests/test_basic.py` now validates GEMM, async GEMM, training
+  wrappers, Q4_0, Q8_0, GGUF copy, and GGUF bulk load.
+- CTest registers `python_basic` when Python + NumPy are available.
+
+### Verification
+- `ctest --test-dir build --output-on-failure`: 17/17 pass on Apple M2 Ultra.
+- Installed package smoke verified with `/private/tmp/tensorcore-install`.
+- Out-of-tree CMake consumer verified via `find_package(tensorcore CONFIG)`.
+
 ## v0.1.5 — Modern attention, multi-process distributed, inference bench, Python
 
 Closes the rest: sliding-window + ALiBi attention (modern LLM features), real

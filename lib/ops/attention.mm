@@ -341,8 +341,9 @@ extern "C" tc_status_t tc_attention_forward_async(tc_context* ctx,
     const uint32_t q_blocks = (seq_q + kc.BR - 1) / kc.BR;
 
     @autoreleasepool {
-        id<MTLCommandQueue> q = stream ? stream->queue : ctx->queue;
-        id<MTLCommandBuffer> cmd = [q commandBuffer];
+        id<MTLCommandBuffer> cmd = stream ? tc_stream_command_buffer(stream)
+                                          : [ctx->queue commandBuffer];
+        if (!cmd) return TC_ERR_INTERNAL;
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
         [enc setComputePipelineState:pso];
         [enc setBuffer:Q->mtl offset:0 atIndex:0];
@@ -359,7 +360,7 @@ extern "C" tc_status_t tc_attention_forward_async(tc_context* ctx,
         [enc dispatchThreadgroups:MTLSizeMake(q_blocks, heads, batch)
             threadsPerThreadgroup:MTLSizeMake(kc.threads, 1, 1)];
         [enc endEncoding];
-        [cmd commit];
+        if (!stream) [cmd commit];
     }
     tc_set_last_backend(TC_BACKEND_SIMDGROUP_MATRIX);
     return TC_OK;
