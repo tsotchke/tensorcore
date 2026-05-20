@@ -32,6 +32,7 @@ For perf-critical loops, use the async variants and tc.stream_sync().
 import ctypes
 import os
 import sys
+import weakref
 from ctypes import (
     c_int, c_uint, c_int32, c_int64, c_uint32, c_uint64, c_size_t,
     c_float, c_double, c_char_p, c_void_p, c_bool, POINTER, Structure, byref,
@@ -759,8 +760,9 @@ class Context:
 
     def __init__(self):
         self.handle = init()
-        self._buffers = set()
-        self._streams = set()
+        self._buffers = weakref.WeakSet()
+        self._streams = weakref.WeakSet()
+        self._loaded_models = weakref.WeakSet()
         self._closed = False
 
     def __enter__(self):
@@ -788,11 +790,19 @@ class Context:
     def _forget_stream(self, stream):
         self._streams.discard(stream)
 
+    def _remember_loaded_model(self, model):
+        self._loaded_models.add(model)
+
+    def _forget_loaded_model(self, model):
+        self._loaded_models.discard(model)
+
     def close(self):
         if self._closed:
             return
         for stream in list(self._streams):
             stream.close()
+        for model in list(self._loaded_models):
+            model.close()
         for buf in list(self._buffers):
             buf.close()
         shutdown(self.handle)
@@ -822,6 +832,9 @@ class Context:
 
     def gemv_quantized(self, X, W_quant, Y, fmt, M, N, K):
         return gemv_quantized(self, X, W_quant, Y, fmt, M, N, K)
+
+    def gemv_quantized_async(self, X, W_quant, Y, fmt, M, N, K, stream):
+        return gemv_quantized_async(self, X, W_quant, Y, fmt, M, N, K, stream)
 
     def rmsnorm_forward(self, X, gamma, Y, rstd_out, N, D, eps=1e-5):
         return rmsnorm_forward(self, X, gamma, Y, rstd_out, N, D, eps)
@@ -987,9 +1000,9 @@ class GgufFile:
     def llama_config(self):
         return gguf_get_llama_config(self)
 
-    def tensor_to_buffer(self, ctx, name, owned=True):
+    def tensor_to_buffer(self, ctx, name):
         handle = gguf_tensor_to_buffer(ctx, self, name)
-        return Buffer(ctx, handle=handle, owned=owned)
+        return Buffer(ctx, handle=handle, owned=True)
 
     def load_supported_tensors(self, ctx):
         return LoadedModel(ctx, self)
@@ -1002,6 +1015,8 @@ class LoadedModel:
         self.ctx = ctx
         self.handle = gguf_load_supported_tensors(ctx, gguf)
         self._closed = False
+        if hasattr(ctx, "_remember_loaded_model"):
+            ctx._remember_loaded_model(self)
 
     def __bool__(self):
         return self.handle is not None
@@ -1024,6 +1039,8 @@ class LoadedModel:
             gguf_loaded_model_free(self.ctx, self.handle)
             self.handle = None
             self._closed = True
+        if hasattr(self.ctx, "_forget_loaded_model"):
+            self.ctx._forget_loaded_model(self)
 
     def tensor_count(self):
         return gguf_loaded_tensor_count(self)
@@ -1032,10 +1049,77 @@ class LoadedModel:
         return gguf_loaded_skipped_tensor_count(self)
 
     def tensor_at(self, index):
-        return gguf_loaded_tensor_at(self, index)
+        return LoadedTensor(self, gguf_loaded_tensor_at(self, index))
 
     def get_tensor(self, name):
-        return gguf_loaded_get_tensor(self, name)
+        return LoadedTensor(self, gguf_loaded_get_tensor(self, name))
+
+    def quantized_matrix(self, name):
+        return QuantizedMatrix(self, name)
+
+
+class LoadedTensor(dict):
+    """Loaded tensor metadata with a strong reference to its owning model."""
+
+    def __init__(self, model, info):
+        super().__init__(info)
+        self.model = model
+
+    def _check_alive(self):
+        if getattr(self.model, "_closed", False):
+            raise RuntimeError("loaded tensor buffer is no longer valid; owning model is closed")
+
+    def __getitem__(self, key):
+        if key == "buffer":
+            self._check_alive()
+        return super().__getitem__(key)
+
+    def get(self, key, default=None):
+        if key == "buffer":
+            self._check_alive()
+        return super().get(key, default)
+
+    @property
+    def buffer(self):
+        return self["buffer"]
+
+
+class QuantizedMatrix:
+    """Loaded GGUF Q4_0/Q8_0 matrix ready for tc_gemv_quantized."""
+
+    def __init__(self, model, name):
+        self.model = model
+        self.name = str(name)
+        self.tensor = model.get_tensor(name)
+        self.info = gguf_loaded_tensor_quantized_matrix_info(self.tensor)
+        self.N = self.info["N"]
+        self.K = self.info["K"]
+        self.quant_type = self.info["quant_type"]
+        self.gguf_type = self.info["gguf_type"]
+        self.n_bytes = self.info["n_bytes"]
+        self.buffer = self.info["buffer"]
+
+    def _check_alive(self):
+        if getattr(self.model, "_closed", False):
+            raise RuntimeError("quantized matrix buffer is no longer valid; owning model is closed")
+
+    def output(self, M=1):
+        self._check_alive()
+        return Buffer(self.model.ctx, int(M) * self.N * 2)
+
+    def gemv(self, X, Y, M=1, ctx=None):
+        self._check_alive()
+        run_ctx = self.model.ctx if ctx is None else ctx
+        gemv_quantized(run_ctx, X, self.buffer, Y, self.quant_type,
+                       int(M), self.N, self.K)
+        return Y
+
+    def gemv_async(self, X, Y, stream, M=1, ctx=None):
+        self._check_alive()
+        run_ctx = self.model.ctx if ctx is None else ctx
+        gemv_quantized_async(run_ctx, X, self.buffer, Y, self.quant_type,
+                             int(M), self.N, self.K, stream)
+        return Y
 
 
 def version():

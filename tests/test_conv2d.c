@@ -124,6 +124,14 @@ int main(void) {
            IC, OC, H, W_in, kH, kW, pad, stride, oH, oW, fwd_err,
            (fwd_err < 2e-2) ? "OK" : "FAIL");
 
+    s = tc_conv2d_forward(ctx, Xb, Wb, bb, Yb, col,
+                          2, IC, OC, H, W_in, kH, kW,
+                          pad, pad, stride, stride, oH, oW);
+    const int multi_batch_rejected = (s == TC_ERR_INVALID_SHAPE);
+    printf("  conv2d_forward batch>1 rejected=%s  %s\n",
+           multi_batch_rejected ? "yes" : "no",
+           multi_batch_rejected ? "OK" : tc_status_string(s));
+
     /* Backward sanity: just check the kernels dispatch + write nonzero results. */
     tc_buffer *dXb, *dWb, *dX_f32;
     tc_buffer_alloc(ctx, N*IC*H*W_in*2, &dXb);
@@ -162,5 +170,6 @@ int main(void) {
     tc_buffer_free(ctx, dXb); tc_buffer_free(ctx, dWb); tc_buffer_free(ctx, dX_f32);
     tc_shutdown(ctx);
 
-    return (fwd_err < 2e-2 && bw_in_ok && nz_in > 0 && bw_w_ok && nz_w > 0) ? 0 : 5;
+    return (fwd_err < 2e-2 && multi_batch_rejected &&
+            bw_in_ok && nz_in > 0 && bw_w_ok && nz_w > 0) ? 0 : 5;
 }

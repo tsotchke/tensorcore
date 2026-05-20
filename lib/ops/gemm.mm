@@ -309,6 +309,7 @@ extern "C" tc_status_t tc_gemm_batched(tc_context* ctx,
                                        tc_buffer*       C) {
     if (!ctx || !bd || !A || !B || !C) return TC_ERR_INVALID_ARG;
     const tc_gemm_desc& d = bd->base;
+    if (bd->batch <= 0) return TC_ERR_INVALID_ARG;
 
     /* v0.1 batched fast path: fp16 in/out + fp32 accum + no transpose +
      * alpha=1/beta=0. Anything else falls back to the per-batch loop. */
@@ -318,13 +319,12 @@ extern "C" tc_status_t tc_gemm_batched(tc_context* ctx,
          !d.transpose_a && !d.transpose_b);
 
     if (!fast_path) {
-        /* Fallback: per-batch dispatch via tc_gemm. Manual offset accounting
-         * via tc_buffer sub-views is not yet plumbed; v0.2. */
-        for (int32_t i = 0; i < bd->batch; ++i) {
-            tc_status_t s = tc_gemm(ctx, &d, A, B, C);
-            if (s != TC_OK) return s;
-        }
-        return TC_OK;
+        if (bd->batch != 1) return TC_ERR_INVALID_SHAPE;
+        return tc_gemm(ctx, &d, A, B, C);
+    }
+
+    if (bd->batch > 1 && (bd->stride_a <= 0 || bd->stride_b <= 0 || bd->stride_c <= 0)) {
+        return TC_ERR_INVALID_SHAPE;
     }
 
     tc_status_t err = TC_OK;

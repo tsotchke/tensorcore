@@ -437,15 +437,30 @@ def main():
             owned_tensor = owned_g.get_tensor("weight.test")
             with owned_g.tensor_to_buffer(ctx, "weight.test") as owned_gb:
                 owned_copied = ctypes.string_at(owned_gb.map(), owned_gb.size())
-            with owned_g.load_supported_tensors(ctx) as owned_loaded:
-                owned_loaded_tensor = owned_loaded.get_tensor("weight.test")
-                owned_loaded_qinfo = tc.gguf_loaded_tensor_quantized_matrix_info(owned_loaded_tensor)
-                owned_loaded_ok = (
-                    owned_loaded.tensor_count() == 1 and
-                    owned_loaded.skipped_tensor_count() == 0 and
-                    owned_loaded_qinfo["N"] == 1 and
-                    owned_loaded_qinfo["K"] == 32
-                )
+            with tc.Context() as owned_ctx:
+                with owned_g.load_supported_tensors(owned_ctx) as owned_loaded:
+                    owned_loaded_tensor = owned_loaded.get_tensor("weight.test")
+                    owned_loaded_qinfo = tc.gguf_loaded_tensor_quantized_matrix_info(owned_loaded_tensor)
+                    qmat = owned_loaded.quantized_matrix("weight.test")
+                    x_ones = np.ones((1, 32), dtype=np.float16)
+                    with owned_ctx.buffer_from_array(x_ones) as xbuf, qmat.output() as ybuf:
+                        qmat.gemv(xbuf, ybuf)
+                        qmat_y = ybuf.to_numpy((1, qmat.N), np.float16)
+                    owned_loaded_ok = (
+                        owned_loaded.tensor_count() == 1 and
+                        owned_loaded.skipped_tensor_count() == 0 and
+                        owned_loaded_qinfo["N"] == 1 and
+                        owned_loaded_qinfo["K"] == 32 and
+                        qmat.N == 1 and
+                        qmat.K == 32 and
+                        qmat.quant_type == tc.TC_QUANT_Q4_0 and
+                        qmat_y[0, 0] == np.float16(40.0)
+                    )
+                try:
+                    _ = owned_loaded_tensor["buffer"]
+                    owned_tensor_lifetime_ok = False
+                except RuntimeError:
+                    owned_tensor_lifetime_ok = True
         gguf_ok = (
             tc.gguf_tensor_count(g) == 1 and
             tc.gguf_metadata_count(g) == 12 and
@@ -473,6 +488,7 @@ def main():
             owned_tensor["dims"] == (32, 1) and
             owned_copied == copied and
             owned_loaded_ok and
+            owned_tensor_lifetime_ok and
             qinfo["N"] == 1 and
             qinfo["K"] == 32 and
             qinfo["quant_type"] == tc.TC_QUANT_Q4_0 and

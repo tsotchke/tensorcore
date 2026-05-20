@@ -34,6 +34,25 @@ int main(void) {
     if (info.family < TC_FAMILY_APPLE7) {
         fprintf(stderr, "warning: pre-M1 GPU detected — simdgroup_matrix unavailable\n");
     }
-    tc_shutdown(ctx);
+
+    tc_context* ctx2 = NULL;
+    s = tc_init(&ctx2);
+    if (s != TC_ERR_ALREADY_INITIALIZED || ctx2 != ctx) {
+        fprintf(stderr, "second tc_init did not return shared initialized context\n");
+        return 3;
+    }
+
+    if (tc_shutdown(ctx) != TC_OK) {
+        fprintf(stderr, "first tc_shutdown failed\n");
+        return 4;
+    }
+    if (tc_device_info_get(ctx2, &info) != TC_OK) {
+        fprintf(stderr, "context was destroyed before final shutdown\n");
+        return 5;
+    }
+    if (tc_shutdown(ctx2) != TC_OK) {
+        fprintf(stderr, "second tc_shutdown failed\n");
+        return 6;
+    }
     return 0;
 }

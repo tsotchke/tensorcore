@@ -125,6 +125,32 @@ static int run_case(tc_context* ctx, int M, int N, int K) {
     return (scaled < 1.5e-2) ? 0 : 5;
 }
 
+static int run_batched_rejection_case(tc_context* ctx) {
+    tc_buffer *A = NULL, *B = NULL, *C = NULL;
+    tc_buffer_alloc(ctx, 2 * sizeof(uint16_t), &A);
+    tc_buffer_alloc(ctx, 2 * sizeof(uint16_t), &B);
+    tc_buffer_alloc(ctx, 2 * sizeof(uint16_t), &C);
+
+    tc_gemm_batched_desc bd = {0};
+    bd.base.M = 1; bd.base.N = 1; bd.base.K = 1;
+    bd.base.a_dtype = TC_DTYPE_F32;
+    bd.base.b_dtype = TC_DTYPE_F32;
+    bd.base.c_dtype = TC_DTYPE_F32;
+    bd.base.accum_dtype = TC_DTYPE_F32;
+    bd.base.alpha = 1.0f; bd.base.beta = 0.0f;
+    bd.batch = 2;
+    bd.stride_a = 1; bd.stride_b = 1; bd.stride_c = 1;
+
+    tc_status_t s = tc_gemm_batched(ctx, &bd, A, B, C);
+    printf("  batched fallback rejection: %s\n",
+           (s == TC_ERR_INVALID_SHAPE) ? "OK" : tc_status_string(s));
+
+    tc_buffer_free(ctx, A);
+    tc_buffer_free(ctx, B);
+    tc_buffer_free(ctx, C);
+    return (s == TC_ERR_INVALID_SHAPE) ? 0 : 1;
+}
+
 int main(void) {
     tc_context* ctx = NULL;
     tc_status_t s = tc_init(&ctx);
@@ -137,6 +163,7 @@ int main(void) {
     rc |= run_case(ctx, 128, 128, 128);
     rc |= run_case(ctx, 256, 256, 256);
     rc |= run_case(ctx, 512, 512, 512);
+    rc |= run_batched_rejection_case(ctx);
     tc_shutdown(ctx);
     return rc;
 }

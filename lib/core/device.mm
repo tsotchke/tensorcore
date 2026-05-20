@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <dlfcn.h>
+#include <mutex>
 #include <new>
 
 /* Forward — implemented in pipeline_cache.mm / buffer_pool.mm. */
@@ -34,7 +35,7 @@ extern "C" tc_status_t tc_autotune_run_sweep(tc_context* ctx, char* out_json, si
 /* Singleton context — only one MTLDevice per process for now.        */
 /* ----------------------------------------------------------------- */
 static struct tc_context* g_ctx = nullptr;
-static std::atomic<bool>  g_init_running{false};
+static std::mutex         g_ctx_mutex;
 
 /* Thread-local diagnostic for tc_last_backend(). */
 static thread_local tc_backend_t t_last_backend = TC_BACKEND_NONE;
@@ -153,83 +154,95 @@ static id<MTLLibrary> load_metallib(id<MTLDevice> dev) {
 /* ----------------------------------------------------------------- */
 extern "C" tc_status_t tc_init(tc_context** out_ctx) {
     if (!out_ctx) return TC_ERR_INVALID_ARG;
-    bool expected = false;
-    if (!g_init_running.compare_exchange_strong(expected, true)) {
-        if (g_ctx) { *out_ctx = g_ctx; return TC_ERR_ALREADY_INITIALIZED; }
-    }
-    if (g_ctx) { g_init_running.store(false); *out_ctx = g_ctx; return TC_ERR_ALREADY_INITIALIZED; }
 
-    @autoreleasepool {
-        id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
-        if (!dev) { g_init_running.store(false); return TC_ERR_NO_DEVICE; }
-
-        id<MTLCommandQueue> q = [dev newCommandQueue];
-        if (!q)   { g_init_running.store(false); return TC_ERR_NO_DEVICE; }
-
-        id<MTLLibrary> lib = load_metallib(dev);
-        if (!lib) { g_init_running.store(false); return TC_ERR_KERNEL_NOT_FOUND; }
-
-        TCPipelineCache* pcache = tc_pipeline_cache_create(lib);
-        TCBufferPool*    bpool  = tc_buffer_pool_create(dev);
-        if (!pcache || !bpool) {
-            g_init_running.store(false);
-            return TC_ERR_ALLOC;
+    bool created = false;
+    {
+        std::lock_guard<std::mutex> lock(g_ctx_mutex);
+        if (g_ctx) {
+            g_ctx->ref.fetch_add(1);
+            *out_ctx = g_ctx;
+            return TC_ERR_ALREADY_INITIALIZED;
         }
 
-        tc_context* ctx = new (std::nothrow) tc_context();
-        if (!ctx) { g_init_running.store(false); return TC_ERR_ALLOC; }
+        @autoreleasepool {
+            id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
+            if (!dev) return TC_ERR_NO_DEVICE;
 
-        ctx->device      = dev;
-        ctx->queue       = q;
-        ctx->library     = lib;
-        ctx->pipelines   = pcache;
-        ctx->buffer_pool = bpool;
-        ctx->ref.store(1);
+            id<MTLCommandQueue> q = [dev newCommandQueue];
+            if (!q) return TC_ERR_NO_DEVICE;
 
-        tc_family_t fam = tc_device_family_from_mtl(dev);
-        ctx->info.family                = fam;
-        const char* dev_name = [[dev name] UTF8String];
-        std::strncpy(ctx->info.name, dev_name ? dev_name : "", sizeof(ctx->info.name) - 1);
-        ctx->info.max_buffer_bytes              = (uint64_t)[dev maxBufferLength];
-        ctx->info.recommended_working_set_bytes = (uint64_t)[dev recommendedMaxWorkingSetSize];
-        ctx->info.max_threadgroup_memory        = (uint32_t)[dev maxThreadgroupMemoryLength];
-        ctx->info.max_threads_per_threadgroup   = 1024;
-        ctx->info.thread_execution_width        = 32;  /* All Apple Silicon */
-        ctx->info.unified_memory                = [dev hasUnifiedMemory];
-        ctx->info.supports_bf16_simdgroup       = (fam >= TC_FAMILY_APPLE9);
-        ctx->info.supports_i8_simdgroup         = (fam >= TC_FAMILY_APPLE10);
-        ctx->info.supports_tensorops_m5         = (fam >= TC_FAMILY_APPLE11);
-        ctx->info.supports_fp64_native          = false;
+            id<MTLLibrary> lib = load_metallib(dev);
+            if (!lib) return TC_ERR_KERNEL_NOT_FOUND;
 
-        fprintf(stderr,
-            "[tensorcore] device=\"%s\" family=Apple%d unified=%s vram=%lluMB "
-            "bf16_sg=%s i8_sg=%s tensorops_m5=%s\n",
-            ctx->info.name, (int)fam,
-            ctx->info.unified_memory ? "yes" : "no",
-            (unsigned long long)(ctx->info.recommended_working_set_bytes / (1024 * 1024)),
-            ctx->info.supports_bf16_simdgroup ? "yes" : "no",
-            ctx->info.supports_i8_simdgroup   ? "yes" : "no",
-            ctx->info.supports_tensorops_m5   ? "yes" : "no");
+            TCPipelineCache* pcache = tc_pipeline_cache_create(lib);
+            TCBufferPool*    bpool  = tc_buffer_pool_create(dev);
+            if (!pcache || !bpool) {
+                if (pcache) tc_pipeline_cache_destroy(pcache);
+                if (bpool) tc_buffer_pool_destroy(bpool);
+                return TC_ERR_ALLOC;
+            }
 
-        g_ctx = ctx;
+            tc_context* ctx = new (std::nothrow) tc_context();
+            if (!ctx) {
+                tc_pipeline_cache_destroy(pcache);
+                tc_buffer_pool_destroy(bpool);
+                return TC_ERR_ALLOC;
+            }
+
+            ctx->device      = dev;
+            ctx->queue       = q;
+            ctx->library     = lib;
+            ctx->pipelines   = pcache;
+            ctx->buffer_pool = bpool;
+            ctx->ref.store(1);
+
+            tc_family_t fam = tc_device_family_from_mtl(dev);
+            ctx->info.family                = fam;
+            const char* dev_name = [[dev name] UTF8String];
+            std::strncpy(ctx->info.name, dev_name ? dev_name : "", sizeof(ctx->info.name) - 1);
+            ctx->info.max_buffer_bytes              = (uint64_t)[dev maxBufferLength];
+            ctx->info.recommended_working_set_bytes = (uint64_t)[dev recommendedMaxWorkingSetSize];
+            ctx->info.max_threadgroup_memory        = (uint32_t)[dev maxThreadgroupMemoryLength];
+            ctx->info.max_threads_per_threadgroup   = 1024;
+            ctx->info.thread_execution_width        = 32;  /* All Apple Silicon */
+            ctx->info.unified_memory                = [dev hasUnifiedMemory];
+            ctx->info.supports_bf16_simdgroup       = (fam >= TC_FAMILY_APPLE9);
+            ctx->info.supports_i8_simdgroup         = (fam >= TC_FAMILY_APPLE10);
+            ctx->info.supports_tensorops_m5         = (fam >= TC_FAMILY_APPLE11);
+            ctx->info.supports_fp64_native          = false;
+
+            fprintf(stderr,
+                "[tensorcore] device=\"%s\" family=Apple%d unified=%s vram=%lluMB "
+                "bf16_sg=%s i8_sg=%s tensorops_m5=%s\n",
+                ctx->info.name, (int)fam,
+                ctx->info.unified_memory ? "yes" : "no",
+                (unsigned long long)(ctx->info.recommended_working_set_bytes / (1024 * 1024)),
+                ctx->info.supports_bf16_simdgroup ? "yes" : "no",
+                ctx->info.supports_i8_simdgroup   ? "yes" : "no",
+                ctx->info.supports_tensorops_m5   ? "yes" : "no");
+
+            g_ctx = ctx;
+            *out_ctx = g_ctx;
+            created = true;
+        }
     }
-    g_init_running.store(false);
-    *out_ctx = g_ctx;
 
     /* Bench-driven autotune: TC_AUTOTUNE=1 to trigger sweep; otherwise load
      * cached config if present. The cache key is device name. */
-    if (const char* at = std::getenv("TC_AUTOTUNE")) {
-        if (at[0] == '1') {
-            char json[1024] = {0};
-            tc_status_t s = tc_autotune_load_cache(g_ctx->info.name, json, sizeof(json));
-            if (s == TC_OK && json[0]) {
-                fprintf(stderr, "[tensorcore] autotune: loaded cached config\n");
-            } else {
-                fprintf(stderr, "[tensorcore] autotune: running sweep (one-time)\n");
-                s = tc_autotune_run_sweep(g_ctx, json, sizeof(json));
+    if (created) {
+        if (const char* at = std::getenv("TC_AUTOTUNE")) {
+            if (at[0] == '1') {
+                char json[1024] = {0};
+                tc_status_t s = tc_autotune_load_cache((*out_ctx)->info.name, json, sizeof(json));
                 if (s == TC_OK && json[0]) {
-                    tc_autotune_save_cache(g_ctx->info.name, json);
-                    fprintf(stderr, "[tensorcore] autotune: cached → %s\n", json);
+                    fprintf(stderr, "[tensorcore] autotune: loaded cached config\n");
+                } else {
+                    fprintf(stderr, "[tensorcore] autotune: running sweep (one-time)\n");
+                    s = tc_autotune_run_sweep(*out_ctx, json, sizeof(json));
+                    if (s == TC_OK && json[0]) {
+                        tc_autotune_save_cache((*out_ctx)->info.name, json);
+                        fprintf(stderr, "[tensorcore] autotune: cached → %s\n", json);
+                    }
                 }
             }
         }
@@ -239,8 +252,9 @@ extern "C" tc_status_t tc_init(tc_context** out_ctx) {
 
 extern "C" tc_status_t tc_shutdown(tc_context* ctx) {
     if (!ctx) return TC_ERR_INVALID_ARG;
-    if (ctx != g_ctx) return TC_ERR_INVALID_ARG;
+    std::lock_guard<std::mutex> lock(g_ctx_mutex);
 
+    if (ctx != g_ctx) return TC_ERR_INVALID_ARG;
     if (ctx->ref.fetch_sub(1) > 1) return TC_OK;
 
     tc_pipeline_cache_destroy(ctx->pipelines);

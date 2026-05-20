@@ -280,6 +280,7 @@ extern "C" tc_status_t tc_conv2d_forward(tc_context* ctx,
         H <= 0 || W_in <= 0 || kH <= 0 || kW <= 0 ||
         out_H <= 0 || out_W <= 0)
         return TC_ERR_INVALID_SHAPE;
+    if (batch != 1) return TC_ERR_INVALID_SHAPE;
 
     tc_status_t err = TC_OK;
     id<MTLComputePipelineState> pso_im2col =
