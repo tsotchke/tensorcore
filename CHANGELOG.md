@@ -1,5 +1,59 @@
 # Changelog
 
+## v0.1.4 — Quantized inference + GQA + fused norm + REAL Eshkol integration
+
+The big push: the LLM-inference kernels (Q4_0/Q8_0 weight-only matmul), GQA
+attention validation, fused RMSnorm+GEMV for the inference hot path, and
+the long-deferred actual integration with `eshkol-platform`.
+
+### Q4_0 / Q8_0 quantized matmul (LLM inference)
+- `kernels/metal/gemm_quantized.metal`: ggml-style block quantization.
+  Q4_0 = 32 weights/block × (fp16 scale + 16 packed nibbles) = 4.5 bits/weight.
+  Q8_0 = 32 weights/block × (fp16 scale + 32 int8) = 8.5 bits/weight.
+- `tc_q4_0_gemv_f16`, `tc_q8_0_gemv_f16`: dequantize on the fly, multiply
+  against fp16 activation, output fp16. One simdgroup per output cell,
+  cooperative simd_sum reduction.
+- `tc_quantize_q4_0`: GPU-side quantization kernel (rounds fp16 weights
+  into Q4_0 blocks with per-block scale).
+- Public API in `include/tensorcore/quantized.h`: `tc_quantize_weights`,
+  `tc_gemv_quantized`, `tc_quantized_size`.
+- `tests/test_quantized.c`: validated bit-exact against CPU dequant ref
+  (rms_scaled=2.0e-4); storage = exact 4.50 bits/weight at K=256.
+
+### GQA / MQA attention validation
+- `tests/test_attention_correctness.c`: added 3 GQA cases (MQA with 1 KV
+  head, GQA with H/2 KV heads, GQA H=8 KV=2 with D=128). All pass at <1%
+  RMS-scaled error vs fp64 reference that implements the same H→KV_H
+  head-grouping the kernel does.
+
+### Fused RMSnorm + GEMV
+- `kernels/metal/fused_norm_gemv.metal`: one-pass `Y = RMSnorm(X, gamma) @ W`.
+  Eliminates the round-trip of the normalized intermediate — the dominant
+  cost at inference batch sizes (M≤4). Two-pass intra-threadgroup: pass 1
+  computes rstd via simd reductions; pass 2 reapplies normalization
+  inline as part of the matmul accumulation.
+- `tc_fused_rmsnorm_gemv` public API.
+- `tests/test_fused_norm_gemv.c`: validated by comparing fused output to
+  `tc_rmsnorm_forward + tc_gemm` separate path, rms_scaled<5e-3.
+
+### REAL eshkol-platform integration (the long-promised one)
+- The `eshkol/bridge/tensorcore_codegen.cpp` shim was previously only
+  compile-tested standalone. Now it's actually dropped into
+  `eshkol-platform/lib/backend/`, glob-included by their CMakeLists, and
+  called from `llvm_codegen.cpp:3140`.
+- Activation is opt-in via `ESHKOL_ENABLE_TENSORCORE=1`. When set, the
+  14 `tc_*` C ABI functions are declared as ExternalLinkage in the
+  Eshkol LLVM module at codegen-context init time.
+- eshkol-platform builds 100% clean with the bridge in place
+  (`eshkol-static` target green, REPL functional in both modes:
+  `(+ 1 2) → 3` identically with and without the env var).
+- Eshkol-platform changes: 1 file added + 1 line change at the call site.
+  Fully reversible — set env=0 or remove the file and the build is back.
+
+### Test count: 14/14 pass on Apple M2 Ultra
+Added test_quantized, test_fused_norm_gemv (12→14). All prior tests still
+pass. ctest --output-on-failure completes in ~3s.
+
 ## v0.1.3 — Universal-dtype GEMM + multi-batch Conv + macOS 26 SDK gating
 
 Closes every remaining hardware-gated path from v0.1.2 by adding **software fallbacks that work on every M-series chip today**. bf16 and i8 GEMM no longer require M3+/M4+ — they validate on this M2.

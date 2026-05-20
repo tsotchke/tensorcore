@@ -91,6 +91,8 @@ static void ref_attention(int B, int H, int Sq, int Sk, int D, int causal,
 
 static int run_case(tc_context* ctx, int B, int H, int Sq, int Sk, int D);
 
+static int run_gqa_case(tc_context* ctx, int B, int H, int KV_H, int Sq, int Sk, int D);
+
 int main(void) {
     tc_context* ctx = NULL;
     tc_status_t s = tc_init(&ctx);
@@ -100,17 +102,115 @@ int main(void) {
     }
 
     int rc = 0;
-    /* D=64 (GPT-2 style) */
+    /* MHA D=64 */
     rc |= run_case(ctx, 1, 2,  64,  64,  64);
     rc |= run_case(ctx, 1, 2, 128, 128,  64);
     rc |= run_case(ctx, 1, 4, 256, 256,  64);
-    /* D=128 (llama / mistral standard) */
+    /* MHA D=128 (llama standard) */
     rc |= run_case(ctx, 1, 2,  64,  64, 128);
     rc |= run_case(ctx, 1, 2, 128, 128, 128);
     rc |= run_case(ctx, 1, 4, 256, 256, 128);
+    /* GQA: kv_heads = heads/4 (llama-3 70B-style) and kv_heads = heads/2. */
+    rc |= run_gqa_case(ctx, 1, 4, 1,  64,  64, 64);   /* MQA: 1 KV head    */
+    rc |= run_gqa_case(ctx, 1, 4, 2, 128, 128, 64);   /* GQA: 2 KV heads   */
+    rc |= run_gqa_case(ctx, 1, 8, 2, 128, 128, 128);  /* GQA D=128         */
 
     tc_shutdown(ctx);
     return rc;
+}
+
+static int run_gqa_case(tc_context* ctx, int B, int H, int KV_H, int Sq, int Sk, int D) {
+    /* Same as run_case but with kv_heads != heads. Reference must replicate
+     * KV per query head: query head h maps to kv head h * KV_H / H. */
+    const float scale = 1.0f / sqrtf((float)D);
+    const int causal = 1;
+    const size_t qkv_elems = (size_t)B * H * Sq * D;
+    const size_t kv_elems  = (size_t)B * KV_H * Sk * D;
+
+    tc_buffer *Q, *K, *V, *O;
+    tc_buffer_alloc(ctx, qkv_elems * 2, &Q);
+    tc_buffer_alloc(ctx, kv_elems  * 2, &K);
+    tc_buffer_alloc(ctx, kv_elems  * 2, &V);
+    tc_buffer_alloc(ctx, qkv_elems * 2, &O);
+
+    uint16_t *Qp, *Kp, *Vp, *Op;
+    tc_buffer_map(Q, (void**)&Qp);
+    tc_buffer_map(K, (void**)&Kp);
+    tc_buffer_map(V, (void**)&Vp);
+    tc_buffer_map(O, (void**)&Op);
+
+    float* Qf = malloc(qkv_elems * sizeof(float));
+    float* Kf = malloc(kv_elems  * sizeof(float));
+    float* Vf = malloc(kv_elems  * sizeof(float));
+    float* Or = malloc(qkv_elems * sizeof(float));
+
+    srand(0xC0A);
+    for (size_t i = 0; i < qkv_elems; ++i) { float v = ((float)rand()/RAND_MAX-0.5f)*0.5f; Qf[i]=v; Qp[i]=f32_to_f16(v); }
+    for (size_t i = 0; i < kv_elems;  ++i) { float v = ((float)rand()/RAND_MAX-0.5f)*0.5f; Kf[i]=v; Kp[i]=f32_to_f16(v); }
+    for (size_t i = 0; i < kv_elems;  ++i) { float v = ((float)rand()/RAND_MAX-0.5f)*0.5f; Vf[i]=v; Vp[i]=f32_to_f16(v); }
+    memset(Op, 0, qkv_elems * 2);
+
+    /* Reference: for each query head h, use kv head h*KV_H/H. */
+    for (int b = 0; b < B; ++b) {
+        for (int h = 0; h < H; ++h) {
+            const int kvh = h * KV_H / H;
+            for (int q = 0; q < Sq; ++q) {
+                double m = -INFINITY;
+                double* sscore = (double*)malloc(Sk * sizeof(double));
+                for (int k = 0; k < Sk; ++k) {
+                    if (causal && k > q) { sscore[k] = -INFINITY; continue; }
+                    double dot = 0.0;
+                    for (int d = 0; d < D; ++d) {
+                        const float qv = Qf[((b*H + h)*Sq + q)*D + d];
+                        const float kv = Kf[((b*KV_H + kvh)*Sk + k)*D + d];
+                        dot += (double)qv * (double)kv;
+                    }
+                    sscore[k] = dot * scale;
+                    if (sscore[k] > m) m = sscore[k];
+                }
+                double l = 0.0;
+                for (int k = 0; k < Sk; ++k) {
+                    sscore[k] = (sscore[k] > -1e30) ? exp(sscore[k] - m) : 0.0;
+                    l += sscore[k];
+                }
+                for (int d = 0; d < D; ++d) {
+                    double acc = 0.0;
+                    for (int k = 0; k < Sk; ++k) {
+                        const float vv = Vf[((b*KV_H + kvh)*Sk + k)*D + d];
+                        acc += sscore[k] * (double)vv;
+                    }
+                    Or[((b*H + h)*Sq + q)*D + d] = (float)(acc / (l + 1e-30));
+                }
+                free(sscore);
+            }
+        }
+    }
+
+    tc_attention_desc d = {0};
+    d.batch = B; d.heads = H; d.kv_heads = KV_H;
+    d.seq_q = Sq; d.seq_kv = Sk; d.head_dim = D;
+    d.io_dtype = TC_DTYPE_F16; d.accum_dtype = TC_DTYPE_F32;
+    d.softmax_scale = scale; d.causal = causal; d.return_lse = 0;
+    tc_status_t s = tc_attention_forward(ctx, &d, Q, K, V, O, NULL);
+
+    double max_abs = 0.0, se = 0.0, sr = 0.0;
+    for (size_t i = 0; i < qkv_elems; ++i) {
+        float got = f16_to_f32(Op[i]);
+        double e = fabs((double)got - (double)Or[i]);
+        if (e > max_abs) max_abs = e;
+        se += e * e; sr += (double)Or[i] * Or[i];
+    }
+    double scaled = sqrt(se / qkv_elems) / (sqrt(sr / qkv_elems) + 1e-9);
+
+    printf("gqa  B=%d H=%d KV_H=%d Sq=%d Sk=%d D=%d   "
+           "max_abs=%.3e scaled=%.3e  %s\n",
+           B, H, KV_H, Sq, Sk, D, max_abs, scaled,
+           (s == TC_OK && scaled < 2e-2) ? "OK" : "FAIL");
+
+    free(Qf); free(Kf); free(Vf); free(Or);
+    tc_buffer_free(ctx, Q); tc_buffer_free(ctx, K);
+    tc_buffer_free(ctx, V); tc_buffer_free(ctx, O);
+    return (s == TC_OK && scaled < 2e-2) ? 0 : 9;
 }
 
 static int run_case(tc_context* ctx, int B, int H, int Sq, int Sk, int D) {

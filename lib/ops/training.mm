@@ -326,6 +326,42 @@ extern "C" tc_status_t tc_softmax_backward(tc_context* ctx,
     return TC_OK;
 }
 
+extern "C" tc_status_t tc_fused_rmsnorm_gemv(tc_context* ctx,
+                                             const tc_buffer* X,
+                                             const tc_buffer* gamma,
+                                             const tc_buffer* W,
+                                             tc_buffer*       Y,
+                                             int M, int N, int K, float eps) {
+    if (!ctx || !X || !gamma || !W || !Y || M <= 0 || N <= 0 || K <= 0)
+        return TC_ERR_INVALID_ARG;
+    tc_status_t err = TC_OK;
+    id<MTLComputePipelineState> pso = pso_for(ctx, @"tc_fused_rmsnorm_gemv_f16", &err);
+    if (!pso) return err;
+
+    const uint32_t M_u = (uint32_t)M, N_u = (uint32_t)N, K_u = (uint32_t)K;
+    @autoreleasepool {
+        id<MTLCommandBuffer> cmd = [ctx->queue commandBuffer];
+        id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+        [enc setComputePipelineState:pso];
+        [enc setBuffer:X->mtl     offset:0 atIndex:0];
+        [enc setBuffer:gamma->mtl offset:0 atIndex:1];
+        [enc setBuffer:W->mtl     offset:0 atIndex:2];
+        [enc setBuffer:Y->mtl     offset:0 atIndex:3];
+        [enc setBytes:&M_u length:sizeof(M_u) atIndex:4];
+        [enc setBytes:&N_u length:sizeof(N_u) atIndex:5];
+        [enc setBytes:&K_u length:sizeof(K_u) atIndex:6];
+        [enc setBytes:&eps length:sizeof(eps) atIndex:7];
+        const uint32_t T = threads_for_d(K_u);
+        [enc dispatchThreadgroups:MTLSizeMake(N_u, M_u, 1)
+            threadsPerThreadgroup:MTLSizeMake(T, 1, 1)];
+        [enc endEncoding];
+        [cmd commit];
+        [cmd waitUntilCompleted];
+        if (cmd.error) return TC_ERR_DISPATCH;
+    }
+    return TC_OK;
+}
+
 extern "C" tc_status_t tc_adamw_step(tc_context* ctx,
                                      tc_buffer* params_fp32,
                                      tc_buffer* m_fp32, tc_buffer* v_fp32,

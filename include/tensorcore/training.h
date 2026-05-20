@@ -111,6 +111,26 @@ tc_status_t tc_adamw_step(tc_context* ctx,
                           float lr, float beta1, float beta2, float eps,
                           float wd, float bc1, float bc2);
 
+/* Fused RMSnorm + GEMV for inference: Y = RMSnorm(X, gamma) @ W.
+ *
+ *   X     : [M, K]  fp16     (typically M ≤ 4 for inference)
+ *   gamma : [K]     fp16
+ *   W     : [K, N]  fp16
+ *   Y     : [M, N]  fp16
+ *
+ * Eliminates the round-trip of the normalized intermediate, which dominates
+ * latency for the Q/K/V and MLP projections during LLM decode.
+ *
+ * For training (M > 4), callers should use tc_rmsnorm_forward + tc_gemm
+ * separately — the per-row rstd recomputation overhead dominates at larger M.
+ */
+tc_status_t tc_fused_rmsnorm_gemv(tc_context* ctx,
+                                  const tc_buffer* X,
+                                  const tc_buffer* gamma,
+                                  const tc_buffer* W,
+                                  tc_buffer*       Y,
+                                  int M, int N, int K, float eps);
+
 #ifdef __cplusplus
 }
 #endif

@@ -11,6 +11,7 @@
 #include "tensorcore/training.h"
 #include "tensorcore/conv.h"
 #include "tensorcore/distributed.h"
+#include "tensorcore/quantized.h"
 
 #ifdef __cplusplus
 extern "C" {
