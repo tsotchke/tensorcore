@@ -83,6 +83,8 @@ static int run_case(tc_context* ctx, int M, int N, int K) {
     free(Af); free(Bf); free(Cr);
     tc_buffer_free(ctx, A); tc_buffer_free(ctx, B); tc_buffer_free(ctx, C);
     /* bf16 has ~3x worse mantissa than fp16 — looser threshold. */
+    /* When MPS bf16 fallback ran through the SW fp32 path, accuracy is
+     * essentially fp32-quantized-to-bf16 ≈ 4e-3 RMS. */
     return (s == TC_OK && scaled < 5e-2) ? 0 : 5;
 }
 
@@ -96,10 +98,11 @@ int main(void) {
     tc_device_info info;
     tc_device_info_get(ctx, &info);
     if (!info.supports_bf16_simdgroup) {
-        printf("[skip] device family=Apple%d does not expose bf16 simdgroup_matrix\n",
+        printf("[note] device family=Apple%d lacks bf16 simdgroup_matrix; "
+               "testing MPS fallback path instead\n", (int)info.family);
+    } else {
+        printf("[note] device family=Apple%d supports bf16 simdgroup_matrix\n",
                (int)info.family);
-        tc_shutdown(ctx);
-        return 0;
     }
     int rc = 0;
     rc |= run_case(ctx, 64, 64, 64);

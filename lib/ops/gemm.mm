@@ -57,7 +57,7 @@ static bool use_async_kernel(const tc_gemm_desc* /*d*/) {
     return opt && opt[0] == '1';
 }
 
-TileChoice kernel_for(const tc_gemm_desc* d, tc_family_t fam, tc_status_t* err) {
+TileChoice kernel_for(const tc_gemm_desc* d, tc_family_t fam, tc_context* ctx, tc_status_t* err) {
     *err = TC_OK;
     const bool big = use_128_tile(d);
     const bool async_path = use_async_kernel(d);
@@ -69,8 +69,18 @@ TileChoice kernel_for(const tc_gemm_desc* d, tc_family_t fam, tc_status_t* err) 
     if (d->a_dtype == TC_DTYPE_F16 && d->b_dtype == TC_DTYPE_F16 &&
         d->c_dtype == TC_DTYPE_F16 && d->accum_dtype == TC_DTYPE_F32) {
         if (fam < TC_FAMILY_APPLE7) { *err = TC_ERR_UNSUPPORTED_FAMILY; return {nil,0,0,0}; }
-        if (async_path && !big && !d->transpose_a && !d->transpose_b) {
-            return { @"tc_gemm_f16_f32_async", 64, 64, 128 };
+        if (async_path && !d->transpose_a && !d->transpose_b) {
+            /* If async kernels were stripped from the build (macOS 26+ SDK),
+             * silently fall through to the sync path. */
+            id<MTLFunction> probe = [ctx->library newFunctionWithName:@"tc_gemm_f16_f32_async"];
+            if (probe) {
+                const char* a128 = getenv("TC_USE_ASYNC_128");
+                if (a128 && a128[0] == '1' &&
+                    d->M >= 1024 && d->N >= 1024 && d->K >= 256) {
+                    return { @"tc_gemm_f16_f32_async_128", 128, 128, 512 };
+                }
+                return { @"tc_gemm_f16_f32_async", 64, 64, 128 };
+            }
         }
         return { big ? @"tc_gemm_f16_f32_128" : @"tc_gemm_f16_f32", BM, BN, T };
     }
@@ -178,7 +188,7 @@ extern "C" tc_status_t tc_gemm(tc_context* ctx,
 #endif
 
     tc_status_t err = TC_OK;
-    TileChoice tile = kernel_for(desc, ctx->info.family, &err);
+    TileChoice tile = kernel_for(desc, ctx->info.family, ctx, &err);
     if (!tile.kernel_name) {
         tc_set_last_backend(TC_BACKEND_MPS);
         return tc_mps_gemm(ctx, desc, A, B, C);
@@ -244,7 +254,7 @@ extern "C" tc_status_t tc_gemm_async(tc_context* ctx,
     if (!A || !B || !C)        return TC_ERR_INVALID_ARG;
 
     tc_status_t err = TC_OK;
-    TileChoice tile = kernel_for(desc, ctx->info.family, &err);
+    TileChoice tile = kernel_for(desc, ctx->info.family, ctx, &err);
     if (!tile.kernel_name) return tc_mps_gemm(ctx, desc, A, B, C);
 
     id<MTLComputePipelineState> pso = resolve_pipeline(ctx, tile.kernel_name,

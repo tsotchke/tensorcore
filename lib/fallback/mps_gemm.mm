@@ -20,10 +20,123 @@ static MPSDataType to_mps_dtype(tc_dtype_t d) {
     switch (d) {
         case TC_DTYPE_F16:  return MPSDataTypeFloat16;
         case TC_DTYPE_F32:  return MPSDataTypeFloat32;
+        case TC_DTYPE_BF16: {
+            /* MPSDataTypeBFloat16 added in macOS 14.0. */
+            if (@available(macOS 14.0, iOS 16.0, *)) {
+                return MPSDataTypeBFloat16;
+            }
+            return MPSDataTypeInvalid;
+        }
         case TC_DTYPE_I8:   return MPSDataTypeInt8;
         case TC_DTYPE_I32:  return MPSDataTypeInt32;
         default:            return MPSDataTypeInvalid;
     }
+}
+
+/* bf16 ↔ fp32 lifts (CPU side). bf16 = high 16 bits of fp32. */
+static inline float bf16_to_f32(uint16_t bits) {
+    union { uint32_t u; float f; } v = { ((uint32_t)bits) << 16 };
+    return v.f;
+}
+static inline uint16_t f32_to_bf16(float x) {
+    union { float f; uint32_t u; } v = { x };
+    /* Round-to-nearest-even of the high half. */
+    uint32_t r = v.u + 0x7FFF + ((v.u >> 16) & 1);
+    return (uint16_t)(r >> 16);
+}
+
+/* Software bf16 GEMM: bf16 -> fp32 (host convert) -> tc_gemm(fp32) -> bf16.
+ * Used as a fallback when the device lacks bf16 simdgroup_matrix AND MPS
+ * doesn't support bf16 in matmul (Apple<9 path). */
+static tc_status_t bf16_via_fp32(tc_context* ctx,
+                                 const tc_gemm_desc* desc,
+                                 const tc_buffer* A,
+                                 const tc_buffer* B,
+                                 tc_buffer*       C) {
+    const int M = desc->M, N = desc->N, K = desc->K;
+    /* Convert bf16 inputs and output buffer to fp32. */
+    uint16_t *Ap, *Bp, *Cp;
+    tc_buffer_map((tc_buffer*)A, (void**)&Ap);
+    tc_buffer_map((tc_buffer*)B, (void**)&Bp);
+    tc_buffer_map(C, (void**)&Cp);
+
+    tc_buffer *Af, *Bf, *Cf;
+    if (tc_buffer_alloc(ctx, (size_t)M * K * sizeof(float), &Af) != TC_OK ||
+        tc_buffer_alloc(ctx, (size_t)K * N * sizeof(float), &Bf) != TC_OK ||
+        tc_buffer_alloc(ctx, (size_t)M * N * sizeof(float), &Cf) != TC_OK) {
+        return TC_ERR_ALLOC;
+    }
+    float *Afp, *Bfp, *Cfp;
+    tc_buffer_map(Af, (void**)&Afp);
+    tc_buffer_map(Bf, (void**)&Bfp);
+    tc_buffer_map(Cf, (void**)&Cfp);
+
+    for (int i = 0; i < M * K; ++i) Afp[i] = bf16_to_f32(Ap[i]);
+    for (int i = 0; i < K * N; ++i) Bfp[i] = bf16_to_f32(Bp[i]);
+
+    tc_gemm_desc d = *desc;
+    d.a_dtype = TC_DTYPE_F32;
+    d.b_dtype = TC_DTYPE_F32;
+    d.c_dtype = TC_DTYPE_F32;
+    d.accum_dtype = TC_DTYPE_F32;
+    tc_status_t s = tc_gemm(ctx, &d, Af, Bf, Cf);
+    if (s != TC_OK) {
+        tc_buffer_free(ctx, Af); tc_buffer_free(ctx, Bf); tc_buffer_free(ctx, Cf);
+        return s;
+    }
+
+    for (int i = 0; i < M * N; ++i) Cp[i] = f32_to_bf16(Cfp[i]);
+
+    tc_buffer_free(ctx, Af);
+    tc_buffer_free(ctx, Bf);
+    tc_buffer_free(ctx, Cf);
+    return TC_OK;
+}
+
+/* Software int8 GEMM: i8 -> fp32 (exact lift) -> tc_gemm(fp32) -> i32.
+ * fp32 has 24-bit mantissa so exact for K ≤ 2^16 with int8 inputs in
+ * [-128, 127]. Used when device lacks i8 simdgroup_matrix. */
+static tc_status_t i8_via_fp32(tc_context* ctx,
+                               const tc_gemm_desc* desc,
+                               const tc_buffer* A,
+                               const tc_buffer* B,
+                               tc_buffer*       C) {
+    const int M = desc->M, N = desc->N, K = desc->K;
+    int8_t  *Ap, *Bp; int32_t *Cp;
+    tc_buffer_map((tc_buffer*)A, (void**)&Ap);
+    tc_buffer_map((tc_buffer*)B, (void**)&Bp);
+    tc_buffer_map(C, (void**)&Cp);
+
+    tc_buffer *Af, *Bf, *Cf;
+    if (tc_buffer_alloc(ctx, (size_t)M * K * sizeof(float), &Af) != TC_OK ||
+        tc_buffer_alloc(ctx, (size_t)K * N * sizeof(float), &Bf) != TC_OK ||
+        tc_buffer_alloc(ctx, (size_t)M * N * sizeof(float), &Cf) != TC_OK) {
+        return TC_ERR_ALLOC;
+    }
+    float *Afp, *Bfp, *Cfp;
+    tc_buffer_map(Af, (void**)&Afp);
+    tc_buffer_map(Bf, (void**)&Bfp);
+    tc_buffer_map(Cf, (void**)&Cfp);
+
+    for (int i = 0; i < M * K; ++i) Afp[i] = (float)Ap[i];
+    for (int i = 0; i < K * N; ++i) Bfp[i] = (float)Bp[i];
+
+    tc_gemm_desc d = *desc;
+    d.a_dtype = TC_DTYPE_F32;
+    d.b_dtype = TC_DTYPE_F32;
+    d.c_dtype = TC_DTYPE_F32;
+    d.accum_dtype = TC_DTYPE_F32;
+    tc_status_t s = tc_gemm(ctx, &d, Af, Bf, Cf);
+    if (s != TC_OK) {
+        tc_buffer_free(ctx, Af); tc_buffer_free(ctx, Bf); tc_buffer_free(ctx, Cf);
+        return s;
+    }
+    for (int i = 0; i < M * N; ++i) Cp[i] = (int32_t)Cfp[i];
+
+    tc_buffer_free(ctx, Af);
+    tc_buffer_free(ctx, Bf);
+    tc_buffer_free(ctx, Cf);
+    return TC_OK;
 }
 
 extern "C" tc_status_t tc_mps_gemm(tc_context* ctx,
@@ -32,6 +145,17 @@ extern "C" tc_status_t tc_mps_gemm(tc_context* ctx,
                                    const tc_buffer* B,
                                    tc_buffer*       C) {
     if (!ctx || !desc || !A || !B || !C) return TC_ERR_INVALID_ARG;
+
+    /* bf16: MPSMatrixMultiplication asserts on bf16, so route through the
+     * fp32 software fallback when the device lacks bf16 simdgroup_matrix. */
+    if (desc->a_dtype == TC_DTYPE_BF16 && desc->b_dtype == TC_DTYPE_BF16) {
+        return bf16_via_fp32(ctx, desc, A, B, C);
+    }
+    /* i8 -> i32: same SW fallback through fp32. */
+    if (desc->a_dtype == TC_DTYPE_I8 && desc->b_dtype == TC_DTYPE_I8 &&
+        desc->c_dtype == TC_DTYPE_I32) {
+        return i8_via_fp32(ctx, desc, A, B, C);
+    }
 
     MPSDataType a_dt = to_mps_dtype(desc->a_dtype);
     MPSDataType b_dt = to_mps_dtype(desc->b_dtype);

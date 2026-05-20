@@ -83,10 +83,11 @@ int main(void) {
     tc_device_info info;
     tc_device_info_get(ctx, &info);
     if (!info.supports_i8_simdgroup) {
-        printf("[skip] device family=Apple%d does not expose i8 simdgroup_matrix\n",
+        printf("[note] device family=Apple%d lacks i8 simdgroup_matrix; "
+               "testing SW fallback (i8 -> fp32 -> i32)\n", (int)info.family);
+    } else {
+        printf("[note] device family=Apple%d supports i8 simdgroup_matrix\n",
                (int)info.family);
-        tc_shutdown(ctx);
-        return 0;
     }
     int rc = 0;
     rc |= run_case(ctx, 64, 64, 64);

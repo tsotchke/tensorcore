@@ -101,8 +101,24 @@ set(TC_METAL_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/training_kernels.metal
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/conv2d.metal
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/conv2d_backward.metal
-    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/gemm_async.metal
 )
+
+# The async_copy kernels use private AIR intrinsics via __asm. Xcode 16.x
+# accepts them; Xcode 17+ / macOS 26+ rejects (per research). Gate the
+# compilation by SDK version so the build succeeds either way; on newer
+# SDKs the async-kernel name simply isn't present in the metallib and the
+# host-side dispatch silently falls back to the sync path.
+if(TC_SDK_VERSION VERSION_LESS "26.0")
+    set(TC_HAVE_ASYNC_COPY ON)
+    list(APPEND TC_METAL_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/gemm_async.metal
+        ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/gemm_async_128.metal
+    )
+    message(STATUS "tensorcore: SDK ${TC_SDK_VERSION} -- ENABLING async_copy GEMM kernels")
+else()
+    set(TC_HAVE_ASYNC_COPY OFF)
+    message(STATUS "tensorcore: SDK ${TC_SDK_VERSION} -- DISABLING async_copy GEMM kernels (Xcode 17+ rejects __asm intrinsics)")
+endif()
 
 if(TC_HAVE_METAL4)
     list(APPEND TC_METAL_SOURCES

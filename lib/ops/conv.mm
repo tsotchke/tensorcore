@@ -32,20 +32,63 @@ extern "C" tc_status_t tc_conv2d_backward_input(tc_context* ctx,
     if (!ctx || !dY || !weight || !dX || !scratch_col || !scratch_dX_f32)
         return TC_ERR_INVALID_ARG;
 
-    /* dCol = W^T @ dY.  W is [OC, K]; we want W^T @ dY where dY is [OC, out_hw].
-     * Result dCol is [K, out_hw]. tc_gemm with transpose_a=true. */
+    /* dCol = W^T @ dY for each batch (no cross-batch dependency).
+     * W is [OC, K]; dY is [N, OC, out_hw]; dCol is [N, K, out_hw].
+     * Loop over batches encoding each as a separate dispatch with
+     * MTLBuffer offset. tc_gemm doesn't support offsets, so we encode
+     * the GEMM directly. */
     const int OC = out_channels;
     const int K  = in_channels * kH * kW;
     const int out_hw = out_H * out_W;
 
-    tc_gemm_desc d = {0};
-    d.M = K; d.N = out_hw; d.K = OC;
-    d.a_dtype = TC_DTYPE_F16; d.b_dtype = TC_DTYPE_F16;
-    d.c_dtype = TC_DTYPE_F16; d.accum_dtype = TC_DTYPE_F32;
-    d.alpha = 1.0f; d.beta = 0.0f;
-    d.transpose_a = 1;
-    tc_status_t s = tc_gemm(ctx, &d, weight, dY, scratch_col);
-    if (s != TC_OK) return s;
+    NSString* kname = @"tc_gemm_f16_f32";
+    id<MTLComputePipelineState> pso = nil;
+    {
+        MTLFunctionConstantValues* cv = [MTLFunctionConstantValues new];
+        bool ta = true, tb = false;
+        [cv setConstantValue:&ta type:MTLDataTypeBool atIndex:0];
+        [cv setConstantValue:&tb type:MTLDataTypeBool atIndex:1];
+        NSError* nserr = nil;
+        id<MTLFunction> fn = [ctx->library newFunctionWithName:kname
+                                                constantValues:cv error:&nserr];
+        if (!fn) return TC_ERR_KERNEL_NOT_FOUND;
+        pso = [ctx->device newComputePipelineStateWithFunction:fn error:&nserr];
+        if (!pso) return TC_ERR_PIPELINE;
+    }
+
+    const uint32_t M_u = (uint32_t)K, N_u = (uint32_t)out_hw, K_u = (uint32_t)OC;
+    float alpha = 1.0f, beta = 0.0f;
+    const size_t stride_dY  = (size_t)OC * out_hw * sizeof(uint16_t);
+    const size_t stride_col = (size_t)K * out_hw * sizeof(uint16_t);
+
+    @autoreleasepool {
+        id<MTLCommandBuffer> dcol_cmd = [ctx->queue commandBuffer];
+        for (int n = 0; n < batch; ++n) {
+            id<MTLComputeCommandEncoder> enc = [dcol_cmd computeCommandEncoder];
+            [enc setComputePipelineState:pso];
+            [enc setBuffer:weight->mtl      offset:0              atIndex:0];
+            [enc setBuffer:dY->mtl          offset:n * stride_dY  atIndex:1];
+            [enc setBuffer:scratch_col->mtl offset:n * stride_col atIndex:2];
+            [enc setBytes:&M_u   length:sizeof(M_u)   atIndex:3];
+            [enc setBytes:&N_u   length:sizeof(N_u)   atIndex:4];
+            [enc setBytes:&K_u   length:sizeof(K_u)   atIndex:5];
+            [enc setBytes:&alpha length:sizeof(alpha) atIndex:6];
+            [enc setBytes:&beta  length:sizeof(beta)  atIndex:7];
+            const uint32_t gx = (N_u + 64 - 1) / 64;
+            const uint32_t gy = (M_u + 64 - 1) / 64;
+            [enc dispatchThreadgroups:MTLSizeMake(gx, gy, 1)
+                threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+            [enc endEncoding];
+        }
+        [dcol_cmd commit];
+        [dcol_cmd waitUntilCompleted];
+        if (dcol_cmd.error) {
+            fprintf(stderr, "[tensorcore] conv2d_backward_input dCol: %s\n",
+                    [[dcol_cmd.error localizedDescription] UTF8String]);
+            return TC_ERR_DISPATCH;
+        }
+    }
+    tc_status_t s = TC_OK;
 
     /* Zero the fp32 accumulation buffer for atomic-add scatter. */
     void* dx32; tc_buffer_map(scratch_dX_f32, &dx32);
