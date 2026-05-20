@@ -1,0 +1,98 @@
+;;
+;; tensorcore.esk — Eshkol bindings for tensorcore.
+;;
+;; tensorcore exposes a C ABI (see include/tensorcore/tensorcore.h). This file
+;; wraps the C entry points as Eshkol builtins.  To install:
+;;
+;;   1. Build tensorcore (CMake) → libtensorcore.a + tensorcore.metallib.
+;;   2. In eshkol-platform, link against -ltensorcore and add the bridge file
+;;      `lib/ffi/tensorcore_ffi.cpp` (see docs/eshkol_integration.md).  That
+;;      file registers __tc-* builtins.
+;;   3. (use tensorcore) from any Eshkol source.
+;;
+;; Until the bridge lands, this file documents the planned API.
+;;
+
+(provide tc-init tc-shutdown tc-device-info
+         tc-buffer-alloc tc-buffer-free tc-buffer-map
+         tc-gemm tc-gemm-fp16 tc-gemm-fp32 tc-gemm-bf16
+         tc-attention-forward
+         tc-last-backend)
+
+;;; ----------------------------------------------------------------
+;;;  Lifecycle
+;;; ----------------------------------------------------------------
+
+(define (tc-init)
+  "Initialize the tensorcore context. Returns an opaque context handle."
+  (__tc-init))
+
+(define (tc-shutdown ctx)
+  "Release the tensorcore context and any pooled buffers."
+  (__tc-shutdown ctx))
+
+(define (tc-device-info ctx)
+  "Return an alist of (family name unified-memory? bf16? i8? tensorops-m5?)."
+  (__tc-device-info ctx))
+
+;;; ----------------------------------------------------------------
+;;;  Buffers — unified-memory MTLBuffer handles
+;;; ----------------------------------------------------------------
+
+(define (tc-buffer-alloc ctx bytes)
+  "Allocate a GPU buffer; returns an opaque handle."
+  (__tc-buffer-alloc ctx bytes))
+
+(define (tc-buffer-free ctx buf)
+  (__tc-buffer-free ctx buf))
+
+(define (tc-buffer-map buf)
+  "Map the buffer to a CPU-accessible pointer (no copy on Apple Silicon).
+  Returns a foreign pointer suitable for vector-from-pointer."
+  (__tc-buffer-map buf))
+
+;;; ----------------------------------------------------------------
+;;;  GEMM — alpha*A@B + beta*C
+;;; ----------------------------------------------------------------
+
+;; Generic GEMM. dtype is a symbol: 'f16 'bf16 'f32 'i8
+(define (tc-gemm ctx dtype A B C M N K
+                 alpha beta transpose-a transpose-b)
+  (__tc-gemm ctx dtype A B C M N K alpha beta
+             (if transpose-a 1 0)
+             (if transpose-b 1 0)))
+
+(define (tc-gemm-fp16 ctx A B C M N K)
+  "fp16 inputs, fp32 accumulators, fp16 output. Apple7+ (M1+)."
+  (tc-gemm ctx 'f16 A B C M N K 1.0 0.0 #f #f))
+
+(define (tc-gemm-fp32 ctx A B C M N K)
+  "fp32 throughout. Apple7+ (M1+)."
+  (tc-gemm ctx 'f32 A B C M N K 1.0 0.0 #f #f))
+
+(define (tc-gemm-bf16 ctx A B C M N K)
+  "bf16 inputs, fp32 accumulators. Requires Apple9+ (M3+); errors otherwise."
+  (tc-gemm ctx 'bf16 A B C M N K 1.0 0.0 #f #f))
+
+;;; ----------------------------------------------------------------
+;;;  FlashAttention forward
+;;; ----------------------------------------------------------------
+
+(define (tc-attention-forward ctx Q K V O
+                              batch heads seq-q seq-kv head-dim
+                              softmax-scale causal?)
+  "Fused scaled-dot-product attention forward. fp16 IO, fp32 accum.
+   head-dim must be 64 (v0.1)."
+  (__tc-attention-forward ctx Q K V O
+                          batch heads seq-q seq-kv head-dim
+                          softmax-scale
+                          (if causal? 1 0)))
+
+;;; ----------------------------------------------------------------
+;;;  Diagnostics
+;;; ----------------------------------------------------------------
+
+(define (tc-last-backend)
+  "Symbol describing which backend served the most recent call from this
+   thread: 'simdgroup-matrix 'tensorops-m5 'mps 'accelerate-cpu 'none."
+  (__tc-last-backend))

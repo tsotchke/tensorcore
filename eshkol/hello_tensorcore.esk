@@ -1,0 +1,39 @@
+;;
+;; hello_tensorcore.esk — minimal "is tensorcore wired up" example.
+;;
+;; Run via:
+;;   eshkol-run --library=eshkol/tensorcore.esk hello_tensorcore.esk
+;;
+;; Expected output:
+;;   tensorcore device=<Apple GPU name> family=Apple<N>
+;;   gemm OK   backend=simdgroup-matrix
+;;
+
+(use tensorcore)
+
+(define (main)
+  (let* ((ctx  (tc-init))
+         (info (tc-device-info ctx)))
+    (display "tensorcore device=")
+    (display (cdr (assoc 'name info)))
+    (display " family=Apple")
+    (display (cdr (assoc 'family info)))
+    (newline)
+
+    ;; Allocate three 256x256 fp16 matrices.
+    (let* ((M 256) (N 256) (K 256)
+           (bytes (* M N 2))
+           (A (tc-buffer-alloc ctx (* M K 2)))
+           (B (tc-buffer-alloc ctx (* K N 2)))
+           (C (tc-buffer-alloc ctx (* M N 2))))
+      (tc-gemm-fp16 ctx A B C M N K)
+      (display "gemm OK  backend=")
+      (display (tc-last-backend))
+      (newline)
+      (tc-buffer-free ctx A)
+      (tc-buffer-free ctx B)
+      (tc-buffer-free ctx C))
+
+    (tc-shutdown ctx)))
+
+(main)

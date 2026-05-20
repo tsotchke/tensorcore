@@ -1,0 +1,279 @@
+/*
+ * tensorcore — device init, info, and global plumbing.
+ */
+
+#import <Metal/Metal.h>
+#import <Foundation/Foundation.h>
+
+#include "tensorcore/tensorcore.h"
+#include "internal.h"
+
+#include <atomic>
+#include <cstring>
+#include <cstdlib>
+#include <cstdio>
+#include <new>
+
+/* Forward — implemented in pipeline_cache.mm / buffer_pool.mm. */
+@class TCPipelineCache;
+@class TCBufferPool;
+extern "C" TCPipelineCache* tc_pipeline_cache_create(id<MTLLibrary> lib);
+extern "C" void              tc_pipeline_cache_destroy(TCPipelineCache* c);
+extern "C" TCBufferPool*     tc_buffer_pool_create(id<MTLDevice> dev);
+extern "C" void              tc_buffer_pool_destroy(TCBufferPool* p);
+extern "C" tc_status_t       tc_buffer_pool_alloc(TCBufferPool* p, size_t bytes, struct tc_buffer** out);
+extern "C" void              tc_buffer_pool_free (TCBufferPool* p, struct tc_buffer* buf);
+
+/* ----------------------------------------------------------------- */
+/* Singleton context — only one MTLDevice per process for now.        */
+/* ----------------------------------------------------------------- */
+static struct tc_context* g_ctx = nullptr;
+static std::atomic<bool>  g_init_running{false};
+
+/* Thread-local diagnostic for tc_last_backend(). */
+static thread_local tc_backend_t t_last_backend = TC_BACKEND_NONE;
+
+extern "C" void tc_set_last_backend(tc_backend_t b) { t_last_backend = b; }
+extern "C" tc_backend_t tc_last_backend(void)       { return t_last_backend; }
+
+extern "C" const char* tc_backend_name(tc_backend_t b) {
+    switch (b) {
+        case TC_BACKEND_NONE:             return "none";
+        case TC_BACKEND_SIMDGROUP_MATRIX: return "simdgroup_matrix";
+        case TC_BACKEND_TENSOROPS_M5:     return "tensorops_m5";
+        case TC_BACKEND_MPS:              return "mps";
+        case TC_BACKEND_ACCELERATE_CPU:   return "accelerate_cpu";
+        case TC_BACKEND_SF64_EMULATED:    return "sf64_emulated";
+        case TC_BACKEND_OZAKI_II:         return "ozaki_ii";
+    }
+    return "?";
+}
+
+extern "C" const char* tc_version(void) {
+    return "tensorcore 0.1.0";
+}
+
+/* ----------------------------------------------------------------- */
+/* Family detection — runtime probe of MTLGPUFamilyApple7..Apple11.   */
+/* ----------------------------------------------------------------- */
+extern "C" tc_family_t tc_device_family_from_mtl(id<MTLDevice> dev) {
+    tc_family_t fam = TC_FAMILY_UNKNOWN;
+
+    /* Probe high-to-low so we report the highest supported family.
+     * Apple11 / MTLGPUFamilyMetal4 are macOS 26+ ; weak-link by branch on the
+     * symbol availability. */
+    if (@available(macOS 12.0, *)) {
+        if ([dev supportsFamily:MTLGPUFamilyApple7]) fam = TC_FAMILY_APPLE7;
+    }
+    if (@available(macOS 13.0, *)) {
+        if ([dev supportsFamily:MTLGPUFamilyApple8]) fam = TC_FAMILY_APPLE8;
+    }
+    if (@available(macOS 14.0, *)) {
+        if ([dev supportsFamily:MTLGPUFamilyApple9]) fam = TC_FAMILY_APPLE9;
+    }
+#ifdef MTLGPUFamilyApple10
+    if (@available(macOS 15.0, *)) {
+        if ([dev supportsFamily:(MTLGPUFamily)MTLGPUFamilyApple10]) fam = TC_FAMILY_APPLE10;
+    }
+#endif
+#ifdef MTLGPUFamilyApple11
+    if (@available(macOS 26.0, *)) {
+        if ([dev supportsFamily:(MTLGPUFamily)MTLGPUFamilyApple11]) fam = TC_FAMILY_APPLE11;
+    }
+#endif
+    return fam;
+}
+
+/* ----------------------------------------------------------------- */
+/* MTLLibrary load — prefers TC_METALLIB_PATH (absolute, baked in by  */
+/* CMake), then bundle's default.metallib, then $TC_METALLIB env.     */
+/* ----------------------------------------------------------------- */
+static id<MTLLibrary> load_metallib(id<MTLDevice> dev) {
+    NSError* err = nil;
+
+    const char* env = std::getenv("TC_METALLIB");
+    NSString* candidates[3] = { nil, nil, nil };
+    int n = 0;
+    if (env && *env) {
+        candidates[n++] = [NSString stringWithUTF8String:env];
+    }
+#ifdef TC_METALLIB_PATH
+    candidates[n++] = [NSString stringWithUTF8String:TC_METALLIB_PATH];
+#endif
+    candidates[n++] = @"default.metallib";
+
+    for (int i = 0; i < n; ++i) {
+        if (!candidates[i]) continue;
+        NSURL* url = [NSURL fileURLWithPath:candidates[i]];
+        id<MTLLibrary> lib = [dev newLibraryWithURL:url error:&err];
+        if (lib) {
+            fprintf(stderr, "[tensorcore] loaded metallib: %s\n",
+                    [candidates[i] UTF8String]);
+            return lib;
+        }
+    }
+    fprintf(stderr,
+        "[tensorcore] failed to load metallib (TC_METALLIB_PATH=%s): %s\n",
+#ifdef TC_METALLIB_PATH
+        TC_METALLIB_PATH,
+#else
+        "(unset)",
+#endif
+        err ? [[err localizedDescription] UTF8String] : "(no error)");
+    return nil;
+}
+
+/* ----------------------------------------------------------------- */
+/* tc_init / tc_shutdown                                              */
+/* ----------------------------------------------------------------- */
+extern "C" tc_status_t tc_init(tc_context** out_ctx) {
+    if (!out_ctx) return TC_ERR_INVALID_ARG;
+    bool expected = false;
+    if (!g_init_running.compare_exchange_strong(expected, true)) {
+        if (g_ctx) { *out_ctx = g_ctx; return TC_ERR_ALREADY_INITIALIZED; }
+    }
+    if (g_ctx) { g_init_running.store(false); *out_ctx = g_ctx; return TC_ERR_ALREADY_INITIALIZED; }
+
+    @autoreleasepool {
+        id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
+        if (!dev) { g_init_running.store(false); return TC_ERR_NO_DEVICE; }
+
+        id<MTLCommandQueue> q = [dev newCommandQueue];
+        if (!q)   { g_init_running.store(false); return TC_ERR_NO_DEVICE; }
+
+        id<MTLLibrary> lib = load_metallib(dev);
+        if (!lib) { g_init_running.store(false); return TC_ERR_KERNEL_NOT_FOUND; }
+
+        TCPipelineCache* pcache = tc_pipeline_cache_create(lib);
+        TCBufferPool*    bpool  = tc_buffer_pool_create(dev);
+        if (!pcache || !bpool) {
+            g_init_running.store(false);
+            return TC_ERR_ALLOC;
+        }
+
+        tc_context* ctx = new (std::nothrow) tc_context();
+        if (!ctx) { g_init_running.store(false); return TC_ERR_ALLOC; }
+
+        ctx->device      = dev;
+        ctx->queue       = q;
+        ctx->library     = lib;
+        ctx->pipelines   = pcache;
+        ctx->buffer_pool = bpool;
+        ctx->ref.store(1);
+
+        tc_family_t fam = tc_device_family_from_mtl(dev);
+        ctx->info.family                = fam;
+        const char* dev_name = [[dev name] UTF8String];
+        std::strncpy(ctx->info.name, dev_name ? dev_name : "", sizeof(ctx->info.name) - 1);
+        ctx->info.max_buffer_bytes              = (uint64_t)[dev maxBufferLength];
+        ctx->info.recommended_working_set_bytes = (uint64_t)[dev recommendedMaxWorkingSetSize];
+        ctx->info.max_threadgroup_memory        = (uint32_t)[dev maxThreadgroupMemoryLength];
+        ctx->info.max_threads_per_threadgroup   = 1024;
+        ctx->info.thread_execution_width        = 32;  /* All Apple Silicon */
+        ctx->info.unified_memory                = [dev hasUnifiedMemory];
+        ctx->info.supports_bf16_simdgroup       = (fam >= TC_FAMILY_APPLE9);
+        ctx->info.supports_i8_simdgroup         = (fam >= TC_FAMILY_APPLE10);
+        ctx->info.supports_tensorops_m5         = (fam >= TC_FAMILY_APPLE11);
+        ctx->info.supports_fp64_native          = false;
+
+        fprintf(stderr,
+            "[tensorcore] device=\"%s\" family=Apple%d unified=%s vram=%lluMB "
+            "bf16_sg=%s i8_sg=%s tensorops_m5=%s\n",
+            ctx->info.name, (int)fam,
+            ctx->info.unified_memory ? "yes" : "no",
+            (unsigned long long)(ctx->info.recommended_working_set_bytes / (1024 * 1024)),
+            ctx->info.supports_bf16_simdgroup ? "yes" : "no",
+            ctx->info.supports_i8_simdgroup   ? "yes" : "no",
+            ctx->info.supports_tensorops_m5   ? "yes" : "no");
+
+        g_ctx = ctx;
+    }
+    g_init_running.store(false);
+    *out_ctx = g_ctx;
+    return TC_OK;
+}
+
+extern "C" tc_status_t tc_shutdown(tc_context* ctx) {
+    if (!ctx) return TC_ERR_INVALID_ARG;
+    if (ctx != g_ctx) return TC_ERR_INVALID_ARG;
+
+    if (ctx->ref.fetch_sub(1) > 1) return TC_OK;
+
+    tc_pipeline_cache_destroy(ctx->pipelines);
+    tc_buffer_pool_destroy(ctx->buffer_pool);
+    /* ARC releases device/queue/library when ctx is destroyed. */
+    ctx->device = nil;
+    ctx->queue = nil;
+    ctx->library = nil;
+    g_ctx = nullptr;
+    delete ctx;
+    return TC_OK;
+}
+
+extern "C" tc_status_t tc_device_info_get(tc_context* ctx, tc_device_info* out_info) {
+    if (!ctx || !out_info) return TC_ERR_INVALID_ARG;
+    *out_info = ctx->info;
+    return TC_OK;
+}
+
+/* ----------------------------------------------------------------- */
+/* Buffer surface — thin wrapper over buffer_pool.                    */
+/* ----------------------------------------------------------------- */
+extern "C" tc_status_t tc_buffer_alloc(tc_context* ctx, size_t bytes, tc_buffer** out) {
+    if (!ctx || !out || bytes == 0) return TC_ERR_INVALID_ARG;
+    tc_status_t s = tc_buffer_pool_alloc(ctx->buffer_pool, bytes, out);
+    if (s == TC_OK && *out) (*out)->owner = ctx;
+    return s;
+}
+
+extern "C" tc_status_t tc_buffer_free(tc_context* ctx, tc_buffer* buf) {
+    if (!ctx || !buf) return TC_ERR_INVALID_ARG;
+    tc_buffer_pool_free(ctx->buffer_pool, buf);
+    return TC_OK;
+}
+
+extern "C" tc_status_t tc_buffer_map(tc_buffer* buf, void** out_ptr) {
+    if (!buf || !out_ptr) return TC_ERR_INVALID_ARG;
+    *out_ptr = [buf->mtl contents];
+    if (!*out_ptr) return TC_ERR_INTERNAL;
+    return TC_OK;
+}
+
+extern "C" size_t tc_buffer_size(const tc_buffer* buf) {
+    return buf ? buf->bytes : 0;
+}
+
+/* ----------------------------------------------------------------- */
+/* Streams                                                            */
+/* ----------------------------------------------------------------- */
+extern "C" tc_status_t tc_stream_create(tc_context* ctx, tc_stream** out) {
+    if (!ctx || !out) return TC_ERR_INVALID_ARG;
+    @autoreleasepool {
+        id<MTLCommandQueue> q = [ctx->device newCommandQueue];
+        if (!q) return TC_ERR_ALLOC;
+        tc_stream* s = new (std::nothrow) tc_stream();
+        if (!s) return TC_ERR_ALLOC;
+        s->queue = q;
+        s->owner = ctx;
+        *out = s;
+    }
+    return TC_OK;
+}
+
+extern "C" tc_status_t tc_stream_destroy(tc_context* ctx, tc_stream* s) {
+    (void)ctx;
+    if (!s) return TC_ERR_INVALID_ARG;
+    s->queue = nil;
+    delete s;
+    return TC_OK;
+}
+
+extern "C" tc_status_t tc_stream_sync(tc_stream* s) {
+    if (!s) return TC_ERR_INVALID_ARG;
+    @autoreleasepool {
+        id<MTLCommandBuffer> cmd = [s->queue commandBuffer];
+        [cmd commit];
+        [cmd waitUntilCompleted];
+    }
+    return TC_OK;
+}
