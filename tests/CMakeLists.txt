@@ -13,6 +13,8 @@ set(TC_TESTS
     test_training_kernels
     test_transformer_block
     test_e2e_training
+    test_conv2d
+    test_distributed_ring
 )
 
 foreach(t IN LISTS TC_TESTS)

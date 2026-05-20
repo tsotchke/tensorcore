@@ -101,6 +101,7 @@ set(TC_METAL_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/training_kernels.metal
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/conv2d.metal
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/conv2d_backward.metal
+    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/gemm_async.metal
 )
 
 if(TC_HAVE_METAL4)
@@ -135,6 +136,7 @@ set(TC_SOURCES
     lib/ops/training.mm
     lib/ops/conv.mm
     lib/distributed/distributed.mm
+    lib/distributed/ring_local.mm
     lib/fallback/mps_gemm.mm
     lib/fallback/accelerate_gemm.c
     lib/c_api/c_api.mm

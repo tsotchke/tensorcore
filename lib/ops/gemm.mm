@@ -52,9 +52,15 @@ static bool use_128_tile(const tc_gemm_desc* /*d*/) {
     return opt && opt[0] == '1';
 }
 
+static bool use_async_kernel(const tc_gemm_desc* /*d*/) {
+    const char* opt = getenv("TC_USE_ASYNC");
+    return opt && opt[0] == '1';
+}
+
 TileChoice kernel_for(const tc_gemm_desc* d, tc_family_t fam, tc_status_t* err) {
     *err = TC_OK;
     const bool big = use_128_tile(d);
+    const bool async_path = use_async_kernel(d);
     const uint32_t BM = big ? 128 : 64;
     const uint32_t BN = big ? 128 : 64;
     const uint32_t T  = big ? 512 : 128;
@@ -63,6 +69,9 @@ TileChoice kernel_for(const tc_gemm_desc* d, tc_family_t fam, tc_status_t* err) 
     if (d->a_dtype == TC_DTYPE_F16 && d->b_dtype == TC_DTYPE_F16 &&
         d->c_dtype == TC_DTYPE_F16 && d->accum_dtype == TC_DTYPE_F32) {
         if (fam < TC_FAMILY_APPLE7) { *err = TC_ERR_UNSUPPORTED_FAMILY; return {nil,0,0,0}; }
+        if (async_path && !big && !d->transpose_a && !d->transpose_b) {
+            return { @"tc_gemm_f16_f32_async", 64, 64, 128 };
+        }
         return { big ? @"tc_gemm_f16_f32_128" : @"tc_gemm_f16_f32", BM, BN, T };
     }
     if (d->a_dtype == TC_DTYPE_F32 && d->b_dtype == TC_DTYPE_F32 &&
