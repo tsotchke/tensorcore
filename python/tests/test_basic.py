@@ -292,16 +292,16 @@ def _run_owned_api_check():
     C_ref = (A.astype(np.float32) @ B.astype(np.float32)).astype(np.float16)
 
     with tc.Context() as ctx:
-        a = ctx.buffer(A.nbytes).write(A)
-        b = ctx.buffer(B.nbytes).write(B)
+        a = ctx.buffer_from_array(A)
+        b = ctx.buffer_from_array(B)
         c = ctx.buffer(C.nbytes)
         ctx.gemm(a, b, c, M, N, K)
-        c.read(C)
+        C = c.to_numpy((M, N), np.float16)
 
         with ctx.stream() as stream:
             ctx.gemm_async(a, b, c, M, N, K, stream)
             stream.sync()
-        c.read(C_async)
+        C_async = c.to_numpy((M, N), np.float16)
 
     err = np.max(np.abs(C.astype(np.float32) - C_ref.astype(np.float32)))
     err_async = np.max(np.abs(C_async.astype(np.float32) - C_ref.astype(np.float32)))

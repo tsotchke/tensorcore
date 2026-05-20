@@ -805,6 +805,9 @@ class Context:
     def buffer(self, nbytes):
         return Buffer(self, nbytes)
 
+    def buffer_from_array(self, arr):
+        return self.buffer(arr.nbytes).write(arr)
+
     def stream(self):
         return Stream(self)
 
@@ -879,6 +882,12 @@ class Buffer:
 
     def read(self, arr):
         buffer_read(self, arr)
+        return arr
+
+    def to_numpy(self, shape, dtype):
+        import numpy as np
+        arr = np.empty(shape, dtype=dtype)
+        self.read(arr)
         return arr
 
 
