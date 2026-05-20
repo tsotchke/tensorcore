@@ -53,6 +53,8 @@ constant constexpr uint FA_TN_O = FA_D  / FA_WN / 8;   /* 64/2/8 = 4 */
 
 constant bool g_causal     [[function_constant(0)]];
 constant bool g_return_lse [[function_constant(1)]];
+constant bool g_use_window [[function_constant(2)]];
+constant bool g_use_alibi  [[function_constant(3)]];
 
 /* Cooperative tile load. */
 template <typename T>
@@ -86,6 +88,8 @@ kernel void tc_flash_attention_f16_d64(
     constant uint& seq_q          [[buffer(8)]],
     constant uint& seq_kv         [[buffer(9)]],
     constant float& softmax_scale [[buffer(10)]],
+    constant uint& window_size    [[buffer(11), function_constant(g_use_window)]],
+    constant float& alibi_slope   [[buffer(12), function_constant(g_use_alibi)]],
     uint3 group_id                [[threadgroup_position_in_grid]],
     uint  sgid                    [[simdgroup_index_in_threadgroup]],
     uint  slid                    [[thread_index_in_simdgroup]])
@@ -194,16 +198,20 @@ kernel void tc_flash_attention_f16_d64(
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
-        /* ----- scale + causal mask ----- */
-        if (g_causal || softmax_scale != 1.0f) {
+        /* ----- scale + causal/window/alibi ----- */
+        if (g_causal || g_use_window || g_use_alibi || softmax_scale != 1.0f) {
             for (uint idx = tid; idx < FA_BR * FA_BC; idx += FA_THREADS) {
                 const uint r = idx / FA_BC;
                 const uint c = idx % FA_BC;
                 float v = sS[r * FA_BC + c] * softmax_scale;
-                if (g_causal) {
-                    const uint gq = row0 + r;
-                    const uint gk = kv_col0 + c;
-                    if (gk > gq) v = -INFINITY;
+                const uint gq = row0 + r;
+                const uint gk = kv_col0 + c;
+                if (g_causal && gk > gq) v = -INFINITY;
+                if (g_use_window && gq > gk + window_size) v = -INFINITY;
+                if (g_use_alibi && v > -1e30f) {
+                    /* ALiBi linear bias: subtract slope * (i - j). */
+                    const float bias = alibi_slope * (float)((int)gk - (int)gq);
+                    v += bias;
                 }
                 sS[r * FA_BC + c] = v;
             }

@@ -17,6 +17,7 @@ set(TC_TESTS
     test_distributed_ring
     test_quantized
     test_fused_norm_gemv
+    test_distributed_ring_fork
 )
 
 foreach(t IN LISTS TC_TESTS)

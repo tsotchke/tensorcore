@@ -55,9 +55,12 @@ id<MTLComputePipelineState> resolve_pipeline(tc_context* ctx,
                                              NSString* name,
                                              bool causal,
                                              bool return_lse,
+                                             bool use_window,
+                                             bool use_alibi,
                                              tc_status_t* err) {
-    NSString* key = [NSString stringWithFormat:@"%@:c=%d:l=%d", name,
-                                                causal ? 1 : 0, return_lse ? 1 : 0];
+    NSString* key = [NSString stringWithFormat:@"%@:c=%d:l=%d:w=%d:a=%d", name,
+                                                causal ? 1 : 0, return_lse ? 1 : 0,
+                                                use_window ? 1 : 0, use_alibi ? 1 : 0];
     {
         id<MTLComputePipelineState> cached = nil;
         @synchronized(ctx->pipelines) {
@@ -69,6 +72,8 @@ id<MTLComputePipelineState> resolve_pipeline(tc_context* ctx,
     MTLFunctionConstantValues* cv = [MTLFunctionConstantValues new];
     [cv setConstantValue:&causal     type:MTLDataTypeBool atIndex:0];
     [cv setConstantValue:&return_lse type:MTLDataTypeBool atIndex:1];
+    [cv setConstantValue:&use_window type:MTLDataTypeBool atIndex:2];
+    [cv setConstantValue:&use_alibi  type:MTLDataTypeBool atIndex:3];
 
     NSError* nserr = nil;
     id<MTLFunction> fn = [ctx->library newFunctionWithName:name
@@ -118,9 +123,12 @@ extern "C" tc_status_t tc_attention_forward(tc_context* ctx,
     KernelChoice kc = kernel_name_for(desc, &err);
     if (!kc.name) return err;
 
+    const bool use_window = (desc->window_size > 0);
+    const bool use_alibi  = (desc->alibi_slopes != NULL);
     id<MTLComputePipelineState> pso = resolve_pipeline(ctx, kc.name,
                                                         desc->causal,
-                                                        desc->return_lse, &err);
+                                                        desc->return_lse,
+                                                        use_window, use_alibi, &err);
     if (!pso) return err;
 
     const uint32_t batch    = (uint32_t)desc->batch;
@@ -150,6 +158,18 @@ extern "C" tc_status_t tc_attention_forward(tc_context* ctx,
         [enc setBytes:&seq_q    length:sizeof(seq_q)    atIndex:8];
         [enc setBytes:&seq_kv   length:sizeof(seq_kv)   atIndex:9];
         [enc setBytes:&sm_scale length:sizeof(sm_scale) atIndex:10];
+        if (use_window) {
+            const uint32_t w = (uint32_t)desc->window_size;
+            [enc setBytes:&w length:sizeof(w) atIndex:11];
+        }
+        if (use_alibi) {
+            /* For v0.1, use a single slope (the head-mean). Multi-head per-head
+             * slopes will land in v0.2 via a buffer binding. */
+            float slope = 0.0f;
+            for (int h = 0; h < desc->heads; ++h) slope += desc->alibi_slopes[h];
+            slope /= (float)desc->heads;
+            [enc setBytes:&slope length:sizeof(slope) atIndex:12];
+        }
 
         [enc dispatchThreadgroups:MTLSizeMake(q_blocks, heads, batch)
             threadsPerThreadgroup:MTLSizeMake(kc.threads, 1, 1)];
@@ -304,9 +324,12 @@ extern "C" tc_status_t tc_attention_forward_async(tc_context* ctx,
     tc_status_t err = TC_OK;
     KernelChoice kc = kernel_name_for(desc, &err);
     if (!kc.name) return err;
+    const bool use_window = (desc->window_size > 0);
+    const bool use_alibi  = (desc->alibi_slopes != NULL);
     id<MTLComputePipelineState> pso = resolve_pipeline(ctx, kc.name,
                                                         desc->causal,
-                                                        desc->return_lse, &err);
+                                                        desc->return_lse,
+                                                        use_window, use_alibi, &err);
     if (!pso) return err;
 
     const uint32_t batch    = (uint32_t)desc->batch;

@@ -166,7 +166,26 @@ if(TC_HAVE_METAL4)
     add_compile_definitions(TC_HAVE_METAL4_SDK=1)
 endif()
 
+# Build BOTH static and shared; shared is what Python ctypes loads.
 add_library(tensorcore STATIC ${TC_SOURCES})
+add_library(tensorcore_shared SHARED ${TC_SOURCES})
+set_target_properties(tensorcore_shared PROPERTIES OUTPUT_NAME tensorcore)
+add_dependencies(tensorcore_shared tensorcore_metallib)
+target_include_directories(tensorcore_shared
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/lib
+)
+target_compile_definitions(tensorcore_shared PRIVATE
+    TC_METALLIB_PATH="${TC_METALLIB_PATH}"
+)
+target_link_libraries(tensorcore_shared PUBLIC
+    ${METAL_FRAMEWORK} ${FOUNDATION_FRAMEWORK} ${METALKIT_FRAMEWORK}
+    ${METALPERFORMANCESHADERS_FRAMEWORK} ${METALPERFORMANCESHADERSGRAPH_FRAMEWORK}
+    ${ACCELERATE_FRAMEWORK}
+)
 add_library(tensorcore::tensorcore ALIAS tensorcore)
 add_dependencies(tensorcore tensorcore_metallib)
 

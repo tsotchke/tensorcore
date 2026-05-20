@@ -44,6 +44,19 @@ tc_status_t tc_gemv_quantized(tc_context* ctx,
                               tc_quant_t       fmt,
                               int M, int N, int K);
 
+/* Async variant: encodes into the provided stream without sync. Caller must
+ * call tc_stream_sync afterwards. The dominant cost of many small GEMVs is
+ * per-call command-buffer round-trip; the async path keeps a single CB open
+ * across calls. For decode-step inference this is the difference between
+ * 6 tok/s (sync-per-call) and 40+ tok/s (batched). */
+tc_status_t tc_gemv_quantized_async(tc_context* ctx,
+                                    const tc_buffer* X,
+                                    const tc_buffer* W_quant,
+                                    tc_buffer*       Y,
+                                    tc_quant_t       fmt,
+                                    int M, int N, int K,
+                                    tc_stream*       stream);
+
 /* Compute the storage size (bytes) for an [N, K] quantized weight buffer. */
 size_t tc_quantized_size(tc_quant_t fmt, int N, int K);
 

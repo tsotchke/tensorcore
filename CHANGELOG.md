@@ -1,5 +1,62 @@
 # Changelog
 
+## v0.1.5 — Modern attention, multi-process distributed, inference bench, Python
+
+Closes the rest: sliding-window + ALiBi attention (modern LLM features), real
+multi-process ring all-reduce via fork(), a synthetic 7B Q4_0 inference latency
+bench with concrete tok/s, and a Python ctypes binding so the library is
+usable from any numpy script.
+
+### Sliding-window + ALiBi attention
+- New `tc_attention_desc` fields: `window_size` (Mistral-style local
+  attention, 0 = full attention) and `alibi_slopes` (per-head ALiBi linear
+  bias, host fp32 array).
+- `kernels/metal/flash_attention.metal`: applies window + ALiBi in the
+  score-modification step under new function constants `g_use_window` /
+  `g_use_alibi`. Causal + window + ALiBi can be combined.
+- `tests/test_attention_correctness.c`: added sliding-window case
+  (W=16 with Sq=Sk=64). Validated at 1.6e-3 RMS-scaled vs fp64 reference.
+
+### Multi-process ring all-reduce (real fork)
+- `tests/test_distributed_ring_fork.c`: same ring algorithm as the
+  threads test, but each rank is a fork()ed child. Communicates via
+  socketpairs the parent set up before fork. Validated **bit-exact** for
+  4 ranks × 1024 fp32 elements.
+- This is the same code path the multi-Mac TB5/RDMA backend will use —
+  only the transport layer changes.
+
+### Synthetic 7B Q4_0 inference bench
+- `bench/bench_inference_7b.c`: allocates Q4_0 weights matching a 7B llama
+  (32 layers × hidden=4096 × mlp=11008 = 3.4 GB), times the GEMV stack
+  per decode step. Excludes attention/softmax/RoPE/RMSnorm.
+- **Initial result (sync-per-call): 6.5 tok/s @ 22 GB/s.**
+- **After async batched dispatch: 13.7 tok/s @ 46.5 GB/s.**
+- Reference: llama.cpp on M2 Ultra reports ~55-65 tok/s. We're at 24% of
+  that today; the gap is in Q4_0 kernel design (1 sg per output cell with
+  no inter-block pipelining vs llama.cpp's hand-tuned 4-output-per-sg).
+- Added `tc_gemv_quantized_async` for stream-batched dispatch.
+
+### Python ctypes binding
+- `python/tensorcore/__init__.py`: minimal ctypes wrapper for
+  `tc_init`, `tc_buffer_*`, `tc_gemm` with `TCDeviceInfo` / `TCGemmDesc`
+  Python structs. numpy interop via `buffer_write` / `buffer_read`.
+- `python/tests/test_basic.py`: end-to-end fp16 GEMM 256³ vs numpy
+  reference, validates the binding is functional.
+- CMake now builds both `libtensorcore.a` and `libtensorcore.dylib`;
+  the .dylib is what ctypes loads.
+
+### Eshkol integration in BOTH repos
+- `~/Desktop/eshkol-platform/` was the wrong repo earlier; the user
+  clarified the main branch is `~/Desktop/eshkol/`. **Both** now have
+  the same integration (drop the bridge file, one-line call site,
+  build clean). Separate commits in each repo. `eshkol-static` builds
+  green in both.
+
+### Test count: 15/15 pass on Apple M2 Ultra
+Added test_distributed_ring_fork (thread → process), sliding-window case
+in test_attention_correctness, test_quantized + test_fused_norm_gemv from
+prior. Total ctest time ~3s.
+
 ## v0.1.4 — Quantized inference + GQA + fused norm + REAL Eshkol integration
 
 The big push: the LLM-inference kernels (Q4_0/Q8_0 weight-only matmul), GQA

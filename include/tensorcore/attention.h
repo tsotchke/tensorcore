@@ -37,6 +37,18 @@ typedef struct {
 
     /* GQA / MQA: kv_heads divides heads. If 0, defaults to `heads`. */
     int32_t  kv_heads;
+
+    /* Sliding window: limit each query to attend to the last `window_size`
+     * keys. 0 means no window (full causal/non-causal). Mistral 7B uses
+     * window_size=4096. */
+    int32_t  window_size;
+
+    /* ALiBi: linear positional bias slope per query head. Applied as
+     *   S[i,j] -= alibi_slope[h] * (i - j)
+     * when alibi_slopes is non-NULL (alibi_slopes is a pointer to a host
+     * fp32 array of `heads` elements; copied into the kernel via setBytes).
+     * Used by BLOOM and other ALiBi-trained models. */
+    const float* alibi_slopes;
 } tc_attention_desc;
 
 tc_status_t tc_attention_forward(tc_context* ctx,

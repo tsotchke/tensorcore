@@ -115,6 +115,65 @@ int main(void) {
     rc |= run_gqa_case(ctx, 1, 4, 2, 128, 128, 64);   /* GQA: 2 KV heads   */
     rc |= run_gqa_case(ctx, 1, 8, 2, 128, 128, 128);  /* GQA D=128         */
 
+    /* Sliding-window: window_size = 32 with seq_kv = 128 means each query
+     * only attends to the most recent 32 keys. Test by setting window and
+     * comparing against a fp64 reference that applies the same window. */
+    {
+        const int B = 1, H = 2, Sq = 64, Sk = 64, D = 64, W = 16;
+        const float scale = 1.0f / sqrtf((float)D);
+        const size_t qkv = (size_t)B * H * Sq * D;
+        tc_buffer *Q, *K, *V, *O;
+        tc_buffer_alloc(ctx, qkv * 2, &Q);
+        tc_buffer_alloc(ctx, qkv * 2, &K);
+        tc_buffer_alloc(ctx, qkv * 2, &V);
+        tc_buffer_alloc(ctx, qkv * 2, &O);
+        uint16_t *Qp, *Kp, *Vp, *Op;
+        tc_buffer_map(Q, (void**)&Qp); tc_buffer_map(K, (void**)&Kp);
+        tc_buffer_map(V, (void**)&Vp); tc_buffer_map(O, (void**)&Op);
+        float *Qf = malloc(qkv*4), *Kf = malloc(qkv*4), *Vf = malloc(qkv*4);
+        float *Or = malloc(qkv*4);
+        srand(0xBA);
+        for (size_t i = 0; i < qkv; ++i) { float v = ((float)rand()/RAND_MAX-0.5f)*0.3f; Qf[i]=v; Qp[i]=f32_to_f16(v); }
+        for (size_t i = 0; i < qkv; ++i) { float v = ((float)rand()/RAND_MAX-0.5f)*0.3f; Kf[i]=v; Kp[i]=f32_to_f16(v); }
+        for (size_t i = 0; i < qkv; ++i) { float v = ((float)rand()/RAND_MAX-0.5f)*0.3f; Vf[i]=v; Vp[i]=f32_to_f16(v); }
+        memset(Op, 0, qkv*2);
+        for (int b = 0; b < B; ++b) for (int h = 0; h < H; ++h) for (int q = 0; q < Sq; ++q) {
+            double *s = calloc(Sk, sizeof(double));
+            double m = -INFINITY;
+            for (int k = 0; k < Sk; ++k) {
+                if (k > q) { s[k] = -INFINITY; continue; }     /* causal */
+                if (q > k + W) { s[k] = -INFINITY; continue; } /* window */
+                double dot = 0; for (int d2 = 0; d2 < D; ++d2)
+                    dot += (double)Qf[((b*H+h)*Sq+q)*D+d2] * (double)Kf[((b*H+h)*Sk+k)*D+d2];
+                s[k] = dot * scale; if (s[k] > m) m = s[k];
+            }
+            double l = 0;
+            for (int k = 0; k < Sk; ++k) { s[k] = (s[k] > -1e30) ? exp(s[k] - m) : 0; l += s[k]; }
+            for (int d2 = 0; d2 < D; ++d2) {
+                double a = 0;
+                for (int k = 0; k < Sk; ++k) a += s[k] * (double)Vf[((b*H+h)*Sk+k)*D+d2];
+                Or[((b*H+h)*Sq+q)*D+d2] = (float)(a / (l + 1e-30));
+            }
+            free(s);
+        }
+        tc_attention_desc d = {0};
+        d.batch=B; d.heads=H; d.seq_q=Sq; d.seq_kv=Sk; d.head_dim=D;
+        d.io_dtype=TC_DTYPE_F16; d.accum_dtype=TC_DTYPE_F32;
+        d.softmax_scale=scale; d.causal=1; d.window_size=W;
+        tc_status_t s = tc_attention_forward(ctx, &d, Q, K, V, O, NULL);
+        double se=0, sr=0;
+        for (size_t i = 0; i < qkv; ++i) {
+            double e = (double)f16_to_f32(Op[i]) - Or[i]; se += e*e; sr += Or[i]*Or[i];
+        }
+        double scaled = sqrt(se/qkv) / (sqrt(sr/qkv) + 1e-9);
+        printf("sliding_window B=%d H=%d Sq=%d Sk=%d D=%d W=%d   scaled=%.3e  %s\n",
+               B, H, Sq, Sk, D, W, scaled, (s==TC_OK && scaled < 2e-2) ? "OK" : "FAIL");
+        rc |= (s == TC_OK && scaled < 2e-2) ? 0 : 9;
+        free(Qf); free(Kf); free(Vf); free(Or);
+        tc_buffer_free(ctx, Q); tc_buffer_free(ctx, K);
+        tc_buffer_free(ctx, V); tc_buffer_free(ctx, O);
+    }
+
     tc_shutdown(ctx);
     return rc;
 }
