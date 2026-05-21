@@ -41,7 +41,9 @@ jobs:
         env:
           PYTHON_BIN: ${{ runner.temp }}/tensorcore-release-venv/bin/python
           OUT_DIR: dist
-        run: scripts/create_native_sdk_archive.sh "$RUNNER_TEMP/tensorcore-native-sdk"
+        run: |
+          archive="$(scripts/create_native_sdk_archive.sh "$RUNNER_TEMP/tensorcore-native-sdk")"
+          scripts/check_native_sdk_archive.sh "$archive"
 
       - name: Upload runtime evidence
         if: always()

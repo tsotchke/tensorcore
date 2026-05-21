@@ -59,7 +59,8 @@ jobs:
           else
             echo "pkg-config not found; skipping pkg-config smoke."
           fi
-          OUT_DIR="$RUNNER_TEMP" scripts/create_native_sdk_archive.sh "$RUNNER_TEMP/tensorcore-install"
+          archive="$(OUT_DIR="$RUNNER_TEMP" scripts/create_native_sdk_archive.sh "$RUNNER_TEMP/tensorcore-install")"
+          scripts/check_native_sdk_archive.sh "$archive"
       - name: Python package smoke
         run: scripts/ci_python_smoke.sh
 
@@ -100,6 +101,7 @@ jobs:
           else
             echo "pkg-config not found; skipping pkg-config smoke."
           fi
-          OUT_DIR="$RUNNER_TEMP" scripts/create_native_sdk_archive.sh "$RUNNER_TEMP/tensorcore-install"
+          archive="$(OUT_DIR="$RUNNER_TEMP" scripts/create_native_sdk_archive.sh "$RUNNER_TEMP/tensorcore-install")"
+          scripts/check_native_sdk_archive.sh "$archive"
       - name: Python package smoke
         run: scripts/ci_python_smoke.sh
