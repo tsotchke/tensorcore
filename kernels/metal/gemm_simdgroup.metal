@@ -348,11 +348,13 @@ kernel void tc_gemm_bf16_f32(
 }
 #endif
 
-/* ----- int8 IO, int32 accumulator (Apple10+, M4+; MSL 3.2+) -----
+/* ----- int8 IO, int32 accumulator (Apple10+, M4+; MSL 3.2/3.x) -----
  * Note: integer matrix MMA on Apple10+ uses `simdgroup_matrix<char, 8, 8>` for
  * inputs and `simdgroup_matrix<int, 8, 8>` for the accumulator. alpha/beta are
- * passed as float and rounded at store time. */
-#if defined(__METAL_VERSION__) && __METAL_VERSION__ >= 320
+ * passed as float and rounded at store time. Metal 4 removes these integer
+ * simdgroup_matrix element types, so SDK26 builds omit this kernel and fall
+ * back through the MPS i8 path. */
+#if defined(__METAL_VERSION__) && __METAL_VERSION__ >= 320 && __METAL_VERSION__ < 400
 kernel void tc_gemm_i8_i32(
     device const char*  A     [[buffer(0)]],
     device const char*  B     [[buffer(1)]],

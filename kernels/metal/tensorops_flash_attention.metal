@@ -26,8 +26,6 @@ using namespace metal;
 using namespace mpp::tensor_ops;
 
 constant constexpr int TC4_FA_BR = 64;
-constant constexpr int TC4_FA_BC = 64;
-constant constexpr int TC4_FA_SG_COUNT = 4;
 
 constant bool g_tc4_causal     [[function_constant(0)]];
 constant bool g_tc4_return_lse [[function_constant(1)]];
