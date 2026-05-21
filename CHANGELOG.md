@@ -1,5 +1,349 @@
 # Changelog
 
+## Unreleased
+
+Portable CPU backend for non-Apple workers, documentation overhaul,
+executable examples for the inference + training assembly, hardened shell
+scripts, expanded CI breadth, and a packaged native SDK artifact on top of
+v0.1.22:
+
+### Portable CPU backend (`TC_ENABLE_METAL=OFF`)
+
+- `Add portable CPU backend` — `lib/core/device_cpu.cpp`, `lib/ops/gemm_cpu.cpp`,
+  `lib/ops/quantized_cpu.cpp`, `lib/ops/unsupported_cpu.cpp`,
+  `lib/core/cpu_float.h`. Pure C/C++17; builds on Linux, Intel Mac, or
+  anywhere with a C++17 toolchain. New `TC_BACKEND_PORTABLE_CPU = 7`
+  enum value; `tc_backend_name` renders it as `"portable_cpu"`.
+- `Tighten portable CPU collectives` — `tc_dist_*` works in the
+  `TC_DIST_SINGLE` (`world_size = 1`) configuration on CPU; ring / Gloo
+  remain v0.5.
+- `Add portable CPU CI coverage` — CI builds and tests the CPU-only
+  configuration on every push.
+- New CMake option `TC_ENABLE_METAL` (defaults: ON on Apple, OFF
+  elsewhere) gates the Apple Metal backend. With `TC_ENABLE_METAL=OFF`
+  the Metal kernels, MPS fallback, and TensorOps path are excluded; the
+  dispatch ladder collapses to one entry (`portable_cpu`).
+- Covered ops on the CPU build: `tc_init`/`shutdown`,
+  `tc_buffer_*`, `tc_stream_*`, `tc_gemm` (all dtypes + transpose
+  + batched + async), `tc_quantize_weights`, `tc_gemv_quantized`,
+  `tc_gguf_*`, `tc_dist_*` (single-host), diagnostic API
+  (`tc_status_string`, `tc_dtype_name`, `tc_backend_name`).
+- Uncovered ops return `TC_ERR_UNSUPPORTED_FAMILY` cleanly so downstream
+  FFI imports can bind the full ABI surface without requiring Metal
+  symbols.
+
+### Test surface
+
+- `Add decode and training integration examples` —
+  `examples/decode_step.c` (full synthetic Llama decode step;
+  ~30 ms / 2 layers on M2 Ultra) and `examples/training_step.c`
+  (RMSnorm + Linear + softmax forward, backward through Linear / RMSnorm,
+  AdamW on weights + gamma; loss decreases 3.98 → 0.25 over 15 steps).
+- `Clarify test registration paths` — register the new examples as
+  CTest entries (`example_decode_step`, `example_training_step`) gated
+  by `TC_ENABLE_METAL AND TC_BUILD_TESTS` so CPU-only builds skip them.
+- `Expand Python GGUF integration coverage` — the synthetic GGUF in
+  `python/tests/test_basic.py` now writes an int64 array
+  (`tokenizer.ggml.token_ids`) so `gguf_meta_array_get_i64` has test
+  coverage. `QuantizedMatrix.gemv_async` is also exercised against the
+  sync path. Both were previously dead-code-flagged.
+- Test count: 22 / 22 pass (was 20).
+
+### CI hardening
+
+- `Harden CI output file writes` — `scripts/ci_macos_test.sh`,
+  `scripts/release_smoke.sh`, and `scripts/create_release_checksums.sh`
+  gained `require_output_file_path` guards that refuse to write to
+  `/`, `/etc`, `/bin`, `/usr`, `/sbin`, `/System`. The checksums script
+  now writes through a `mktemp` temp file and `mv`s atomically into
+  place with a named trap handler for cleanup.
+- ICC's shell-hardening audit findings: 3 medium → 0.
+- `scripts/check_docs_links.py` — auditable check for broken
+  intra-doc Markdown links; wired into the dev `Makefile` as
+  `make docs-check`.
+
+### Dev convenience
+
+- `Makefile` with 16 dev targets: `build`, `test`, `bench`, `smoke`,
+  `hello`, `inspect`, `decode`, `train`, `examples`, `check-version`,
+  `check-headers`, `check-exports`, `check-python`, `docs-check`,
+  `icc-audit`, `install`, `wheel`. See `make help`.
+- Pyproject metadata: expanded keywords (13 entries), classifiers
+  (Python 3.9-3.13, C/C++ language tags, Science/Research audience),
+  and `[project.urls]` with homepage / repo / docs / changelog /
+  roadmap / issues / security URLs.
+
+### Documentation overhaul
+
+- Rebuilt `docs/` into a 40+ doc tree, including a CUDA-for-Apple
+  positioning doc ([docs/cuda_comparison.md](docs/cuda_comparison.md)),
+  full C ABI reference ([docs/api_reference.md](docs/api_reference.md)),
+  per-area kernel walkthroughs (gemm, attention, training_kernels,
+  conv2d, quantized, gguf, distributed, dtypes, family_gating), a
+  ground-truth audit produced by [ICC](https://github.com/tsotchke/infinite_context_coder),
+  numerics + memory model + observability docs, assembly walkthroughs
+  for inference and training, an FAQ, a glossary, a kernel-extension
+  tutorial, a release runbook, a dev-setup guide, per-directory
+  READMEs in `examples/`, `tests/`, `bench/`, and a per-`.metal`-file
+  walkthrough in `docs/kernels.md`.
+- Caught and fixed several docs-vs-code discrepancies along the way:
+  GEMM kernel layout is 4 simdgroups × 128 threads (not 32 × 1024);
+  FlashAttention D=64 tile is Br=Bc=32 (not 64); `dgamma` from
+  `tc_rmsnorm_backward` is fp32 (not fp16, with corrected dtype
+  + AdamW grad-dtype guidance); `tc_backend_name` returns lowercase
+  strings, not uppercase enum names.
+
+### TensorOps + hardware evidence
+
+- `Align TensorOps device capability gate` — the `supports_tensorops_m5`
+  gate now mirrors the actual `mpp::tensor_ops` availability rather than
+  raw GPU family. Older M5 firmware that doesn't expose the encoder
+  reports correctly.
+- `Gate TensorOps GEMM to validated tiles`, `Use SDK26 tensor_ops tile
+  shape`, `Align tensor_ops GEMM tensors with SDK26 API`, `Use tensor_ops
+  accumulate mode for SDK26`, `Probe TensorOps ragged fallback on M5`,
+  `Add M5 TensorOps runtime smoke wrapper`, `Disable unvalidated
+  TensorOps attention kernel body` — the M5 TensorOps GEMM path is
+  now SDK 26 API-aligned, gated to validated tile shapes, and exercised
+  by a runtime smoke wrapper that is ready for M5 hardware. The
+  TensorOps attention body is intentionally disabled at v0.1 until the
+  validation lands.
+- `Add hardware evidence path for TensorOps readiness` — `release_smoke.sh`
+  collects a JSON runtime-evidence artifact (chip, family, TensorOps
+  availability) under a `REQUIRE_METAL4_TENSOROPS` switch consumed by
+  the self-hosted CI workflow.
+- `Add TensorOps build toggle` — `TC_ENABLE_TENSOROPS` now exists as a
+  CMake option. It defaults to `ON` to preserve SDK 26 compile evidence,
+  but can be set to `OFF` to force the non-TensorOps Metal path.
+
+### Executable end-to-end examples
+
+(See "Test surface" above for the new `decode_step.c` and
+`training_step.c` examples, which are also registered as CTest entries.)
+
+### GitHub OSS hygiene
+
+- `SECURITY.md` — threat model (GGUF parsing, tensor dimension
+  validation, native lib load), reporting flow, hardening posture.
+- `.github/ISSUE_TEMPLATE/{bug_report,feature_request,performance_regression}.md`
+  — structured templates that ask for chip / SDK / `tc_version()` /
+  `tc_last_backend()` capture up front.
+- `.github/PULL_REQUEST_TEMPLATE.md` — 11-item checklist citing the
+  numerical guarantees, public-export checks, Python ABI checks,
+  CHANGELOG/ROADMAP/docs updates.
+- `CITATION.cff` — CFF v1.2.0 metadata for academic / technical
+  citation.
+
+### GitHub repo metadata
+
+- Description set: "CUDA-equivalent tensor-core acceleration for Apple
+  Silicon. C-ABI kernel library wrapping simdgroup_matrix (M1+) and
+  mpp::tensor_ops (M5+): GEMM, FlashAttention, Conv2D, Q4_0/Q8_0
+  quantized inference, GGUF reader, full transformer training kernels.
+  One binary, M1 → M5."
+- 13 topics added for discoverability: `apple-silicon`,
+  `cuda-alternative`, `flash-attention`, `flashattention2`, `gemm`,
+  `gguf`, `llm-inference`, `metal`, `mixed-precision`, `mlx`,
+  `objective-c-plus-plus`, `simdgroup-matrix`, `tensor-ops`.
+
+### Native SDK release artifact
+
+- `Publish native SDK release artifact` — the release workflow now
+  produces a tarball of headers, libraries, and the metallib that
+  downstream consumers can vendor without rebuilding.
+- `Verify native SDK archive consumers`, `Check static SDK archive
+  consumer`, `Check C++ SDK archive consumer` — CI compiles a tiny
+  consumer against the archived static and shared libraries on every
+  push, in both C and C++ modes, so the archive contract is
+  continuously verified.
+- `Publish release checksums` + `Verify release checksum manifest` —
+  release ships a SHA manifest; CI asserts the manifest is consistent
+  with the artifact contents.
+- `Harden native SDK archive hygiene` — the archive carries no
+  build-tree paths or absolute references; produced via
+  `scripts/create_native_sdk_archive.sh` and verified by
+  `scripts/check_native_sdk_archive.sh`.
+- `Make SDK CMake exports relocatable` — the installed
+  `tensorcoreConfig.cmake` no longer embeds the build host's prefix; it
+  resolves paths relative to the install root, so the archive works at
+  any prefix on the consumer side.
+
+### TensorOps + hardware evidence (extended)
+
+- `Separate packaging evidence from GPU coverage` — wheel-packaging and
+  GPU-hardware coverage are now distinct evidence streams so neither
+  masks the other.
+- `Harden hardware evidence and Python diagnostics` — release smoke
+  emits machine-readable evidence and Python exposes matching diagnostic
+  helpers (`status_string`, `dtype_name`, `backend_name`,
+  `last_backend_name`, `tensorops_gemm_kernel_name`).
+
+### Distributed and Python ABI
+
+- `Expose distributed primitives in Python` — `tc_dist_init`,
+  `tc_allreduce`, `tc_broadcast`, `tc_allgather`, `tc_barrier`,
+  `tc_dist_world_size`, `tc_dist_rank` plus `tc_dist_finalize` are now
+  callable from the Python binding.
+- `Restrict shared library exports to public ABI` — the shared dylib
+  filters its export list down to the symbols declared in
+  `include/tensorcore/`; CI checks for drift against the public headers
+  on every push (`Check public export surface in CI`,
+  `Check exports against public headers`).
+- Public-surface guardrails in CI — `Check Python FFI surface`, `Check
+  Python ABI layout`, `Check Python constants against public enums`,
+  `Check public headers`. The Python binding can no longer drift from
+  the C ABI undetected.
+
+### Release workflow
+
+- `Use release smoke for release workflow` + `Handle paravirtual GPUs in
+  release smoke` — `release.yml` now drives `scripts/release_smoke.sh`,
+  which copes with paravirtualized GPUs that show up under macOS
+  virtualization.
+
+## v0.1.22 — Version guards across pyproject / CMake / header
+
+- Added `scripts/check_version_consistency.sh` to fail CI if
+  `pyproject.toml`, `CMakeLists.txt::project(VERSION ...)`, and the
+  `TENSORCORE_VERSION_{MAJOR,MINOR,PATCH}` triple in
+  `include/tensorcore/tensorcore.h` disagree.
+- The CI workflow runs the check as its first step on every push.
+
+## v0.1.21 — Release wheel workflow + macOS hardware-aware CI
+
+- `Add release wheel workflow` — `.github/workflows/release.yml` builds
+  the `tensorcore_apple-*.whl` on the `v*` tag, runs the version check,
+  hardware-aware tests, the install smoke, and publishes the wheel as a
+  GitHub release asset.
+- `Upload release wheel artifacts` — wheels also upload as build
+  artifacts on every successful release run.
+- `Update checkout action for Node 24` — bumps `actions/checkout` to v6
+  for Node 24 compatibility.
+- `Use a venv for Python CI smoke` — the Python smoke script now sets
+  up an isolated venv so system Python state can't leak in.
+- `Make macOS CI hardware-aware` — `scripts/ci_macos_test.sh` skips
+  tests that require a real GPU when the runner only exposes the
+  paravirtual one, so CI on `macos-14` / `macos-15` runners is
+  predictable.
+
+## v0.1.20 — Public integration oracle
+
+- `Add public integration oracle` — a CI-side check that compiles a
+  minimal `tc_gemm` consumer against the installed CMake package, runs
+  it, and asserts the expected backend dispatch. The oracle is the
+  contract for "the installed package is usable from another project."
+
+## v0.1.19 — TensorOps selector extracted for coverage
+
+- `Extract TensorOps selector for coverage` — the M5 `mpp::tensor_ops`
+  path selection moves to `lib/tensorops/tensorops_select.{c,h}` so it
+  can be unit-tested independently of a Metal 4 runtime.
+- `tests/test_tensorops_select.c` covers the selector's dtype × accum
+  matrix without needing M5 hardware.
+
+## v0.1.18 — Runtime evidence for public integration
+
+- `Expand runtime evidence for public integration` — `release_smoke.sh`
+  emits structured runtime evidence (backend chosen, family detected,
+  TensorOps presence) so downstream integrators can see *what their
+  installed binary does* on real hardware, not just what it claims.
+
+## v0.1.17 — Conv2D backward in Python + runtime evidence
+
+- `Expose Conv2D backward and runtime evidence` — `tc_conv2d_backward_input`
+  and `tc_conv2d_backward_weight` are wrapped in the Python binding;
+  runtime-evidence helpers (`conv2d_backward_input_scratch_bytes`) ship
+  alongside them.
+
+## v0.1.16 — Python buffer layout hardening
+
+- `Harden Python buffer layout handling` — `buffer_write` /
+  `buffer_read` validate dtype, shape, and contiguity against the
+  buffer they're targeting; mismatched layouts raise instead of
+  silently corrupting data.
+
+## v0.1.15 — Wheel native artifact tags validated
+
+- `Validate wheel native artifact tags` — the release pipeline asserts
+  the wheel's platform tag matches the dylib it carries (no
+  `macosx_15_0_arm64.whl` shipping a dylib built for `macosx_11_0`).
+
+## v0.1.14 — Python native library loading hardened
+
+- `Harden Python native library loading` — the binding's `_find_lib`
+  searches in a predictable order (`TENSORCORE_LIB` env → next to the
+  package → standard install prefixes → build tree) and produces a
+  clear `TensorcoreError` if every candidate fails, with the searched
+  paths in the message.
+
+## v0.1.13 — Conv2D forward in Python
+
+- `Expose Conv2D forward through Python` — `tc_conv2d_forward` is
+  wrapped in the Python binding, with helpers (`conv2d_output_shape`,
+  `conv2d_scratch_bytes`) that match the C-side scratch-sizing math.
+
+## v0.1.12 — Batched GEMM in Python
+
+- `Expose batched GEMM through Python` — `tc_gemm_batched` is wrapped;
+  the binding takes a single `tc_gemm_batched_desc` and exposes the
+  stride parameters cleanly.
+
+## v0.1.11 — Attention in Python
+
+- `Expose attention through Python bindings` — `tc_attention_forward`,
+  `tc_attention_forward_async`, and `tc_attention_backward` cross the
+  Python boundary. The descriptor (including `kv_heads`,
+  `window_size`, `alibi_slopes`) is exposed; `alibi_slopes` accepts a
+  NumPy fp32 array.
+
+## v0.1.10 — Async attention dispatch hardened
+
+- `Harden async attention dispatch` — the `_async` attention variant
+  shares the same pending command-buffer pattern as `tc_gemm_async` so
+  multiple attention dispatches can pipeline through one stream.
+
+## v0.1.9 — Buffer validation + wheel release guards
+
+- `Bump version to 0.1.9` — first wheel-publishable release.
+- `Validate buffers before GPU dispatch` — `tc_gemm`,
+  `tc_attention_forward`, and friends now validate that the supplied
+  `tc_buffer*` objects come from the same context and have sufficient
+  size for the requested shape, returning `TC_ERR_INVALID_ARG` /
+  `TC_ERR_INVALID_SHAPE` instead of trusting the caller.
+- `Harden Python wheel release checks` — wheel release adds version /
+  artifact assertions before upload.
+
+## v0.1.8 — Native runtime packaged in wheels
+
+- `Package native runtime in Python wheels` — the wheel now ships
+  `libtensorcore.dylib` and `tensorcore.metallib` inside the package,
+  so `pip install tensorcore-apple` is a complete install on Apple
+  Silicon. `TENSORCORE_LIB` / `TC_METALLIB` env overrides still take
+  precedence.
+
+## v0.1.7 — pkg-config support + owned Python wrappers
+
+- `Add pkg-config install support` — `tensorcore.pc` ships in
+  `lib/pkgconfig/`. Direct compiler invocation works:
+  `cc main.c $(pkg-config --cflags --libs tensorcore)`.
+- `Check pkg-config metadata in CI` — CI validates the generated
+  `tensorcore.pc` against the install prefix on every push.
+- `Add owned Python context and buffer wrappers` — `tc.Context`,
+  `tc.Buffer`, and `tc.Stream` are context-manager-friendly object
+  wrappers that own the underlying handle and release on exit.
+- `Add owned Python GGUF wrappers` — `tc.GgufFile`, `tc.LoadedModel`,
+  `tc.LoadedTensor`, `tc.QuantizedMatrix` mirror the pattern for the
+  GGUF surface.
+- `Add NumPy helpers to Python buffers` — `Buffer.from_numpy`,
+  `Buffer.to_numpy`, `Context.buffer_from`, `Context.buffer_zeros`.
+- `Fix context and Python ownership lifetimes` — wrappers correctly
+  retain the context as long as any dependent handle is alive, so GC
+  ordering can't pull the rug out from under a live buffer.
+- `Support installed static consumers` — out-of-tree builds linking
+  against `tensorcore::tensorcore` (the static library) resolve the
+  Metal / Foundation / Accelerate frameworks correctly via the
+  installed CMake package config.
+
 ## v0.1.6 — GGUF loading, Q4 v2, Q8 quantization, installable package
 
 This checkpoint turns tensorcore from a build-tree kernel library into
@@ -162,7 +506,7 @@ the long-deferred actual integration with `eshkol-platform`.
 - The `eshkol/bridge/tensorcore_codegen.cpp` shim was previously only
   compile-tested standalone. Now it's actually dropped into
   `eshkol-platform/lib/backend/`, glob-included by their CMakeLists, and
-  called from `llvm_codegen.cpp:3140`.
+  called from the codegen-context initialization path.
 - Activation is opt-in via `ESHKOL_ENABLE_TENSORCORE=1`. When set, the
   14 `tc_*` C ABI functions are declared as ExternalLinkage in the
   Eshkol LLVM module at codegen-context init time.

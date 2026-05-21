@@ -184,3 +184,182 @@ tc_gguf_meta_array_get_str(
 
 String array values are pointer+length pairs into the mapped GGUF file; they
 are valid until `tc_gguf_close`.
+
+## Minimum-viable integration
+
+The smallest useful "hook tensorcore into my project" is one GEMM call.
+That's worth proving before you wire up the rest of the surface.
+
+```c
+#include "tensorcore/tensorcore.h"
+#include <stdio.h>
+
+int main(void) {
+    tc_context* ctx = NULL;
+    if (tc_init(&ctx) != TC_OK) return 1;
+
+    tc_device_info info;
+    tc_device_info_get(ctx, &info);
+    printf("tensorcore on %s (Apple%d)\n", info.name, (int)info.family);
+
+    tc_buffer *A, *B, *C;
+    tc_buffer_alloc(ctx, 256 * 256 * 2, &A);
+    tc_buffer_alloc(ctx, 256 * 256 * 2, &B);
+    tc_buffer_alloc(ctx, 256 * 256 * 2, &C);
+
+    tc_gemm_desc d = {0};
+    d.M = d.N = d.K = 256;
+    d.a_dtype = d.b_dtype = d.c_dtype = TC_DTYPE_F16;
+    d.accum_dtype = TC_DTYPE_F32;
+    d.alpha = 1.0f;
+    d.beta = 0.0f;
+
+    tc_gemm(ctx, &d, A, B, C);
+    printf("backend: %s\n", tc_backend_name(tc_last_backend()));
+
+    tc_buffer_free(ctx, A);
+    tc_buffer_free(ctx, B);
+    tc_buffer_free(ctx, C);
+    tc_shutdown(ctx);
+    return 0;
+}
+```
+
+Build:
+
+```sh
+cc tc_smoke.c $(pkg-config --cflags --libs tensorcore) -o tc_smoke
+./tc_smoke
+```
+
+You should see `backend: simdgroup_matrix`. If it says anything else, see
+[troubleshooting.md](troubleshooting.md).
+
+## Error handling, the boring-but-load-bearing version
+
+Every entry point returns `tc_status_t`. Wrap it:
+
+```c
+#define TC_CHECK(call) do {                                       \
+    tc_status_t _s = (call);                                      \
+    if (_s != TC_OK) {                                            \
+        fprintf(stderr, "%s:%d: %s -> %s (%d)\n",                 \
+                __FILE__, __LINE__, #call,                        \
+                tc_status_string(_s), (int)_s);                   \
+        abort();                                                  \
+    }                                                             \
+} while (0)
+```
+
+Common codes you should be ready to handle:
+
+- `TC_ERR_NOT_INITIALIZED` — `tc_init` not called, or called and then
+  shut down.
+- `TC_ERR_ALREADY_INITIALIZED` — second `tc_init`. Idempotent; not an
+  error in your code unless you assumed it succeeded.
+- `TC_ERR_UNSUPPORTED_FAMILY` — chip too old for the requested path. Drop
+  to fp32 or report cleanly.
+- `TC_ERR_UNSUPPORTED_DTYPE` — kernel doesn't accept that dtype combo.
+  Check the table in [dtypes.md](dtypes.md).
+- `TC_ERR_INVALID_SHAPE` — descriptor shape doesn't match buffer sizes.
+- `TC_ERR_INVALID_ARG` — generic input validation failure; check NULL
+  pointers in the call.
+- `TC_ERR_KERNEL_NOT_FOUND` — the metallib doesn't have the function the
+  dispatch expects. Usually a stale / missing metallib; see
+  [troubleshooting.md](troubleshooting.md).
+
+## Picking an integration footprint
+
+There are three reasonable footprints depending on what your project
+already has:
+
+### Narrow: keep your model code, swap individual ops
+
+Best for projects that already have a working Metal pipeline and just want
+faster GEMM or quantized GEMV.
+
+- Drop `tc_gemm` into your matmul site.
+- Optionally drop `tc_gemv_quantized` into your Q4_0 path.
+- Keep using your KV-cache, sampling, tokenization.
+
+You'll start to question whether to widen the footprint once you see how
+much code in your pipeline is GEMM-shaped.
+
+### Medium: take the LLM hot path
+
+Best for inference projects that don't have a heavy investment in
+hand-tuned Metal yet.
+
+- Use `tc_gguf_load_supported_tensors` to load the model.
+- Use `tc_fused_rmsnorm_gemv` + `tc_rope_forward` + `tc_gemv_quantized` +
+  `tc_attention_forward` + `tc_swiglu_forward` to drive the decode step.
+- Stream the GEMVs with `tc_gemv_quantized_async` against a single
+  `tc_stream` for the 2.1× tok/s win.
+- Keep tokenization, sampling, KV-cache in your code.
+
+### Wide: take the training step
+
+Best for projects that want a Llama-class training loop on Apple Silicon
+and don't already have one.
+
+- Use `tc_gemm`, `tc_attention_forward[/_backward]`, `tc_rmsnorm_*`,
+  `tc_rope_forward`, `tc_swiglu_*`, `tc_softmax_*`, `tc_adamw_step` for
+  the per-step graph.
+- Use `tc_dist_init(TC_DIST_SINGLE, ...)` and `tc_allreduce` so the
+  multi-Mac upgrade in v0.5 is a backend swap.
+- Keep your data loader, your scheduler, your checkpoint format.
+
+`tests/test_transformer_block.c` and `tests/test_e2e_training.c` are
+worth reading as the smallest existing examples that exercise this full
+shape.
+
+## Threading
+
+- One `tc_context` per process is the easy mode and probably what you want.
+- The C API is reentrant per-context. Two threads using the same context
+  must serialize access to the *same* `tc_buffer` (no atomic guarantee
+  there); two threads using two different buffers concurrently is fine.
+- The pipeline cache and the buffer pool are internally guarded.
+- `tc_last_backend` is thread-local — it reports the most recent call on
+  the calling thread, not globally.
+- The Python binding doesn't release the GIL inside dispatches; if you
+  want concurrent Python threads, build them around separate contexts.
+
+## CI / build matrix considerations
+
+- **Hardware:** tensorcore needs Apple Silicon. GitHub's macOS-14 / macOS-15
+  runners expose a virtual GPU that's enough to run `tc_init` and the
+  Accelerate fallback, but `simdgroup_matrix` kernels will report as
+  `mps` or `accelerate_cpu`. Use a self-hosted M-series runner for
+  perf-sensitive CI.
+- **SDK version:** `xcrun --show-sdk-version` decides whether the Metal 4
+  path is included. Pin your CI image's Xcode version or the binary's
+  surface will drift across runs.
+- **macOS version:** the runtime `supports_tensorops_m5` flag depends on
+  M5-class hardware reporting Metal 4 support at runtime. Build with
+  SDK 26.0+ and pin the macOS version on M5-class runners so that
+  runtime capability reporting stays stable.
+
+## Versioning
+
+`TENSORCORE_VERSION_MAJOR / _MINOR / _PATCH` live in
+`include/tensorcore/tensorcore.h`. The `CMakeLists.txt` `project(...
+VERSION ...)` field is the authoritative build version (it drives the
+`pkg-config` file). They are kept in sync at tag time.
+
+Public ABI is stable within a minor version. Major version bumps may
+move enum values; minor / patch bumps will not (new dtypes append; status
+codes append; new fields go at the *end* of descriptor structs).
+
+`find_package(tensorcore CONFIG)` enforces `SameMajorVersion` compatibility
+in the generated `tensorcoreConfigVersion.cmake`.
+
+## Going further
+
+- Build a real inference loop: [gguf.md](gguf.md) + [quantized.md](quantized.md)
+  + [attention.md](attention.md).
+- Build a real training step: [training_kernels.md](training_kernels.md)
+  + [gemm.md](gemm.md) + [attention.md](attention.md).
+- Understand which path served your call: [family_gating.md](family_gating.md)
+  + `tc_last_backend()`.
+- Diagnose a failure: [troubleshooting.md](troubleshooting.md).

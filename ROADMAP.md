@@ -13,7 +13,7 @@ Apple has to ship hardware, and what software work closes the gap.
 
 | Op | Shape | dtype | TFLOPS | % of peak | Reference |
 |---|---|---|---|---|---|
-| GEMM | 4096³ | fp16 | **16.93** | ~63% | MLX on M3 Max ≈ 13.3 (`philipturner/metal-benchmarks`) |
+| GEMM | 4096³ | fp16 | **17.88** | ~66% | MLX on M3 Max ≈ 13.3 (`philipturner/metal-benchmarks`) |
 | GEMM | 4096³ | fp32 | 2.36 | ~60% | — |
 | GEMM | 2048³ | fp16 | 10.79 | — | — |
 | FlashAttention | S=4096, D=64, H=32 | fp16 | 6.70 | — | MFA-pre-tuning baseline |
@@ -80,25 +80,47 @@ to consume it on day one.**
 
 ### v0.1 — Foundation (shipped this checkpoint)
 - [x] CMake + metallib precompile + cross-family runtime detect
-- [x] Public C ABI (`include/tensorcore/`)
-- [x] Device init / pipeline cache / power-of-2 buffer pool
+- [x] Public C ABI (`include/tensorcore/`) — 11 headers, 71 exported symbols
+- [x] Device init / pipeline cache / power-of-2 buffer pool, autotune sweep + JSON cache
 - [x] **`simdgroup_matrix` GEMM** — fp16/fp32 (64×64 tile, BK=32, vec4 loads,
-      f32-accum) — **16.93 TFLOPS @ 4096³ on M2 Ultra, fp32 bit-exact vs Accelerate**
-- [x] bf16 kernel for Apple9+ (M3+) — gated, tested cleanly skips on older
-- [x] int8 kernel for Apple10+ (M4+) — gated
+      f32-accum) — **17.88 TFLOPS @ 4096³ on M2 Ultra, fp32 bit-exact vs Accelerate**
+- [x] bf16 GEMM — native on Apple9+, fp32-fallback on Apple7..8 (validated, rms ≤ 3e-3)
+- [x] int8 GEMM — native on Apple10+, fp32-widen fallback on Apple7..9 (bit-exact i32 accum)
 - [x] 128×128 large-tile GEMM (env-flag opt-in; register-pressure tuning v0.2)
-- [x] **Fused FlashAttention forward** — fp16, D=64 and D=128
-- [x] Q4_0/Q8_0 quantized GEMV plus GPU quantization
+- [x] **Fused FlashAttention forward** — fp16, D=64 and D=128, with causal,
+      GQA, sliding-window, and ALiBi via function constants
+- [x] **FlashAttention backward** — D=64 (LSE-saved scheme); D=128 backward
+      also shipped
+- [x] Conv2D forward + backward (dInput + dWeight), im2col + tc_gemm strategy
+- [x] Q4_0/Q8_0 quantized GEMV plus GPU quantization (v2 kernel: 186 tok/s @
+      632 GB/s on 7B decode, ~3× ahead of llama.cpp)
 - [x] GGUF v3 reader, metadata helpers, bulk tensor loading, and quantized
       matrix descriptors
 - [x] RMSNorm, LayerNorm, RoPE, SwiGLU, softmax, AdamW, and fused
-      RMSNorm+GEMV kernels
-- [x] Python binding for buffers, streams, GEMM, training ops, quantized GEMV,
-      and GGUF loading
+      RMSNorm+GEMV kernels (fwd + bwd where applicable)
+- [x] Python binding — full ABI parity (71 exports / 71 wrappers), owned object
+      wrappers (`Context`, `Buffer`, `Stream`, `DistContext`, `GgufFile`,
+      `LoadedModel`, `QuantizedMatrix`), NumPy interop
+- [x] Distributed primitives — single-host ring all-reduce / broadcast / allgather
+      / barrier, both threads-with-shared-mem and fork-with-socketpair transports
+      (the latter is the v0.5 multi-Mac transport pattern, bit-exact validated)
+- [x] M5 TensorOps GEMM + FlashAttention kernels (`tensorops_*.metal`),
+      SDK 26.0+ gated, runtime selector
 - [x] MPS + Accelerate fallback paths
-- [x] Correctness tests vs `cblas_sgemm` + fp64 reference (17/17 pass on M2 Ultra)
-- [x] TFLOPS bench harness
-- [x] Eshkol binding skeleton + integration doc
+- [x] Correctness tests vs `cblas_sgemm` + fp64 reference — **20/20 pass** on M2 Ultra
+      (+ 2 example-as-test entries → 22/22 total ctest)
+- [x] TFLOPS bench harness (GEMM sweep, attention sweep, 7B Q4_0 inference)
+- [x] Eshkol binding skeleton + bridge file dropped into both `eshkol/` and
+      `eshkol-platform/`, opt-in via `ESHKOL_ENABLE_TENSORCORE=1`
+- [x] **Native SDK release artifact** — headers + libraries + metallib +
+      CMake config + pkg-config tarball, with consumer verification in CI
+- [x] **Wheel packaging** — `tensorcore_apple-*.whl` with dylib + metallib
+      vendored; published as GitHub release asset on every `v*` tag
+- [x] **Version consistency CI** — `scripts/check_version_consistency.sh`
+      asserts `pyproject.toml` / CMake / header triple agreement on every push
+- [x] **End-to-end assembly examples** — `examples/decode_step.c` (synthetic
+      Llama decode step) and `examples/training_step.c` (synthetic mixed-
+      precision training iteration; loss decreases 3.98 → 0.25 over 15 steps)
 
 ### v0.2 — Saturation perf on Apple7..9 (next 2-4 weeks of focused work)
 
@@ -182,6 +204,23 @@ becomes the smarter purchase** once tensorcore matures.
 - `tensorcore` as a backend target for PyTorch, MLX, JAX, ONNX, GGUF
 - Pattern-matched op fusion in Eshkol's tensor codegen
 - `torch.compile`-style Triton-on-Metal alternative driven by tensorcore IR
+
+## How to read this roadmap
+
+- **v0.1 — measured.** Every claim ships with a test, a bench number, or
+  a correctness validation; see [docs/benchmarks.md](docs/benchmarks.md)
+  for reproducibility and [CHANGELOG.md](CHANGELOG.md) for per-checkpoint
+  history.
+- **v0.2-v0.3 — committed.** The work is bounded; the deliverables are
+  shape-tuning, kernel-design wins, and SDK 26 hardware exercises. No
+  hardware dependency outside Apple's already-shipped silicon.
+- **v0.4 — coordination.** Software-only, but consolidating across three
+  sibling projects. See [docs/eshkol_integration.md](docs/eshkol_integration.md).
+- **v0.5 — substrate-bound.** Needs macOS 26.2's JACCL surface and a
+  Thunderbolt-5 ring to validate against. The single-host path is in v0.1
+  so the work is transport-swap + scheduler, not algorithm.
+- **v0.6+ — silicon-bound.** Honest about what's software-only vs what
+  needs Apple to ship.
 
 ---
 

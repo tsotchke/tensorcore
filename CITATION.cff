@@ -1,0 +1,36 @@
+cff-version: 1.2.0
+message: "If you use tensorcore in academic work or technical writing, please cite it."
+title: "tensorcore: CUDA-equivalent tensor-core acceleration for Apple Silicon"
+abstract: >-
+  tensorcore is a C-ABI kernel library that turns Apple Silicon GPUs into
+  a training-grade foundation for AI workloads. It provides simdgroup_matrix
+  GEMM (fp16/bf16/fp32/int8), fused FlashAttention forward and backward
+  (including GQA, sliding window, and ALiBi), Q4_0/Q8_0 quantized inference
+  with a GGUF reader, the full transformer training kernel set
+  (RMSnorm / LayerNorm / RoPE / SwiGLU / softmax / AdamW), Conv2D, and
+  single-host distributed primitives. The same library binary runs on
+  every M-series chip from M1 (Apple7) through M5 (Apple11), with the M5
+  TensorOps path lit up via mpp::tensor_ops when SDK 26.0+ is available.
+type: software
+authors:
+  - name: "tsotchke"
+license: MIT
+repository-code: "https://github.com/tsotchke/tensorcore"
+url: "https://github.com/tsotchke/tensorcore"
+keywords:
+  - apple-silicon
+  - metal
+  - gemm
+  - flashattention
+  - llm-inference
+  - mixed-precision
+  - cuda-alternative
+  - simdgroup-matrix
+  - tensor-ops
+  - gguf
+preferred-citation:
+  type: software
+  title: "tensorcore: CUDA-equivalent tensor-core acceleration for Apple Silicon"
+  authors:
+    - name: "tsotchke"
+  url: "https://github.com/tsotchke/tensorcore"
