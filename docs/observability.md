@@ -218,7 +218,7 @@ Build / CMake knobs:
 | `-DTC_BUILD_BENCH=ON/OFF` | Enable/disable the bench harness. |
 | `-DTC_BUILD_EXAMPLES=ON/OFF` | Enable/disable `hello_gemm` and `gguf_inspect`. |
 | `-DTC_ENABLE_METAL=ON/OFF` | ON by default on macOS; OFF on Linux/Windows. When OFF, only the **portable CPU backend** builds and the C ABI works without Metal. |
-| `-DTC_ENABLE_TENSOROPS=ON/OFF` | Wire the M5 `mpp::tensor_ops` dispatch path. |
+| `-DTC_ENABLE_TENSOROPS=ON/OFF` | Wire the M5 `mpp::tensor_ops` dispatch path. **Defaults to ON**; takes effect only when SDK ≥ 26.0 + Apple11/M5 + runtime supports the encoder. Set OFF to force the non-TensorOps Metal path for A/B comparison. |
 | `-DCMAKE_BUILD_TYPE=Release/Debug` | Standard CMake. |
 
 ## Logging at startup

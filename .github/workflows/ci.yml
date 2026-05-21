@@ -15,6 +15,9 @@ jobs:
       - name: Documentation links
         run: python3 scripts/check_docs_links.py
 
+      - name: Release evidence checker fixtures
+        run: python3 scripts/check_release_evidence_selftest.py
+
   portable-cpu:
     name: portable-cpu (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

@@ -151,26 +151,69 @@ def check_no_gpu_consistency(errors: list[str], data: Any) -> None:
             errors.append(f"{label} must be skipped on no-GPU evidence, got {actual!r}")
 
 
+def require_string_list(errors: list[str], data: Any, path: str) -> list[str] | None:
+    actual = get_path(data, path)
+    if not isinstance(actual, list):
+        errors.append(f"{path} must be a list, got {actual!r}")
+        return None
+    non_strings = [item for item in actual if not isinstance(item, str)]
+    if non_strings:
+        errors.append(f"{path} must contain only strings, got {non_strings!r}")
+        return None
+    return sorted(actual)
+
+
 def check_public_core_files(errors: list[str], data: Any) -> None:
     public_core = get_path(data, "checks.public_core_paths")
     files = get_path(data, "files")
     if not isinstance(public_core, dict) or not isinstance(files, dict):
-        return
-    if public_core.get("runtime_covered") is not True:
-        return
-
-    missing = public_core.get("missing_files")
-    if missing:
-        errors.append(f"public core paths are marked covered but missing_files is not empty: {missing!r}")
-
-    required = public_core.get("required_files")
-    if not isinstance(required, list):
-        errors.append("checks.public_core_paths.required_files must be a list")
+        errors.append("checks.public_core_paths and files must be objects")
         return
 
-    uncovered = sorted(path for path in required if path not in files)
-    if uncovered:
-        errors.append(f"public core paths are marked covered but files lacks: {uncovered}")
+    required = require_string_list(errors, data, "checks.public_core_paths.required_files")
+    missing = require_string_list(errors, data, "checks.public_core_paths.missing_files")
+    uncovered = require_string_list(errors, data, "checks.public_core_paths.uncovered_files")
+    if required is None or missing is None or uncovered is None:
+        return
+
+    runtime_covered = public_core.get("runtime_covered")
+    gpu_available = get_path(data, "checks.tests.gpu_device_available")
+    if not isinstance(runtime_covered, bool):
+        errors.append(f"checks.public_core_paths.runtime_covered must be boolean, got {runtime_covered!r}")
+        return
+    if not isinstance(gpu_available, bool):
+        errors.append(f"checks.tests.gpu_device_available must be boolean, got {gpu_available!r}")
+        return
+
+    computed_uncovered = sorted(path for path in required if path not in files)
+    if uncovered != computed_uncovered:
+        errors.append(
+            "checks.public_core_paths.uncovered_files must match required files absent from "
+            f"files: expected {computed_uncovered!r}, got {uncovered!r}"
+        )
+
+    if runtime_covered:
+        if missing:
+            errors.append(
+                "public core paths are marked covered but missing_files is not empty: "
+                f"{missing!r}"
+            )
+        if uncovered:
+            errors.append(
+                "public core paths are marked covered but uncovered_files is not empty: "
+                f"{uncovered!r}"
+            )
+    elif gpu_available:
+        if missing != computed_uncovered:
+            errors.append(
+                "GPU evidence with incomplete public core coverage must record true missing "
+                f"files in missing_files: expected {computed_uncovered!r}, got {missing!r}"
+            )
+    elif missing:
+        errors.append(
+            "no-GPU/paravirtual evidence must not report runtime coverage gaps as "
+            f"missing files: {missing!r}"
+        )
 
 
 def check_metal4_consistency(

@@ -368,7 +368,8 @@ Two SDK gates and three CMake options shape the build:
 | `-DTC_BUILD_TESTS=ON/OFF` | enable/disable correctness suite |
 | `-DTC_BUILD_BENCH=ON/OFF` | enable/disable TFLOPS / tok/s harness |
 | `-DTC_BUILD_EXAMPLES=ON/OFF` | enable/disable `hello_gemm` and `gguf_inspect` |
-| `-DTC_ENABLE_TENSOROPS=ON/OFF` | wire the M5 `mpp::tensor_ops` path into dispatch |
+| `-DTC_ENABLE_TENSOROPS=ON/OFF` | wire the M5 `mpp::tensor_ops` path into dispatch (defaults ON; takes effect only on M5 + SDK 26+) |
+| `-DTC_ENABLE_METAL=ON/OFF` | gate the Apple Metal backend (defaults ON on Apple, OFF elsewhere). OFF builds only the portable CPU backend. |
 
 The build always compiles a single `tensorcore.metallib`; which `.metal`
 files are included depends only on the SDK gate, not on what chip the

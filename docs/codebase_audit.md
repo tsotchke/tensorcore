@@ -32,7 +32,7 @@ $ICC_HOME/bin/icc architecture-summary --repo tensorcore --bundle --include-chea
 | Call-graph edges (ambiguous) | 31 |
 | Doc coverage (public symbols) | 159 / 205 (78%) |
 | Unreferenced docs (orphan files) | 0 / 32 |
-| Test suite | 20 / 20 passing, 1.3s |
+| Test suite | 22 / 22 passing (20 correctness + 2 example smokes), 2-3s |
 
 ## Public module roots
 

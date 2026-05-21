@@ -65,6 +65,8 @@ v0.1.22:
   not runtime-covered on no-GPU/paravirtual runners (`uncovered_files`)
   from files that are actually missing from covered evidence
   (`missing_files`).
+- `scripts/check_release_evidence.py` now enforces that distinction, and
+  CI runs fixture tests for the release-evidence checker.
 
 ### Dev convenience
 
