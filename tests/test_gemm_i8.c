@@ -1,7 +1,8 @@
 /*
  * Correctness test: tc_gemm in int8 vs int32 reference.
  *
- * Requires Apple10+ (M4) for simdgroup_matrix<char,8,8>. Skips on older.
+ * Uses simdgroup_matrix<char,8,8> on Apple10+ (M4). Older silicon routes
+ * through the MPS software fallback and should still match int32 reference.
  */
 
 #include <stdio.h>
@@ -9,6 +10,91 @@
 #include <string.h>
 #include <stdint.h>
 #include "tensorcore/tensorcore.h"
+
+extern tc_status_t tc_mps_gemm(tc_context* ctx,
+                               const tc_gemm_desc* desc,
+                               const tc_buffer* A,
+                               const tc_buffer* B,
+                               tc_buffer* C);
+
+static int run_mps_i8_fallback_smoke(tc_context* ctx) {
+    enum { M = 3, N = 4, K = 5 };
+    const size_t ba = (size_t)M * K;
+    const size_t bb = (size_t)K * N;
+    const size_t bc = (size_t)M * N * sizeof(int32_t);
+    const int8_t A_src[M * K] = {
+         3, -2,  5,  1, -4,
+        -7,  6,  0,  2,  1,
+         4,  3, -5, -1,  2,
+    };
+    const int8_t B_src[K * N] = {
+         2, -3,  1,  4,
+        -1,  5, -2,  0,
+         3,  1,  2, -4,
+        -5,  2,  3,  1,
+         4, -1,  0,  2,
+    };
+
+    tc_buffer *A = NULL, *B = NULL, *C = NULL;
+    int8_t *Ap = NULL, *Bp = NULL;
+    int32_t *Cp = NULL;
+    int rc = 6;
+
+    if (tc_buffer_alloc(ctx, ba, &A) != TC_OK ||
+        tc_buffer_alloc(ctx, bb, &B) != TC_OK ||
+        tc_buffer_alloc(ctx, bc, &C) != TC_OK) {
+        fprintf(stderr, "  mps i8 fallback smoke: allocation failed\n");
+        goto cleanup;
+    }
+    if (tc_buffer_map(A, (void**)&Ap) != TC_OK ||
+        tc_buffer_map(B, (void**)&Bp) != TC_OK ||
+        tc_buffer_map(C, (void**)&Cp) != TC_OK) {
+        fprintf(stderr, "  mps i8 fallback smoke: map failed\n");
+        goto cleanup;
+    }
+    memcpy(Ap, A_src, ba);
+    memcpy(Bp, B_src, bb);
+    memset(Cp, 0, bc);
+
+    tc_gemm_desc d = {0};
+    d.M = M; d.N = N; d.K = K;
+    d.a_dtype = TC_DTYPE_I8;
+    d.b_dtype = TC_DTYPE_I8;
+    d.c_dtype = TC_DTYPE_I32;
+    d.accum_dtype = TC_DTYPE_I32;
+    d.alpha = 1.0f;
+    d.beta = 0.0f;
+
+    tc_status_t s = tc_mps_gemm(ctx, &d, A, B, C);
+    if (s != TC_OK) {
+        fprintf(stderr, "  mps i8 fallback smoke failed: %s\n", tc_status_string(s));
+        goto cleanup;
+    }
+
+    int errors = 0;
+    int64_t max_abs = 0;
+    for (int m = 0; m < M; ++m) {
+        for (int n = 0; n < N; ++n) {
+            int32_t want = 0;
+            for (int k = 0; k < K; ++k) {
+                want += (int32_t)Ap[m * K + k] * (int32_t)Bp[k * N + n];
+            }
+            int64_t e = (int64_t)Cp[m * N + n] - (int64_t)want;
+            if (e < 0) e = -e;
+            if (e > max_abs) max_abs = e;
+            if (e != 0) ++errors;
+        }
+    }
+    printf("  %-28s errors=%d/%d  max_abs=%lld\n",
+           "mps_i8_sw_fallback", errors, M * N, (long long)max_abs);
+    rc = (errors == 0) ? 0 : 6;
+
+cleanup:
+    if (A) tc_buffer_free(ctx, A);
+    if (B) tc_buffer_free(ctx, B);
+    if (C) tc_buffer_free(ctx, C);
+    return rc;
+}
 
 static int run_case(tc_context* ctx, int M, int N, int K) {
     const size_t ba = (size_t)M * K;
@@ -90,6 +176,7 @@ int main(void) {
                (int)info.family);
     }
     int rc = 0;
+    rc |= run_mps_i8_fallback_smoke(ctx);
     rc |= run_case(ctx, 64, 64, 64);
     rc |= run_case(ctx, 128, 128, 128);
     rc |= run_case(ctx, 256, 256, 256);

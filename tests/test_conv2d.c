@@ -1,7 +1,7 @@
 /*
  * Conv2D forward + backward correctness vs CPU fp64 reference.
  *
- * Single batch (N=1), small shapes. Validates:
+ * Small batched shapes. Validates:
  *   - tc_conv2d_forward
  *   - tc_conv2d_backward_input  (col2im + GEMM)
  *   - tc_conv2d_backward_weight (im2col + GEMM)
@@ -38,26 +38,28 @@ static float f16_to_f32(uint16_t h) {
     return v.f;
 }
 
-/* CPU reference conv2d forward (N=1). Y[oc, oh, ow] = sum_{ic,kh,kw} X[ic,h,w]*W[oc,ic,kh,kw] + bias[oc] */
-static void ref_conv2d_fwd(int IC, int OC, int H, int W_in, int kH, int kW,
+/* CPU reference conv2d forward. */
+static void ref_conv2d_fwd(int N, int IC, int OC, int H, int W_in, int kH, int kW,
                            int pad, int stride, int oH, int oW,
                            const float* X, const float* W, const float* bias,
                            float* Y) {
-    for (int oc = 0; oc < OC; ++oc) {
-        const float b = bias ? bias[oc] : 0.0f;
-        for (int oh = 0; oh < oH; ++oh) {
-            for (int ow = 0; ow < oW; ++ow) {
-                double acc = b;
-                for (int ic = 0; ic < IC; ++ic)
-                    for (int kh = 0; kh < kH; ++kh)
-                        for (int kw = 0; kw < kW; ++kw) {
-                            int h_in = oh * stride - pad + kh;
-                            int w_in = ow * stride - pad + kw;
-                            if (h_in < 0 || h_in >= H || w_in < 0 || w_in >= W_in) continue;
-                            acc += (double)X[(ic*H + h_in)*W_in + w_in]
-                                 * (double)W[((oc*IC + ic)*kH + kh)*kW + kw];
-                        }
-                Y[(oc*oH + oh)*oW + ow] = (float)acc;
+    for (int n = 0; n < N; ++n) {
+        for (int oc = 0; oc < OC; ++oc) {
+            const float b = bias ? bias[oc] : 0.0f;
+            for (int oh = 0; oh < oH; ++oh) {
+                for (int ow = 0; ow < oW; ++ow) {
+                    double acc = b;
+                    for (int ic = 0; ic < IC; ++ic)
+                        for (int kh = 0; kh < kH; ++kh)
+                            for (int kw = 0; kw < kW; ++kw) {
+                                int h_in = oh * stride - pad + kh;
+                                int w_in = ow * stride - pad + kw;
+                                if (h_in < 0 || h_in >= H || w_in < 0 || w_in >= W_in) continue;
+                                acc += (double)X[((n*IC + ic)*H + h_in)*W_in + w_in]
+                                     * (double)W[((oc*IC + ic)*kH + kh)*kW + kw];
+                            }
+                    Y[((n*OC + oc)*oH + oh)*oW + ow] = (float)acc;
+                }
             }
         }
     }
@@ -79,7 +81,7 @@ int main(void) {
         fprintf(stderr, "tc_init failed: %s\n", tc_status_string(s)); return 1;
     }
 
-    const int N = 1, IC = 4, OC = 8;
+    const int N = 2, IC = 4, OC = 8;
     const int H = 8, W_in = 8, kH = 3, kW = 3;
     const int pad = 1, stride = 1;
     const int oH = (H + 2*pad - kH) / stride + 1;
@@ -110,7 +112,7 @@ int main(void) {
     for (int i = 0; i < OC*IC*kH*kW; ++i) { float v = ((float)rand()/RAND_MAX-0.5f)*0.2f; Wf[i]=v; Wp[i]=f32_to_f16(v); }
     for (int i = 0; i < OC; ++i) { float v = ((float)rand()/RAND_MAX-0.5f)*0.1f; bf[i]=v; bp[i]=f32_to_f16(v); }
 
-    ref_conv2d_fwd(IC, OC, H, W_in, kH, kW, pad, stride, oH, oW, Xf, Wf, bf, Yref);
+    ref_conv2d_fwd(N, IC, OC, H, W_in, kH, kW, pad, stride, oH, oW, Xf, Wf, bf, Yref);
 
     s = tc_conv2d_forward(ctx, Xb, Wb, bb, Yb, col,
                           N, IC, OC, H, W_in, kH, kW,
@@ -123,14 +125,6 @@ int main(void) {
            "                         out=(%d,%d)  rms_scaled=%.3e  %s\n",
            IC, OC, H, W_in, kH, kW, pad, stride, oH, oW, fwd_err,
            (fwd_err < 2e-2) ? "OK" : "FAIL");
-
-    s = tc_conv2d_forward(ctx, Xb, Wb, bb, Yb, col,
-                          2, IC, OC, H, W_in, kH, kW,
-                          pad, pad, stride, stride, oH, oW);
-    const int multi_batch_rejected = (s == TC_ERR_INVALID_SHAPE);
-    printf("  conv2d_forward batch>1 rejected=%s  %s\n",
-           multi_batch_rejected ? "yes" : "no",
-           multi_batch_rejected ? "OK" : tc_status_string(s));
 
     /* Backward sanity: just check the kernels dispatch + write nonzero results. */
     tc_buffer *dXb, *dWb, *dX_f32;
@@ -164,12 +158,34 @@ int main(void) {
            bw_w_ok ? "yes" : "no", nz_w, OC*IC*kH*kW,
            (bw_w_ok && nz_w > 0) ? "OK" : "FAIL");
 
+    tc_buffer* small = NULL;
+    tc_buffer_alloc(ctx, 2, &small);
+    s = tc_conv2d_backward_input(ctx, Yb, Wb, small, col, dX_f32,
+                                 N, IC, OC, H, W_in, kH, kW,
+                                 pad, pad, stride, stride, oH, oW);
+    const int bw_in_small_rejected = (s == TC_ERR_INVALID_SHAPE);
+    s = tc_conv2d_backward_weight(ctx, Xb, Yb, small, col,
+                                  N, IC, OC, H, W_in, kH, kW,
+                                  pad, pad, stride, stride, oH, oW);
+    const int bw_w_small_rejected = (s == TC_ERR_INVALID_SHAPE);
+    s = tc_conv2d_forward(ctx, Xb, Wb, bb, Yb, col,
+                          N, IC, OC, H, W_in, kH, kW,
+                          pad, pad, stride, stride, oH + 1, oW);
+    const int bad_out_shape_rejected = (s == TC_ERR_INVALID_SHAPE);
+    printf("  conv2d_validation      small_dX=%s  small_dW=%s  bad_out=%s  %s\n",
+           bw_in_small_rejected ? "yes" : "no",
+           bw_w_small_rejected ? "yes" : "no",
+           bad_out_shape_rejected ? "yes" : "no",
+           (bw_in_small_rejected && bw_w_small_rejected && bad_out_shape_rejected) ? "OK" : "FAIL");
+
     free(Xf); free(Wf); free(bf); free(Yref);
     tc_buffer_free(ctx, Xb); tc_buffer_free(ctx, Wb); tc_buffer_free(ctx, bb);
     tc_buffer_free(ctx, Yb); tc_buffer_free(ctx, col);
     tc_buffer_free(ctx, dXb); tc_buffer_free(ctx, dWb); tc_buffer_free(ctx, dX_f32);
+    tc_buffer_free(ctx, small);
     tc_shutdown(ctx);
 
-    return (fwd_err < 2e-2 && multi_batch_rejected &&
-            bw_in_ok && nz_in > 0 && bw_w_ok && nz_w > 0) ? 0 : 5;
+    return (fwd_err < 2e-2 &&
+            bw_in_ok && nz_in > 0 && bw_w_ok && nz_w > 0 &&
+            bw_in_small_rejected && bw_w_small_rejected && bad_out_shape_rejected) ? 0 : 5;
 }

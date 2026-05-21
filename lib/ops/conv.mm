@@ -17,6 +17,85 @@
 #include "../core/internal.h"
 
 #include <cstdio>
+#include <limits>
+
+namespace {
+
+bool checked_mul(size_t a, size_t b, size_t* out) {
+    if (a != 0 && b > std::numeric_limits<size_t>::max() / a) return false;
+    *out = a * b;
+    return true;
+}
+
+bool conv_dims_valid(int batch, int in_channels, int out_channels,
+                     int H, int W_in, int kH, int kW,
+                     int pad_h, int pad_w,
+                     int stride_h, int stride_w,
+                     int out_H, int out_W) {
+    if (batch <= 0 || in_channels <= 0 || out_channels <= 0 ||
+        H <= 0 || W_in <= 0 || kH <= 0 || kW <= 0 ||
+        pad_h < 0 || pad_w < 0 || stride_h <= 0 || stride_w <= 0 ||
+        out_H <= 0 || out_W <= 0) {
+        return false;
+    }
+    const int expect_H = (H + 2 * pad_h - kH) / stride_h + 1;
+    const int expect_W = (W_in + 2 * pad_w - kW) / stride_w + 1;
+    return expect_H == out_H && expect_W == out_W;
+}
+
+bool conv_bytes(int batch, int in_channels, int out_channels,
+                int H, int W_in, int kH, int kW,
+                int out_H, int out_W,
+                size_t* x_bytes, size_t* weight_bytes,
+                size_t* y_bytes, size_t* scratch_col_bytes,
+                size_t* dx_f32_bytes) {
+    size_t x_elems = 0, w_elems = 0, y_elems = 0, k_elems = 0;
+    size_t out_hw = 0, col_elems = 0, tmp = 0;
+    if (!checked_mul((size_t)H, (size_t)W_in, &tmp) ||
+        !checked_mul((size_t)batch, (size_t)in_channels, &x_elems) ||
+        !checked_mul(x_elems, tmp, &x_elems) ||
+        !checked_mul((size_t)out_channels, (size_t)in_channels, &w_elems) ||
+        !checked_mul(w_elems, (size_t)kH, &w_elems) ||
+        !checked_mul(w_elems, (size_t)kW, &w_elems) ||
+        !checked_mul((size_t)out_H, (size_t)out_W, &out_hw) ||
+        !checked_mul((size_t)batch, (size_t)out_channels, &y_elems) ||
+        !checked_mul(y_elems, out_hw, &y_elems) ||
+        !checked_mul((size_t)in_channels, (size_t)kH, &k_elems) ||
+        !checked_mul(k_elems, (size_t)kW, &k_elems) ||
+        !checked_mul((size_t)batch, k_elems, &col_elems) ||
+        !checked_mul(col_elems, out_hw, &col_elems)) {
+        return false;
+    }
+    return checked_mul(x_elems, sizeof(uint16_t), x_bytes) &&
+           checked_mul(w_elems, sizeof(uint16_t), weight_bytes) &&
+           checked_mul(y_elems, sizeof(uint16_t), y_bytes) &&
+           checked_mul(col_elems, sizeof(uint16_t), scratch_col_bytes) &&
+           checked_mul(x_elems, sizeof(float), dx_f32_bytes);
+}
+
+tc_status_t validate_conv_common(tc_context* ctx,
+                                 int batch, int in_channels, int out_channels,
+                                 int H, int W_in, int kH, int kW,
+                                 int pad_h, int pad_w,
+                                 int stride_h, int stride_w,
+                                 int out_H, int out_W,
+                                 size_t* x_bytes, size_t* weight_bytes,
+                                 size_t* y_bytes, size_t* scratch_col_bytes,
+                                 size_t* dx_f32_bytes) {
+    if (!conv_dims_valid(batch, in_channels, out_channels, H, W_in, kH, kW,
+                         pad_h, pad_w, stride_h, stride_w, out_H, out_W)) {
+        return TC_ERR_INVALID_SHAPE;
+    }
+    if (!conv_bytes(batch, in_channels, out_channels, H, W_in, kH, kW,
+                    out_H, out_W, x_bytes, weight_bytes, y_bytes,
+                    scratch_col_bytes, dx_f32_bytes)) {
+        return TC_ERR_INVALID_SHAPE;
+    }
+    (void)ctx;
+    return TC_OK;
+}
+
+}  // namespace
 
 extern "C" tc_status_t tc_conv2d_backward_input(tc_context* ctx,
                                                 const tc_buffer* dY,
@@ -31,6 +110,23 @@ extern "C" tc_status_t tc_conv2d_backward_input(tc_context* ctx,
                                                 int out_H, int out_W) {
     if (!ctx || !dY || !weight || !dX || !scratch_col || !scratch_dX_f32)
         return TC_ERR_INVALID_ARG;
+    size_t x_bytes = 0, weight_bytes = 0, y_bytes = 0, scratch_col_bytes = 0, dx_f32_bytes = 0;
+    tc_status_t s = validate_conv_common(ctx, batch, in_channels, out_channels,
+                                         H, W_in, kH, kW, pad_h, pad_w,
+                                         stride_h, stride_w, out_H, out_W,
+                                         &x_bytes, &weight_bytes, &y_bytes,
+                                         &scratch_col_bytes, &dx_f32_bytes);
+    if (s != TC_OK) return s;
+    s = tc_buffer_validate(ctx, dY, y_bytes);
+    if (s != TC_OK) return s;
+    s = tc_buffer_validate(ctx, weight, weight_bytes);
+    if (s != TC_OK) return s;
+    s = tc_buffer_validate(ctx, dX, x_bytes);
+    if (s != TC_OK) return s;
+    s = tc_buffer_validate(ctx, scratch_col, scratch_col_bytes);
+    if (s != TC_OK) return s;
+    s = tc_buffer_validate(ctx, scratch_dX_f32, dx_f32_bytes);
+    if (s != TC_OK) return s;
 
     /* dCol = W^T @ dY for each batch (no cross-batch dependency).
      * W is [OC, K]; dY is [N, OC, out_hw]; dCol is [N, K, out_hw].
@@ -161,6 +257,21 @@ extern "C" tc_status_t tc_conv2d_backward_weight(tc_context* ctx,
                                                  int stride_h, int stride_w,
                                                  int out_H, int out_W) {
     if (!ctx || !X || !dY || !dW || !scratch_col) return TC_ERR_INVALID_ARG;
+    size_t x_bytes = 0, weight_bytes = 0, y_bytes = 0, scratch_col_bytes = 0, dx_f32_bytes = 0;
+    tc_status_t s = validate_conv_common(ctx, batch, in_channels, out_channels,
+                                         H, W_in, kH, kW, pad_h, pad_w,
+                                         stride_h, stride_w, out_H, out_W,
+                                         &x_bytes, &weight_bytes, &y_bytes,
+                                         &scratch_col_bytes, &dx_f32_bytes);
+    if (s != TC_OK) return s;
+    s = tc_buffer_validate(ctx, X, x_bytes);
+    if (s != TC_OK) return s;
+    s = tc_buffer_validate(ctx, dY, y_bytes);
+    if (s != TC_OK) return s;
+    s = tc_buffer_validate(ctx, dW, weight_bytes);
+    if (s != TC_OK) return s;
+    s = tc_buffer_validate(ctx, scratch_col, scratch_col_bytes);
+    if (s != TC_OK) return s;
 
     /* First re-run im2col on X to produce col. */
     tc_status_t err = TC_OK;
@@ -274,11 +385,25 @@ extern "C" tc_status_t tc_conv2d_forward(tc_context* ctx,
                                          int stride_h, int stride_w,
                                          int out_H, int out_W) {
     if (!ctx || !X || !weight || !Y || !scratch_col) return TC_ERR_INVALID_ARG;
-    if (batch <= 0 || in_channels <= 0 || out_channels <= 0 ||
-        H <= 0 || W_in <= 0 || kH <= 0 || kW <= 0 ||
-        out_H <= 0 || out_W <= 0)
-        return TC_ERR_INVALID_SHAPE;
-    if (batch != 1) return TC_ERR_INVALID_SHAPE;
+    size_t x_bytes = 0, weight_bytes = 0, y_bytes = 0, scratch_col_bytes = 0, dx_f32_bytes = 0;
+    tc_status_t s = validate_conv_common(ctx, batch, in_channels, out_channels,
+                                         H, W_in, kH, kW, pad_h, pad_w,
+                                         stride_h, stride_w, out_H, out_W,
+                                         &x_bytes, &weight_bytes, &y_bytes,
+                                         &scratch_col_bytes, &dx_f32_bytes);
+    if (s != TC_OK) return s;
+    s = tc_buffer_validate(ctx, X, x_bytes);
+    if (s != TC_OK) return s;
+    s = tc_buffer_validate(ctx, weight, weight_bytes);
+    if (s != TC_OK) return s;
+    if (bias) {
+        s = tc_buffer_validate(ctx, bias, (size_t)out_channels * sizeof(uint16_t));
+        if (s != TC_OK) return s;
+    }
+    s = tc_buffer_validate(ctx, Y, y_bytes);
+    if (s != TC_OK) return s;
+    s = tc_buffer_validate(ctx, scratch_col, scratch_col_bytes);
+    if (s != TC_OK) return s;
 
     tc_status_t err = TC_OK;
     id<MTLComputePipelineState> pso_im2col =
@@ -327,30 +452,57 @@ extern "C" tc_status_t tc_conv2d_forward(tc_context* ctx,
         if (cmd.error) return TC_ERR_DISPATCH;
     }
 
-    /* Per-batch GEMM: Y[n] = W @ col[n].  W is [OC, K], col[n] is [K, out_hw],
-     * Y[n] is [OC, out_hw]. Stride between batches is K*out_hw for col and
-     * OC*out_hw for Y. */
-    /* For simplicity, loop over batches at the host side. */
-    for (uint32_t n = 0; n < B; ++n) {
-        tc_gemm_desc d = {};
-        d.M = (int32_t)OC;
-        d.N = (int32_t)out_hw;
-        d.K = (int32_t)K;
-        d.a_dtype = TC_DTYPE_F16;
-        d.b_dtype = TC_DTYPE_F16;
-        d.c_dtype = TC_DTYPE_F16;
-        d.accum_dtype = TC_DTYPE_F32;
-        d.alpha = 1.0f;
-        d.beta  = 0.0f;
-        /* Custom offsets via temporary tc_buffer aliases — for v0.1 we use
-         * the existing tc_gemm signature which doesn't take offsets. We rely
-         * on the kernels treating the whole buffer as one tile starting at 0.
-         * Multi-batch convs therefore require the caller to call this per
-         * batch with sub-buffer aliases, or we pass the full buffer here and
-         * trust the kernel grid sizing. Phase 2 adds a batched-GEMM path. */
-        if (n > 0) break;  /* TODO: batched dispatch in v0.2 */
-        tc_status_t s = tc_gemm(ctx, &d, weight, scratch_col, Y);
-        if (s != TC_OK) return s;
+    /* Per-batch GEMM: Y[n] = W @ col[n]. W is [OC, K], col[n] is
+     * [K, out_hw], Y[n] is [OC, out_hw]. Bind per-batch MTLBuffer offsets
+     * directly because the public GEMM API intentionally has no offset args. */
+    NSString* kname = @"tc_gemm_f16_f32";
+    id<MTLComputePipelineState> pso = nil;
+    {
+        MTLFunctionConstantValues* cv = [MTLFunctionConstantValues new];
+        bool ta = false, tb = false;
+        [cv setConstantValue:&ta type:MTLDataTypeBool atIndex:0];
+        [cv setConstantValue:&tb type:MTLDataTypeBool atIndex:1];
+        NSError* nserr = nil;
+        id<MTLFunction> fn = [ctx->library newFunctionWithName:kname
+                                                constantValues:cv error:&nserr];
+        if (!fn) return TC_ERR_KERNEL_NOT_FOUND;
+        pso = [ctx->device newComputePipelineStateWithFunction:fn error:&nserr];
+        if (!pso) return TC_ERR_PIPELINE;
+    }
+
+    const uint32_t M_u = OC;
+    const uint32_t N_u = out_hw;
+    const uint32_t K_u = K;
+    float alpha = 1.0f, beta = 0.0f;
+    const size_t stride_col = (size_t)K * out_hw * sizeof(uint16_t);
+    const size_t stride_Y = (size_t)OC * out_hw * sizeof(uint16_t);
+
+    @autoreleasepool {
+        id<MTLCommandBuffer> cmd = [ctx->queue commandBuffer];
+        for (uint32_t n = 0; n < B; ++n) {
+            id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+            [enc setComputePipelineState:pso];
+            [enc setBuffer:weight->mtl      offset:0              atIndex:0];
+            [enc setBuffer:scratch_col->mtl offset:n * stride_col atIndex:1];
+            [enc setBuffer:Y->mtl           offset:n * stride_Y   atIndex:2];
+            [enc setBytes:&M_u   length:sizeof(M_u)   atIndex:3];
+            [enc setBytes:&N_u   length:sizeof(N_u)   atIndex:4];
+            [enc setBytes:&K_u   length:sizeof(K_u)   atIndex:5];
+            [enc setBytes:&alpha length:sizeof(alpha) atIndex:6];
+            [enc setBytes:&beta  length:sizeof(beta)  atIndex:7];
+            const uint32_t gx = (N_u + 64 - 1) / 64;
+            const uint32_t gy = (M_u + 64 - 1) / 64;
+            [enc dispatchThreadgroups:MTLSizeMake(gx, gy, 1)
+                threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+            [enc endEncoding];
+        }
+        [cmd commit];
+        [cmd waitUntilCompleted];
+        if (cmd.error) {
+            fprintf(stderr, "[tensorcore] conv2d_forward GEMM: %s\n",
+                    [[cmd.error localizedDescription] UTF8String]);
+            return TC_ERR_DISPATCH;
+        }
     }
 
     if (bias) {

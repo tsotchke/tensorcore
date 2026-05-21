@@ -267,6 +267,18 @@ if _lib is not None:
         c_int, c_int, c_int, c_int, c_int, c_int,
     ]
     _lib.tc_conv2d_forward.restype = c_int
+    _lib.tc_conv2d_backward_input.argtypes = [
+        c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_void_p,
+        c_int, c_int, c_int, c_int, c_int, c_int, c_int,
+        c_int, c_int, c_int, c_int, c_int, c_int,
+    ]
+    _lib.tc_conv2d_backward_input.restype = c_int
+    _lib.tc_conv2d_backward_weight.argtypes = [
+        c_void_p, c_void_p, c_void_p, c_void_p, c_void_p,
+        c_int, c_int, c_int, c_int, c_int, c_int, c_int,
+        c_int, c_int, c_int, c_int, c_int, c_int,
+    ]
+    _lib.tc_conv2d_backward_weight.restype = c_int
     _lib.tc_quantize_weights.argtypes = [c_void_p, c_void_p, c_void_p, c_int, c_int, c_int]
     _lib.tc_quantize_weights.restype = c_int
     _lib.tc_gemv_quantized.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int, c_int, c_int]
@@ -706,6 +718,11 @@ def conv2d_scratch_bytes(batch, in_channels, H, W_in, kH, kW,
     return int(batch) * int(in_channels) * int(kH) * int(kW) * int(out_H) * int(out_W) * 2
 
 
+def conv2d_backward_input_scratch_bytes(batch, in_channels, H, W_in):
+    """Return fp32 accumulation scratch bytes required by conv2d_backward_input."""
+    return int(batch) * int(in_channels) * int(H) * int(W_in) * 4
+
+
 def conv2d_forward(ctx, X, weight, bias, Y, scratch_col,
                    batch, in_channels, out_channels, H, W_in, kH, kW,
                    pad_h=0, pad_w=0, stride_h=1, stride_w=1,
@@ -717,6 +734,42 @@ def conv2d_forward(ctx, X, weight, bias, Y, scratch_col,
     _check(_lib.tc_conv2d_forward(
         _as_handle(ctx), _as_handle(X), _as_handle(weight), _as_handle(bias),
         _as_handle(Y), _as_handle(scratch_col),
+        int(batch), int(in_channels), int(out_channels),
+        int(H), int(W_in), int(kH), int(kW),
+        int(pad_h), int(pad_w), int(stride_h), int(stride_w),
+        int(out_H), int(out_W)
+    ))
+
+
+def conv2d_backward_input(ctx, dY, weight, dX, scratch_col, scratch_dX_f32,
+                          batch, in_channels, out_channels, H, W_in, kH, kW,
+                          pad_h=0, pad_w=0, stride_h=1, stride_w=1,
+                          out_H=None, out_W=None):
+    """Compute fp16 Conv2D input gradients for NCHW dY and OIHW weights."""
+    if out_H is None or out_W is None:
+        out_H, out_W = conv2d_output_shape(H, W_in, kH, kW, pad_h, pad_w,
+                                           stride_h, stride_w)
+    _check(_lib.tc_conv2d_backward_input(
+        _as_handle(ctx), _as_handle(dY), _as_handle(weight), _as_handle(dX),
+        _as_handle(scratch_col), _as_handle(scratch_dX_f32),
+        int(batch), int(in_channels), int(out_channels),
+        int(H), int(W_in), int(kH), int(kW),
+        int(pad_h), int(pad_w), int(stride_h), int(stride_w),
+        int(out_H), int(out_W)
+    ))
+
+
+def conv2d_backward_weight(ctx, X, dY, dW, scratch_col,
+                           batch, in_channels, out_channels, H, W_in, kH, kW,
+                           pad_h=0, pad_w=0, stride_h=1, stride_w=1,
+                           out_H=None, out_W=None):
+    """Compute fp16 Conv2D weight gradients for NCHW X/dY and OIHW weights."""
+    if out_H is None or out_W is None:
+        out_H, out_W = conv2d_output_shape(H, W_in, kH, kW, pad_h, pad_w,
+                                           stride_h, stride_w)
+    _check(_lib.tc_conv2d_backward_weight(
+        _as_handle(ctx), _as_handle(X), _as_handle(dY), _as_handle(dW),
+        _as_handle(scratch_col),
         int(batch), int(in_channels), int(out_channels),
         int(H), int(W_in), int(kH), int(kW),
         int(pad_h), int(pad_w), int(stride_h), int(stride_w),
@@ -1058,6 +1111,16 @@ class Context:
                        batch, in_channels, out_channels, H, W_in, kH, kW, **kwargs):
         return conv2d_forward(self, X, weight, bias, Y, scratch_col,
                               batch, in_channels, out_channels, H, W_in, kH, kW, **kwargs)
+
+    def conv2d_backward_input(self, dY, weight, dX, scratch_col, scratch_dX_f32,
+                              batch, in_channels, out_channels, H, W_in, kH, kW, **kwargs):
+        return conv2d_backward_input(self, dY, weight, dX, scratch_col, scratch_dX_f32,
+                                     batch, in_channels, out_channels, H, W_in, kH, kW, **kwargs)
+
+    def conv2d_backward_weight(self, X, dY, dW, scratch_col,
+                               batch, in_channels, out_channels, H, W_in, kH, kW, **kwargs):
+        return conv2d_backward_weight(self, X, dY, dW, scratch_col,
+                                      batch, in_channels, out_channels, H, W_in, kH, kW, **kwargs)
 
     def quantize_weights(self, W_fp16, W_quant, fmt, N, K):
         return quantize_weights(self, W_fp16, W_quant, fmt, N, K)

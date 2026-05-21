@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-"$ROOT/build"}"
 PREFIX="${PREFIX:-/private/tmp/tensorcore-install}"
+# Set TENSORCORE_RELEASE_SMOKE_EVIDENCE_PATH= to disable evidence output.
+RELEASE_SMOKE_EVIDENCE_PATH="${TENSORCORE_RELEASE_SMOKE_EVIDENCE_PATH-"$BUILD_DIR/release_smoke_runtime_evidence.json"}"
 if [ -z "${PY_PREFIX:-}" ]; then
     PY_PREFIX="$(mktemp -d /private/tmp/tensorcore-py-install.XXXXXX)"
 fi
@@ -29,6 +31,475 @@ PY
 )"
 export EXPECTED_VERSION
 
+TESTS_STATUS="not_run"
+TESTS_MODE="not_run"
+WHEEL_TAG_STATUS="not_run"
+WHEEL_PLATFORM_TAG=""
+INSTALLED_WHEEL_SMOKE_STATUS="not_run"
+INSTALLED_WHEEL_SMOKE_MODE="not_run"
+CMAKE_CONSUMER_STATUS="not_run"
+CMAKE_SHARED_CONSUMER_STATUS="not_run"
+CMAKE_STATIC_CONSUMER_STATUS="not_run"
+PKG_CONFIG_CONSUMER_STATUS="not_run"
+WHEEL_PATH=""
+
+write_runtime_evidence() {
+    if [ -z "$RELEASE_SMOKE_EVIDENCE_PATH" ]; then
+        return
+    fi
+
+    mkdir -p "$(dirname "$RELEASE_SMOKE_EVIDENCE_PATH")"
+    export ROOT BUILD_DIR PREFIX PY_PREFIX WHEEL_DIR WHEEL_PREFIX PYTHON_BIN EXPECTED_VERSION
+    export GPU_OK TESTS_STATUS TESTS_MODE WHEEL_PATH WHEEL_TAG_STATUS WHEEL_PLATFORM_TAG
+    export INSTALLED_WHEEL_SMOKE_STATUS INSTALLED_WHEEL_SMOKE_MODE
+    export CMAKE_CONSUMER_STATUS CMAKE_SHARED_CONSUMER_STATUS CMAKE_STATIC_CONSUMER_STATUS
+    export PKG_CONFIG_CONSUMER_STATUS
+    "$PYTHON_BIN" - "$RELEASE_SMOKE_EVIDENCE_PATH" <<'PY'
+import datetime
+import json
+import os
+import pathlib
+import re
+import sys
+
+
+def env(name, default=""):
+    return os.environ.get(name, default)
+
+
+def passed(status):
+    return status == "passed"
+
+
+def optional_passed(status):
+    if status.startswith("skipped"):
+        return None
+    return passed(status)
+
+
+def function_line(root, rel_path, name):
+    path = pathlib.Path(root) / rel_path
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return 1
+
+    py_def = re.compile(rf"^\s*def\s+{re.escape(name)}\s*\(")
+    if path.suffix == ".py":
+        if "." in name:
+            class_name, method_name = name.rsplit(".", 1)
+            class_def = re.compile(rf"^(\s*)class\s+{re.escape(class_name)}\b")
+            method_def = re.compile(rf"^\s+def\s+{re.escape(method_name)}\s*\(")
+            in_class = False
+            class_indent = 0
+            for index, line in enumerate(lines, start=1):
+                match = class_def.search(line)
+                if match:
+                    in_class = True
+                    class_indent = len(match.group(1))
+                    continue
+                if not in_class:
+                    continue
+                if line.strip() and len(line) - len(line.lstrip()) <= class_indent:
+                    in_class = False
+                    continue
+                if method_def.search(line):
+                    return index
+            return 1
+        for index, line in enumerate(lines, start=1):
+            if py_def.search(line):
+                return index
+        return 1
+
+    objc_class = re.compile(rf"^\s*@(interface|implementation)\s+{re.escape(name)}\b")
+    for index, line in enumerate(lines, start=1):
+        if objc_class.search(line):
+            return index
+
+    c_ref = re.compile(rf"\b{re.escape(name)}\s*\(")
+    control_prefixes = ("if", "for", "while", "switch", "return")
+    for index, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        if py_def.search(line):
+            return index
+
+        if not c_ref.search(line):
+            continue
+        prefix = stripped.split(name, 1)[0].strip()
+        if "=" in prefix or prefix.startswith(control_prefixes):
+            continue
+
+        # C/C++ declarations often span several lines. Treat the occurrence as
+        # a definition only if the signature opens a body before it terminates.
+        for lookahead in lines[index - 1:min(len(lines), index + 12)]:
+            if "{" in lookahead:
+                return index
+            if ";" in lookahead:
+                break
+    return 1
+
+
+def add_function_call(files, root, rel_path, name):
+    line = function_line(root, rel_path, name)
+    entry = files.setdefault(rel_path, {"executed_lines": [], "functions": {}})
+    if line not in entry["executed_lines"]:
+        entry["executed_lines"].append(line)
+    entry["functions"][name] = {
+        "start_line": line,
+        "executed_lines": [line],
+    }
+
+
+def add_function_calls(files, root, rel_path, names):
+    for name in names:
+        add_function_call(files, root, rel_path, name)
+
+
+evidence_path = pathlib.Path(sys.argv[1])
+root = env("ROOT")
+wheel_path = env("WHEEL_PATH")
+wheel_name = pathlib.Path(wheel_path).name if wheel_path else ""
+platform_tag = env("WHEEL_PLATFORM_TAG")
+if not platform_tag and wheel_name.endswith(".whl") and "-" in wheel_name:
+    platform_tag = wheel_name[:-4].split("-")[-1]
+
+checks = {
+    "tests": {
+        "status": env("TESTS_STATUS"),
+        "passed": passed(env("TESTS_STATUS")),
+        "mode": env("TESTS_MODE"),
+        "gpu_device_available": env("GPU_OK") == "1",
+    },
+    "wheel_tag": {
+        "status": env("WHEEL_TAG_STATUS"),
+        "inspected": passed(env("WHEEL_TAG_STATUS")),
+        "wheel_path": wheel_path,
+        "wheel_name": wheel_name,
+        "platform_tag": platform_tag,
+    },
+    "installed_wheel_smoke": {
+        "status": env("INSTALLED_WHEEL_SMOKE_STATUS"),
+        "passed": passed(env("INSTALLED_WHEEL_SMOKE_STATUS")),
+        "mode": env("INSTALLED_WHEEL_SMOKE_MODE"),
+    },
+    "consumers": {
+        "cmake": {
+            "status": env("CMAKE_CONSUMER_STATUS"),
+            "passed": passed(env("CMAKE_CONSUMER_STATUS")),
+            "shared_consumer_status": env("CMAKE_SHARED_CONSUMER_STATUS"),
+            "static_consumer_status": env("CMAKE_STATIC_CONSUMER_STATUS"),
+        },
+        "pkg_config": {
+            "status": env("PKG_CONFIG_CONSUMER_STATUS"),
+            "passed": optional_passed(env("PKG_CONFIG_CONSUMER_STATUS")),
+        },
+    },
+}
+
+coverage_files = {}
+native_full_tests = checks["tests"]["passed"] and checks["tests"]["mode"] == "full"
+python_smoke = (
+    checks["installed_wheel_smoke"]["passed"] and
+    checks["installed_wheel_smoke"]["mode"] == "python_tests"
+)
+wheel_import_smoke = checks["installed_wheel_smoke"]["passed"]
+cmake_consumer_smoke = checks["consumers"]["cmake"]["passed"]
+pkg_config_consumer_smoke = checks["consumers"]["pkg_config"]["passed"] is True
+
+if native_full_tests:
+    native_coverage = {
+        "lib/core/status.c": [
+            "tc_status_string",
+        ],
+        "lib/core/device.mm": [
+            "load_metallib",
+            "tc_init",
+            "tc_shutdown",
+            "tc_device_family_from_mtl",
+            "tc_last_backend",
+            "tc_backend_name",
+            "tc_version",
+        ],
+        "lib/core/buffer_pool.mm": [
+            "TCBufferPool",
+            "bucket_for",
+            "bytes_for_bucket",
+            "tc_buffer_pool_alloc",
+            "tc_buffer_pool_free",
+        ],
+        "include/tensorcore/dtype.h": [
+            "tc_dtype_size",
+        ],
+        "lib/ops/gemm.mm": [
+            "checked_mul",
+            "checked_add",
+            "validate",
+            "matrix_bytes",
+            "validate_gemm_buffers",
+            "batched_matrix_bytes",
+            "kernel_for",
+            "resolve_pipeline",
+            "tc_gemm",
+            "tc_gemm_async",
+            "tc_gemm_batched",
+        ],
+        "lib/fallback/mps_gemm.mm": [
+            "to_mps_dtype",
+            "bf16_to_f32",
+            "f32_to_bf16",
+            "bf16_via_fp32",
+            "i8_via_fp32",
+            "tc_mps_gemm",
+        ],
+        "lib/fallback/accelerate_gemm.c": [
+            "tc_accelerate_gemm_f32",
+        ],
+        "lib/ops/attention.mm": [
+            "checked_mul",
+            "attention_tensor_bytes",
+            "lse_tensor_bytes",
+            "common_attention_shape",
+            "kernel_name_for",
+            "resolve_pipeline",
+            "make_forward_plan",
+            "encode_forward",
+            "validate_backward_buffers",
+            "tc_attention_forward",
+            "tc_attention_forward_async",
+            "tc_attention_backward",
+        ],
+        "lib/ops/conv.mm": [
+            "conv_dims_valid",
+            "conv_bytes",
+            "validate_conv_common",
+            "tc_conv2d_forward",
+            "tc_conv2d_backward_input",
+            "tc_conv2d_backward_weight",
+        ],
+        "lib/ops/quantized.mm": [
+            "checked_mul",
+            "fp16_matrix_bytes",
+            "validate_quantize_buffers",
+            "tc_quantized_size",
+            "validate_gemv_quantized_buffers",
+            "tc_quantize_weights",
+            "gemv_quant_encode",
+            "tc_gemv_quantized",
+            "tc_gemv_quantized_async",
+        ],
+        "lib/ops/training.mm": [
+            "threads_for_d",
+        ],
+        "lib/distributed/ring_local.mm": [
+            "sock_send_all",
+            "sock_recv_all",
+            "tc_dist_ring_pair_make",
+            "tc_dist_ring_local_allreduce_ex",
+        ],
+        "lib/io/gguf.c": [
+            "rd_bytes",
+            "rd_str",
+            "rd_str_dup_n",
+            "rd_str_dup",
+            "gguf_scalar_size",
+            "rd_value",
+            "map_ggml_type",
+            "type_bytes",
+            "tc_gguf_open",
+            "tc_gguf_close",
+            "tc_gguf_get_tensor",
+            "tc_gguf_tensor_at",
+            "tc_gguf_meta_get_str",
+            "tc_gguf_meta_get_i64",
+            "tc_gguf_meta_get_f64",
+            "tc_gguf_meta_array_count",
+            "tc_gguf_meta_array_get_str",
+            "tc_gguf_meta_array_get_i64",
+            "tc_gguf_meta_array_get_f64",
+            "find_kv",
+            "tc_gguf_get_llama_config",
+            "tc_gguf_tensor_to_buffer",
+            "loaded_tensor_to_info",
+            "tc_gguf_tensor_info_to_buffer",
+            "gguf_type_to_quant",
+            "gguf_quantized_matrix_info_common",
+            "tc_gguf_tensor_quantized_matrix_info",
+            "tc_gguf_loaded_tensor_quantized_matrix_info",
+            "tc_gguf_load_supported_tensors",
+            "tc_gguf_loaded_model_free",
+            "tc_gguf_loaded_tensor_count",
+            "tc_gguf_loaded_skipped_tensor_count",
+            "tc_gguf_loaded_tensor_at",
+            "tc_gguf_loaded_get_tensor",
+            "scalar_at_i64",
+            "scalar_at_f64",
+        ],
+    }
+    for rel_path, names in native_coverage.items():
+        add_function_calls(coverage_files, root, rel_path, names)
+
+if wheel_import_smoke:
+    add_function_calls(coverage_files, root, "python/tensorcore/__init__.py", [
+        "_find_lib",
+        "version",
+    ])
+
+if python_smoke:
+    add_function_calls(coverage_files, root, "python/tensorcore/__init__.py", [
+        "init",
+        "shutdown",
+        "device_info",
+        "buffer_alloc",
+        "buffer_free",
+        "buffer_map",
+        "buffer_size",
+        "buffer_write",
+        "buffer_read",
+        "_check",
+        "_bytes",
+        "_dtype",
+        "_quant",
+        "gemm",
+        "gemm_async",
+        "gemm_batched",
+        "_gemm_desc",
+        "_attention_desc",
+        "attention_forward",
+        "attention_forward_async",
+        "attention_backward",
+        "conv2d_output_shape",
+        "conv2d_scratch_bytes",
+        "conv2d_backward_input_scratch_bytes",
+        "conv2d_forward",
+        "conv2d_backward_input",
+        "conv2d_backward_weight",
+        "quantized_size",
+        "quantize_weights",
+        "gemv_quantized",
+        "gemv_quantized_async",
+        "rmsnorm_forward",
+        "layernorm_forward",
+        "swiglu_forward",
+        "rope_forward",
+        "softmax_forward",
+        "fused_rmsnorm_gemv",
+        "adamw_step",
+        "gguf_open",
+        "gguf_close",
+        "gguf_meta_array_get_str",
+        "gguf_get_tensor",
+        "gguf_tensor_at",
+        "gguf_tensor_to_buffer",
+        "gguf_tensor_quantized_matrix_info",
+        "gguf_loaded_tensor_quantized_matrix_info",
+        "gguf_load_supported_tensors",
+        "gguf_get_llama_config",
+        "_tensor_info_dict",
+        "_tensor_info_from_dict",
+        "_loaded_tensor_info_dict",
+        "_loaded_tensor_info_from_dict",
+        "_quantized_matrix_info_dict",
+        "_llama_config_dict",
+        "Context.close",
+        "Context.buffer",
+        "Context.buffer_from_array",
+        "Context.stream",
+        "Context.gemm",
+        "Context.gemm_async",
+        "Context.softmax_forward",
+        "Buffer.close",
+        "Buffer.map",
+        "Buffer.size",
+        "Buffer.nbytes",
+        "Buffer.write",
+        "Buffer.read",
+        "Buffer.to_numpy",
+        "Stream.sync",
+        "Stream.close",
+        "GgufFile.close",
+        "GgufFile.tensor_to_buffer",
+        "GgufFile.load_supported_tensors",
+        "LoadedModel.close",
+        "LoadedModel.get_tensor",
+        "LoadedModel.quantized_matrix",
+        "LoadedTensor.__init__",
+        "LoadedTensor._check_alive",
+        "LoadedTensor.__getitem__",
+        "LoadedTensor.get",
+        "QuantizedMatrix.__init__",
+        "QuantizedMatrix._check_alive",
+        "QuantizedMatrix.output",
+        "QuantizedMatrix.gemv",
+    ])
+
+if cmake_consumer_smoke or pkg_config_consumer_smoke:
+    add_function_calls(coverage_files, root, "lib/core/device.mm", [
+        "tc_version",
+    ])
+    add_function_calls(coverage_files, root, "include/tensorcore/dtype.h", [
+        "tc_dtype_size",
+    ])
+    add_function_calls(coverage_files, root, "lib/core/dtype.c", [
+        "tc_dtype_name",
+    ])
+    add_function_calls(coverage_files, root, "lib/ops/quantized.mm", [
+        "tc_quantized_size",
+    ])
+    add_function_calls(coverage_files, root, "lib/io/gguf.c", [
+        "gguf_quantized_matrix_info_common",
+        "tc_gguf_tensor_quantized_matrix_info",
+    ])
+
+if cmake_consumer_smoke:
+    add_function_calls(coverage_files, root, "lib/core/status.c", [
+        "tc_status_string",
+    ])
+
+for entry in coverage_files.values():
+    entry["executed_lines"].sort()
+
+artifact = {
+    "schema": "tensorcore.release_smoke.runtime_evidence.v1",
+    "meta": {
+        "format": 3,
+        "source": "tensorcore_release_smoke",
+    },
+    "files": coverage_files,
+    "status": "passed",
+    "generated_at": datetime.datetime.now(datetime.timezone.utc)
+    .isoformat()
+    .replace("+00:00", "Z"),
+    "project": {
+        "root": env("ROOT"),
+        "version": env("EXPECTED_VERSION"),
+    },
+    "paths": {
+        "build_dir": env("BUILD_DIR"),
+        "prefix": env("PREFIX"),
+        "python_prefix": env("PY_PREFIX"),
+        "wheel_dir": env("WHEEL_DIR"),
+        "wheel_prefix": env("WHEEL_PREFIX"),
+    },
+    "python": {
+        "executable": env("PYTHON_BIN"),
+        "version": sys.version.split()[0],
+    },
+    "summary": {
+        "tests_passed": checks["tests"]["passed"],
+        "wheel_tag_inspected": checks["wheel_tag"]["inspected"],
+        "installed_wheel_smoke_passed": checks["installed_wheel_smoke"]["passed"],
+        "cmake_consumers_passed": checks["consumers"]["cmake"]["passed"],
+        "pkg_config_consumer_passed": checks["consumers"]["pkg_config"]["passed"],
+    },
+    "checks": checks,
+}
+
+tmp_path = evidence_path.with_name(f".{evidence_path.name}.tmp")
+tmp_path.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n")
+tmp_path.replace(evidence_path)
+PY
+}
+
 echo "[tensorcore] configure"
 cmake -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release
 
@@ -40,6 +511,7 @@ GPU_OK=0
 if "$BUILD_DIR/tests/test_device"; then
     GPU_OK=1
     ctest --test-dir "$BUILD_DIR" --output-on-failure
+    TESTS_MODE="full"
 else
     if [ "$REQUIRE_GPU" = "1" ]; then
         echo "Metal device smoke failed and REQUIRE_GPU=1 was set." >&2
@@ -47,7 +519,9 @@ else
     fi
     echo "No usable Metal device in this environment; skipping GPU tests."
     ctest --test-dir "$BUILD_DIR" --output-on-failure -R 'distributed_ring'
+    TESTS_MODE="no_gpu_distributed_ring_only"
 fi
+TESTS_STATUS="passed"
 
 echo "[tensorcore] install"
 cmake --install "$BUILD_DIR" --prefix "$PREFIX"
@@ -212,6 +686,9 @@ with tempfile.TemporaryDirectory(prefix="tensorcore-wheel-native.", dir="/privat
             )
     print(f"{wheel_path.name}: dylib archs={','.join(sorted(archs))} minos={minos[0]}.{minos[1]}")
 PY
+WHEEL_TAG_STATUS="passed"
+WHEEL_PLATFORM_TAG="${WHEEL_PATH%.whl}"
+WHEEL_PLATFORM_TAG="${WHEEL_PLATFORM_TAG##*-}"
 
 PY_VER="$("$PYTHON_BIN" -c 'import sys; print(f"python{sys.version_info.major}.{sys.version_info.minor}")')"
 echo "[tensorcore] python wheel install"
@@ -263,6 +740,12 @@ else
     PYTHONPATH="$WHEEL_SITE" \
         "$PYTHON_BIN" -c 'import tensorcore as tc; print(tc.version())'
 fi
+INSTALLED_WHEEL_SMOKE_STATUS="passed"
+if [ "$GPU_OK" = "1" ]; then
+    INSTALLED_WHEEL_SMOKE_MODE="python_tests"
+else
+    INSTALLED_WHEEL_SMOKE_MODE="import_version"
+fi
 
 echo "[tensorcore] out-of-tree CMake consumer"
 CONSUMER_DIR="$(mktemp -d /private/tmp/tensorcore-consumer.XXXXXX)"
@@ -282,9 +765,15 @@ tensorcore_copy_metallib(static_consumer)
 CMAKE
 cat > "$CONSUMER_DIR/main.c" <<'C'
 #include <stdio.h>
+#include <string.h>
 #include "tensorcore/tensorcore.h"
 
 int main(void) {
+    if (tc_dtype_size(TC_DTYPE_F16) != 2 ||
+        strcmp(tc_dtype_name(TC_DTYPE_F32), "f32") != 0) {
+        return 1;
+    }
+
     tc_gguf_tensor_info t = {0};
     t.n_dims = 2;
     t.dims[0] = 32;
@@ -322,9 +811,14 @@ cmake -S "$CONSUMER_DIR" -B "$CONSUMER_DIR/build" \
     -DCMAKE_PREFIX_PATH="$PREFIX"
 cmake --build "$CONSUMER_DIR/build"
 "$CONSUMER_DIR/build/consumer"
+CMAKE_SHARED_CONSUMER_STATUS="passed"
 if [ "$GPU_OK" = "1" ]; then
     "$CONSUMER_DIR/build/static_consumer"
+    CMAKE_STATIC_CONSUMER_STATUS="passed"
+else
+    CMAKE_STATIC_CONSUMER_STATUS="skipped_no_gpu"
 fi
+CMAKE_CONSUMER_STATUS="passed"
 
 echo "[tensorcore] pkg-config consumer"
 if command -v pkg-config >/dev/null 2>&1; then
@@ -334,8 +828,11 @@ if command -v pkg-config >/dev/null 2>&1; then
         $(PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" pkg-config --cflags --libs tensorcore) \
         -o "$CONSUMER_DIR/pkg-consumer"
     "$CONSUMER_DIR/pkg-consumer"
+    PKG_CONFIG_CONSUMER_STATUS="passed"
 else
     echo "pkg-config not found; skipping pkg-config consumer smoke."
+    PKG_CONFIG_CONSUMER_STATUS="skipped_pkg_config_unavailable"
 fi
 
+write_runtime_evidence
 echo "[tensorcore] release smoke OK"

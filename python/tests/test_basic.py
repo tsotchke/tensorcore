@@ -148,6 +148,10 @@ def _run_attention_wrapper_check(ctx):
         O = np.zeros_like(Q)
         O_async = np.zeros_like(Q)
         LSE = np.zeros((B, H, S), dtype=np.float32)
+        dO = (np.random.randn(B, H, S, D) * 0.125).astype(np.float16)
+        dQ = np.zeros_like(Q)
+        dK = np.zeros_like(K)
+        dV = np.zeros_like(V)
 
         qf = Q.astype(np.float32)
         kf = K.astype(np.float32)
@@ -168,6 +172,10 @@ def _run_attention_wrapper_check(ctx):
         ob = empty(O)
         oab = empty(O_async)
         lseb = empty(LSE)
+        dob = make(dO)
+        dqb = empty(dQ)
+        dkb = empty(dK)
+        dvb = empty(dV)
 
         tc.attention_forward(ctx, qb, kb, vb, ob, B, H, S, S, D,
                              LSE=lseb, return_lse=True)
@@ -182,11 +190,33 @@ def _run_attention_wrapper_check(ctx):
             tc.stream_destroy(ctx, stream)
         tc.buffer_read(oab, O_async)
 
+        tc.attention_backward(ctx, qb, kb, vb, ob, dob, lseb, dqb, dkb, dvb,
+                              B, H, S, S, D)
+        tc.buffer_read(dqb, dQ)
+        tc.buffer_read(dkb, dK)
+        tc.buffer_read(dvb, dV)
+
         out_err = _scaled_rms(O, O_ref)
         lse_err = float(np.max(np.abs(LSE - LSE_ref)))
         async_err = float(np.max(np.abs(O_async.astype(np.float32) - O.astype(np.float32))))
-        ok = out_err < 2e-2 and lse_err < 2e-2 and async_err < 1e-3
-        return ok, {"out": out_err, "lse": lse_err, "async": async_err}
+        grad_max = max(
+            float(np.max(np.abs(dQ.astype(np.float32)))),
+            float(np.max(np.abs(dK.astype(np.float32)))),
+            float(np.max(np.abs(dV.astype(np.float32)))),
+        )
+        backward_ok = (
+            np.all(np.isfinite(dQ.astype(np.float32))) and
+            np.all(np.isfinite(dK.astype(np.float32))) and
+            np.all(np.isfinite(dV.astype(np.float32))) and
+            grad_max > 0.0
+        )
+        ok = (
+            out_err < 2e-2 and
+            lse_err < 2e-2 and
+            async_err < 1e-3 and
+            backward_ok
+        )
+        return ok, {"out": out_err, "lse": lse_err, "async": async_err, "bwd": grad_max}
     finally:
         for b in reversed(bufs):
             tc.buffer_free(ctx, b)
@@ -240,19 +270,25 @@ def _run_batched_gemm_wrapper_check(ctx):
 
 
 def _run_conv_wrapper_check(ctx):
-    B, IC, OC = 1, 2, 3
+    B, IC, OC = 2, 2, 3
     H, W_in, kH, kW = 8, 8, 3, 3
     pad, stride = 1, 1
     out_H, out_W = tc.conv2d_output_shape(H, W_in, kH, kW, pad, pad, stride, stride)
     X = (np.random.randn(B, IC, H, W_in) * 0.25).astype(np.float16)
     W = (np.random.randn(OC, IC, kH, kW) * 0.2).astype(np.float16)
     bias = (np.random.randn(OC) * 0.05).astype(np.float16)
+    dY = (np.random.randn(B, OC, out_H, out_W) * 0.1).astype(np.float16)
     Y = np.zeros((B, OC, out_H, out_W), dtype=np.float16)
+    dX = np.zeros_like(X)
+    dW = np.zeros_like(W)
     Y_ref = np.zeros_like(Y, dtype=np.float32)
+    dX_ref = np.zeros_like(X, dtype=np.float32)
+    dW_ref = np.zeros_like(W, dtype=np.float32)
 
     Xf = X.astype(np.float32)
     Wf = W.astype(np.float32)
     bf = bias.astype(np.float32)
+    dYf = dY.astype(np.float32)
     for b_i in range(B):
         for oc in range(OC):
             for oh in range(out_H):
@@ -266,31 +302,63 @@ def _run_conv_wrapper_check(ctx):
                                 if 0 <= ih < H and 0 <= iw < W_in:
                                     acc += float(Xf[b_i, ic, ih, iw] * Wf[oc, ic, kh, kw])
                     Y_ref[b_i, oc, oh, ow] = acc
+                    dy = dYf[b_i, oc, oh, ow]
+                    for ic in range(IC):
+                        for kh in range(kH):
+                            for kw in range(kW):
+                                ih = oh * stride - pad + kh
+                                iw = ow * stride - pad + kw
+                                if 0 <= ih < H and 0 <= iw < W_in:
+                                    dX_ref[b_i, ic, ih, iw] += Wf[oc, ic, kh, kw] * dy
+                                    dW_ref[oc, ic, kh, kw] += Xf[b_i, ic, ih, iw] * dy
 
     xb = tc.buffer_alloc(ctx, X.nbytes)
     wb = tc.buffer_alloc(ctx, W.nbytes)
     bb = tc.buffer_alloc(ctx, bias.nbytes)
+    dyb = tc.buffer_alloc(ctx, dY.nbytes)
     yb = tc.buffer_alloc(ctx, Y.nbytes)
+    dxb = tc.buffer_alloc(ctx, dX.nbytes)
+    dwb = tc.buffer_alloc(ctx, dW.nbytes)
     scratch = tc.buffer_alloc(
         ctx,
         tc.conv2d_scratch_bytes(B, IC, H, W_in, kH, kW, pad, pad, stride, stride),
     )
+    scratch_dx = tc.buffer_alloc(ctx, tc.conv2d_backward_input_scratch_bytes(B, IC, H, W_in))
     try:
         tc.buffer_write(xb, X)
         tc.buffer_write(wb, W)
         tc.buffer_write(bb, bias)
+        tc.buffer_write(dyb, dY)
         tc.conv2d_forward(ctx, xb, wb, bb, yb, scratch,
                           B, IC, OC, H, W_in, kH, kW,
                           pad_h=pad, pad_w=pad, stride_h=stride, stride_w=stride)
         tc.buffer_read(yb, Y)
-        err = _scaled_rms(Y, Y_ref)
-        return err < 2e-2, err
+        fwd_err = _scaled_rms(Y, Y_ref)
+
+        tc.conv2d_backward_input(ctx, dyb, wb, dxb, scratch, scratch_dx,
+                                 B, IC, OC, H, W_in, kH, kW,
+                                 pad_h=pad, pad_w=pad, stride_h=stride, stride_w=stride)
+        tc.buffer_read(dxb, dX)
+        dx_err = _scaled_rms(dX, dX_ref)
+
+        tc.conv2d_backward_weight(ctx, xb, dyb, dwb, scratch,
+                                  B, IC, OC, H, W_in, kH, kW,
+                                  pad_h=pad, pad_w=pad, stride_h=stride, stride_w=stride)
+        tc.buffer_read(dwb, dW)
+        dw_err = _scaled_rms(dW, dW_ref)
+
+        err = max(fwd_err, dx_err, dw_err)
+        return err < 2e-2, {"forward": fwd_err, "dX": dx_err, "dW": dw_err}
     finally:
         tc.buffer_free(ctx, xb)
         tc.buffer_free(ctx, wb)
         tc.buffer_free(ctx, bb)
+        tc.buffer_free(ctx, dyb)
         tc.buffer_free(ctx, yb)
+        tc.buffer_free(ctx, dxb)
+        tc.buffer_free(ctx, dwb)
         tc.buffer_free(ctx, scratch)
+        tc.buffer_free(ctx, scratch_dx)
 
 
 def _run_buffer_layout_check(ctx):
@@ -492,6 +560,7 @@ def _run_owned_api_check():
         a = ctx.buffer_from_array(A)
         b = ctx.buffer_from_array(B)
         c = ctx.buffer(C.nbytes)
+        owned_nbytes_ok = a.nbytes == A.nbytes and b.nbytes == B.nbytes and c.nbytes == C.nbytes
         ctx.gemm(a, b, c, M, N, K)
         C = c.to_numpy((M, N), np.float16)
 
@@ -508,7 +577,9 @@ def _run_owned_api_check():
     err = np.max(np.abs(C.astype(np.float32) - C_ref.astype(np.float32)))
     err_async = np.max(np.abs(C_async.astype(np.float32) - C_ref.astype(np.float32)))
     sm_err = _scaled_rms(Y, Y_ref)
-    return err == 0.0 and err_async == 0.0 and sm_err < 5e-3, max(float(err), float(err_async), sm_err)
+    return (
+        owned_nbytes_ok and err == 0.0 and err_async == 0.0 and sm_err < 5e-3
+    ), max(float(err), float(err_async), sm_err)
 
 
 def main():
@@ -588,13 +659,15 @@ def main():
     print(f"GEMM batched fp16:     max_abs={batched_err:.3e}  "
           f"{'OK' if batched_ok else 'FAIL'}")
 
-    conv_ok, conv_err = _run_conv_wrapper_check(ctx)
-    print(f"Conv2D wrapper:        scaled_rms={conv_err:.3e}  "
+    conv_ok, conv_errs = _run_conv_wrapper_check(ctx)
+    print(f"Conv2D wrapper:        fwd={conv_errs['forward']:.3e}  "
+          f"dX={conv_errs['dX']:.3e}  dW={conv_errs['dW']:.3e}  "
           f"{'OK' if conv_ok else 'FAIL'}")
 
     attention_ok, attention_errs = _run_attention_wrapper_check(ctx)
     print(f"Attention wrapper:     scaled={attention_errs['out']:.3e}  "
           f"lse={attention_errs['lse']:.3e}  async={attention_errs['async']:.3e}  "
+          f"bwd={attention_errs['bwd']:.3e}  "
           f"{'OK' if attention_ok else 'FAIL'}")
 
     qM, qN, qK = 1, 4, 64
@@ -610,18 +683,29 @@ def main():
     wq = tc.buffer_alloc(ctx, q_bytes)
     wq8 = tc.buffer_alloc(ctx, q8_bytes)
     yq = tc.buffer_alloc(ctx, Yq_np.nbytes)
+    yq_async = tc.buffer_alloc(ctx, Yq_np.nbytes)
     yq8 = tc.buffer_alloc(ctx, Yq_np.nbytes)
     tc.buffer_write(xq, Xq_np)
     tc.buffer_write(wfp16, Wq_fp16_np)
     tc.quantize_weights(ctx, wfp16, wq, "q4_0", qN, qK)
     tc.gemv_quantized(ctx, xq, wq, yq, "q4_0", qM, qN, qK)
     tc.buffer_read(yq, Yq_np)
+    Yq_async_np = np.zeros((qM, qN), dtype=np.float16)
+    q_stream = tc.stream_create(ctx)
+    try:
+        tc.gemv_quantized_async(ctx, xq, wq, yq_async, "q4_0", qM, qN, qK, q_stream)
+        tc.stream_sync(q_stream)
+    finally:
+        tc.stream_destroy(ctx, q_stream)
+    tc.buffer_read(yq_async, Yq_async_np)
     raw_q4 = ctypes.string_at(tc.buffer_map(wq), q_bytes)
     W_deq = _dequant_q4_0(raw_q4, qN, qK)
     Y_ref = (Xq_np.astype(np.float32) @ W_deq.T).astype(np.float16)
     q_err = np.abs(Yq_np.astype(np.float32) - Y_ref.astype(np.float32))
-    q_ok = q_size_ok and q_err.max() < 2e-2
+    q_async_err = np.abs(Yq_async_np.astype(np.float32) - Y_ref.astype(np.float32))
+    q_ok = q_size_ok and q_err.max() < 2e-2 and q_async_err.max() < 2e-2
     print(f"Q4_0 GEMV wrapper:    max_abs={q_err.max():.3e}  "
+          f"async={q_async_err.max():.3e}  "
           f"{'OK' if q_ok else 'FAIL'}")
 
     Yq8_np = np.zeros((qM, qN), dtype=np.float16)
@@ -646,6 +730,7 @@ def main():
     tc.buffer_free(ctx, wq)
     tc.buffer_free(ctx, wq8)
     tc.buffer_free(ctx, yq)
+    tc.buffer_free(ctx, yq_async)
     tc.buffer_free(ctx, yq8)
 
     gguf_path = tempfile.NamedTemporaryFile(prefix="tc_py_", suffix=".gguf", delete=False).name
@@ -676,6 +761,7 @@ def main():
             with tc.Context() as owned_ctx:
                 with owned_g.load_supported_tensors(owned_ctx) as owned_loaded:
                     owned_loaded_tensor = owned_loaded.get_tensor("weight.test")
+                    owned_loaded_buffer = owned_loaded_tensor.get("buffer")
                     owned_loaded_qinfo = tc.gguf_loaded_tensor_quantized_matrix_info(owned_loaded_tensor)
                     qmat = owned_loaded.quantized_matrix("weight.test")
                     x_ones = np.ones((1, 32), dtype=np.float16)
@@ -690,6 +776,7 @@ def main():
                         qmat.N == 1 and
                         qmat.K == 32 and
                         qmat.quant_type == tc.TC_QUANT_Q4_0 and
+                        owned_loaded_buffer == owned_loaded_tensor["buffer"] and
                         qmat_y[0, 0] == np.float16(40.0)
                     )
                 try:
