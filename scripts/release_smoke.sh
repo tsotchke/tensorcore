@@ -1032,7 +1032,7 @@ missing = [
 if missing:
     raise SystemExit(f"wheel missing native artifacts: {missing}")
 PY
-"$PYTHON_BIN" - "$WHEEL_PATH" <<'PY'
+"$PYTHON_BIN" - "$WHEEL_PATH" "$EXPECTED_VERSION" <<'PY'
 import pathlib
 import re
 import subprocess
@@ -1078,7 +1078,22 @@ def dylib_macos_version(path):
     return normalize((int(match.group(1)), int(match.group(2))))
 
 
+def dylib_identity(path):
+    out = subprocess.check_output(["otool", "-L", str(path)], text=True)
+    match = re.search(
+        r"@rpath/libtensorcore\.dylib "
+        r"\(compatibility version ([^,]+), current version ([^)]+)\)",
+        out,
+    )
+    if not match:
+        raise SystemExit("wheel dylib install name is not @rpath/libtensorcore.dylib")
+    return match.groups()
+
+
 wheel_path = pathlib.Path(sys.argv[1])
+expected = sys.argv[2]
+major, minor, _patch = expected.split(".", 2)
+expected_compat = f"{major}.{minor}.0"
 platform = wheel_path.name[:-4].split("-")[-1]
 with tempfile.TemporaryDirectory(prefix="tensorcore-wheel-native.", dir="/private/tmp") as td:
     with zipfile.ZipFile(wheel_path) as zf:
@@ -1093,6 +1108,13 @@ with tempfile.TemporaryDirectory(prefix="tensorcore-wheel-native.", dir="/privat
 
     archs = set(subprocess.check_output(["lipo", "-archs", str(dylib)], text=True).split())
     minos = dylib_macos_version(dylib)
+    compat, current = dylib_identity(dylib)
+    if current != expected:
+        raise SystemExit(f"wheel dylib current version mismatch: expected {expected}, got {current}")
+    if compat != expected_compat:
+        raise SystemExit(
+            f"wheel dylib compatibility version mismatch: expected {expected_compat}, got {compat}"
+        )
     for tag, tag_version, arch_tag in platform_tags(platform):
         required = ARCH_TAGS.get(arch_tag)
         if required is None:
@@ -1107,7 +1129,10 @@ with tempfile.TemporaryDirectory(prefix="tensorcore-wheel-native.", dir="/privat
                 f"{wheel_path.name} tag {tag} advertises macOS {tag_version[0]}.{tag_version[1]}, "
                 f"but dylib requires {minos[0]}.{minos[1]}"
             )
-    print(f"{wheel_path.name}: dylib archs={','.join(sorted(archs))} minos={minos[0]}.{minos[1]}")
+    print(
+        f"{wheel_path.name}: dylib archs={','.join(sorted(archs))} "
+        f"minos={minos[0]}.{minos[1]} current={current} compat={compat}"
+    )
 PY
 WHEEL_TAG_STATUS="passed"
 WHEEL_PLATFORM_TAG="${WHEEL_PATH%.whl}"
