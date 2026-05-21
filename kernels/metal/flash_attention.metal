@@ -89,7 +89,7 @@ kernel void tc_flash_attention_f16_d64(
     constant uint& seq_kv         [[buffer(9)]],
     constant float& softmax_scale [[buffer(10)]],
     constant uint& window_size    [[buffer(11), function_constant(g_use_window)]],
-    constant float& alibi_slope   [[buffer(12), function_constant(g_use_alibi)]],
+    constant float* alibi_slopes  [[buffer(12), function_constant(g_use_alibi)]],
     uint3 group_id                [[threadgroup_position_in_grid]],
     uint  sgid                    [[simdgroup_index_in_threadgroup]],
     uint  slid                    [[thread_index_in_simdgroup]])
@@ -210,6 +210,7 @@ kernel void tc_flash_attention_f16_d64(
                 if (g_use_window && gq > gk + window_size) v = -INFINITY;
                 if (g_use_alibi && v > -1e30f) {
                     /* ALiBi linear bias: subtract slope * (i - j). */
+                    const float alibi_slope = alibi_slopes[head_idx];
                     const float bias = alibi_slope * (float)((int)gk - (int)gq);
                     v += bias;
                 }

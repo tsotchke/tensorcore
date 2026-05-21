@@ -93,6 +93,8 @@ static int run_case(tc_context* ctx, int B, int H, int Sq, int Sk, int D);
 
 static int run_gqa_case(tc_context* ctx, int B, int H, int KV_H, int Sq, int Sk, int D);
 
+static int run_alibi_case(tc_context* ctx);
+
 static int run_async_option_case(tc_context* ctx, const char* label,
                                  int D, int window_size, int use_alibi);
 
@@ -119,6 +121,7 @@ int main(void) {
     rc |= run_gqa_case(ctx, 1, 4, 1,  64,  64, 64);   /* MQA: 1 KV head    */
     rc |= run_gqa_case(ctx, 1, 4, 2, 128, 128, 64);   /* GQA: 2 KV heads   */
     rc |= run_gqa_case(ctx, 1, 8, 2, 128, 128, 128);  /* GQA D=128         */
+    rc |= run_alibi_case(ctx);
     rc |= run_async_option_case(ctx, "async_window_d64", 64, 8, 0);
     rc |= run_async_option_case(ctx, "async_alibi_d64", 64, 0, 1);
     rc |= run_async_option_case(ctx, "async_window_alibi_d128", 128, 8, 1);
@@ -314,6 +317,110 @@ static int run_async_validation_case(tc_context* ctx) {
     tc_buffer_free(ctx, O);
     tc_buffer_free(ctx, Q_small);
     return rc;
+}
+
+static int run_alibi_case(tc_context* ctx) {
+    const int B = 1, H = 2, Sq = 64, Sk = 64, D = 64;
+    const float scale = 1.0f / sqrtf((float)D);
+    const float slopes[2] = {0.0f, 2.0f};
+    const size_t qkv_elems = (size_t)B * H * Sq * D;
+
+    tc_buffer *Q = NULL, *K = NULL, *V = NULL, *O = NULL;
+    tc_buffer_alloc(ctx, qkv_elems * sizeof(uint16_t), &Q);
+    tc_buffer_alloc(ctx, qkv_elems * sizeof(uint16_t), &K);
+    tc_buffer_alloc(ctx, qkv_elems * sizeof(uint16_t), &V);
+    tc_buffer_alloc(ctx, qkv_elems * sizeof(uint16_t), &O);
+
+    uint16_t *Qp = NULL, *Kp = NULL, *Vp = NULL, *Op = NULL;
+    tc_buffer_map(Q, (void**)&Qp);
+    tc_buffer_map(K, (void**)&Kp);
+    tc_buffer_map(V, (void**)&Vp);
+    tc_buffer_map(O, (void**)&Op);
+
+    float* Qf = malloc(qkv_elems * sizeof(float));
+    float* Kf = malloc(qkv_elems * sizeof(float));
+    float* Vf = malloc(qkv_elems * sizeof(float));
+    float* Or = malloc(qkv_elems * sizeof(float));
+
+    srand(0xA11B1);
+    for (size_t i = 0; i < qkv_elems; ++i) {
+        float v = ((float)rand() / RAND_MAX - 0.5f) * 0.5f;
+        Qf[i] = v; Qp[i] = f32_to_f16(v);
+    }
+    for (size_t i = 0; i < qkv_elems; ++i) {
+        float v = ((float)rand() / RAND_MAX - 0.5f) * 0.5f;
+        Kf[i] = v; Kp[i] = f32_to_f16(v);
+    }
+    for (size_t i = 0; i < qkv_elems; ++i) {
+        float v = ((float)rand() / RAND_MAX - 0.5f) * 0.5f;
+        Vf[i] = v; Vp[i] = f32_to_f16(v);
+    }
+    memset(Op, 0, qkv_elems * sizeof(uint16_t));
+
+    for (int b = 0; b < B; ++b) {
+        for (int h = 0; h < H; ++h) {
+            for (int q = 0; q < Sq; ++q) {
+                double m = -INFINITY;
+                double* scores = (double*)malloc(Sk * sizeof(double));
+                for (int k = 0; k < Sk; ++k) {
+                    if (k > q) {
+                        scores[k] = -INFINITY;
+                        continue;
+                    }
+                    double dot = 0.0;
+                    for (int d = 0; d < D; ++d) {
+                        const float qv = Qf[((b*H + h)*Sq + q)*D + d];
+                        const float kv = Kf[((b*H + h)*Sk + k)*D + d];
+                        dot += (double)qv * (double)kv;
+                    }
+                    scores[k] = dot * scale + (double)slopes[h] * (double)(k - q);
+                    if (scores[k] > m) m = scores[k];
+                }
+                double l = 0.0;
+                for (int k = 0; k < Sk; ++k) {
+                    scores[k] = (scores[k] > -1e30) ? exp(scores[k] - m) : 0.0;
+                    l += scores[k];
+                }
+                for (int d = 0; d < D; ++d) {
+                    double acc = 0.0;
+                    for (int k = 0; k < Sk; ++k) {
+                        const float vv = Vf[((b*H + h)*Sk + k)*D + d];
+                        acc += scores[k] * (double)vv;
+                    }
+                    Or[((b*H + h)*Sq + q)*D + d] = (float)(acc / (l + 1e-30));
+                }
+                free(scores);
+            }
+        }
+    }
+
+    tc_attention_desc d = {0};
+    d.batch = B; d.heads = H; d.seq_q = Sq; d.seq_kv = Sk; d.head_dim = D;
+    d.io_dtype = TC_DTYPE_F16; d.accum_dtype = TC_DTYPE_F32;
+    d.softmax_scale = scale; d.causal = 1; d.return_lse = 0;
+    d.alibi_slopes = slopes;
+    tc_status_t s = tc_attention_forward(ctx, &d, Q, K, V, O, NULL);
+
+    double max_abs = 0.0, se = 0.0, sr = 0.0;
+    for (size_t i = 0; i < qkv_elems; ++i) {
+        const double got = (double)f16_to_f32(Op[i]);
+        const double ref = (double)Or[i];
+        const double e = fabs(got - ref);
+        if (e > max_abs) max_abs = e;
+        se += e * e;
+        sr += ref * ref;
+    }
+    const double scaled = sqrt(se / qkv_elems) / (sqrt(sr / qkv_elems) + 1e-9);
+
+    printf("alibi_per_head B=%d H=%d Sq=%d Sk=%d D=%d "
+           "max_abs=%.3e scaled=%.3e  %s\n",
+           B, H, Sq, Sk, D, max_abs, scaled,
+           (s == TC_OK && scaled < 2e-2) ? "OK" : "FAIL");
+
+    free(Qf); free(Kf); free(Vf); free(Or);
+    tc_buffer_free(ctx, Q); tc_buffer_free(ctx, K);
+    tc_buffer_free(ctx, V); tc_buffer_free(ctx, O);
+    return (s == TC_OK && scaled < 2e-2) ? 0 : 9;
 }
 
 static int run_gqa_case(tc_context* ctx, int B, int H, int KV_H, int Sq, int Sk, int D) {

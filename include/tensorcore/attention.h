@@ -75,7 +75,7 @@ tc_status_t tc_attention_forward_async(tc_context* ctx,
  *   - LSE must be the log-sum-exp written by tc_attention_forward with
  *     return_lse=true (or recomputed equivalently).
  *   - All tensors are fp16; LSE is fp32.
- *   - v0.1 of the backward: head_dim = 64 only. */
+ *   - head_dim must be 64 or 128. */
 tc_status_t tc_attention_backward(tc_context* ctx,
                                   const tc_attention_desc* desc,
                                   const tc_buffer* Q,

@@ -3,13 +3,8 @@
  *
  * v0.1 supports:
  *   - io_dtype F16, accum_dtype F32
- *   - head_dim ∈ {64}   (D=128 path lands in v0.2)
- *
- * Larger or unsupported configurations fall back to a non-fused path that
- * issues GEMM + softmax + GEMM (TC_BACKEND_MPS). The fallback is implemented
- * in lib/fallback/mps_attention.mm (stub for now — returns
- * TC_ERR_UNSUPPORTED_DTYPE so callers see a clean failure instead of a wrong
- * answer).
+ *   - head_dim in {64, 128}
+ *   - causal, sliding-window, GQA/MQA, ALiBi, and optional LSE output
  */
 
 #import <Metal/Metal.h>
@@ -48,7 +43,6 @@ struct ForwardPlan {
     uint32_t q_blocks;
     uint32_t window_size;
     float    sm_scale;
-    float    alibi_slope;
     bool     use_window;
     bool     use_alibi;
 };
@@ -205,11 +199,6 @@ tc_status_t make_forward_plan(tc_context* ctx,
     plan->sm_scale = desc->softmax_scale;
     plan->use_window = (desc->window_size > 0);
     plan->use_alibi = (desc->alibi_slopes != NULL);
-    plan->alibi_slope = 0.0f;
-    if (plan->use_alibi) {
-        for (int h = 0; h < desc->heads; ++h) plan->alibi_slope += desc->alibi_slopes[h];
-        plan->alibi_slope /= (float)desc->heads;
-    }
     return TC_OK;
 }
 
@@ -242,7 +231,7 @@ void encode_forward(id<MTLComputeCommandEncoder> enc,
         [enc setBytes:&plan->window_size length:sizeof(plan->window_size) atIndex:11];
     }
     if (plan->use_alibi) {
-        [enc setBytes:&plan->alibi_slope length:sizeof(plan->alibi_slope) atIndex:12];
+        [enc setBytes:desc->alibi_slopes length:sizeof(float) * plan->heads atIndex:12];
     }
 
     [enc dispatchThreadgroups:MTLSizeMake(plan->q_blocks, plan->heads, plan->batch)
