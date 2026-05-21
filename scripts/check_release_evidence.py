@@ -72,6 +72,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Require SDK26+ Metal 4 TensorOps compile and M5+ runtime coverage.",
     )
+    parser.add_argument(
+        "--require-metal4-compile",
+        action="store_true",
+        help="Require SDK26+ Metal 4 TensorOps compile evidence without M5 runtime coverage.",
+    )
     return parser.parse_args()
 
 
@@ -168,7 +173,12 @@ def check_public_core_files(errors: list[str], data: Any) -> None:
         errors.append(f"public core paths are marked covered but files lacks: {uncovered}")
 
 
-def check_metal4_consistency(errors: list[str], data: Any, require_metal4: bool) -> None:
+def check_metal4_consistency(
+    errors: list[str],
+    data: Any,
+    require_metal4_runtime: bool,
+    require_metal4_compile: bool,
+) -> None:
     compile_status = get_path(data, "checks.metal4_tensorops.compile_status")
     runtime_compile_status = get_path(data, "checks.metal4_tensorops.runtime_compile_status")
     runtime_status = get_path(data, "checks.metal4_tensorops.runtime_status")
@@ -198,8 +208,13 @@ def check_metal4_consistency(errors: list[str], data: Any, require_metal4: bool)
             f"{runtime_status!r}"
         )
 
-    if require_metal4:
-        check_required_true(errors, data, METAL4_REQUIRED_TRUE)
+    if require_metal4_compile or require_metal4_runtime:
+        require_true(
+            errors,
+            data,
+            "summary.metal4_tensorops_compile_passed",
+            "summary must record Metal 4 TensorOps compilation",
+        )
         require_status(
             errors,
             data,
@@ -207,6 +222,9 @@ def check_metal4_consistency(errors: list[str], data: Any, require_metal4: bool)
             "compiled",
             "Metal 4 TensorOps sources must compile with SDK26+",
         )
+
+    if require_metal4_runtime:
+        check_required_true(errors, data, METAL4_REQUIRED_TRUE)
         require_status(
             errors,
             data,
@@ -264,7 +282,12 @@ def main() -> int:
         errors.append(f"checks.tests.gpu_device_available must be boolean, got {gpu_available!r}")
 
     check_public_core_files(errors, data)
-    check_metal4_consistency(errors, data, args.require_metal4_tensorops)
+    check_metal4_consistency(
+        errors,
+        data,
+        args.require_metal4_tensorops,
+        args.require_metal4_compile,
+    )
 
     if errors:
         print("release evidence validation failed:", file=sys.stderr)
