@@ -88,8 +88,6 @@ extern "C" tc_status_t tc_conv2d_backward_input(tc_context* ctx,
             return TC_ERR_DISPATCH;
         }
     }
-    tc_status_t s = TC_OK;
-
     /* Zero the fp32 accumulation buffer for atomic-add scatter. */
     void* dx32; tc_buffer_map(scratch_dX_f32, &dx32);
     memset(dx32, 0, (size_t)batch * in_channels * H * W_in * sizeof(float));
@@ -334,7 +332,7 @@ extern "C" tc_status_t tc_conv2d_forward(tc_context* ctx,
      * OC*out_hw for Y. */
     /* For simplicity, loop over batches at the host side. */
     for (uint32_t n = 0; n < B; ++n) {
-        tc_gemm_desc d = {0};
+        tc_gemm_desc d = {};
         d.M = (int32_t)OC;
         d.N = (int32_t)out_hw;
         d.K = (int32_t)K;

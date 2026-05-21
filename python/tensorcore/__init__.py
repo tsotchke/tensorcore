@@ -253,6 +253,12 @@ if _lib is not None:
         c_void_p, c_void_p, c_void_p, c_void_p, c_void_p
     ]
     _lib.tc_attention_backward.restype = c_int
+    _lib.tc_conv2d_forward.argtypes = [
+        c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_void_p,
+        c_int, c_int, c_int, c_int, c_int, c_int, c_int,
+        c_int, c_int, c_int, c_int, c_int, c_int,
+    ]
+    _lib.tc_conv2d_forward.restype = c_int
     _lib.tc_quantize_weights.argtypes = [c_void_p, c_void_p, c_void_p, c_int, c_int, c_int]
     _lib.tc_quantize_weights.restype = c_int
     _lib.tc_gemv_quantized.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int, c_int, c_int]
@@ -668,6 +674,41 @@ def attention_backward(ctx, Q, K, V, O, dO, LSE, dQ, dK, dV, batch, heads,
     _ = slopes
 
 
+def conv2d_output_shape(H, W_in, kH, kW, pad_h=0, pad_w=0, stride_h=1, stride_w=1):
+    """Return (out_H, out_W) for a dilation-1 Conv2D."""
+    out_H = (int(H) + 2 * int(pad_h) - int(kH)) // int(stride_h) + 1
+    out_W = (int(W_in) + 2 * int(pad_w) - int(kW)) // int(stride_w) + 1
+    return out_H, out_W
+
+
+def conv2d_scratch_bytes(batch, in_channels, H, W_in, kH, kW,
+                         pad_h=0, pad_w=0, stride_h=1, stride_w=1,
+                         out_H=None, out_W=None):
+    """Return fp16 im2col scratch bytes required by conv2d_forward."""
+    if out_H is None or out_W is None:
+        out_H, out_W = conv2d_output_shape(H, W_in, kH, kW, pad_h, pad_w,
+                                           stride_h, stride_w)
+    return int(batch) * int(in_channels) * int(kH) * int(kW) * int(out_H) * int(out_W) * 2
+
+
+def conv2d_forward(ctx, X, weight, bias, Y, scratch_col,
+                   batch, in_channels, out_channels, H, W_in, kH, kW,
+                   pad_h=0, pad_w=0, stride_h=1, stride_w=1,
+                   out_H=None, out_W=None):
+    """Compute fp16 Conv2D forward for NCHW input and OIHW weights."""
+    if out_H is None or out_W is None:
+        out_H, out_W = conv2d_output_shape(H, W_in, kH, kW, pad_h, pad_w,
+                                           stride_h, stride_w)
+    _check(_lib.tc_conv2d_forward(
+        _as_handle(ctx), _as_handle(X), _as_handle(weight), _as_handle(bias),
+        _as_handle(Y), _as_handle(scratch_col),
+        int(batch), int(in_channels), int(out_channels),
+        int(H), int(W_in), int(kH), int(kW),
+        int(pad_h), int(pad_w), int(stride_h), int(stride_w),
+        int(out_H), int(out_W)
+    ))
+
+
 def quantized_size(fmt, N, K):
     """Return byte size for an [N, K] quantized weight matrix."""
     return int(_lib.tc_quantized_size(_quant(fmt), int(N), int(K)))
@@ -997,6 +1038,11 @@ class Context:
                            batch, heads, seq_q, seq_kv, head_dim, **kwargs):
         return attention_backward(self, Q, K, V, O, dO, LSE, dQ, dK, dV,
                                   batch, heads, seq_q, seq_kv, head_dim, **kwargs)
+
+    def conv2d_forward(self, X, weight, bias, Y, scratch_col,
+                       batch, in_channels, out_channels, H, W_in, kH, kW, **kwargs):
+        return conv2d_forward(self, X, weight, bias, Y, scratch_col,
+                              batch, in_channels, out_channels, H, W_in, kH, kW, **kwargs)
 
     def quantize_weights(self, W_fp16, W_quant, fmt, N, K):
         return quantize_weights(self, W_fp16, W_quant, fmt, N, K)

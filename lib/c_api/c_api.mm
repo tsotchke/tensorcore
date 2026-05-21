@@ -9,4 +9,5 @@
 #include "tensorcore/tensorcore.h"
 
 /* Marker symbol so callers can link against -ltensorcore and feature-test. */
+extern "C" __attribute__((visibility("default"), used))
 const int tensorcore_abi_version = 1;

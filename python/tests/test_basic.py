@@ -239,6 +239,60 @@ def _run_batched_gemm_wrapper_check(ctx):
         tc.buffer_free(ctx, cb)
 
 
+def _run_conv_wrapper_check(ctx):
+    B, IC, OC = 1, 2, 3
+    H, W_in, kH, kW = 8, 8, 3, 3
+    pad, stride = 1, 1
+    out_H, out_W = tc.conv2d_output_shape(H, W_in, kH, kW, pad, pad, stride, stride)
+    X = (np.random.randn(B, IC, H, W_in) * 0.25).astype(np.float16)
+    W = (np.random.randn(OC, IC, kH, kW) * 0.2).astype(np.float16)
+    bias = (np.random.randn(OC) * 0.05).astype(np.float16)
+    Y = np.zeros((B, OC, out_H, out_W), dtype=np.float16)
+    Y_ref = np.zeros_like(Y, dtype=np.float32)
+
+    Xf = X.astype(np.float32)
+    Wf = W.astype(np.float32)
+    bf = bias.astype(np.float32)
+    for b_i in range(B):
+        for oc in range(OC):
+            for oh in range(out_H):
+                for ow in range(out_W):
+                    acc = float(bf[oc])
+                    for ic in range(IC):
+                        for kh in range(kH):
+                            for kw in range(kW):
+                                ih = oh * stride - pad + kh
+                                iw = ow * stride - pad + kw
+                                if 0 <= ih < H and 0 <= iw < W_in:
+                                    acc += float(Xf[b_i, ic, ih, iw] * Wf[oc, ic, kh, kw])
+                    Y_ref[b_i, oc, oh, ow] = acc
+
+    xb = tc.buffer_alloc(ctx, X.nbytes)
+    wb = tc.buffer_alloc(ctx, W.nbytes)
+    bb = tc.buffer_alloc(ctx, bias.nbytes)
+    yb = tc.buffer_alloc(ctx, Y.nbytes)
+    scratch = tc.buffer_alloc(
+        ctx,
+        tc.conv2d_scratch_bytes(B, IC, H, W_in, kH, kW, pad, pad, stride, stride),
+    )
+    try:
+        tc.buffer_write(xb, X)
+        tc.buffer_write(wb, W)
+        tc.buffer_write(bb, bias)
+        tc.conv2d_forward(ctx, xb, wb, bb, yb, scratch,
+                          B, IC, OC, H, W_in, kH, kW,
+                          pad_h=pad, pad_w=pad, stride_h=stride, stride_w=stride)
+        tc.buffer_read(yb, Y)
+        err = _scaled_rms(Y, Y_ref)
+        return err < 2e-2, err
+    finally:
+        tc.buffer_free(ctx, xb)
+        tc.buffer_free(ctx, wb)
+        tc.buffer_free(ctx, bb)
+        tc.buffer_free(ctx, yb)
+        tc.buffer_free(ctx, scratch)
+
+
 def _run_training_wrapper_checks(ctx):
     bufs = []
 
@@ -497,6 +551,10 @@ def main():
     print(f"GEMM batched fp16:     max_abs={batched_err:.3e}  "
           f"{'OK' if batched_ok else 'FAIL'}")
 
+    conv_ok, conv_err = _run_conv_wrapper_check(ctx)
+    print(f"Conv2D wrapper:        scaled_rms={conv_err:.3e}  "
+          f"{'OK' if conv_ok else 'FAIL'}")
+
     attention_ok, attention_errs = _run_attention_wrapper_check(ctx)
     print(f"Attention wrapper:     scaled={attention_errs['out']:.3e}  "
           f"lse={attention_errs['lse']:.3e}  async={attention_errs['async']:.3e}  "
@@ -671,6 +729,7 @@ def main():
         scaled_async < 1e-2 and
         host_bounds_ok and
         batched_ok and
+        conv_ok and
         attention_ok and
         q_ok and
         q8_ok and
