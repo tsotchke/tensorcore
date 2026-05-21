@@ -59,26 +59,15 @@ inline void flash_attention_tensorops_impl(
     const uint k_base   = ((batch_idx * kv_heads + kv_head_idx) * seq_kv + 0) * D;
     const uint o_base   = ((batch_idx * heads    + head_idx)    * seq_q  + 0) * D;
 
-    auto Qt = tensor<device const half, dextents<int32_t, 2>, tensor_inline>(
-                Q + q_base, dextents<int32_t, 2>(int32_t(D), int32_t(seq_q)));
-    auto Qb = Qt.slice(0, row0);
-    auto Kt = tensor<device const half, dextents<int32_t, 2>, tensor_inline>(
-                K + k_base, dextents<int32_t, 2>(int32_t(D), int32_t(seq_kv)));
-    auto Kb = Kt.slice(0, 0);
-    auto Ot = tensor<device       half, dextents<int32_t, 2>, tensor_inline>(
-                O + o_base, dextents<int32_t, 2>(int32_t(D), int32_t(seq_q)));
-    auto Ob = Ot.slice(0, row0);
-
-    constexpr auto placeholder_md = matmul2d_descriptor(
-        TC4_FA_BR, D, D,
-        false, false, false,
-        matmul2d_descriptor::mode::multiply_accumulate);
-    matmul2d<placeholder_md, execution_simdgroups<TC4_FA_SG_COUNT>> placeholder_op;
-    placeholder_op.run(Qb, Kb, Ob);
-
+    (void)Q;
+    (void)K;
     (void)V;
+    (void)O;
     (void)LSE;
     (void)batch;
+    (void)q_base;
+    (void)k_base;
+    (void)o_base;
     (void)softmax_scale;
     (void)g_tc4_causal;
     (void)g_tc4_return_lse;
