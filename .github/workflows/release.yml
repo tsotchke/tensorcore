@@ -45,6 +45,9 @@ jobs:
           archive="$(scripts/create_native_sdk_archive.sh "$RUNNER_TEMP/tensorcore-native-sdk")"
           scripts/check_native_sdk_archive.sh "$archive"
 
+      - name: Create release checksums
+        run: scripts/create_release_checksums.sh dist
+
       - name: Upload runtime evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -67,6 +70,13 @@ jobs:
           path: dist/tensorcore-native-sdk-*.tar.gz
           if-no-files-found: error
 
+      - name: Upload release checksums
+        uses: actions/upload-artifact@v7
+        with:
+          name: tensorcore-release-checksums
+          path: dist/SHA256SUMS
+          if-no-files-found: error
+
       - name: Publish GitHub release assets
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -79,4 +89,5 @@ jobs:
           gh release upload "$GITHUB_REF_NAME" \
             dist/tensorcore_apple-*.whl \
             dist/tensorcore-native-sdk-*.tar.gz \
+            dist/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" --clobber
