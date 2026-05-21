@@ -317,6 +317,34 @@ kernel void tc_gemm_f16_f32_batched(
                                      shared_mem, tg2, sgid, slid);
 }
 
+kernel void tc_gemm_f32_f32_batched(
+    device const float* A     [[buffer(0)]],
+    device const float* B     [[buffer(1)]],
+    device       float* C     [[buffer(2)]],
+    constant uint& M          [[buffer(3)]],
+    constant uint& N          [[buffer(4)]],
+    constant uint& K          [[buffer(5)]],
+    constant float& alpha     [[buffer(6)]],
+    constant float& beta      [[buffer(7)]],
+    constant ulong& stride_a  [[buffer(8)]],
+    constant ulong& stride_b  [[buffer(9)]],
+    constant ulong& stride_c  [[buffer(10)]],
+    constant uint& lda        [[buffer(11)]],
+    constant uint& ldb        [[buffer(12)]],
+    constant uint& ldc        [[buffer(13)]],
+    uint3 group_id            [[threadgroup_position_in_grid]],
+    uint  sgid                [[simdgroup_index_in_threadgroup]],
+    uint  slid                [[thread_index_in_simdgroup]])
+{
+    threadgroup float shared_mem[SA_SIZE + SB_SIZE];
+    device const float* Ab = A + (ulong)group_id.z * stride_a;
+    device const float* Bb = B + (ulong)group_id.z * stride_b;
+    device       float* Cb = C + (ulong)group_id.z * stride_c;
+    uint2 tg2 = uint2(group_id.x, group_id.y);
+    gemm_simdgroup_impl<float, float>(Ab, Bb, Cb, M, N, K, lda, ldb, ldc, alpha, beta,
+                                      shared_mem, tg2, sgid, slid);
+}
+
 /* ----- fp32 IO, fp32 accumulator (Apple7+, M1+) ----- */
 kernel void tc_gemm_f32_f32(
     device const float* A     [[buffer(0)]],

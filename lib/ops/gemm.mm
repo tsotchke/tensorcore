@@ -427,11 +427,17 @@ extern "C" tc_status_t tc_gemm_batched(tc_context* ctx,
     if (bd->batch <= 0) return TC_ERR_INVALID_ARG;
     if (!validate(&d)) return TC_ERR_INVALID_ARG;
 
-    /* Batched fast path: fp16 in/out + fp32 accum. Transposes are specialized
-     * through the same function constants as single GEMM. */
-    const bool fast_path =
-        (d.a_dtype == TC_DTYPE_F16 && d.b_dtype == TC_DTYPE_F16 &&
-         d.c_dtype == TC_DTYPE_F16 && d.accum_dtype == TC_DTYPE_F32);
+    /* Batched fast path: same-type IO with fp32 accum. Transposes are
+     * specialized through the same function constants as single GEMM. */
+    NSString* batched_kernel = nil;
+    if (d.a_dtype == TC_DTYPE_F16 && d.b_dtype == TC_DTYPE_F16 &&
+        d.c_dtype == TC_DTYPE_F16 && d.accum_dtype == TC_DTYPE_F32) {
+        batched_kernel = @"tc_gemm_f16_f32_batched";
+    } else if (d.a_dtype == TC_DTYPE_F32 && d.b_dtype == TC_DTYPE_F32 &&
+               d.c_dtype == TC_DTYPE_F32 && d.accum_dtype == TC_DTYPE_F32) {
+        batched_kernel = @"tc_gemm_f32_f32_batched";
+    }
+    const bool fast_path = (batched_kernel != nil);
 
     if (!fast_path) {
         if (bd->batch != 1) return TC_ERR_INVALID_SHAPE;
@@ -465,7 +471,7 @@ extern "C" tc_status_t tc_gemm_batched(tc_context* ctx,
     if (s != TC_OK) return s;
 
     tc_status_t err = TC_OK;
-    id<MTLComputePipelineState> pso = resolve_pipeline(ctx, @"tc_gemm_f16_f32_batched",
+    id<MTLComputePipelineState> pso = resolve_pipeline(ctx, batched_kernel,
                                                         d.transpose_a, d.transpose_b, &err);
     if (!pso) return err;
 

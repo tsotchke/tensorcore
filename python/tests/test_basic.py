@@ -399,18 +399,18 @@ def _run_batched_padded_gemm_wrapper_check(ctx):
     total_b = (batch - 1) * storage_b + storage_b
     total_c = (batch - 1) * storage_c + storage_c
 
-    A = np.full(total_a, -3.0, dtype=np.float16)
-    B = np.full(total_b, 5.0, dtype=np.float16)
-    C = np.full(total_c, -7.0, dtype=np.float16)
+    A = np.full(total_a, -3.0, dtype=np.float32)
+    B = np.full(total_b, 5.0, dtype=np.float32)
+    C = np.full(total_c, -7.0, dtype=np.float32)
     C_ref = C.copy()
 
     for b_i in range(batch):
         a0 = b_i * storage_a
         b0 = b_i * storage_b
         c0 = b_i * storage_c
-        Aphys = (np.random.randn(K, M) * 0.2).astype(np.float16)
-        Bphys = (np.random.randn(N, K) * 0.2).astype(np.float16)
-        Cm = (Aphys.astype(np.float32).T @ Bphys.astype(np.float32).T).astype(np.float16)
+        Aphys = (np.random.randn(K, M) * 0.2).astype(np.float32)
+        Bphys = (np.random.randn(N, K) * 0.2).astype(np.float32)
+        Cm = Aphys.T @ Bphys.T
         for k in range(K):
             A[a0 + k * lda:a0 + k * lda + M] = Aphys[k]
         for n in range(N):
@@ -426,6 +426,7 @@ def _run_batched_padded_gemm_wrapper_check(ctx):
         tc.buffer_write(bb, B)
         tc.buffer_write(cb, C)
         tc.gemm_batched(ctx, ab, bb, cb, batch, M, N, K,
+                        dtype="f32",
                         transpose_a=True, transpose_b=True,
                         lda=lda, ldb=ldb, ldc=ldc)
         tc.buffer_read(cb, C)
@@ -442,9 +443,9 @@ def _run_batched_padded_gemm_wrapper_check(ctx):
                 if m < M - 1:
                     pad = slice(c0 + m * ldc + N, c0 + (m + 1) * ldc)
                     padding_ok = padding_ok and np.array_equal(
-                        C[pad], np.full(ldc - N, -7.0, dtype=np.float16),
+                        C[pad], np.full(ldc - N, -7.0, dtype=np.float32),
                     )
-        return max_abs < 1e-3 and padding_ok, max_abs
+        return max_abs < 5e-4 and padding_ok, max_abs
     finally:
         tc.buffer_free(ctx, ab)
         tc.buffer_free(ctx, bb)

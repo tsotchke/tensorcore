@@ -362,6 +362,159 @@ cleanup:
     return rc;
 }
 
+static int run_batched_padded_transpose_case(tc_context* ctx) {
+    enum { batch = 2, M = 29, N = 31, K = 27, LDA = 34, LDB = 32, LDC = 38 };
+    const size_t elems_a = (size_t)(K - 1) * LDA + M;
+    const size_t elems_b = (size_t)(N - 1) * LDB + K;
+    const size_t elems_c = (size_t)(M - 1) * LDC + N;
+    const int64_t stride_a = (int64_t)elems_a + 7;
+    const int64_t stride_b = (int64_t)elems_b + 11;
+    const int64_t stride_c = (int64_t)elems_c + 13;
+    const size_t total_a = (size_t)(batch - 1) * (size_t)stride_a + elems_a;
+    const size_t total_b = (size_t)(batch - 1) * (size_t)stride_b + elems_b;
+    const size_t total_c = (size_t)(batch - 1) * (size_t)stride_c + elems_c;
+    const size_t bytes_a = total_a * sizeof(float);
+    const size_t bytes_b = total_b * sizeof(float);
+    const size_t bytes_c = total_c * sizeof(float);
+    const float alpha = 1.25f;
+    const float beta = -0.5f;
+
+    tc_buffer *A = NULL, *B = NULL, *C = NULL;
+    float *Ap = NULL, *Bp = NULL, *Cp = NULL;
+    float *Ahost = (float*)malloc(bytes_a);
+    float *Bhost = (float*)malloc(bytes_b);
+    float *Chost = (float*)malloc(bytes_c);
+    float *Cref = (float*)malloc(bytes_c);
+    int rc = 8;
+
+    if (!Ahost || !Bhost || !Chost || !Cref) {
+        fprintf(stderr, "  batched padded transpose f32: host allocation failed\n");
+        goto cleanup;
+    }
+
+    for (size_t i = 0; i < total_a; ++i) Ahost[i] = -37.0f;
+    for (size_t i = 0; i < total_b; ++i) Bhost[i] = 19.0f;
+    for (size_t i = 0; i < total_c; ++i) Chost[i] = -11.0f;
+
+    for (int b = 0; b < batch; ++b) {
+        const size_t a0 = (size_t)b * (size_t)stride_a;
+        const size_t b0 = (size_t)b * (size_t)stride_b;
+        const size_t c0 = (size_t)b * (size_t)stride_c;
+        for (int k = 0; k < K; ++k) {
+            for (int m = 0; m < M; ++m) {
+                Ahost[a0 + (size_t)k * LDA + m] =
+                    (float)(((b * 19 + k * 17 + m * 13) % 31) - 15) * 0.03125f;
+            }
+        }
+        for (int n = 0; n < N; ++n) {
+            for (int k = 0; k < K; ++k) {
+                Bhost[b0 + (size_t)n * LDB + k] =
+                    (float)(((b * 23 + n * 11 + k * 7) % 29) - 14) * 0.02734375f;
+            }
+        }
+        for (int m = 0; m < M; ++m) {
+            for (int n = 0; n < N; ++n) {
+                Chost[c0 + (size_t)m * LDC + n] =
+                    (float)(((b * 3 + m * 5 + n * 3) % 23) - 11) * 0.015625f;
+            }
+        }
+    }
+    memcpy(Cref, Chost, bytes_c);
+
+    for (int b = 0; b < batch; ++b) {
+        const size_t a0 = (size_t)b * (size_t)stride_a;
+        const size_t b0 = (size_t)b * (size_t)stride_b;
+        const size_t c0 = (size_t)b * (size_t)stride_c;
+        cblas_sgemm(CblasRowMajor,
+                    CblasTrans,
+                    CblasTrans,
+                    M, N, K,
+                    alpha, Ahost + a0, LDA,
+                           Bhost + b0, LDB,
+                    beta, Cref + c0, LDC);
+    }
+
+    if (tc_buffer_alloc(ctx, bytes_a, &A) != TC_OK ||
+        tc_buffer_alloc(ctx, bytes_b, &B) != TC_OK ||
+        tc_buffer_alloc(ctx, bytes_c, &C) != TC_OK) {
+        fprintf(stderr, "  batched padded transpose f32: device allocation failed\n");
+        goto cleanup;
+    }
+    if (tc_buffer_map(A, (void**)&Ap) != TC_OK ||
+        tc_buffer_map(B, (void**)&Bp) != TC_OK ||
+        tc_buffer_map(C, (void**)&Cp) != TC_OK) {
+        fprintf(stderr, "  batched padded transpose f32: map failed\n");
+        goto cleanup;
+    }
+    memcpy(Ap, Ahost, bytes_a);
+    memcpy(Bp, Bhost, bytes_b);
+    memcpy(Cp, Chost, bytes_c);
+
+    tc_gemm_batched_desc bd = {0};
+    bd.base.M = M; bd.base.N = N; bd.base.K = K;
+    bd.base.a_dtype = TC_DTYPE_F32;
+    bd.base.b_dtype = TC_DTYPE_F32;
+    bd.base.c_dtype = TC_DTYPE_F32;
+    bd.base.accum_dtype = TC_DTYPE_F32;
+    bd.base.transpose_a = 1;
+    bd.base.transpose_b = 1;
+    bd.base.alpha = alpha;
+    bd.base.beta = beta;
+    bd.base.lda = LDA;
+    bd.base.ldb = LDB;
+    bd.base.ldc = LDC;
+    bd.batch = batch;
+    bd.stride_a = stride_a;
+    bd.stride_b = stride_b;
+    bd.stride_c = stride_c;
+
+    tc_status_t s = tc_gemm_batched(ctx, &bd, A, B, C);
+    if (s != TC_OK) {
+        fprintf(stderr, "  batched padded transpose f32 failed: %s\n", tc_status_string(s));
+        goto cleanup;
+    }
+
+    double max_abs = 0.0;
+    double max_rel = 0.0;
+    double sum_sq = 0.0;
+    int padding_ok = 1;
+    for (int b = 0; b < batch; ++b) {
+        const size_t c0 = (size_t)b * (size_t)stride_c;
+        for (int m = 0; m < M; ++m) {
+            for (int n = 0; n < N; ++n) {
+                const size_t idx = c0 + (size_t)m * LDC + n;
+                const double got = Cp[idx];
+                const double want = Cref[idx];
+                const double e = fabs(got - want);
+                const double re = e / (fabs(want) + 1e-9);
+                if (e > max_abs) max_abs = e;
+                if (re > max_rel) max_rel = re;
+                sum_sq += e * e;
+            }
+            if (m < M - 1) {
+                for (int n = N; n < LDC; ++n) {
+                    if (Cp[c0 + (size_t)m * LDC + n] != -11.0f) padding_ok = 0;
+                }
+            }
+        }
+    }
+    const double rmse = sqrt(sum_sq / ((double)batch * M * N));
+    const char* backend = tc_backend_name(tc_last_backend());
+    printf("  batched padded transpose f32 backend=%-18s  max_abs=%.3e  max_rel=%.3e  rmse=%.3e  padding=%s\n",
+           backend, max_abs, max_rel, rmse, padding_ok ? "OK" : "FAIL");
+    rc = (max_rel < 1e-3 && max_abs < 1e-3 && padding_ok) ? 0 : 8;
+
+cleanup:
+    if (A) tc_buffer_free(ctx, A);
+    if (B) tc_buffer_free(ctx, B);
+    if (C) tc_buffer_free(ctx, C);
+    free(Ahost);
+    free(Bhost);
+    free(Chost);
+    free(Cref);
+    return rc;
+}
+
 int main(void) {
     tc_context* ctx = NULL;
     tc_status_t s = tc_init(&ctx);
@@ -386,6 +539,7 @@ int main(void) {
     rc |= run_case(ctx,  65,  63,  47, 0, 0);
     rc |= run_case(ctx, 100, 200, 300, 0, 0);
     rc |= run_padded_transpose_case(ctx);
+    rc |= run_batched_padded_transpose_case(ctx);
 
     tc_shutdown(ctx);
     return rc;
