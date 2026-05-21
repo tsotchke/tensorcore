@@ -59,6 +59,15 @@ find_library(METALPERFORMANCESHADERS_FRAMEWORK MetalPerformanceShaders REQUIRED)
 find_library(METALPERFORMANCESHADERSGRAPH_FRAMEWORK MetalPerformanceShadersGraph REQUIRED)
 find_library(ACCELERATE_FRAMEWORK       Accelerate                  REQUIRED)
 
+set(TC_APPLE_FRAMEWORK_LINKS
+    "-framework Metal"
+    "-framework Foundation"
+    "-framework MetalKit"
+    "-framework MetalPerformanceShaders"
+    "-framework MetalPerformanceShadersGraph"
+    "-framework Accelerate"
+)
+
 # ----------------------------------------------------------------------------
 # Metal kernel compilation
 # ----------------------------------------------------------------------------
@@ -185,9 +194,7 @@ target_compile_definitions(tensorcore_shared PRIVATE
     TC_METALLIB_PATH="${TC_METALLIB_PATH}"
 )
 target_link_libraries(tensorcore_shared PUBLIC
-    ${METAL_FRAMEWORK} ${FOUNDATION_FRAMEWORK} ${METALKIT_FRAMEWORK}
-    ${METALPERFORMANCESHADERS_FRAMEWORK} ${METALPERFORMANCESHADERSGRAPH_FRAMEWORK}
-    ${ACCELERATE_FRAMEWORK}
+    ${TC_APPLE_FRAMEWORK_LINKS}
 )
 target_link_options(tensorcore_shared PRIVATE
     "LINKER:-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/cmake/tensorcore.exports"
@@ -208,12 +215,7 @@ target_compile_definitions(tensorcore PRIVATE
 )
 
 target_link_libraries(tensorcore PUBLIC
-    ${METAL_FRAMEWORK}
-    ${FOUNDATION_FRAMEWORK}
-    ${METALKIT_FRAMEWORK}
-    ${METALPERFORMANCESHADERS_FRAMEWORK}
-    ${METALPERFORMANCESHADERSGRAPH_FRAMEWORK}
-    ${ACCELERATE_FRAMEWORK}
+    ${TC_APPLE_FRAMEWORK_LINKS}
     $<$<LINK_LANGUAGE:C>:c++>
     objc
 )

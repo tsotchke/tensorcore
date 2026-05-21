@@ -75,6 +75,12 @@ if [ "${#missing[@]}" -ne 0 ]; then
     exit 1
 fi
 
+if LC_ALL=C grep -R -n -E '/Applications/.+Xcode|MacOSX\.sdk' \
+    "$sdk/lib/cmake/tensorcore" "$sdk/lib/pkgconfig/tensorcore.pc" >&2; then
+    echo "native SDK metadata contains build-machine SDK paths" >&2
+    exit 1
+fi
+
 if command -v lipo >/dev/null 2>&1; then
     archs="$(lipo -archs "$sdk/lib/libtensorcore.dylib")"
     host_arch="$(uname -m)"
