@@ -750,6 +750,9 @@ public_core_missing = sorted(
     if rel_path not in coverage_files
 )
 public_core_covered = checks["tests"]["gpu_device_available"] and not public_core_missing
+public_core_uncovered = public_core_missing
+if not checks["tests"]["gpu_device_available"]:
+    public_core_missing = []
 checks["public_core_paths"] = {
     "runtime_status": (
         "passed" if public_core_covered else
@@ -759,6 +762,7 @@ checks["public_core_paths"] = {
     "runtime_covered": public_core_covered,
     "required_files": public_core_required_files,
     "missing_files": public_core_missing,
+    "uncovered_files": public_core_uncovered,
 }
 
 artifact = {

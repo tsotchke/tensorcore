@@ -61,6 +61,10 @@ v0.1.22:
 - `scripts/check_docs_links.py` — auditable check for broken
   intra-doc Markdown links; wired into the dev `Makefile` as
   `make docs-check`.
+- Release evidence now distinguishes public-core files that were merely
+  not runtime-covered on no-GPU/paravirtual runners (`uncovered_files`)
+  from files that are actually missing from covered evidence
+  (`missing_files`).
 
 ### Dev convenience
 
