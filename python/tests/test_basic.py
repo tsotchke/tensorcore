@@ -63,11 +63,20 @@ def _write_test_gguf(path):
         f.write(struct.pack("<f", a))
         f.write(struct.pack("<f", b))
 
+    def w_kv_i64_array3(f, key, a, b, c):
+        w_str(f, key)
+        w_u32(f, 9)   # GGUF_TYPE_ARRAY
+        w_u32(f, 11)  # GGUF_TYPE_INT64
+        w_u64(f, 3)
+        f.write(struct.pack("<q", a))
+        f.write(struct.pack("<q", b))
+        f.write(struct.pack("<q", c))
+
     with open(path, "wb") as f:
         w_u32(f, 0x46554747)  # GGUF
         w_u32(f, 3)
         w_u64(f, 1)
-        w_u64(f, 12)
+        w_u64(f, 13)
         w_kv_str(f, "general.architecture", "llama")
         w_kv_str(f, "general.name", "python-test")
         w_kv_u32(f, "llama.context_length", 2048)
@@ -80,6 +89,7 @@ def _write_test_gguf(path):
         w_kv_f32(f, "llama.attention.layer_norm_rms_epsilon", 0.125)
         w_kv_str_array2(f, "tokenizer.ggml.tokens", "<unk>", "hello")
         w_kv_f32_array2(f, "tokenizer.ggml.scores", -1000.0, 0.25)
+        w_kv_i64_array3(f, "tokenizer.ggml.token_ids", -7, 0, 42)
         w_str(f, "weight.test")
         w_u32(f, 2)
         w_u64(f, 32)
@@ -1024,7 +1034,7 @@ def main():
             owned_config = owned_g.llama_config()
             owned_meta_ok = (
                 owned_g.tensor_count() == 1 and
-                owned_g.metadata_count() == 12 and
+                owned_g.metadata_count() == 13 and
                 owned_g.meta_get_str("general.architecture") == "llama" and
                 owned_g.meta_get_str("general.name") == "python-test" and
                 owned_g.meta_get_i64("llama.context_length", -1) == 2048 and
@@ -1048,6 +1058,13 @@ def main():
                     with owned_ctx.buffer_from_array(x_ones) as xbuf, qmat.output() as ybuf:
                         qmat.gemv(xbuf, ybuf)
                         qmat_y = ybuf.to_numpy((1, qmat.N), np.float16)
+                    # Async variant should produce the same result as sync.
+                    with owned_ctx.buffer_from_array(x_ones) as xbuf, \
+                         qmat.output() as ybuf_async, \
+                         owned_ctx.stream() as qstream:
+                        qmat.gemv_async(xbuf, ybuf_async, qstream)
+                        qstream.sync()
+                        qmat_y_async = ybuf_async.to_numpy((1, qmat.N), np.float16)
                     owned_loaded_ok = (
                         owned_loaded.tensor_count() == 1 and
                         owned_loaded.skipped_tensor_count() == 0 and
@@ -1059,7 +1076,8 @@ def main():
                         qmat.quant_type == tc.TC_QUANT_Q4_0 and
                         owned_loaded_buffer == owned_loaded_tensor["buffer"] and
                         owned_loaded_property_buffer == owned_loaded_tensor["buffer"] and
-                        qmat_y[0, 0] == np.float16(40.0)
+                        qmat_y[0, 0] == np.float16(40.0) and
+                        qmat_y_async[0, 0] == qmat_y[0, 0]
                     )
                 try:
                     _ = owned_loaded_tensor["buffer"]
@@ -1074,7 +1092,7 @@ def main():
                         ctx_loaded_buffer = ctx_loaded_tensor.buffer
                         ctx_loaded_ok = (
                             ctx_g.tensor_count() == 1 and
-                            ctx_g.metadata_count() == 12 and
+                            ctx_g.metadata_count() == 13 and
                             ctx_open_tensor["name"] == "weight.test" and
                             ctx_loaded.tensor_count() == 1 and
                             ctx_loaded.skipped_tensor_count() == 0 and
@@ -1083,7 +1101,7 @@ def main():
                         )
         gguf_ok = (
             tc.gguf_tensor_count(g) == 1 and
-            tc.gguf_metadata_count(g) == 12 and
+            tc.gguf_metadata_count(g) == 13 and
             tc.gguf_meta_get_str(g, "general.architecture") == "llama" and
             tc.gguf_meta_get_str(g, "general.name") == "python-test" and
             tc.gguf_meta_get_i64(g, "llama.context_length", -1) == 2048 and
@@ -1091,6 +1109,9 @@ def main():
             tc.gguf_meta_array_count(g, "tokenizer.ggml.tokens") == 2 and
             tc.gguf_meta_array_get_str(g, "tokenizer.ggml.tokens", 1) == "hello" and
             abs(tc.gguf_meta_array_get_f64(g, "tokenizer.ggml.scores", 1, -1.0) - 0.25) < 1e-12 and
+            tc.gguf_meta_array_count(g, "tokenizer.ggml.token_ids") == 3 and
+            tc.gguf_meta_array_get_i64(g, "tokenizer.ggml.token_ids", 0, 0) == -7 and
+            tc.gguf_meta_array_get_i64(g, "tokenizer.ggml.token_ids", 2, 0) == 42 and
             config["context_length"] == 2048 and
             config["embedding_length"] == 4096 and
             config["feed_forward_length"] == 11008 and
