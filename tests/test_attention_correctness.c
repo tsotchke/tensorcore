@@ -93,6 +93,11 @@ static int run_case(tc_context* ctx, int B, int H, int Sq, int Sk, int D);
 
 static int run_gqa_case(tc_context* ctx, int B, int H, int KV_H, int Sq, int Sk, int D);
 
+static int run_async_option_case(tc_context* ctx, const char* label,
+                                 int D, int window_size, int use_alibi);
+
+static int run_async_validation_case(tc_context* ctx);
+
 int main(void) {
     tc_context* ctx = NULL;
     tc_status_t s = tc_init(&ctx);
@@ -114,6 +119,10 @@ int main(void) {
     rc |= run_gqa_case(ctx, 1, 4, 1,  64,  64, 64);   /* MQA: 1 KV head    */
     rc |= run_gqa_case(ctx, 1, 4, 2, 128, 128, 64);   /* GQA: 2 KV heads   */
     rc |= run_gqa_case(ctx, 1, 8, 2, 128, 128, 128);  /* GQA D=128         */
+    rc |= run_async_option_case(ctx, "async_window_d64", 64, 8, 0);
+    rc |= run_async_option_case(ctx, "async_alibi_d64", 64, 0, 1);
+    rc |= run_async_option_case(ctx, "async_window_alibi_d128", 128, 8, 1);
+    rc |= run_async_validation_case(ctx);
 
     /* Sliding-window: window_size = 32 with seq_kv = 128 means each query
      * only attends to the most recent 32 keys. Test by setting window and
@@ -175,6 +184,135 @@ int main(void) {
     }
 
     tc_shutdown(ctx);
+    return rc;
+}
+
+static int expect_status(const char* label, tc_status_t got, tc_status_t want) {
+    const int ok = (got == want);
+    printf("%s got=%s want=%s  %s\n",
+           label, tc_status_string(got), tc_status_string(want), ok ? "OK" : "FAIL");
+    return ok ? 0 : 13;
+}
+
+static int run_async_option_case(tc_context* ctx, const char* label,
+                                 int D, int window_size, int use_alibi) {
+    const int B = 1, H = 2, Sq = 64, Sk = 64;
+    const float scale = 1.0f / sqrtf((float)D);
+    const size_t q_elems = (size_t)B * H * Sq * D;
+    const size_t kv_elems = (size_t)B * H * Sk * D;
+    const float slopes[2] = {0.75f, 1.25f};
+
+    tc_buffer *Q = NULL, *K = NULL, *V = NULL, *O_sync = NULL, *O_async = NULL;
+    tc_buffer_alloc(ctx, q_elems * sizeof(uint16_t), &Q);
+    tc_buffer_alloc(ctx, kv_elems * sizeof(uint16_t), &K);
+    tc_buffer_alloc(ctx, kv_elems * sizeof(uint16_t), &V);
+    tc_buffer_alloc(ctx, q_elems * sizeof(uint16_t), &O_sync);
+    tc_buffer_alloc(ctx, q_elems * sizeof(uint16_t), &O_async);
+
+    uint16_t *Qp = NULL, *Kp = NULL, *Vp = NULL, *Os = NULL, *Oa = NULL;
+    tc_buffer_map(Q, (void**)&Qp);
+    tc_buffer_map(K, (void**)&Kp);
+    tc_buffer_map(V, (void**)&Vp);
+    tc_buffer_map(O_sync, (void**)&Os);
+    tc_buffer_map(O_async, (void**)&Oa);
+
+    srand((unsigned)(0xA500 + D + window_size + use_alibi * 31));
+    for (size_t i = 0; i < q_elems; ++i) {
+        float v = ((float)rand() / RAND_MAX - 0.5f) * 0.7f;
+        Qp[i] = f32_to_f16(v);
+    }
+    for (size_t i = 0; i < kv_elems; ++i) {
+        float v = ((float)rand() / RAND_MAX - 0.5f) * 0.7f;
+        Kp[i] = f32_to_f16(v);
+    }
+    for (size_t i = 0; i < kv_elems; ++i) {
+        float v = ((float)rand() / RAND_MAX - 0.5f) * 0.7f;
+        Vp[i] = f32_to_f16(v);
+    }
+    memset(Os, 0, q_elems * sizeof(uint16_t));
+    memset(Oa, 0, q_elems * sizeof(uint16_t));
+
+    tc_attention_desc d = {0};
+    d.batch = B; d.heads = H; d.seq_q = Sq; d.seq_kv = Sk; d.head_dim = D;
+    d.io_dtype = TC_DTYPE_F16; d.accum_dtype = TC_DTYPE_F32;
+    d.softmax_scale = scale; d.causal = 1;
+    d.window_size = window_size;
+    d.alibi_slopes = use_alibi ? slopes : NULL;
+
+    tc_status_t s_sync = tc_attention_forward(ctx, &d, Q, K, V, O_sync, NULL);
+    tc_stream* st = NULL;
+    tc_status_t s_stream = tc_stream_create(ctx, &st);
+    tc_status_t s_async = (s_stream == TC_OK)
+        ? tc_attention_forward_async(ctx, &d, Q, K, V, O_async, NULL, st)
+        : s_stream;
+    tc_status_t s_wait = (s_async == TC_OK) ? tc_stream_sync(st) : s_async;
+    if (st) tc_stream_destroy(ctx, st);
+
+    double max_abs = 0.0;
+    if (s_sync == TC_OK && s_async == TC_OK && s_wait == TC_OK) {
+        for (size_t i = 0; i < q_elems; ++i) {
+            const double e = fabs((double)f16_to_f32(Os[i]) - (double)f16_to_f32(Oa[i]));
+            if (e > max_abs) max_abs = e;
+        }
+    }
+
+    const int ok = (s_sync == TC_OK && s_async == TC_OK && s_wait == TC_OK && max_abs < 1e-3);
+    printf("%s D=%d W=%d alibi=%d max_abs=%.3e  %s\n",
+           label, D, window_size, use_alibi, max_abs, ok ? "OK" : "FAIL");
+
+    tc_buffer_free(ctx, Q);
+    tc_buffer_free(ctx, K);
+    tc_buffer_free(ctx, V);
+    tc_buffer_free(ctx, O_sync);
+    tc_buffer_free(ctx, O_async);
+    return ok ? 0 : 12;
+}
+
+static int run_async_validation_case(tc_context* ctx) {
+    const int B = 1, H = 2, Sq = 64, Sk = 64, D = 64;
+    const size_t q_elems = (size_t)B * H * Sq * D;
+    const size_t kv_elems = (size_t)B * H * Sk * D;
+    int rc = 0;
+
+    tc_buffer *Q = NULL, *K = NULL, *V = NULL, *O = NULL, *Q_small = NULL;
+    tc_buffer_alloc(ctx, q_elems * sizeof(uint16_t), &Q);
+    tc_buffer_alloc(ctx, kv_elems * sizeof(uint16_t), &K);
+    tc_buffer_alloc(ctx, kv_elems * sizeof(uint16_t), &V);
+    tc_buffer_alloc(ctx, q_elems * sizeof(uint16_t), &O);
+    tc_buffer_alloc(ctx, sizeof(uint16_t), &Q_small);
+
+    tc_attention_desc d = {0};
+    d.batch = B; d.heads = H; d.seq_q = Sq; d.seq_kv = Sk; d.head_dim = D;
+    d.io_dtype = TC_DTYPE_F16; d.accum_dtype = TC_DTYPE_F32;
+    d.softmax_scale = 1.0f / sqrtf((float)D); d.causal = 1;
+
+    d.return_lse = 1;
+    rc |= expect_status("async_validation_missing_lse",
+                        tc_attention_forward_async(ctx, &d, Q, K, V, O, NULL, NULL),
+                        TC_ERR_INVALID_ARG);
+
+    d.return_lse = 0;
+    d.seq_q = 0;
+    rc |= expect_status("async_validation_zero_seq",
+                        tc_attention_forward_async(ctx, &d, Q, K, V, O, NULL, NULL),
+                        TC_ERR_INVALID_SHAPE);
+
+    d.seq_q = Sq;
+    d.kv_heads = 3;
+    rc |= expect_status("async_validation_bad_kv_heads",
+                        tc_attention_forward_async(ctx, &d, Q, K, V, O, NULL, NULL),
+                        TC_ERR_INVALID_SHAPE);
+
+    d.kv_heads = 0;
+    rc |= expect_status("async_validation_small_q",
+                        tc_attention_forward_async(ctx, &d, Q_small, K, V, O, NULL, NULL),
+                        TC_ERR_INVALID_SHAPE);
+
+    tc_buffer_free(ctx, Q);
+    tc_buffer_free(ctx, K);
+    tc_buffer_free(ctx, V);
+    tc_buffer_free(ctx, O);
+    tc_buffer_free(ctx, Q_small);
     return rc;
 }
 

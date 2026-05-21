@@ -38,6 +38,8 @@ constant constexpr uint FA128_TN_O = FA128_D  / FA128_WN / 8;   /* 8 */
 
 constant bool g128_causal     [[function_constant(0)]];
 constant bool g128_return_lse [[function_constant(1)]];
+constant bool g128_use_window [[function_constant(2)]];
+constant bool g128_use_alibi  [[function_constant(3)]];
 
 template <typename T>
 inline void coop128(threadgroup T*       dst, uint dst_stride,
@@ -70,6 +72,8 @@ kernel void tc_flash_attention_f16_d128(
     constant uint& seq_q          [[buffer(8)]],
     constant uint& seq_kv         [[buffer(9)]],
     constant float& softmax_scale [[buffer(10)]],
+    constant uint& window_size    [[buffer(11), function_constant(g128_use_window)]],
+    constant float& alibi_slope   [[buffer(12), function_constant(g128_use_alibi)]],
     uint3 group_id                [[threadgroup_position_in_grid]],
     uint  sgid                    [[simdgroup_index_in_threadgroup]],
     uint  slid                    [[thread_index_in_simdgroup]])
@@ -163,15 +167,20 @@ kernel void tc_flash_attention_f16_d128(
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
-        if (g128_causal || softmax_scale != 1.0f) {
+        if (g128_causal || g128_use_window || g128_use_alibi || softmax_scale != 1.0f) {
             for (uint idx = tid; idx < FA128_BR * FA128_BC; idx += FA128_THREADS) {
                 const uint r = idx / FA128_BC;
                 const uint c = idx % FA128_BC;
                 float v = sS[r * FA128_BC + c] * softmax_scale;
+                const uint gq = row0 + r;
+                const uint gk = kv_col0 + c;
                 if (g128_causal) {
-                    const uint gq = row0 + r;
-                    const uint gk = kv_col0 + c;
                     if (gk > gq) v = -INFINITY;
+                }
+                if (g128_use_window && gq > gk + window_size) v = -INFINITY;
+                if (g128_use_alibi && v > -1e30f) {
+                    const float bias = alibi_slope * (float)((int)gk - (int)gq);
+                    v += bias;
                 }
                 sS[r * FA128_BC + c] = v;
             }
