@@ -30,6 +30,9 @@ jobs:
       - name: Build
         run: cmake --build build -j
 
+      - name: Public export surface
+        run: scripts/check_public_exports.sh
+
       - name: Hardware-aware tests
         run: scripts/ci_macos_test.sh
 
