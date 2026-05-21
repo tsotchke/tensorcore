@@ -98,6 +98,10 @@ find_package(tensorcore CONFIG REQUIRED)
 add_executable(consumer main.c)
 target_link_libraries(consumer PRIVATE tensorcore::tensorcore_shared)
 tensorcore_copy_metallib(consumer)
+
+add_executable(static_consumer main.c)
+target_link_libraries(static_consumer PRIVATE tensorcore::tensorcore)
+tensorcore_copy_metallib(static_consumer)
 CMAKE
 cat > "$consumer/main.c" <<'C'
 #include <stdio.h>
@@ -145,6 +149,7 @@ if [ ! -f "$consumer/build/tensorcore.metallib" ]; then
 fi
 DYLD_LIBRARY_PATH="$sdk/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
     "$consumer/build/consumer"
+"$consumer/build/static_consumer"
 
 if command -v pkg-config >/dev/null 2>&1; then
     pkg_version="$(PKG_CONFIG_PATH="$sdk/lib/pkgconfig" pkg-config --modversion tensorcore)"
