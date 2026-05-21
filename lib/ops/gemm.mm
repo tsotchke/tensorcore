@@ -124,28 +124,55 @@ bool checked_add(size_t a, size_t b, size_t* out) {
     return true;
 }
 
-bool matrix_bytes(int32_t rows, int32_t cols, tc_dtype_t dtype, size_t* out) {
+bool matrix_storage_bytes(int32_t rows, int32_t cols, int32_t ld,
+                          tc_dtype_t dtype, size_t* out) {
+    size_t row_offset = 0;
     size_t elems = 0;
     size_t bytes = 0;
     const size_t elem_size = tc_dtype_size(dtype);
-    if (rows <= 0 || cols <= 0 || elem_size == 0) return false;
-    if (!checked_mul((size_t)rows, (size_t)cols, &elems)) return false;
+    if (rows <= 0 || cols <= 0 || ld < cols || elem_size == 0) return false;
+    if (!checked_mul((size_t)(rows - 1), (size_t)ld, &row_offset)) return false;
+    if (!checked_add(row_offset, (size_t)cols, &elems)) return false;
     if (!checked_mul(elems, elem_size, &bytes)) return false;
     *out = bytes;
     return true;
 }
+
+int32_t effective_lda(const tc_gemm_desc* d) {
+    return d->lda ? d->lda : (d->transpose_a ? d->M : d->K);
+}
+
+int32_t effective_ldb(const tc_gemm_desc* d) {
+    return d->ldb ? d->ldb : (d->transpose_b ? d->K : d->N);
+}
+
+int32_t effective_ldc(const tc_gemm_desc* d) {
+    return d->ldc ? d->ldc : d->N;
+}
+
+#ifdef TC_HAVE_METAL4_SDK
+bool gemm_uses_default_layout(const tc_gemm_desc* d) {
+    return effective_lda(d) == (d->transpose_a ? d->M : d->K) &&
+           effective_ldb(d) == (d->transpose_b ? d->K : d->N) &&
+           effective_ldc(d) == d->N;
+}
+#endif
 
 tc_status_t validate_gemm_buffers(tc_context* ctx,
                                   const tc_gemm_desc* d,
                                   const tc_buffer* A,
                                   const tc_buffer* B,
                                   tc_buffer* C) {
+    const int32_t a_rows = d->transpose_a ? d->K : d->M;
+    const int32_t a_cols = d->transpose_a ? d->M : d->K;
+    const int32_t b_rows = d->transpose_b ? d->N : d->K;
+    const int32_t b_cols = d->transpose_b ? d->K : d->N;
     size_t a_bytes = 0;
     size_t b_bytes = 0;
     size_t c_bytes = 0;
-    if (!matrix_bytes(d->M, d->K, d->a_dtype, &a_bytes) ||
-        !matrix_bytes(d->K, d->N, d->b_dtype, &b_bytes) ||
-        !matrix_bytes(d->M, d->N, d->c_dtype, &c_bytes)) {
+    if (!matrix_storage_bytes(a_rows, a_cols, effective_lda(d), d->a_dtype, &a_bytes) ||
+        !matrix_storage_bytes(b_rows, b_cols, effective_ldb(d), d->b_dtype, &b_bytes) ||
+        !matrix_storage_bytes(d->M, d->N, effective_ldc(d), d->c_dtype, &c_bytes)) {
         return TC_ERR_INVALID_ARG;
     }
     tc_status_t s = tc_buffer_validate(ctx, A, a_bytes);
@@ -157,6 +184,7 @@ tc_status_t validate_gemm_buffers(tc_context* ctx,
 
 bool batched_matrix_bytes(int32_t rows,
                           int32_t cols,
+                          int32_t ld,
                           tc_dtype_t dtype,
                           int32_t batch,
                           int64_t stride_elems,
@@ -164,8 +192,10 @@ bool batched_matrix_bytes(int32_t rows,
     size_t single_elems = 0;
     size_t total_elems = 0;
     const size_t elem_size = tc_dtype_size(dtype);
-    if (rows <= 0 || cols <= 0 || batch <= 0 || elem_size == 0) return false;
-    if (!checked_mul((size_t)rows, (size_t)cols, &single_elems)) return false;
+    if (rows <= 0 || cols <= 0 || ld < cols || batch <= 0 || elem_size == 0) return false;
+    size_t row_offset = 0;
+    if (!checked_mul((size_t)(rows - 1), (size_t)ld, &row_offset)) return false;
+    if (!checked_add(row_offset, (size_t)cols, &single_elems)) return false;
     if (batch == 1) {
         total_elems = single_elems;
     } else {
@@ -250,7 +280,8 @@ extern "C" tc_status_t tc_gemm(tc_context* ctx,
      * + device-name and silently returns TC_ERR_UNSUPPORTED_* otherwise. */
     if (ctx->info.supports_tensorops_m5 &&
         desc->alpha == 1.0f && desc->beta == 0.0f &&
-        !desc->transpose_a && !desc->transpose_b) {
+        !desc->transpose_a && !desc->transpose_b &&
+        gemm_uses_default_layout(desc)) {
         s = tc_tensorops_gemm_attempt(ctx, desc, A, B, C);
         if (s == TC_OK) return TC_OK;
         /* Anything else: fall through to the simdgroup_matrix path. */
@@ -276,6 +307,9 @@ extern "C" tc_status_t tc_gemm(tc_context* ctx,
     const uint32_t M = (uint32_t)desc->M;
     const uint32_t N = (uint32_t)desc->N;
     const uint32_t K = (uint32_t)desc->K;
+    const uint32_t lda = (uint32_t)effective_lda(desc);
+    const uint32_t ldb = (uint32_t)effective_ldb(desc);
+    const uint32_t ldc = (uint32_t)effective_ldc(desc);
     const float alpha = desc->alpha;
     const float beta  = desc->beta;
 
@@ -291,6 +325,9 @@ extern "C" tc_status_t tc_gemm(tc_context* ctx,
         [enc setBytes:&K     length:sizeof(K)     atIndex:5];
         [enc setBytes:&alpha length:sizeof(alpha) atIndex:6];
         [enc setBytes:&beta  length:sizeof(beta)  atIndex:7];
+        [enc setBytes:&lda   length:sizeof(lda)   atIndex:8];
+        [enc setBytes:&ldb   length:sizeof(ldb)   atIndex:9];
+        [enc setBytes:&ldc   length:sizeof(ldc)   atIndex:10];
 
         const uint32_t groups_x = (N + tile.BN - 1) / tile.BN;
         const uint32_t groups_y = (M + tile.BM - 1) / tile.BM;
@@ -345,6 +382,9 @@ extern "C" tc_status_t tc_gemm_async(tc_context* ctx,
     const uint32_t M = (uint32_t)desc->M;
     const uint32_t N = (uint32_t)desc->N;
     const uint32_t K = (uint32_t)desc->K;
+    const uint32_t lda = (uint32_t)effective_lda(desc);
+    const uint32_t ldb = (uint32_t)effective_ldb(desc);
+    const uint32_t ldc = (uint32_t)effective_ldc(desc);
     const float alpha = desc->alpha;
     const float beta  = desc->beta;
 
@@ -362,6 +402,9 @@ extern "C" tc_status_t tc_gemm_async(tc_context* ctx,
         [enc setBytes:&K     length:sizeof(K)     atIndex:5];
         [enc setBytes:&alpha length:sizeof(alpha) atIndex:6];
         [enc setBytes:&beta  length:sizeof(beta)  atIndex:7];
+        [enc setBytes:&lda   length:sizeof(lda)   atIndex:8];
+        [enc setBytes:&ldb   length:sizeof(ldb)   atIndex:9];
+        [enc setBytes:&ldc   length:sizeof(ldc)   atIndex:10];
 
         const uint32_t groups_x = (N + tile.BN - 1) / tile.BN;
         const uint32_t groups_y = (M + tile.BM - 1) / tile.BM;
@@ -403,9 +446,12 @@ extern "C" tc_status_t tc_gemm_batched(tc_context* ctx,
     size_t a_bytes = 0;
     size_t b_bytes = 0;
     size_t c_bytes = 0;
-    if (!batched_matrix_bytes(d.M, d.K, d.a_dtype, bd->batch, bd->stride_a, &a_bytes) ||
-        !batched_matrix_bytes(d.K, d.N, d.b_dtype, bd->batch, bd->stride_b, &b_bytes) ||
-        !batched_matrix_bytes(d.M, d.N, d.c_dtype, bd->batch, bd->stride_c, &c_bytes)) {
+    if (!batched_matrix_bytes(d.M, d.K, effective_lda(&d),
+                              d.a_dtype, bd->batch, bd->stride_a, &a_bytes) ||
+        !batched_matrix_bytes(d.K, d.N, effective_ldb(&d),
+                              d.b_dtype, bd->batch, bd->stride_b, &b_bytes) ||
+        !batched_matrix_bytes(d.M, d.N, effective_ldc(&d),
+                              d.c_dtype, bd->batch, bd->stride_c, &c_bytes)) {
         return TC_ERR_INVALID_SHAPE;
     }
     tc_status_t s = tc_buffer_validate(ctx, A, a_bytes);
@@ -428,6 +474,9 @@ extern "C" tc_status_t tc_gemm_batched(tc_context* ctx,
     const uint64_t sa = (uint64_t)bd->stride_a;
     const uint64_t sb = (uint64_t)bd->stride_b;
     const uint64_t sc = (uint64_t)bd->stride_c;
+    const uint32_t lda = (uint32_t)effective_lda(&d);
+    const uint32_t ldb = (uint32_t)effective_ldb(&d);
+    const uint32_t ldc = (uint32_t)effective_ldc(&d);
 
     @autoreleasepool {
         id<MTLCommandBuffer> cmd = [ctx->queue commandBuffer];
@@ -444,6 +493,9 @@ extern "C" tc_status_t tc_gemm_batched(tc_context* ctx,
         [enc setBytes:&sa    length:sizeof(sa)    atIndex:8];
         [enc setBytes:&sb    length:sizeof(sb)    atIndex:9];
         [enc setBytes:&sc    length:sizeof(sc)    atIndex:10];
+        [enc setBytes:&lda   length:sizeof(lda)   atIndex:11];
+        [enc setBytes:&ldb   length:sizeof(ldb)   atIndex:12];
+        [enc setBytes:&ldc   length:sizeof(ldc)   atIndex:13];
         const uint32_t gx = (N + 64 - 1) / 64;
         const uint32_t gy = (M + 64 - 1) / 64;
         [enc dispatchThreadgroups:MTLSizeMake(gx, gy, (NSUInteger)bd->batch)

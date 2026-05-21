@@ -78,6 +78,9 @@ inline void gemm_simdgroup_impl(
     constant uint& M,
     constant uint& N,
     constant uint& K,
+    constant uint& lda,
+    constant uint& ldb,
+    constant uint& ldc,
     constant float& alpha,
     constant float& beta,
     threadgroup IO_T*   shared_mem,
@@ -128,7 +131,7 @@ inline void gemm_simdgroup_impl(
                 const uint elem = idx * 4;                                                  \
                 const uint row = elem / BK;                                                 \
                 const uint col = elem % BK;                                                 \
-                V4 v = *((device const V4*)(A + (baseRow + row) * K + kB + col));           \
+                V4 v = *((device const V4*)(A + (baseRow + row) * lda + kB + col));         \
                 (_dst)[row * SA_STRIDE + col + 0] = v[0];                                   \
                 (_dst)[row * SA_STRIDE + col + 1] = v[1];                                   \
                 (_dst)[row * SA_STRIDE + col + 2] = v[2];                                   \
@@ -143,8 +146,8 @@ inline void gemm_simdgroup_impl(
                 const uint gCol = kB + col;                                                 \
                 IO_T v = IO_T(0);                                                           \
                 if (gRow < M && gCol < K) {                                                 \
-                    if (g_trans_a)  v = A[gCol * M + gRow];                                 \
-                    else            v = A[gRow * K + gCol];                                 \
+                    if (g_trans_a)  v = A[gCol * lda + gRow];                               \
+                    else            v = A[gRow * lda + gCol];                               \
                 }                                                                           \
                 (_dst)[row * SA_STRIDE + col] = v;                                          \
             }                                                                               \
@@ -163,7 +166,7 @@ inline void gemm_simdgroup_impl(
                 const uint elem = idx * 4;                                                  \
                 const uint row = elem / BN;                                                 \
                 const uint col = elem % BN;                                                 \
-                V4 v = *((device const V4*)(B + (kB + row) * N + baseCol + col));           \
+                V4 v = *((device const V4*)(B + (kB + row) * ldb + baseCol + col));         \
                 (_dst)[row * SB_STRIDE + col + 0] = v[0];                                   \
                 (_dst)[row * SB_STRIDE + col + 1] = v[1];                                   \
                 (_dst)[row * SB_STRIDE + col + 2] = v[2];                                   \
@@ -178,8 +181,8 @@ inline void gemm_simdgroup_impl(
                 const uint gCol = baseCol + col;                                            \
                 IO_T v = IO_T(0);                                                           \
                 if (gRow < K && gCol < N) {                                                 \
-                    if (g_trans_b)  v = B[gCol * K + gRow];                                 \
-                    else            v = B[gRow * N + gCol];                                 \
+                    if (g_trans_b)  v = B[gCol * ldb + gRow];                               \
+                    else            v = B[gRow * ldb + gCol];                               \
                 }                                                                           \
                 (_dst)[row * SB_STRIDE + col] = v;                                          \
             }                                                                               \
@@ -247,9 +250,9 @@ inline void gemm_simdgroup_impl(
                     if (Gr < M && Gc < N) {
                         ACC_T s = slot[r * 8 + c] * (ACC_T)alpha;
                         if (beta != 0.0f) {
-                            s += (ACC_T)C[Gr * N + Gc] * (ACC_T)beta;
+                            s += (ACC_T)C[Gr * ldc + Gc] * (ACC_T)beta;
                         }
-                        C[Gr * N + Gc] = IO_T(s);
+                        C[Gr * ldc + Gc] = IO_T(s);
                     }
                 }
             }
@@ -272,12 +275,15 @@ kernel void tc_gemm_f16_f32(
     constant uint& K          [[buffer(5)]],
     constant float& alpha     [[buffer(6)]],
     constant float& beta      [[buffer(7)]],
+    constant uint& lda        [[buffer(8)]],
+    constant uint& ldb        [[buffer(9)]],
+    constant uint& ldc        [[buffer(10)]],
     uint2 group_id            [[threadgroup_position_in_grid]],
     uint  sgid                [[simdgroup_index_in_threadgroup]],
     uint  slid                [[thread_index_in_simdgroup]])
 {
     threadgroup half shared_mem[SA_SIZE + SB_SIZE];
-    gemm_simdgroup_impl<half, float>(A, B, C, M, N, K, alpha, beta,
+    gemm_simdgroup_impl<half, float>(A, B, C, M, N, K, lda, ldb, ldc, alpha, beta,
                                      shared_mem, group_id, sgid, slid);
 }
 
@@ -295,6 +301,9 @@ kernel void tc_gemm_f16_f32_batched(
     constant ulong& stride_a  [[buffer(8)]],   /* elements between batches */
     constant ulong& stride_b  [[buffer(9)]],
     constant ulong& stride_c  [[buffer(10)]],
+    constant uint& lda        [[buffer(11)]],
+    constant uint& ldb        [[buffer(12)]],
+    constant uint& ldc        [[buffer(13)]],
     uint3 group_id            [[threadgroup_position_in_grid]],
     uint  sgid                [[simdgroup_index_in_threadgroup]],
     uint  slid                [[thread_index_in_simdgroup]])
@@ -304,7 +313,7 @@ kernel void tc_gemm_f16_f32_batched(
     device const half* Bb = B + (ulong)group_id.z * stride_b;
     device       half* Cb = C + (ulong)group_id.z * stride_c;
     uint2 tg2 = uint2(group_id.x, group_id.y);
-    gemm_simdgroup_impl<half, float>(Ab, Bb, Cb, M, N, K, alpha, beta,
+    gemm_simdgroup_impl<half, float>(Ab, Bb, Cb, M, N, K, lda, ldb, ldc, alpha, beta,
                                      shared_mem, tg2, sgid, slid);
 }
 
@@ -318,12 +327,15 @@ kernel void tc_gemm_f32_f32(
     constant uint& K          [[buffer(5)]],
     constant float& alpha     [[buffer(6)]],
     constant float& beta      [[buffer(7)]],
+    constant uint& lda        [[buffer(8)]],
+    constant uint& ldb        [[buffer(9)]],
+    constant uint& ldc        [[buffer(10)]],
     uint2 group_id            [[threadgroup_position_in_grid]],
     uint  sgid                [[simdgroup_index_in_threadgroup]],
     uint  slid                [[thread_index_in_simdgroup]])
 {
     threadgroup float shared_mem[SA_SIZE + SB_SIZE];
-    gemm_simdgroup_impl<float, float>(A, B, C, M, N, K, alpha, beta,
+    gemm_simdgroup_impl<float, float>(A, B, C, M, N, K, lda, ldb, ldc, alpha, beta,
                                       shared_mem, group_id, sgid, slid);
 }
 
@@ -338,12 +350,15 @@ kernel void tc_gemm_bf16_f32(
     constant uint& K          [[buffer(5)]],
     constant float& alpha     [[buffer(6)]],
     constant float& beta      [[buffer(7)]],
+    constant uint& lda        [[buffer(8)]],
+    constant uint& ldb        [[buffer(9)]],
+    constant uint& ldc        [[buffer(10)]],
     uint2 group_id            [[threadgroup_position_in_grid]],
     uint  sgid                [[simdgroup_index_in_threadgroup]],
     uint  slid                [[thread_index_in_simdgroup]])
 {
     threadgroup bfloat shared_mem[SA_SIZE + SB_SIZE];
-    gemm_simdgroup_impl<bfloat, float>(A, B, C, M, N, K, alpha, beta,
+    gemm_simdgroup_impl<bfloat, float>(A, B, C, M, N, K, lda, ldb, ldc, alpha, beta,
                                        shared_mem, group_id, sgid, slid);
 }
 #endif
@@ -364,6 +379,9 @@ kernel void tc_gemm_i8_i32(
     constant uint& K          [[buffer(5)]],
     constant float& alpha     [[buffer(6)]],
     constant float& beta      [[buffer(7)]],
+    constant uint& lda        [[buffer(8)]],
+    constant uint& ldb        [[buffer(9)]],
+    constant uint& ldc        [[buffer(10)]],
     uint2 group_id            [[threadgroup_position_in_grid]],
     uint  sgid                [[simdgroup_index_in_threadgroup]],
     uint  slid                [[thread_index_in_simdgroup]])
@@ -396,7 +414,7 @@ kernel void tc_gemm_i8_i32(
             const uint col = idx % BK;
             const uint gRow = baseRow + row;
             const uint gCol = kBlock + col;
-            sA[row * SA_STRIDE + col] = (gRow < M && gCol < K) ? A[gRow * K + gCol] : 0;
+            sA[row * SA_STRIDE + col] = (gRow < M && gCol < K) ? A[gRow * lda + gCol] : 0;
         }
         for (uint i = 0; i < EPT_B; ++i) {
             const uint idx = i * THREADS + tid;
@@ -404,7 +422,7 @@ kernel void tc_gemm_i8_i32(
             const uint col = idx % BN;
             const uint gRow = kBlock + row;
             const uint gCol = baseCol + col;
-            sB[row * SB_STRIDE + col] = (gRow < K && gCol < N) ? B[gRow * N + gCol] : 0;
+            sB[row * SB_STRIDE + col] = (gRow < K && gCol < N) ? B[gRow * ldb + gCol] : 0;
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -431,7 +449,7 @@ kernel void tc_gemm_i8_i32(
             const uint gRow = baseRow + sg_row * (TM * 8) + i * 8;
             const uint gCol = baseCol + sg_col * (TN * 8) + j * 8;
             if (gRow + 7 < M && gCol + 7 < N) {
-                simdgroup_store(acc[i][j], C + gRow * N + gCol, N);
+                simdgroup_store(acc[i][j], C + gRow * ldc + gCol, ldc);
             }
         }
     }

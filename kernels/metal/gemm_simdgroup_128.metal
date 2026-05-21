@@ -55,6 +55,7 @@ inline void gemm_128_impl(
     device const IO_T*   B,
     device       IO_T*   C,
     constant uint& M, constant uint& N, constant uint& K,
+    constant uint& lda, constant uint& ldb, constant uint& ldc,
     constant float& alpha, constant float& beta,
     threadgroup IO_T*    shared_mem,
     uint2 group_id,
@@ -90,7 +91,7 @@ inline void gemm_128_impl(
                 const uint idx = i * G128_THREADS + tid;
                 const uint row = idx / G128_BK;
                 const uint col = idx % G128_BK;
-                sA[row * G128_SA_STRIDE + col] = A[(baseRow + row) * K + kBlock + col];
+                sA[row * G128_SA_STRIDE + col] = A[(baseRow + row) * lda + kBlock + col];
             }
         } else {
             for (uint i = 0; i < 2; ++i) {
@@ -101,7 +102,7 @@ inline void gemm_128_impl(
                 const uint gCol = kBlock + col;
                 IO_T v = IO_T(0);
                 if (gRow < M && gCol < K) {
-                    v = g128_trans_a ? A[gCol * M + gRow] : A[gRow * K + gCol];
+                    v = g128_trans_a ? A[gCol * lda + gRow] : A[gRow * lda + gCol];
                 }
                 sA[row * G128_SA_STRIDE + col] = v;
             }
@@ -113,7 +114,7 @@ inline void gemm_128_impl(
                 const uint idx = i * G128_THREADS + tid;
                 const uint row = idx / G128_BN;
                 const uint col = idx % G128_BN;
-                sB[row * G128_SB_STRIDE + col] = B[(kBlock + row) * N + baseCol + col];
+                sB[row * G128_SB_STRIDE + col] = B[(kBlock + row) * ldb + baseCol + col];
             }
         } else {
             for (uint i = 0; i < 2; ++i) {
@@ -124,7 +125,7 @@ inline void gemm_128_impl(
                 const uint gCol = baseCol + col;
                 IO_T v = IO_T(0);
                 if (gRow < K && gCol < N) {
-                    v = g128_trans_b ? B[gCol * K + gRow] : B[gRow * N + gCol];
+                    v = g128_trans_b ? B[gCol * ldb + gRow] : B[gRow * ldb + gCol];
                 }
                 sB[row * G128_SB_STRIDE + col] = v;
             }
@@ -174,9 +175,9 @@ inline void gemm_128_impl(
                     if (Gr < M && Gc < N) {
                         ACC_T s = slot[r * 8 + c] * (ACC_T)alpha;
                         if (beta != 0.0f) {
-                            s += (ACC_T)C[Gr * N + Gc] * (ACC_T)beta;
+                            s += (ACC_T)C[Gr * ldc + Gc] * (ACC_T)beta;
                         }
-                        C[Gr * N + Gc] = IO_T(s);
+                        C[Gr * ldc + Gc] = IO_T(s);
                     }
                 }
             }
@@ -197,12 +198,15 @@ kernel void tc_gemm_f16_f32_128(
     constant uint& K          [[buffer(5)]],
     constant float& alpha     [[buffer(6)]],
     constant float& beta      [[buffer(7)]],
+    constant uint& lda        [[buffer(8)]],
+    constant uint& ldb        [[buffer(9)]],
+    constant uint& ldc        [[buffer(10)]],
     uint2 group_id            [[threadgroup_position_in_grid]],
     uint  sgid                [[simdgroup_index_in_threadgroup]],
     uint  slid                [[thread_index_in_simdgroup]])
 {
     threadgroup half shared_mem[G128_SA_SIZE + G128_SB_SIZE];
-    gemm_128_impl<half, float>(A, B, C, M, N, K, alpha, beta,
+    gemm_128_impl<half, float>(A, B, C, M, N, K, lda, ldb, ldc, alpha, beta,
                                shared_mem, group_id, sgid, slid);
 }
 
@@ -215,12 +219,15 @@ kernel void tc_gemm_f32_f32_128(
     constant uint& K          [[buffer(5)]],
     constant float& alpha     [[buffer(6)]],
     constant float& beta      [[buffer(7)]],
+    constant uint& lda        [[buffer(8)]],
+    constant uint& ldb        [[buffer(9)]],
+    constant uint& ldc        [[buffer(10)]],
     uint2 group_id            [[threadgroup_position_in_grid]],
     uint  sgid                [[simdgroup_index_in_threadgroup]],
     uint  slid                [[thread_index_in_simdgroup]])
 {
     threadgroup float shared_mem[G128_SA_SIZE + G128_SB_SIZE];
-    gemm_128_impl<float, float>(A, B, C, M, N, K, alpha, beta,
+    gemm_128_impl<float, float>(A, B, C, M, N, K, lda, ldb, ldc, alpha, beta,
                                 shared_mem, group_id, sgid, slid);
 }
 
@@ -234,12 +241,15 @@ kernel void tc_gemm_bf16_f32_128(
     constant uint& K          [[buffer(5)]],
     constant float& alpha     [[buffer(6)]],
     constant float& beta      [[buffer(7)]],
+    constant uint& lda        [[buffer(8)]],
+    constant uint& ldb        [[buffer(9)]],
+    constant uint& ldc        [[buffer(10)]],
     uint2 group_id            [[threadgroup_position_in_grid]],
     uint  sgid                [[simdgroup_index_in_threadgroup]],
     uint  slid                [[thread_index_in_simdgroup]])
 {
     threadgroup bfloat shared_mem[G128_SA_SIZE + G128_SB_SIZE];
-    gemm_128_impl<bfloat, float>(A, B, C, M, N, K, alpha, beta,
+    gemm_128_impl<bfloat, float>(A, B, C, M, N, K, lda, ldb, ldc, alpha, beta,
                                  shared_mem, group_id, sgid, slid);
 }
 #endif

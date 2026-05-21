@@ -60,6 +60,15 @@ bool runtime_supports_tensor_unit(id<MTLDevice> dev) {
     return false;
 }
 
+bool uses_default_layout(const tc_gemm_desc* d) {
+    const int32_t lda = d->lda ? d->lda : (d->transpose_a ? d->M : d->K);
+    const int32_t ldb = d->ldb ? d->ldb : (d->transpose_b ? d->K : d->N);
+    const int32_t ldc = d->ldc ? d->ldc : d->N;
+    return lda == (d->transpose_a ? d->M : d->K) &&
+           ldb == (d->transpose_b ? d->K : d->N) &&
+           ldc == d->N;
+}
+
 }  /* namespace */
 
 extern "C" tc_status_t tc_tensorops_available(tc_context* ctx, bool* out) {
@@ -86,7 +95,7 @@ extern "C" tc_status_t tc_tensorops_gemm_attempt(tc_context* ctx,
     NSString* kname = [NSString stringWithUTF8String:cname];
 
     /* v0.1 of this path: exact TensorOps tiles with alpha=1, beta=0 only. */
-    if (!tc_tensorops_gemm_shape_supported(desc)) {
+    if (!tc_tensorops_gemm_shape_supported(desc) || !uses_default_layout(desc)) {
         return TC_ERR_INVALID_SHAPE;
     }
     if (desc->alpha != 1.0f || desc->beta != 0.0f) {

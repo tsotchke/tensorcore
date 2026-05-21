@@ -43,6 +43,9 @@ kernel void tc_gemm_f16_f32_async_128(
     constant uint& K          [[buffer(5)]],
     constant float& alpha     [[buffer(6)]],
     constant float& beta      [[buffer(7)]],
+    constant uint& lda        [[buffer(8)]],
+    constant uint& ldb        [[buffer(9)]],
+    constant uint& ldc        [[buffer(10)]],
     uint2 group_id            [[threadgroup_position_in_grid]],
     uint  sgid                [[simdgroup_index_in_threadgroup]],
     uint  slid                [[thread_index_in_simdgroup]])
@@ -73,10 +76,10 @@ kernel void tc_gemm_f16_f32_async_128(
                 tc::simdgroup_event ev[2];
                 ev[0].async_copy<half>(
                     sA, /*dst_ld=*/AS128_BK, ushort2(AS128_BK, AS128_BM),
-                    A + baseRow * K + kBlock, /*src_ld=*/K, ushort2(AS128_BK, AS128_BM));
+                    A + baseRow * lda + kBlock, /*src_ld=*/lda, ushort2(AS128_BK, AS128_BM));
                 ev[1].async_copy<half>(
                     sB, /*dst_ld=*/AS128_BN, ushort2(AS128_BN, AS128_BK),
-                    B + kBlock * N + baseCol, /*src_ld=*/N, ushort2(AS128_BN, AS128_BK));
+                    B + kBlock * ldb + baseCol, /*src_ld=*/ldb, ushort2(AS128_BN, AS128_BK));
                 tc::simdgroup_event::wait(2, ev);
             }
         } else {
@@ -87,14 +90,14 @@ kernel void tc_gemm_f16_f32_async_128(
                 const uint col = idx % AS128_BK;
                 const uint gr = baseRow + row;
                 const uint gc = kBlock + col;
-                sA[row * AS128_BK + col] = (gr < M && gc < K) ? A[gr * K + gc] : half(0);
+                sA[row * AS128_BK + col] = (gr < M && gc < K) ? A[gr * lda + gc] : half(0);
             }
             for (uint idx = tid; idx < AS128_BK * AS128_BN; idx += AS128_THREADS) {
                 const uint row = idx / AS128_BN;
                 const uint col = idx % AS128_BN;
                 const uint gr = kBlock + row;
                 const uint gc = baseCol + col;
-                sB[row * AS128_BN + col] = (gr < K && gc < N) ? B[gr * N + gc] : half(0);
+                sB[row * AS128_BN + col] = (gr < K && gc < N) ? B[gr * ldb + gc] : half(0);
             }
         }
 
@@ -138,8 +141,8 @@ kernel void tc_gemm_f16_f32_async_128(
                     const uint Gc = gCol + c;
                     if (Gr < M && Gc < N) {
                         float s = slot[r * 8 + c] * alpha;
-                        if (beta != 0.0f) s += (float)C[Gr * N + Gc] * beta;
-                        C[Gr * N + Gc] = (half)s;
+                        if (beta != 0.0f) s += (float)C[Gr * ldc + Gc] * beta;
+                        C[Gr * ldc + Gc] = (half)s;
                     }
                 }
             }

@@ -125,6 +125,98 @@ static int run_case(tc_context* ctx, int M, int N, int K) {
     return (scaled < 1.5e-2) ? 0 : 5;
 }
 
+static int run_padded_ld_case(tc_context* ctx) {
+    enum { M = 65, N = 67, K = 70 };
+    const int lda = K + 5;
+    const int ldb = N + 7;
+    const int ldc = N + 3;
+    const float alpha = 0.75f;
+    const float beta = 0.25f;
+    const size_t elems_a = (size_t)(M - 1) * lda + K;
+    const size_t elems_b = (size_t)(K - 1) * ldb + N;
+    const size_t elems_c = (size_t)(M - 1) * ldc + N;
+
+    tc_buffer *A = NULL, *B = NULL, *C = NULL;
+    if (tc_buffer_alloc(ctx, elems_a * sizeof(uint16_t), &A) != TC_OK) return 1;
+    if (tc_buffer_alloc(ctx, elems_b * sizeof(uint16_t), &B) != TC_OK) return 2;
+    if (tc_buffer_alloc(ctx, elems_c * sizeof(uint16_t), &C) != TC_OK) return 3;
+
+    uint16_t *Ap = NULL, *Bp = NULL, *Cp = NULL;
+    tc_buffer_map(A, (void**)&Ap);
+    tc_buffer_map(B, (void**)&Bp);
+    tc_buffer_map(C, (void**)&Cp);
+
+    float* Afp32 = (float*)calloc(elems_a, sizeof(float));
+    float* Bfp32 = (float*)calloc(elems_b, sizeof(float));
+    float* Cref = (float*)calloc(elems_c, sizeof(float));
+
+    srand(0x1DA);
+    for (size_t i = 0; i < elems_a; ++i) Ap[i] = f32_to_f16(-7.0f);
+    for (size_t i = 0; i < elems_b; ++i) Bp[i] = f32_to_f16(9.0f);
+    for (size_t i = 0; i < elems_c; ++i) {
+        Cp[i] = f32_to_f16(3.0f);
+        Cref[i] = 3.0f;
+    }
+    for (int m = 0; m < M; ++m) {
+        for (int k = 0; k < K; ++k) {
+            float v = ((float)rand() / RAND_MAX - 0.5f) * 2.0f;
+            Afp32[(size_t)m * lda + k] = v;
+            Ap[(size_t)m * lda + k] = f32_to_f16(v);
+        }
+    }
+    for (int k = 0; k < K; ++k) {
+        for (int n = 0; n < N; ++n) {
+            float v = ((float)rand() / RAND_MAX - 0.5f) * 2.0f;
+            Bfp32[(size_t)k * ldb + n] = v;
+            Bp[(size_t)k * ldb + n] = f32_to_f16(v);
+        }
+    }
+    for (int m = 0; m < M; ++m) {
+        for (int n = 0; n < N; ++n) {
+            float v = ((float)rand() / RAND_MAX - 0.5f) * 0.5f;
+            Cref[(size_t)m * ldc + n] = v;
+            Cp[(size_t)m * ldc + n] = f32_to_f16(v);
+        }
+    }
+
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                M, N, K, alpha, Afp32, lda, Bfp32, ldb, beta, Cref, ldc);
+
+    tc_gemm_desc d = {0};
+    d.M = M; d.N = N; d.K = K;
+    d.a_dtype = TC_DTYPE_F16; d.b_dtype = TC_DTYPE_F16;
+    d.c_dtype = TC_DTYPE_F16; d.accum_dtype = TC_DTYPE_F32;
+    d.alpha = alpha; d.beta = beta;
+    d.lda = lda; d.ldb = ldb; d.ldc = ldc;
+    tc_status_t s = tc_gemm(ctx, &d, A, B, C);
+
+    double max_abs = 0.0, sum_sq_err = 0.0, sum_sq_ref = 0.0;
+    if (s == TC_OK) {
+        for (int m = 0; m < M; ++m) {
+            for (int n = 0; n < N; ++n) {
+                const size_t idx = (size_t)m * ldc + n;
+                float a = f16_to_f32(Cp[idx]);
+                double e = fabs((double)a - (double)Cref[idx]);
+                if (e > max_abs) max_abs = e;
+                sum_sq_err += e * e;
+                sum_sq_ref += (double)Cref[idx] * (double)Cref[idx];
+            }
+        }
+    }
+    const double rms_err = sqrt(sum_sq_err / (M * N));
+    const double rms_ref = sqrt(sum_sq_ref / (M * N));
+    const double scaled = rms_err / (rms_ref + 1e-9);
+
+    printf("  padded lda=%d ldb=%d ldc=%d backend=%-18s max_abs=%.3e scaled=%.3e %s\n",
+           lda, ldb, ldc, tc_backend_name(tc_last_backend()), max_abs, scaled,
+           (s == TC_OK) ? "OK" : tc_status_string(s));
+
+    free(Afp32); free(Bfp32); free(Cref);
+    tc_buffer_free(ctx, A); tc_buffer_free(ctx, B); tc_buffer_free(ctx, C);
+    if (s != TC_OK) return (int)-s;
+    return (scaled < 1.5e-2) ? 0 : 5;
+}
+
 static int run_batched_case(tc_context* ctx, int batch, int M, int N, int K) {
     const size_t elems_a = (size_t)M * K;
     const size_t elems_b = (size_t)K * N;
@@ -280,6 +372,7 @@ int main(void) {
     rc |= run_case(ctx, 128, 128, 128);
     rc |= run_case(ctx, 256, 256, 256);
     rc |= run_case(ctx, 512, 512, 512);
+    rc |= run_padded_ld_case(ctx);
     rc |= run_batched_case(ctx, 3, 64, 48, 64);
     rc |= run_batched_rejection_case(ctx);
     rc |= run_buffer_validation_case(ctx);

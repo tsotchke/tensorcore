@@ -153,6 +153,9 @@ extern "C" tc_status_t tc_conv2d_backward_input(tc_context* ctx,
     }
 
     const uint32_t M_u = (uint32_t)K, N_u = (uint32_t)out_hw, K_u = (uint32_t)OC;
+    const uint32_t lda = (uint32_t)K;       /* weight is [OC, K], transposed */
+    const uint32_t ldb = (uint32_t)out_hw;  /* dY is [OC, out_hw] */
+    const uint32_t ldc = (uint32_t)out_hw;  /* dCol is [K, out_hw] */
     float alpha = 1.0f, beta = 0.0f;
     const size_t stride_dY  = (size_t)OC * out_hw * sizeof(uint16_t);
     const size_t stride_col = (size_t)K * out_hw * sizeof(uint16_t);
@@ -170,6 +173,9 @@ extern "C" tc_status_t tc_conv2d_backward_input(tc_context* ctx,
             [enc setBytes:&K_u   length:sizeof(K_u)   atIndex:5];
             [enc setBytes:&alpha length:sizeof(alpha) atIndex:6];
             [enc setBytes:&beta  length:sizeof(beta)  atIndex:7];
+            [enc setBytes:&lda   length:sizeof(lda)   atIndex:8];
+            [enc setBytes:&ldb   length:sizeof(ldb)   atIndex:9];
+            [enc setBytes:&ldc   length:sizeof(ldc)   atIndex:10];
             const uint32_t gx = (N_u + 64 - 1) / 64;
             const uint32_t gy = (M_u + 64 - 1) / 64;
             [enc dispatchThreadgroups:MTLSizeMake(gx, gy, 1)
@@ -336,6 +342,9 @@ extern "C" tc_status_t tc_conv2d_backward_weight(tc_context* ctx,
     const uint32_t M_u = (uint32_t)out_channels;
     const uint32_t N_u = K;          /* dW cols (in elements)             */
     const uint32_t K_u = out_hw;     /* GEMM K (the contracted dim)       */
+    const uint32_t lda = (uint32_t)out_hw;  /* dY is [OC, out_hw] */
+    const uint32_t ldb = (uint32_t)out_hw;  /* col is [K, out_hw], transposed */
+    const uint32_t ldc = (uint32_t)K;       /* dW is [OC, K] */
     float alpha = 1.0f;
     /* dY layout: [N batches, OC, out_hw], stride between batches = OC*out_hw.
      * col layout: [N batches, K, out_hw], stride = K*out_hw.               */
@@ -356,6 +365,9 @@ extern "C" tc_status_t tc_conv2d_backward_weight(tc_context* ctx,
             [enc setBytes:&K_u   length:sizeof(K_u)   atIndex:5];
             [enc setBytes:&alpha length:sizeof(alpha) atIndex:6];
             [enc setBytes:&beta  length:sizeof(beta)  atIndex:7];
+            [enc setBytes:&lda   length:sizeof(lda)   atIndex:8];
+            [enc setBytes:&ldb   length:sizeof(ldb)   atIndex:9];
+            [enc setBytes:&ldc   length:sizeof(ldc)   atIndex:10];
             const uint32_t gx = (N_u + 64 - 1) / 64;
             const uint32_t gy = (M_u + 64 - 1) / 64;
             [enc dispatchThreadgroups:MTLSizeMake(gx, gy, 1)
@@ -473,6 +485,9 @@ extern "C" tc_status_t tc_conv2d_forward(tc_context* ctx,
     const uint32_t M_u = OC;
     const uint32_t N_u = out_hw;
     const uint32_t K_u = K;
+    const uint32_t lda = K;       /* weight is [OC, K] */
+    const uint32_t ldb = out_hw;  /* col is [K, out_hw] */
+    const uint32_t ldc = out_hw;  /* Y is [OC, out_hw] */
     float alpha = 1.0f, beta = 0.0f;
     const size_t stride_col = (size_t)K * out_hw * sizeof(uint16_t);
     const size_t stride_Y = (size_t)OC * out_hw * sizeof(uint16_t);
@@ -490,6 +505,9 @@ extern "C" tc_status_t tc_conv2d_forward(tc_context* ctx,
             [enc setBytes:&K_u   length:sizeof(K_u)   atIndex:5];
             [enc setBytes:&alpha length:sizeof(alpha) atIndex:6];
             [enc setBytes:&beta  length:sizeof(beta)  atIndex:7];
+            [enc setBytes:&lda   length:sizeof(lda)   atIndex:8];
+            [enc setBytes:&ldb   length:sizeof(ldb)   atIndex:9];
+            [enc setBytes:&ldc   length:sizeof(ldc)   atIndex:10];
             const uint32_t gx = (N_u + 64 - 1) / 64;
             const uint32_t gy = (M_u + 64 - 1) / 64;
             [enc dispatchThreadgroups:MTLSizeMake(gx, gy, 1)
