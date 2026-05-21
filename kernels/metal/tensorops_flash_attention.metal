@@ -1,10 +1,9 @@
 /*
  * tensorcore — Metal 4 FlashAttention forward via mpp::tensor_ops.
  *
- * Builds FlashAttention-2 on top of two matmul2d invocations (QK^T then SV)
- * with an online softmax pass between them. Cooperative-tensor accumulators
- * stay in registers across the inner softmax — the M5 Neural Accelerator
- * feeds back into the same register file the simdgroup uses for FMA.
+ * Placeholder compile target for a future FlashAttention-2 implementation on
+ * top of matmul2d invocations. Host dispatch currently returns
+ * TC_ERR_UNSUPPORTED_FAMILY before these entry points are used.
  *
  * Requires Xcode 26.0+ SDK (gated at CMake time).
  *
@@ -14,8 +13,9 @@
  *   - 4 simdgroups cooperate on each matmul2d
  *   - D = head_dim, supported via two entry points: D=64 and D=128
  *
- * For v0.1 of this path: alpha=1, beta=0, causal mask, fp16 IO + fp32 accum.
- * Backward, GQA, and ALiBi land in v0.2 of the tensorops path.
+ * For v0.1, only TensorOps GEMM is exposed at runtime. Keeping these symbols
+ * compile-clean proves SDK26 headers and source gating without advertising an
+ * unvalidated attention backend.
  */
 
 #include <metal_stdlib>
@@ -60,103 +60,28 @@ inline void flash_attention_tensorops_impl(
     const uint v_base   = ((batch_idx * kv_heads + kv_head_idx) * seq_kv + 0) * D;
     const uint o_base   = ((batch_idx * heads    + head_idx)    * seq_q  + 0) * D;
 
-    /* Slice this query block of Q (Br × D). */
     auto Qt = tensor<device const half, dextents<int32_t, 2>, tensor_inline>(
                 Q + q_base, dextents<int32_t, 2>(int32_t(D), int32_t(seq_q)));
     auto Qb = Qt.slice(0, row0);
-
-    /* matmul2d for QK^T:  S_tile = Q_block @ K_block^T (Br × Bc).
-     * With transposeB=true, B's logical layout (Bc × D) is read as (D × Bc). */
-    constexpr auto qk_md = matmul2d_descriptor(
-        TC4_FA_BR, TC4_FA_BC, D,
-        /*transA*/ false, /*transB*/ true, /*transC*/ false,
-        matmul2d_descriptor::mode::multiply_accumulate);
-    matmul2d<qk_md, execution_simdgroups<TC4_FA_SG_COUNT>> qk;
-
-    /* matmul2d for PV: O_tile += P_tile @ V_block (Br × D from Br × Bc · Bc × D). */
-    constexpr auto pv_md = matmul2d_descriptor(
-        TC4_FA_BR, D, TC4_FA_BC,
-        false, false, false,
-        matmul2d_descriptor::mode::multiply_accumulate);
-    matmul2d<pv_md, execution_simdgroups<TC4_FA_SG_COUNT>> pv;
-
     auto Kt = tensor<device const half, dextents<int32_t, 2>, tensor_inline>(
                 K + k_base, dextents<int32_t, 2>(int32_t(D), int32_t(seq_kv)));
-    auto Vt = tensor<device const half, dextents<int32_t, 2>, tensor_inline>(
-                V + v_base, dextents<int32_t, 2>(int32_t(D), int32_t(seq_kv)));
+    auto Kb = Kt.slice(0, 0);
     auto Ot = tensor<device       half, dextents<int32_t, 2>, tensor_inline>(
                 O + o_base, dextents<int32_t, 2>(int32_t(D), int32_t(seq_q)));
-
-    auto K0  = Kt.slice(0, 0);   /* placeholder — sliced per KV block below */
-    auto V0  = Vt.slice(0, 0);
-    (void)K0; (void)V0;
-
-    /* O accumulator in registers (cooperative tensor) — Br × D, fp32. */
-    auto O_acc = pv.get_destination_cooperative_tensor<
-        decltype(Qb), decltype(Vt.slice(0, 0)), float>();
-    O_acc.fill(0.0f);
-
-    /* Online softmax row state: per-query-row max (m) and denom (l).
-     * Held in threadgroup memory since rows are owned across simdgroups. */
-    threadgroup float m_row[TC4_FA_BR];
-    threadgroup float l_row[TC4_FA_BR];
-
-    /* (Skeleton: KV loop with QK^T → softmax → O += P·V follows.
-     * Apple does not yet publish a public stable "cooperative tensor row max"
-     * primitive; we'll spill the S cooperative tensor to threadgroup memory
-     * for the softmax pass, like our simdgroup_matrix FlashAttention. This
-     * path is intentionally a faithful structural mirror of the M1-M4 kernel
-     * so that we can validate the tensor_ops semantics empirically on M5 once
-     * hardware is available. The placeholder below ensures the kernel still
-     * type-checks against the public mpp::tensor_ops API.) */
-
-    const uint Tc = (seq_kv + TC4_FA_BC - 1) / TC4_FA_BC;
-    for (uint j = 0; j < Tc; ++j) {
-        const uint kv_col0 = j * TC4_FA_BC;
-        if (g_tc4_causal && (kv_col0 > row0 + TC4_FA_BR - 1)) break;
-
-        auto Kb = Kt.slice(0, kv_col0);
-        auto Vb = Vt.slice(0, kv_col0);
-
-        auto S_acc = qk.get_destination_cooperative_tensor<
-                        decltype(Qb), decltype(Kb), float>();
-        S_acc.fill(0.0f);
-        qk.run(Qb, Kb, S_acc);
-
-        /* Spill S to threadgroup memory for cross-simdgroup softmax.
-         * v0.2 of the tensorops path will replace this with the in-register
-         * tensor-ops softmax primitive once Apple publishes it. */
-        threadgroup half S_tg[TC4_FA_BR * TC4_FA_BC];
-        auto S_tg_tensor = tensor<threadgroup half, dextents<int32_t, 2>, tensor_inline>(
-                            S_tg, dextents<int32_t, 2>(TC4_FA_BC, TC4_FA_BR));
-        /* Scale into S_tg as we store. */
-        S_acc.store(S_tg_tensor);
-
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-
-        /* (Online softmax + scale + causal mask in threadgroup memory,
-         * identical math to the simdgroup_matrix kernel. The implementation
-         * lives in flash_attention.metal; we trampoline through the same
-         * algorithm here once M5 silicon is available for tuning.) */
-        (void)softmax_scale;
-        (void)m_row; (void)l_row;
-
-        /* P = exp(S - m) — convert back to half cooperative tensor for the PV
-         * matmul.  Skipped here as a stub — the full implementation depends on
-         * runtime behavior of cooperative_tensor::load(threadgroup) which we'll
-         * validate on M5. */
-        auto P_coop = pv.get_destination_cooperative_tensor<
-                        decltype(Qb), decltype(Vb), float>();
-        P_coop.fill(0.0f);
-
-        pv.run(P_coop, Vb, O_acc);
-    }
-
-    /* Final normalize and write O. */
     auto Ob = Ot.slice(0, row0);
-    O_acc.store(Ob);
 
+    constexpr auto placeholder_md = matmul2d_descriptor(
+        TC4_FA_BR, D, D,
+        false, false, false,
+        matmul2d_descriptor::mode::multiply);
+    matmul2d<placeholder_md, execution_simdgroups<TC4_FA_SG_COUNT>> placeholder_op;
+    placeholder_op.run(Qb, Kb, Ob);
+
+    (void)V;
     (void)LSE;
+    (void)batch;
+    (void)softmax_scale;
+    (void)g_tc4_causal;
     (void)g_tc4_return_lse;
 }
 

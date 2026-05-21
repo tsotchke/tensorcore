@@ -64,7 +64,7 @@ kernel void tc4_gemm_f16(
     constexpr auto md = matmul2d_descriptor(
         /*M*/ TC4_M_TILE, /*N*/ TC4_N_TILE, /*K*/ dynamic_length_v<int>,
         /*transA*/ false, /*transB*/ false, /*transC*/ false,
-        matmul2d_descriptor::mode::multiply_accumulate);
+        matmul2d_descriptor::mode::multiply);
 
     matmul2d<md, execution_simdgroups<TC4_SG_COUNT>> mm;
 
@@ -76,24 +76,13 @@ kernel void tc4_gemm_f16(
     auto mA = A.slice(0,    row0);
     auto mB = B.slice(col0, 0);
 
-    /* Cooperative tensor accumulator — register-resident, fp32. */
-    auto cT = mm.get_destination_cooperative_tensor<decltype(mA), decltype(mB), float>();
-    cT.fill(0.0f);
-
     /* Run the matmul. mpp::tensor_ops handles the K-loop internally based on
-     * the dynamic K extent in mA's dextents. */
-    mm.run(mA, mB, cT);
-
-    /* alpha * cT + beta * C  →  C  (manual scale + add via cooperative tensor) */
-    if (alpha != 1.0f || beta != 0.0f) {
-        /* For v0.1 of this path we only fast-path alpha=1, beta=0. The full
-         * scale + accumulate path will be added once we can validate
-         * numerically on M5 hardware. */
-    }
-
-    /* Store the cooperative tensor back to the C tile. */
+     * the dynamic K extent in mA's dextents. v0.1 only dispatches this path
+     * for alpha=1, beta=0, so direct multiply output is correct. */
     auto cSlice = C.slice(col0, row0);
-    cT.store(cSlice);
+    mm.run(mA, mB, cSlice);
+
+    (void)alpha; (void)beta;
 }
 
 /* ====================================================================== *
@@ -120,7 +109,7 @@ kernel void tc4_gemm_bf16(
     constexpr auto md = matmul2d_descriptor(
         TC4_M_TILE, TC4_N_TILE, dynamic_length_v<int>,
         false, false, false,
-        matmul2d_descriptor::mode::multiply_accumulate);
+        matmul2d_descriptor::mode::multiply);
     matmul2d<md, execution_simdgroups<TC4_SG_COUNT>> mm;
 
     const uint row0 = tgid.y * TC4_M_TILE;
@@ -129,12 +118,8 @@ kernel void tc4_gemm_bf16(
     auto mA = A.slice(0,    row0);
     auto mB = B.slice(col0, 0);
 
-    auto cT = mm.get_destination_cooperative_tensor<decltype(mA), decltype(mB), float>();
-    cT.fill(0.0f);
-    mm.run(mA, mB, cT);
-
     auto cSlice = C.slice(col0, row0);
-    cT.store(cSlice);
+    mm.run(mA, mB, cSlice);
 
     (void)alpha; (void)beta;   /* v0.1: alpha=1/beta=0 only on this path */
 }
@@ -163,7 +148,7 @@ kernel void tc4_gemm_f32(
     constexpr auto md = matmul2d_descriptor(
         TC4_M_TILE, TC4_N_TILE, dynamic_length_v<int>,
         false, false, false,
-        matmul2d_descriptor::mode::multiply_accumulate);
+        matmul2d_descriptor::mode::multiply);
     matmul2d<md, execution_simdgroups<TC4_SG_COUNT>> mm;
 
     const uint row0 = tgid.y * TC4_M_TILE;
@@ -172,12 +157,8 @@ kernel void tc4_gemm_f32(
     auto mA = A.slice(0,    row0);
     auto mB = B.slice(col0, 0);
 
-    auto cT = mm.get_destination_cooperative_tensor<decltype(mA), decltype(mB), float>();
-    cT.fill(0.0f);
-    mm.run(mA, mB, cT);
-
     auto cSlice = C.slice(col0, row0);
-    cT.store(cSlice);
+    mm.run(mA, mB, cSlice);
 
     (void)alpha; (void)beta;
 }
