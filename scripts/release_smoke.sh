@@ -15,6 +15,19 @@ if [ -z "${WHEEL_PREFIX:-}" ]; then
 fi
 REQUIRE_GPU="${REQUIRE_GPU:-0}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+EXPECTED_VERSION="$("$PYTHON_BIN" - "$ROOT/pyproject.toml" <<'PY'
+import pathlib
+import re
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text()
+match = re.search(r'(?m)^version\s*=\s*"([^"]+)"\s*$', text)
+if not match:
+    raise SystemExit("project.version not found in pyproject.toml")
+print(match.group(1))
+PY
+)"
+export EXPECTED_VERSION
 
 echo "[tensorcore] configure"
 cmake -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release
@@ -89,6 +102,7 @@ import sys
 sys.path.insert(0, sys.argv[1])
 import tensorcore as tc
 
+expected = os.environ["EXPECTED_VERSION"]
 lib = os.path.realpath(tc._find_lib())
 expected_suffix = os.path.join("tensorcore", "libtensorcore.dylib")
 if not lib.endswith(expected_suffix):
@@ -96,7 +110,7 @@ if not lib.endswith(expected_suffix):
 metallib = os.path.join(os.path.dirname(lib), "tensorcore.metallib")
 if not os.path.exists(metallib):
     raise SystemExit(f"package-local metallib missing: {metallib}")
-assert tc.version().startswith("tensorcore 0.1.8"), tc.version()
+assert tc.version().startswith(f"tensorcore {expected}"), tc.version()
 print(tc.version())
 PY
 
@@ -105,12 +119,14 @@ echo "[tensorcore] python editable install"
 PY_SITE="$PY_PREFIX/lib/$PY_VER/site-packages"
 TENSORCORE_LIB="$PREFIX/lib/libtensorcore.dylib" "$PYTHON_BIN" - "$PY_SITE" <<'PY'
 import site
+import os
 import sys
 
 site.addsitedir(sys.argv[1])
 import tensorcore as tc
 
-assert tc.version().startswith("tensorcore 0.1.8"), tc.version()
+expected = os.environ["EXPECTED_VERSION"]
+assert tc.version().startswith(f"tensorcore {expected}"), tc.version()
 print(tc.version())
 PY
 
