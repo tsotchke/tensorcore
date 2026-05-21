@@ -33,6 +33,9 @@ jobs:
       - name: Python FFI surface
         run: python3 scripts/check_python_ffi_surface.py
 
+      - name: Python ABI layout
+        run: TENSORCORE_LIB="$PWD/build/libtensorcore.dylib" python3 scripts/check_python_abi_layout.py
+
       - name: Hardware-aware tests
         run: scripts/ci_macos_test.sh
       - name: Install smoke
@@ -67,6 +70,8 @@ jobs:
         run: scripts/check_public_exports.sh
       - name: Python FFI surface
         run: python3 scripts/check_python_ffi_surface.py
+      - name: Python ABI layout
+        run: TENSORCORE_LIB="$PWD/build/libtensorcore.dylib" python3 scripts/check_python_abi_layout.py
       - name: Hardware-aware tests
         run: scripts/ci_macos_test.sh
       - name: Install smoke
