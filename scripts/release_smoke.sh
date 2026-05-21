@@ -58,6 +58,51 @@ echo "[tensorcore] python syntax"
     "$ROOT/python/tensorcore/__init__.py" \
     "$ROOT/python/tests/test_basic.py"
 
+echo "[tensorcore] python native loader policy"
+"$PYTHON_BIN" - "$ROOT" "$BUILD_DIR/libtensorcore.dylib" <<'PY'
+import os
+import pathlib
+import shutil
+import subprocess
+import sys
+import tempfile
+
+root = pathlib.Path(sys.argv[1])
+dylib = pathlib.Path(sys.argv[2])
+tmp = pathlib.Path(tempfile.mkdtemp(prefix="tensorcore-loader.", dir="/private/tmp"))
+try:
+    pkg = tmp / "tensorcore"
+    pkg.mkdir()
+    shutil.copy2(root / "python" / "tensorcore" / "__init__.py", pkg / "__init__.py")
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(tmp)
+    env.pop("TENSORCORE_LIB", None)
+    missing = subprocess.run(
+        [sys.executable, "-c", "import tensorcore"],
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if missing.returncode == 0 or "package-local libtensorcore.dylib not found" not in missing.stderr:
+        raise SystemExit("installed-package import did not reject missing native dylib")
+
+    env["TENSORCORE_LIB"] = str(dylib)
+    explicit = subprocess.run(
+        [sys.executable, "-c", "import tensorcore as tc; print(tc.version())"],
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if explicit.returncode != 0:
+        raise SystemExit(explicit.stderr)
+    print(explicit.stdout.strip())
+finally:
+    shutil.rmtree(tmp, ignore_errors=True)
+PY
+
 echo "[tensorcore] python wheel"
 mkdir -p "$WHEEL_DIR"
 TENSORCORE_NATIVE_DIR="$PREFIX/lib" \

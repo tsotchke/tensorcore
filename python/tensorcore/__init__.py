@@ -32,7 +32,6 @@ For perf-critical loops, use the async variants and tc.stream_sync().
 import ctypes
 import math
 import os
-import sys
 import weakref
 from ctypes import (
     c_int, c_uint, c_int32, c_int64, c_uint32, c_uint64, c_size_t,
@@ -48,10 +47,23 @@ def _find_lib():
     if env:
         return env
     here = os.path.dirname(os.path.abspath(__file__))
+    package_local = os.path.join(here, "libtensorcore.dylib")
+    if os.path.exists(package_local):
+        return package_local
+
+    source_root = os.path.abspath(os.path.join(here, "..", ".."))
+    is_source_checkout = (
+        os.path.exists(os.path.join(source_root, "pyproject.toml")) and
+        os.path.exists(os.path.join(source_root, "CMakeLists.txt"))
+    )
+    if not is_source_checkout:
+        raise RuntimeError(
+            "package-local libtensorcore.dylib not found. Reinstall the "
+            "tensorcore-apple wheel or set TENSORCORE_LIB explicitly."
+        )
+
     candidates = [
-        os.path.join(here, "libtensorcore.dylib"),
-        os.path.join(here, "..", "..", "build", "libtensorcore.dylib"),
-        os.path.join(here, "..", "..", "build", "libtensorcore.a"),  # static — won't load via ctypes
+        os.path.join(source_root, "build", "libtensorcore.dylib"),
         "/opt/tensorcore/lib/libtensorcore.dylib",
         "/usr/local/lib/libtensorcore.dylib",
     ]
@@ -63,11 +75,7 @@ def _find_lib():
         "build tensorcore as a shared library."
     )
 
-try:
-    _lib = ctypes.CDLL(_find_lib())
-except Exception as e:
-    print(f"[tensorcore] warning: lib not loaded ({e})", file=sys.stderr)
-    _lib = None
+_lib = ctypes.CDLL(_find_lib())
 
 
 # ---------------------------------------------------------------------------
