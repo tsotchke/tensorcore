@@ -142,6 +142,16 @@ class TCGemmDesc(Structure):
     ]
 
 
+class TCGemmBatchedDesc(Structure):
+    _fields_ = [
+        ("base", TCGemmDesc),
+        ("batch", c_int32),
+        ("stride_a", c_int64),
+        ("stride_b", c_int64),
+        ("stride_c", c_int64),
+    ]
+
+
 class TCAttentionDesc(Structure):
     _fields_ = [
         ("batch", c_int32),
@@ -226,6 +236,10 @@ if _lib is not None:
     _lib.tc_gemm.restype  = c_int
     _lib.tc_gemm_async.argtypes = [c_void_p, POINTER(TCGemmDesc), c_void_p, c_void_p, c_void_p, c_void_p]
     _lib.tc_gemm_async.restype = c_int
+    _lib.tc_gemm_batched.argtypes = [
+        c_void_p, POINTER(TCGemmBatchedDesc), c_void_p, c_void_p, c_void_p
+    ]
+    _lib.tc_gemm_batched.restype = c_int
     _lib.tc_attention_forward.argtypes = [
         c_void_p, POINTER(TCAttentionDesc), c_void_p, c_void_p, c_void_p, c_void_p, c_void_p
     ]
@@ -538,6 +552,27 @@ def gemm_async(ctx, A, B, C, M, N, K, stream, dtype="f16", accum="f32",
     _check(_lib.tc_gemm_async(_as_handle(ctx), byref(desc),
                               _as_handle(A), _as_handle(B), _as_handle(C),
                               _as_handle(stream)))
+
+
+def gemm_batched(ctx, A, B, C, batch, M, N, K, dtype="f16", accum="f32",
+                 alpha=1.0, beta=0.0, transpose_a=False, transpose_b=False,
+                 stride_a=0, stride_b=0, stride_c=0):
+    """Compute strided batched C[b] = alpha * op(A[b]) @ op(B[b]) + beta * C[b]."""
+    if stride_a == 0:
+        stride_a = M * K
+    if stride_b == 0:
+        stride_b = K * N
+    if stride_c == 0:
+        stride_c = M * N
+    desc = TCGemmBatchedDesc(
+        base=_gemm_desc(M, N, K, dtype, accum, alpha, beta, transpose_a, transpose_b),
+        batch=int(batch),
+        stride_a=int(stride_a),
+        stride_b=int(stride_b),
+        stride_c=int(stride_c),
+    )
+    _check(_lib.tc_gemm_batched(_as_handle(ctx), byref(desc),
+                                _as_handle(A), _as_handle(B), _as_handle(C)))
 
 
 def _gemm_desc(M, N, K, dtype, accum, alpha, beta, transpose_a, transpose_b):
@@ -947,6 +982,9 @@ class Context:
 
     def gemm_async(self, A, B, C, M, N, K, stream, **kwargs):
         return gemm_async(self, A, B, C, M, N, K, stream, **kwargs)
+
+    def gemm_batched(self, A, B, C, batch, M, N, K, **kwargs):
+        return gemm_batched(self, A, B, C, batch, M, N, K, **kwargs)
 
     def attention_forward(self, Q, K, V, O, batch, heads, seq_q, seq_kv, head_dim, **kwargs):
         return attention_forward(self, Q, K, V, O, batch, heads, seq_q, seq_kv, head_dim, **kwargs)

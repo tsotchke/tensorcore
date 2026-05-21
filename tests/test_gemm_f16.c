@@ -125,6 +125,99 @@ static int run_case(tc_context* ctx, int M, int N, int K) {
     return (scaled < 1.5e-2) ? 0 : 5;
 }
 
+static int run_batched_case(tc_context* ctx, int batch, int M, int N, int K) {
+    const size_t elems_a = (size_t)M * K;
+    const size_t elems_b = (size_t)K * N;
+    const size_t elems_c = (size_t)M * N;
+    const int64_t stride_a = (int64_t)elems_a + 7;
+    const int64_t stride_b = (int64_t)elems_b + 5;
+    const int64_t stride_c = (int64_t)elems_c + 3;
+    const size_t total_a = (size_t)(batch - 1) * (size_t)stride_a + elems_a;
+    const size_t total_b = (size_t)(batch - 1) * (size_t)stride_b + elems_b;
+    const size_t total_c = (size_t)(batch - 1) * (size_t)stride_c + elems_c;
+
+    tc_buffer *A = NULL, *B = NULL, *C = NULL;
+    if (tc_buffer_alloc(ctx, total_a * sizeof(uint16_t), &A) != TC_OK) return 1;
+    if (tc_buffer_alloc(ctx, total_b * sizeof(uint16_t), &B) != TC_OK) return 2;
+    if (tc_buffer_alloc(ctx, total_c * sizeof(uint16_t), &C) != TC_OK) return 3;
+
+    uint16_t *Ap = NULL, *Bp = NULL, *Cp = NULL;
+    tc_buffer_map(A, (void**)&Ap);
+    tc_buffer_map(B, (void**)&Bp);
+    tc_buffer_map(C, (void**)&Cp);
+
+    float* Afp32 = (float*)calloc(total_a, sizeof(float));
+    float* Bfp32 = (float*)calloc(total_b, sizeof(float));
+    float* Cref = (float*)calloc(total_c, sizeof(float));
+
+    srand(0xB47C);
+    for (int b = 0; b < batch; ++b) {
+        const size_t a0 = (size_t)b * (size_t)stride_a;
+        const size_t b0 = (size_t)b * (size_t)stride_b;
+        for (size_t i = 0; i < elems_a; ++i) {
+            float v = ((float)rand() / RAND_MAX - 0.5f) * 2.0f;
+            Afp32[a0 + i] = v;
+            Ap[a0 + i] = f32_to_f16(v);
+        }
+        for (size_t i = 0; i < elems_b; ++i) {
+            float v = ((float)rand() / RAND_MAX - 0.5f) * 2.0f;
+            Bfp32[b0 + i] = v;
+            Bp[b0 + i] = f32_to_f16(v);
+        }
+    }
+    memset(Cp, 0, total_c * sizeof(uint16_t));
+
+    for (int b = 0; b < batch; ++b) {
+        const size_t a0 = (size_t)b * (size_t)stride_a;
+        const size_t b0 = (size_t)b * (size_t)stride_b;
+        const size_t c0 = (size_t)b * (size_t)stride_c;
+        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                    M, N, K, 1.0f, Afp32 + a0, K, Bfp32 + b0, N,
+                    0.0f, Cref + c0, N);
+    }
+
+    tc_gemm_batched_desc bd = {0};
+    bd.base.M = M; bd.base.N = N; bd.base.K = K;
+    bd.base.a_dtype = TC_DTYPE_F16;
+    bd.base.b_dtype = TC_DTYPE_F16;
+    bd.base.c_dtype = TC_DTYPE_F16;
+    bd.base.accum_dtype = TC_DTYPE_F32;
+    bd.base.alpha = 1.0f; bd.base.beta = 0.0f;
+    bd.batch = batch;
+    bd.stride_a = stride_a;
+    bd.stride_b = stride_b;
+    bd.stride_c = stride_c;
+    tc_status_t s = tc_gemm_batched(ctx, &bd, A, B, C);
+
+    double max_abs = 0.0, sum_sq_err = 0.0, sum_sq_ref = 0.0;
+    if (s == TC_OK) {
+        for (int b = 0; b < batch; ++b) {
+            const size_t c0 = (size_t)b * (size_t)stride_c;
+            for (size_t i = 0; i < elems_c; ++i) {
+                const float got = f16_to_f32(Cp[c0 + i]);
+                const double e = fabs((double)got - (double)Cref[c0 + i]);
+                if (e > max_abs) max_abs = e;
+                sum_sq_err += e * e;
+                sum_sq_ref += (double)Cref[c0 + i] * (double)Cref[c0 + i];
+            }
+        }
+    }
+    const double rms_err = sqrt(sum_sq_err / ((double)batch * elems_c));
+    const double rms_ref = sqrt(sum_sq_ref / ((double)batch * elems_c));
+    const double scaled = rms_err / (rms_ref + 1e-9);
+
+    printf("  batched batch=%d M=%d N=%d K=%d backend=%-18s  max_abs=%.3e scaled=%.3e  %s\n",
+           batch, M, N, K, tc_backend_name(tc_last_backend()),
+           max_abs, scaled, (s == TC_OK && scaled < 1.5e-2) ? "OK" : tc_status_string(s));
+
+    free(Afp32); free(Bfp32); free(Cref);
+    tc_buffer_free(ctx, A);
+    tc_buffer_free(ctx, B);
+    tc_buffer_free(ctx, C);
+    if (s != TC_OK) return (int)-s;
+    return (scaled < 1.5e-2) ? 0 : 5;
+}
+
 static int run_batched_rejection_case(tc_context* ctx) {
     tc_buffer *A = NULL, *B = NULL, *C = NULL;
     tc_buffer_alloc(ctx, 2 * sizeof(uint16_t), &A);
@@ -187,6 +280,7 @@ int main(void) {
     rc |= run_case(ctx, 128, 128, 128);
     rc |= run_case(ctx, 256, 256, 256);
     rc |= run_case(ctx, 512, 512, 512);
+    rc |= run_batched_case(ctx, 3, 64, 48, 64);
     rc |= run_batched_rejection_case(ctx);
     rc |= run_buffer_validation_case(ctx);
     tc_shutdown(ctx);

@@ -416,7 +416,8 @@ extern "C" tc_status_t tc_gemm_batched(tc_context* ctx,
     if (s != TC_OK) return s;
 
     tc_status_t err = TC_OK;
-    id<MTLComputePipelineState> pso = tc_pipeline_get(ctx, @"tc_gemm_f16_f32_batched", &err);
+    id<MTLComputePipelineState> pso = resolve_pipeline(ctx, @"tc_gemm_f16_f32_batched",
+                                                        false, false, &err);
     if (!pso) return err;
 
     const uint32_t M = (uint32_t)d.M;

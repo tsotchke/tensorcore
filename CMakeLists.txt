@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(tensorcore
-    VERSION 0.1.11
+    VERSION 0.1.12
     LANGUAGES C CXX OBJC OBJCXX
     DESCRIPTION "CUDA-equivalent tensor-core acceleration for Apple Silicon"
 )

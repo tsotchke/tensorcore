@@ -192,6 +192,53 @@ def _run_attention_wrapper_check(ctx):
             tc.buffer_free(ctx, b)
 
 
+def _run_batched_gemm_wrapper_check(ctx):
+    batch, M, N, K = 3, 32, 24, 32
+    stride_a = M * K + 7
+    stride_b = K * N + 5
+    stride_c = M * N + 3
+    total_a = (batch - 1) * stride_a + M * K
+    total_b = (batch - 1) * stride_b + K * N
+    total_c = (batch - 1) * stride_c + M * N
+
+    A = np.zeros(total_a, dtype=np.float16)
+    B = np.zeros(total_b, dtype=np.float16)
+    C = np.zeros(total_c, dtype=np.float16)
+    C_ref = np.zeros(total_c, dtype=np.float16)
+    for b in range(batch):
+        a0 = b * stride_a
+        b0 = b * stride_b
+        c0 = b * stride_c
+        A[a0:a0 + M * K] = np.random.randn(M * K).astype(np.float16)
+        B[b0:b0 + K * N] = np.random.randn(K * N).astype(np.float16)
+        Am = A[a0:a0 + M * K].reshape(M, K).astype(np.float32)
+        Bm = B[b0:b0 + K * N].reshape(K, N).astype(np.float32)
+        C_ref[c0:c0 + M * N] = (Am @ Bm).astype(np.float16).reshape(-1)
+
+    ab = tc.buffer_alloc(ctx, A.nbytes)
+    bb = tc.buffer_alloc(ctx, B.nbytes)
+    cb = tc.buffer_alloc(ctx, C.nbytes)
+    try:
+        tc.buffer_write(ab, A)
+        tc.buffer_write(bb, B)
+        tc.gemm_batched(ctx, ab, bb, cb, batch, M, N, K,
+                        stride_a=stride_a, stride_b=stride_b, stride_c=stride_c)
+        tc.buffer_read(cb, C)
+        max_abs = 0.0
+        for b in range(batch):
+            c0 = b * stride_c
+            err = np.max(np.abs(
+                C[c0:c0 + M * N].astype(np.float32) -
+                C_ref[c0:c0 + M * N].astype(np.float32)
+            ))
+            max_abs = max(max_abs, float(err))
+        return max_abs == 0.0, max_abs
+    finally:
+        tc.buffer_free(ctx, ab)
+        tc.buffer_free(ctx, bb)
+        tc.buffer_free(ctx, cb)
+
+
 def _run_training_wrapper_checks(ctx):
     bufs = []
 
@@ -446,6 +493,10 @@ def main():
           f"{'OK' if scaled_async < 1e-2 else 'FAIL'}")
     print(f"Host buffer bounds:    {'OK' if host_bounds_ok else 'FAIL'}")
 
+    batched_ok, batched_err = _run_batched_gemm_wrapper_check(ctx)
+    print(f"GEMM batched fp16:     max_abs={batched_err:.3e}  "
+          f"{'OK' if batched_ok else 'FAIL'}")
+
     attention_ok, attention_errs = _run_attention_wrapper_check(ctx)
     print(f"Attention wrapper:     scaled={attention_errs['out']:.3e}  "
           f"lse={attention_errs['lse']:.3e}  async={attention_errs['async']:.3e}  "
@@ -619,6 +670,7 @@ def main():
         scaled < 1e-2 and
         scaled_async < 1e-2 and
         host_bounds_ok and
+        batched_ok and
         attention_ok and
         q_ok and
         q8_ok and
