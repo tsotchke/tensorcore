@@ -12,6 +12,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Version consistency
+        run: scripts/check_version_consistency.sh
+
       - name: Show toolchain
         run: |
           sw_vers
@@ -48,6 +51,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v6
+      - name: Version consistency
+        run: scripts/check_version_consistency.sh
       - name: Configure
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release
       - name: Build
