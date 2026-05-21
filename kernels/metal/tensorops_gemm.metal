@@ -64,7 +64,7 @@ kernel void tc4_gemm_f16(
     constexpr auto md = matmul2d_descriptor(
         /*M*/ TC4_M_TILE, /*N*/ TC4_N_TILE, /*K*/ dynamic_length_v<int>,
         /*transA*/ false, /*transB*/ false, /*transC*/ false,
-        matmul2d_descriptor::mode::multiply);
+        matmul2d_descriptor::mode::multiply_accumulate);
 
     matmul2d<md, execution_simdgroups<TC4_SG_COUNT>> mm;
 
@@ -78,7 +78,8 @@ kernel void tc4_gemm_f16(
 
     /* Run the matmul. mpp::tensor_ops handles the K-loop internally based on
      * the dynamic K extent in mA's dextents. v0.1 only dispatches this path
-     * for alpha=1, beta=0, so direct multiply output is correct. */
+     * for alpha=1, beta=0; runtime validation initializes C to zero before
+     * exercising this Metal4 path. */
     auto cSlice = C.slice(col0, row0);
     mm.run(mA, mB, cSlice);
 
@@ -109,7 +110,7 @@ kernel void tc4_gemm_bf16(
     constexpr auto md = matmul2d_descriptor(
         TC4_M_TILE, TC4_N_TILE, dynamic_length_v<int>,
         false, false, false,
-        matmul2d_descriptor::mode::multiply);
+        matmul2d_descriptor::mode::multiply_accumulate);
     matmul2d<md, execution_simdgroups<TC4_SG_COUNT>> mm;
 
     const uint row0 = tgid.y * TC4_M_TILE;
@@ -148,7 +149,7 @@ kernel void tc4_gemm_f32(
     constexpr auto md = matmul2d_descriptor(
         TC4_M_TILE, TC4_N_TILE, dynamic_length_v<int>,
         false, false, false,
-        matmul2d_descriptor::mode::multiply);
+        matmul2d_descriptor::mode::multiply_accumulate);
     matmul2d<md, execution_simdgroups<TC4_SG_COUNT>> mm;
 
     const uint row0 = tgid.y * TC4_M_TILE;

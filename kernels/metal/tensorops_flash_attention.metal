@@ -57,7 +57,6 @@ inline void flash_attention_tensorops_impl(
 
     const uint q_base   = ((batch_idx * heads    + head_idx)    * seq_q  + 0) * D;
     const uint k_base   = ((batch_idx * kv_heads + kv_head_idx) * seq_kv + 0) * D;
-    const uint v_base   = ((batch_idx * kv_heads + kv_head_idx) * seq_kv + 0) * D;
     const uint o_base   = ((batch_idx * heads    + head_idx)    * seq_q  + 0) * D;
 
     auto Qt = tensor<device const half, dextents<int32_t, 2>, tensor_inline>(
@@ -73,7 +72,7 @@ inline void flash_attention_tensorops_impl(
     constexpr auto placeholder_md = matmul2d_descriptor(
         TC4_FA_BR, D, D,
         false, false, false,
-        matmul2d_descriptor::mode::multiply);
+        matmul2d_descriptor::mode::multiply_accumulate);
     matmul2d<placeholder_md, execution_simdgroups<TC4_FA_SG_COUNT>> placeholder_op;
     placeholder_op.run(Qb, Kb, Ob);
 
