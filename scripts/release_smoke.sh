@@ -804,18 +804,36 @@ BUILD_DIR="$BUILD_DIR" "$ROOT/scripts/check_public_exports.sh"
 
 echo "[tensorcore] test"
 RELEASE_SMOKE_PHASE="test"
-if "$BUILD_DIR/tests/test_device"; then
-    GPU_OK=1
-    ctest --test-dir "$BUILD_DIR" --output-on-failure
-    echo "[tensorcore] GEMM env variants"
-    cmake -E env TC_METALLIB="$BUILD_DIR/tensorcore.metallib" TC_USE_128_TILE=1 \
-        "$BUILD_DIR/tests/test_gemm_f16"
-    cmake -E env TC_METALLIB="$BUILD_DIR/tensorcore.metallib" TC_USE_128_TILE=1 \
-        "$BUILD_DIR/tests/test_gemm_f32"
-    GEMM_128_TILE_STATUS="passed"
-    cmake -E env TC_METALLIB="$BUILD_DIR/tensorcore.metallib" TC_USE_ASYNC=1 \
-        "$BUILD_DIR/tests/test_gemm_f16"
-    GEMM_ASYNC_STATUS="passed"
+DEVICE_LOG="$BUILD_DIR/release_smoke_device.log"
+if "$BUILD_DIR/tests/test_device" >"$DEVICE_LOG" 2>&1; then
+    cat "$DEVICE_LOG"
+    if grep -Eq 'family[[:space:]]*:[[:space:]]*Apple(0|[1-6]\b)' "$DEVICE_LOG" ||
+       grep -Fq 'Apple Paravirtual device' "$DEVICE_LOG"; then
+        if [ "$REQUIRE_GPU" = "1" ]; then
+            echo "Production Apple GPU required, but only a non-production/pre-M1 GPU was detected." >&2
+            exit 1
+        fi
+        echo "Non-production Apple GPU detected; running paravirtual-safe smoke subset."
+        ctest --test-dir "$BUILD_DIR" --output-on-failure \
+            -R '^(test_device|test_distributed_ring|test_distributed_ring_fork|test_tensorops_select|test_tensorops_runtime|test_gguf)$'
+        TESTS_MODE="paravirtual_safe_subset"
+        GEMM_128_TILE_STATUS="skipped_paravirtual_gpu"
+        GEMM_ASYNC_STATUS="skipped_paravirtual_gpu"
+    else
+        GPU_OK=1
+        ctest --test-dir "$BUILD_DIR" --output-on-failure
+        echo "[tensorcore] GEMM env variants"
+        cmake -E env TC_METALLIB="$BUILD_DIR/tensorcore.metallib" TC_USE_128_TILE=1 \
+            "$BUILD_DIR/tests/test_gemm_f16"
+        cmake -E env TC_METALLIB="$BUILD_DIR/tensorcore.metallib" TC_USE_128_TILE=1 \
+            "$BUILD_DIR/tests/test_gemm_f32"
+        GEMM_128_TILE_STATUS="passed"
+        cmake -E env TC_METALLIB="$BUILD_DIR/tensorcore.metallib" TC_USE_ASYNC=1 \
+            "$BUILD_DIR/tests/test_gemm_f16"
+        GEMM_ASYNC_STATUS="passed"
+        TESTS_MODE="full"
+    fi
+
     echo "[tensorcore] Metal 4 TensorOps runtime probe"
     set +e
     TENSOROPS_RUNTIME_OUTPUT="$(
@@ -853,8 +871,8 @@ if "$BUILD_DIR/tests/test_device"; then
         write_runtime_evidence
         exit 1
     fi
-    TESTS_MODE="full"
 else
+    cat "$DEVICE_LOG"
     if [ "$REQUIRE_GPU" = "1" ]; then
         echo "Metal device smoke failed and REQUIRE_GPU=1 was set." >&2
         exit 1
