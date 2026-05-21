@@ -798,6 +798,10 @@ if [ "$TC_SDK_SUPPORTS_METAL4" = "1" ]; then
     METAL4_TENSOROPS_REASON="SDK ${TC_SDK_VERSION} compiled Metal 4 TensorOps sources; runtime probe not covered on this host"
 fi
 
+echo "[tensorcore] public export surface"
+RELEASE_SMOKE_PHASE="public_exports"
+BUILD_DIR="$BUILD_DIR" "$ROOT/scripts/check_public_exports.sh"
+
 echo "[tensorcore] test"
 RELEASE_SMOKE_PHASE="test"
 if "$BUILD_DIR/tests/test_device"; then
