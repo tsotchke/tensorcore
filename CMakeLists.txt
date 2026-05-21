@@ -189,6 +189,9 @@ target_link_libraries(tensorcore_shared PUBLIC
     ${METALPERFORMANCESHADERS_FRAMEWORK} ${METALPERFORMANCESHADERSGRAPH_FRAMEWORK}
     ${ACCELERATE_FRAMEWORK}
 )
+target_link_options(tensorcore_shared PRIVATE
+    "LINKER:-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/cmake/tensorcore.exports"
+)
 add_library(tensorcore::tensorcore ALIAS tensorcore)
 add_dependencies(tensorcore tensorcore_metallib)
 
