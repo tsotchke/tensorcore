@@ -2,6 +2,15 @@
 #
 # Each .c becomes one ctest case. Tests link against tensorcore + Accelerate.
 
+if(NOT TC_ENABLE_METAL)
+    add_executable(test_portable_cpu test_portable_cpu.c)
+    target_link_libraries(test_portable_cpu PRIVATE tensorcore)
+    target_include_directories(test_portable_cpu PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    add_test(NAME test_portable_cpu COMMAND test_portable_cpu)
+    set_tests_properties(test_portable_cpu PROPERTIES TIMEOUT 120)
+    return()
+endif()
+
 set(TC_TESTS
     test_device
     test_gemm_f32

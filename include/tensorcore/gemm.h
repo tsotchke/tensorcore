@@ -80,6 +80,7 @@ typedef enum {
     TC_BACKEND_ACCELERATE_CPU   = 4,   /* cblas_*gemm fallback            */
     TC_BACKEND_SF64_EMULATED    = 5,   /* SoftFloat-64 emulation          */
     TC_BACKEND_OZAKI_II         = 6,   /* CRT-based exact GEMM            */
+    TC_BACKEND_PORTABLE_CPU     = 7,   /* portable C CPU backend          */
 } tc_backend_t;
 
 tc_backend_t tc_last_backend(void);

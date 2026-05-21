@@ -3,14 +3,18 @@
 include("${CMAKE_CURRENT_LIST_DIR}/tensorcoreTargets.cmake")
 
 set(tensorcore_VERSION "@PROJECT_VERSION@")
-set(tensorcore_METALLIB "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_LIBDIR@/tensorcore.metallib")
+set(tensorcore_ENABLE_METAL "@TC_ENABLE_METAL@")
 
-function(tensorcore_copy_metallib target)
-    if(NOT TARGET "${target}")
-        message(FATAL_ERROR "tensorcore_copy_metallib: target '${target}' does not exist")
-    endif()
-    add_custom_command(TARGET "${target}" POST_BUILD
-        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${tensorcore_METALLIB}"
-            "$<TARGET_FILE_DIR:${target}>/tensorcore.metallib")
-endfunction()
+if(tensorcore_ENABLE_METAL)
+    set(tensorcore_METALLIB "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_LIBDIR@/tensorcore.metallib")
+
+    function(tensorcore_copy_metallib target)
+        if(NOT TARGET "${target}")
+            message(FATAL_ERROR "tensorcore_copy_metallib: target '${target}' does not exist")
+        endif()
+        add_custom_command(TARGET "${target}" POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "${tensorcore_METALLIB}"
+                "$<TARGET_FILE_DIR:${target}>/tensorcore.metallib")
+    endfunction()
+endif()

@@ -2,20 +2,29 @@ cmake_minimum_required(VERSION 3.20)
 
 project(tensorcore
     VERSION 0.1.22
-    LANGUAGES C CXX OBJC OBJCXX
+    LANGUAGES C CXX
     DESCRIPTION "CUDA-equivalent tensor-core acceleration for Apple Silicon"
 )
 
 # ----------------------------------------------------------------------------
 # Platform gate
 # ----------------------------------------------------------------------------
-if(NOT APPLE)
-    message(FATAL_ERROR
-        "tensorcore is Apple-Silicon-only. For NVIDIA, use the CUDA path in "
-        "eshkol-platform/lib/backend/gpu/.")
+if(APPLE)
+    set(TC_ENABLE_METAL_DEFAULT ON)
+else()
+    set(TC_ENABLE_METAL_DEFAULT OFF)
+endif()
+option(TC_ENABLE_METAL "Build the Apple Metal unified-memory GPU backend" ${TC_ENABLE_METAL_DEFAULT})
+
+if(TC_ENABLE_METAL AND NOT APPLE)
+    message(FATAL_ERROR "TC_ENABLE_METAL requires Apple platforms. Disable it for the portable CPU backend.")
 endif()
 
-if(NOT CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
+if(TC_ENABLE_METAL)
+    enable_language(OBJC OBJCXX)
+endif()
+
+if(TC_ENABLE_METAL AND NOT CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
     message(WARNING
         "tensorcore is built for arm64 (Apple Silicon). x86_64 build will "
         "succeed but Metal simdgroup_matrix kernels will not run.")
@@ -37,8 +46,9 @@ endif()
 
 add_compile_options(
     -Wall -Wextra -Wpedantic -Wno-gnu-zero-variadic-macro-arguments
-    -fobjc-arc
 )
+add_compile_options($<$<COMPILE_LANGUAGE:OBJC>:-fobjc-arc>)
+add_compile_options($<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
 add_compile_options($<$<CONFIG:Release>:-O3>)
 add_compile_options($<$<CONFIG:Release>:-DNDEBUG>)
 
@@ -49,131 +59,169 @@ option(TC_BUILD_TESTS  "Build correctness tests" ON)
 option(TC_BUILD_BENCH  "Build TFLOPS bench harness" ON)
 option(TC_BUILD_EXAMPLES "Build example programs" ON)
 
-# ----------------------------------------------------------------------------
-# Frameworks
-# ----------------------------------------------------------------------------
-find_library(METAL_FRAMEWORK            Metal                       REQUIRED)
-find_library(FOUNDATION_FRAMEWORK       Foundation                  REQUIRED)
-find_library(METALKIT_FRAMEWORK         MetalKit                    REQUIRED)
-find_library(METALPERFORMANCESHADERS_FRAMEWORK MetalPerformanceShaders REQUIRED)
-find_library(METALPERFORMANCESHADERSGRAPH_FRAMEWORK MetalPerformanceShadersGraph REQUIRED)
-find_library(ACCELERATE_FRAMEWORK       Accelerate                  REQUIRED)
-
-set(TC_APPLE_FRAMEWORK_LINKS
-    "-framework Metal"
-    "-framework Foundation"
-    "-framework MetalKit"
-    "-framework MetalPerformanceShaders"
-    "-framework MetalPerformanceShadersGraph"
-    "-framework Accelerate"
-)
 set(TC_MACHO_COMPATIBILITY_VERSION
     "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.0"
 )
+
+set(TC_APPLE_FRAMEWORK_LINKS)
+set(TC_PC_PRIVATE_LIBS)
+set(TC_STATIC_RUNTIME_LINKS)
+if(APPLE)
+    list(APPEND TC_STATIC_RUNTIME_LINKS "$<$<LINK_LANGUAGE:C>:-lc++>")
+endif()
+if(TC_ENABLE_METAL)
+    # ------------------------------------------------------------------------
+    # Frameworks
+    # ------------------------------------------------------------------------
+    find_library(METAL_FRAMEWORK            Metal                       REQUIRED)
+    find_library(FOUNDATION_FRAMEWORK       Foundation                  REQUIRED)
+    find_library(METALKIT_FRAMEWORK         MetalKit                    REQUIRED)
+    find_library(METALPERFORMANCESHADERS_FRAMEWORK MetalPerformanceShaders REQUIRED)
+    find_library(METALPERFORMANCESHADERSGRAPH_FRAMEWORK MetalPerformanceShadersGraph REQUIRED)
+    find_library(ACCELERATE_FRAMEWORK       Accelerate                  REQUIRED)
+
+    set(TC_APPLE_FRAMEWORK_LINKS
+        "-framework Metal"
+        "-framework Foundation"
+        "-framework MetalKit"
+        "-framework MetalPerformanceShaders"
+        "-framework MetalPerformanceShadersGraph"
+        "-framework Accelerate"
+    )
+    if(APPLE)
+        list(APPEND TC_STATIC_RUNTIME_LINKS "$<$<LINK_LANGUAGE:C>:-lobjc>")
+    endif()
+    set(TC_PC_PRIVATE_LIBS "${TC_APPLE_FRAMEWORK_LINKS} -lc++ -lobjc")
+elseif(APPLE)
+    set(TC_PC_PRIVATE_LIBS "-lc++")
+endif()
 
 # ----------------------------------------------------------------------------
 # Metal kernel compilation
 # ----------------------------------------------------------------------------
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
-include(compile_metallib)
+if(TC_ENABLE_METAL)
+    include(compile_metallib)
+endif()
 
 # ----------------------------------------------------------------------------
 # SDK detection — Metal 4 / mpp::tensor_ops requires macOS 26.0+ SDK.
 # We detect the SDK version and conditionally include the tensorops kernels.
 # Build succeeds on any SDK >= 12.0; tensorops path only compiles on >= 26.0.
 # ----------------------------------------------------------------------------
-execute_process(
-    COMMAND xcrun --show-sdk-version
-    OUTPUT_VARIABLE TC_SDK_VERSION
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
-)
-if(NOT TC_SDK_VERSION)
-    set(TC_SDK_VERSION "0.0")
-endif()
+if(TC_ENABLE_METAL)
+    execute_process(
+        COMMAND xcrun --show-sdk-version
+        OUTPUT_VARIABLE TC_SDK_VERSION
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(NOT TC_SDK_VERSION)
+        set(TC_SDK_VERSION "0.0")
+    endif()
 
-if(TC_SDK_VERSION VERSION_GREATER_EQUAL "26.0")
-    set(TC_HAVE_METAL4 ON)
-    set(TC_METAL_STD "metal4.0")
-    message(STATUS "tensorcore: SDK ${TC_SDK_VERSION} -- ENABLING Metal 4 / mpp::tensor_ops path")
+    if(TC_SDK_VERSION VERSION_GREATER_EQUAL "26.0")
+        set(TC_HAVE_METAL4 ON)
+        set(TC_METAL_STD "metal4.0")
+        message(STATUS "tensorcore: SDK ${TC_SDK_VERSION} -- ENABLING Metal 4 / mpp::tensor_ops path")
+    else()
+        set(TC_HAVE_METAL4 OFF)
+        set(TC_METAL_STD "metal3.1")
+        message(STATUS "tensorcore: SDK ${TC_SDK_VERSION} -- Metal 4 path requires SDK >= 26.0 (skipping)")
+    endif()
+
+    set(TC_METAL_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/gemm_simdgroup.metal
+        ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/gemm_simdgroup_128.metal
+        ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/flash_attention.metal
+        ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/flash_attention_d128.metal
+        ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/flash_attention_backward.metal
+        ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/flash_attention_backward_d128.metal
+        ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/training_kernels.metal
+        ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/conv2d.metal
+        ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/conv2d_backward.metal
+        ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/gemm_quantized.metal
+        ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/gemm_quantized_v2.metal
+        ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/fused_norm_gemv.metal
+    )
+
+    # The async_copy kernels use private AIR intrinsics via __asm. Xcode 16.x
+    # accepts them; Xcode 17+ / macOS 26+ rejects (per research). Gate the
+    # compilation by SDK version so the build succeeds either way; on newer
+    # SDKs the async-kernel name simply isn't present in the metallib and the
+    # host-side dispatch silently falls back to the sync path.
+    if(TC_SDK_VERSION VERSION_LESS "26.0")
+        set(TC_HAVE_ASYNC_COPY ON)
+        list(APPEND TC_METAL_SOURCES
+            ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/gemm_async.metal
+            ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/gemm_async_128.metal
+        )
+        message(STATUS "tensorcore: SDK ${TC_SDK_VERSION} -- ENABLING async_copy GEMM kernels")
+    else()
+        set(TC_HAVE_ASYNC_COPY OFF)
+        message(STATUS "tensorcore: SDK ${TC_SDK_VERSION} -- DISABLING async_copy GEMM kernels (Xcode 17+ rejects __asm intrinsics)")
+    endif()
+
+    if(TC_HAVE_METAL4)
+        list(APPEND TC_METAL_SOURCES
+            ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/tensorops_gemm.metal
+            ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/tensorops_flash_attention.metal
+        )
+    endif()
+
+    set(TC_METALLIB_PATH "${CMAKE_CURRENT_BINARY_DIR}/tensorcore.metallib")
+
+    tc_compile_metallib(
+        TARGET  tensorcore_metallib
+        SOURCES ${TC_METAL_SOURCES}
+        OUTPUT  ${TC_METALLIB_PATH}
+        STD     ${TC_METAL_STD}
+        FLAGS   -gline-tables-only
+    )
 else()
     set(TC_HAVE_METAL4 OFF)
-    set(TC_METAL_STD "metal3.1")
-    message(STATUS "tensorcore: SDK ${TC_SDK_VERSION} -- Metal 4 path requires SDK >= 26.0 (skipping)")
+    message(STATUS "tensorcore: Metal backend disabled; building portable CPU backend")
 endif()
-
-set(TC_METAL_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/gemm_simdgroup.metal
-    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/gemm_simdgroup_128.metal
-    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/flash_attention.metal
-    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/flash_attention_d128.metal
-    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/flash_attention_backward.metal
-    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/flash_attention_backward_d128.metal
-    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/training_kernels.metal
-    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/conv2d.metal
-    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/conv2d_backward.metal
-    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/gemm_quantized.metal
-    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/gemm_quantized_v2.metal
-    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/fused_norm_gemv.metal
-)
-
-# The async_copy kernels use private AIR intrinsics via __asm. Xcode 16.x
-# accepts them; Xcode 17+ / macOS 26+ rejects (per research). Gate the
-# compilation by SDK version so the build succeeds either way; on newer
-# SDKs the async-kernel name simply isn't present in the metallib and the
-# host-side dispatch silently falls back to the sync path.
-if(TC_SDK_VERSION VERSION_LESS "26.0")
-    set(TC_HAVE_ASYNC_COPY ON)
-    list(APPEND TC_METAL_SOURCES
-        ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/gemm_async.metal
-        ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/gemm_async_128.metal
-    )
-    message(STATUS "tensorcore: SDK ${TC_SDK_VERSION} -- ENABLING async_copy GEMM kernels")
-else()
-    set(TC_HAVE_ASYNC_COPY OFF)
-    message(STATUS "tensorcore: SDK ${TC_SDK_VERSION} -- DISABLING async_copy GEMM kernels (Xcode 17+ rejects __asm intrinsics)")
-endif()
-
-if(TC_HAVE_METAL4)
-    list(APPEND TC_METAL_SOURCES
-        ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/tensorops_gemm.metal
-        ${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/tensorops_flash_attention.metal
-    )
-endif()
-
-set(TC_METALLIB_PATH "${CMAKE_CURRENT_BINARY_DIR}/tensorcore.metallib")
-
-tc_compile_metallib(
-    TARGET  tensorcore_metallib
-    SOURCES ${TC_METAL_SOURCES}
-    OUTPUT  ${TC_METALLIB_PATH}
-    STD     ${TC_METAL_STD}
-    FLAGS   -gline-tables-only
-)
 
 # ----------------------------------------------------------------------------
 # Library
 # ----------------------------------------------------------------------------
-set(TC_SOURCES
+set(TC_COMMON_SOURCES
     lib/core/status.c
     lib/core/dtype.c
-    lib/core/device.mm
-    lib/core/pipeline_cache.mm
-    lib/core/buffer_pool.mm
     lib/core/autotune.cpp
-    lib/ops/gemm.mm
-    lib/ops/attention.mm
-    lib/ops/training.mm
-    lib/ops/conv.mm
-    lib/distributed/distributed.mm
-    lib/distributed/ring_local.mm
-    lib/ops/quantized.mm
     lib/io/gguf.c
     lib/tensorops/tensorops_select.c
-    lib/fallback/mps_gemm.mm
-    lib/fallback/accelerate_gemm.c
-    lib/c_api/c_api.mm
 )
+
+if(TC_ENABLE_METAL)
+    set(TC_SOURCES
+        ${TC_COMMON_SOURCES}
+        lib/core/device.mm
+        lib/core/pipeline_cache.mm
+        lib/core/buffer_pool.mm
+        lib/ops/gemm.mm
+        lib/ops/attention.mm
+        lib/ops/training.mm
+        lib/ops/conv.mm
+        lib/distributed/distributed.mm
+        lib/distributed/ring_local.mm
+        lib/ops/quantized.mm
+        lib/fallback/mps_gemm.mm
+        lib/fallback/accelerate_gemm.c
+        lib/c_api/c_api.mm
+    )
+else()
+    set(TC_SOURCES
+        ${TC_COMMON_SOURCES}
+        lib/core/device_cpu.cpp
+        lib/ops/gemm_cpu.cpp
+        lib/ops/quantized_cpu.cpp
+        lib/ops/unsupported_cpu.cpp
+        lib/distributed/distributed_cpu.cpp
+        lib/c_api/c_api_cpu.c
+    )
+endif()
 
 if(TC_HAVE_METAL4)
     list(APPEND TC_SOURCES lib/tensorops/tensorops_m5.mm)
@@ -189,7 +237,9 @@ set_target_properties(tensorcore_shared PROPERTIES
     MACHO_COMPATIBILITY_VERSION "${TC_MACHO_COMPATIBILITY_VERSION}"
 )
 add_library(tensorcore::tensorcore_shared ALIAS tensorcore_shared)
-add_dependencies(tensorcore_shared tensorcore_metallib)
+if(TC_ENABLE_METAL)
+    add_dependencies(tensorcore_shared tensorcore_metallib)
+endif()
 target_include_directories(tensorcore_shared
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -197,17 +247,23 @@ target_include_directories(tensorcore_shared
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/lib
 )
-target_compile_definitions(tensorcore_shared PRIVATE
-    TC_METALLIB_PATH="${TC_METALLIB_PATH}"
-)
+if(TC_ENABLE_METAL)
+    target_compile_definitions(tensorcore_shared PRIVATE
+        TC_METALLIB_PATH="${TC_METALLIB_PATH}"
+    )
+endif()
 target_link_libraries(tensorcore_shared PUBLIC
     ${TC_APPLE_FRAMEWORK_LINKS}
 )
-target_link_options(tensorcore_shared PRIVATE
-    "LINKER:-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/cmake/tensorcore.exports"
-)
+if(TC_ENABLE_METAL)
+    target_link_options(tensorcore_shared PRIVATE
+        "LINKER:-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/cmake/tensorcore.exports"
+    )
+endif()
 add_library(tensorcore::tensorcore ALIAS tensorcore)
-add_dependencies(tensorcore tensorcore_metallib)
+if(TC_ENABLE_METAL)
+    add_dependencies(tensorcore tensorcore_metallib)
+endif()
 
 target_include_directories(tensorcore
     PUBLIC
@@ -217,14 +273,15 @@ target_include_directories(tensorcore
         ${CMAKE_CURRENT_SOURCE_DIR}/lib
 )
 
-target_compile_definitions(tensorcore PRIVATE
-    TC_METALLIB_PATH="${TC_METALLIB_PATH}"
-)
+if(TC_ENABLE_METAL)
+    target_compile_definitions(tensorcore PRIVATE
+        TC_METALLIB_PATH="${TC_METALLIB_PATH}"
+    )
+endif()
 
 target_link_libraries(tensorcore PUBLIC
     ${TC_APPLE_FRAMEWORK_LINKS}
-    $<$<LINK_LANGUAGE:C>:c++>
-    objc
+    ${TC_STATIC_RUNTIME_LINKS}
 )
 
 set_target_properties(tensorcore PROPERTIES
@@ -260,7 +317,9 @@ install(TARGETS tensorcore tensorcore_shared
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 install(DIRECTORY include/tensorcore DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-install(FILES ${TC_METALLIB_PATH} DESTINATION ${CMAKE_INSTALL_LIBDIR})
+if(TC_ENABLE_METAL)
+    install(FILES ${TC_METALLIB_PATH} DESTINATION ${CMAKE_INSTALL_LIBDIR})
+endif()
 
 set(TC_CONFIG_INSTALL_DIR "${CMAKE_INSTALL_LIBDIR}/cmake/tensorcore")
 configure_package_config_file(
@@ -292,5 +351,7 @@ install(FILES
     DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig"
 )
 
-message(STATUS "tensorcore: configured (Metal4=${TC_HAVE_METAL4}, tests=${TC_BUILD_TESTS}, bench=${TC_BUILD_BENCH})")
-message(STATUS "  metallib -> ${TC_METALLIB_PATH}")
+message(STATUS "tensorcore: configured (Metal=${TC_ENABLE_METAL}, Metal4=${TC_HAVE_METAL4}, tests=${TC_BUILD_TESTS}, bench=${TC_BUILD_BENCH})")
+if(TC_ENABLE_METAL)
+    message(STATUS "  metallib -> ${TC_METALLIB_PATH}")
+endif()

@@ -10,7 +10,9 @@
 extern "C" {
 #endif
 
-/* Opaque handles. Internally these wrap MTLDevice / MTLBuffer / MTLCommandQueue. */
+/* Opaque handles. On Apple builds these wrap MTLDevice / MTLBuffer /
+ * MTLCommandQueue. On portable CPU builds they wrap host allocations and
+ * no-op streams so the same ABI can run on Linux mesh workers. */
 typedef struct tc_context  tc_context;
 typedef struct tc_buffer   tc_buffer;
 typedef struct tc_stream   tc_stream;

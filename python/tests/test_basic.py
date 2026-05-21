@@ -140,6 +140,7 @@ def _run_diagnostic_api_check():
     backend_ok = (
         tc.backend_name(tc.TC_BACKEND_NONE) == "none" and
         tc.backend_name(tc.TC_BACKEND_TENSOROPS_M5) == "tensorops_m5" and
+        tc.backend_name(tc.TC_BACKEND_PORTABLE_CPU) == "portable_cpu" and
         tc.backend_name(9999) == "?" and
         tc.last_backend() == tc.TC_BACKEND_NONE and
         tc.last_backend_name() == "none"
@@ -885,7 +886,7 @@ def main():
           f"{'OK' if scaled < 1e-2 else 'FAIL'}")
     gemm_backend = tc.last_backend_name()
     gemm_backend_ok = gemm_backend in (
-        "simdgroup_matrix", "tensorops_m5", "mps", "accelerate_cpu"
+        "simdgroup_matrix", "tensorops_m5", "mps", "accelerate_cpu", "portable_cpu"
     )
     print(f"GEMM backend:         {gemm_backend}  "
           f"{'OK' if gemm_backend_ok else 'FAIL'}")
