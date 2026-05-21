@@ -151,6 +151,30 @@ static int run_batched_rejection_case(tc_context* ctx) {
     return (s == TC_ERR_INVALID_SHAPE) ? 0 : 1;
 }
 
+static int run_buffer_validation_case(tc_context* ctx) {
+    tc_buffer *A = NULL, *B = NULL, *C = NULL;
+    tc_buffer_alloc(ctx, 3 * sizeof(uint16_t), &A);  /* needs 2x2 = 4 elements */
+    tc_buffer_alloc(ctx, 4 * sizeof(uint16_t), &B);
+    tc_buffer_alloc(ctx, 4 * sizeof(uint16_t), &C);
+
+    tc_gemm_desc d = {0};
+    d.M = 2; d.N = 2; d.K = 2;
+    d.a_dtype = TC_DTYPE_F16;
+    d.b_dtype = TC_DTYPE_F16;
+    d.c_dtype = TC_DTYPE_F16;
+    d.accum_dtype = TC_DTYPE_F32;
+    d.alpha = 1.0f; d.beta = 0.0f;
+
+    tc_status_t s = tc_gemm(ctx, &d, A, B, C);
+    printf("  undersized GEMM buffer rejection: %s\n",
+           (s == TC_ERR_INVALID_SHAPE) ? "OK" : tc_status_string(s));
+
+    tc_buffer_free(ctx, A);
+    tc_buffer_free(ctx, B);
+    tc_buffer_free(ctx, C);
+    return (s == TC_ERR_INVALID_SHAPE) ? 0 : 1;
+}
+
 int main(void) {
     tc_context* ctx = NULL;
     tc_status_t s = tc_init(&ctx);
@@ -164,6 +188,7 @@ int main(void) {
     rc |= run_case(ctx, 256, 256, 256);
     rc |= run_case(ctx, 512, 512, 512);
     rc |= run_batched_rejection_case(ctx);
+    rc |= run_buffer_validation_case(ctx);
     tc_shutdown(ctx);
     return rc;
 }

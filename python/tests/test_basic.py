@@ -339,6 +339,22 @@ def main():
     tc.buffer_write(a, A)
     tc.buffer_write(b, B)
 
+    small = tc.buffer_alloc(ctx, 2)
+    try:
+        try:
+            tc.buffer_write(small, np.zeros(4, dtype=np.uint8))
+            write_bounds_ok = False
+        except ValueError:
+            write_bounds_ok = True
+        try:
+            tc.buffer_read(small, np.zeros(4, dtype=np.uint8))
+            read_bounds_ok = False
+        except ValueError:
+            read_bounds_ok = True
+    finally:
+        tc.buffer_free(ctx, small)
+    host_bounds_ok = write_bounds_ok and read_bounds_ok
+
     tc.gemm(ctx, a, b, c, M, N, K, dtype="f16")
     tc.buffer_read(c, C)
 
@@ -361,6 +377,7 @@ def main():
     scaled_async = rms_async / (ref_rms + 1e-9)
     print(f"GEMM async fp16:       max_abs={err_async.max():.3e}  scaled_rms={scaled_async:.3e}  "
           f"{'OK' if scaled_async < 1e-2 else 'FAIL'}")
+    print(f"Host buffer bounds:    {'OK' if host_bounds_ok else 'FAIL'}")
 
     qM, qN, qK = 1, 4, 64
     Xq_np = np.random.randn(qM, qK).astype(np.float16)
@@ -529,6 +546,7 @@ def main():
     ok = (
         scaled < 1e-2 and
         scaled_async < 1e-2 and
+        host_bounds_ok and
         q_ok and
         q8_ok and
         training_ok and

@@ -10,6 +10,64 @@
 #include "../core/internal.h"
 
 #include <cstdio>
+#include <limits>
+
+namespace {
+
+bool checked_mul(size_t a, size_t b, size_t* out) {
+    if (a != 0 && b > std::numeric_limits<size_t>::max() / a) return false;
+    *out = a * b;
+    return true;
+}
+
+bool fp16_matrix_bytes(int rows, int cols, size_t* out) {
+    size_t elems = 0;
+    if (rows <= 0 || cols <= 0) return false;
+    if (!checked_mul((size_t)rows, (size_t)cols, &elems)) return false;
+    return checked_mul(elems, sizeof(uint16_t), out);
+}
+
+tc_status_t validate_quantize_buffers(tc_context* ctx,
+                                      const tc_buffer* W_fp16,
+                                      tc_buffer* W_quant,
+                                      tc_quant_t fmt,
+                                      int N,
+                                      int K) {
+    size_t fp16_bytes = 0;
+    if (!fp16_matrix_bytes(N, K, &fp16_bytes)) return TC_ERR_INVALID_ARG;
+    const size_t quant_bytes = tc_quantized_size(fmt, N, K);
+    if (quant_bytes == 0) return TC_ERR_INVALID_ARG;
+
+    tc_status_t s = tc_buffer_validate(ctx, W_fp16, fp16_bytes);
+    if (s != TC_OK) return s;
+    return tc_buffer_validate(ctx, W_quant, quant_bytes);
+}
+
+tc_status_t validate_gemv_quantized_buffers(tc_context* ctx,
+                                            const tc_buffer* X,
+                                            const tc_buffer* W_quant,
+                                            tc_buffer* Y,
+                                            tc_quant_t fmt,
+                                            int M,
+                                            int N,
+                                            int K) {
+    size_t x_bytes = 0;
+    size_t y_bytes = 0;
+    if (!fp16_matrix_bytes(M, K, &x_bytes) ||
+        !fp16_matrix_bytes(M, N, &y_bytes)) {
+        return TC_ERR_INVALID_ARG;
+    }
+    const size_t w_bytes = tc_quantized_size(fmt, N, K);
+    if (w_bytes == 0) return TC_ERR_INVALID_ARG;
+
+    tc_status_t s = tc_buffer_validate(ctx, X, x_bytes);
+    if (s != TC_OK) return s;
+    s = tc_buffer_validate(ctx, W_quant, w_bytes);
+    if (s != TC_OK) return s;
+    return tc_buffer_validate(ctx, Y, y_bytes);
+}
+
+} /* namespace */
 
 extern "C" size_t tc_quantized_size(tc_quant_t fmt, int N, int K) {
     if (N <= 0 || K <= 0 || K % 32 != 0) return 0;
@@ -30,6 +88,8 @@ extern "C" tc_status_t tc_quantize_weights(tc_context* ctx,
                                            int N, int K) {
     if (!ctx || !W_fp16 || !W_quant || N <= 0 || K <= 0 || K % 32 != 0)
         return TC_ERR_INVALID_ARG;
+    tc_status_t s = validate_quantize_buffers(ctx, W_fp16, W_quant, fmt, N, K);
+    if (s != TC_OK) return s;
     NSString* kname = nil;
     if (fmt == TC_QUANT_Q4_0) {
         kname = @"tc_quantize_q4_0";
@@ -121,10 +181,13 @@ extern "C" tc_status_t tc_gemv_quantized_async(tc_context* ctx,
                                                tc_stream*       stream) {
     if (!ctx || !X || !W_quant || !Y || !stream ||
         M <= 0 || N <= 0 || K <= 0 || K % 32 != 0) return TC_ERR_INVALID_ARG;
+    if (stream->owner != ctx) return TC_ERR_INVALID_ARG;
+    tc_status_t s = validate_gemv_quantized_buffers(ctx, X, W_quant, Y, fmt, M, N, K);
+    if (s != TC_OK) return s;
     @autoreleasepool {
         id<MTLCommandBuffer> cmd = tc_stream_command_buffer(stream);
         if (!cmd) return TC_ERR_INTERNAL;
-        tc_status_t s = gemv_quant_encode(ctx, cmd, X, W_quant, Y, fmt, M, N, K);
+        s = gemv_quant_encode(ctx, cmd, X, W_quant, Y, fmt, M, N, K);
         if (s != TC_OK) return s;
     }
     return TC_OK;
@@ -138,10 +201,12 @@ extern "C" tc_status_t tc_gemv_quantized(tc_context* ctx,
                                          int M, int N, int K) {
     if (!ctx || !X || !W_quant || !Y || M <= 0 || N <= 0 || K <= 0 || K % 32 != 0)
         return TC_ERR_INVALID_ARG;
+    tc_status_t s = validate_gemv_quantized_buffers(ctx, X, W_quant, Y, fmt, M, N, K);
+    if (s != TC_OK) return s;
 
     @autoreleasepool {
         id<MTLCommandBuffer> cmd = [ctx->queue commandBuffer];
-        tc_status_t s = gemv_quant_encode(ctx, cmd, X, W_quant, Y, fmt, M, N, K);
+        s = gemv_quant_encode(ctx, cmd, X, W_quant, Y, fmt, M, N, K);
         if (s != TC_OK) return s;
         [cmd commit];
         [cmd waitUntilCompleted];

@@ -284,14 +284,24 @@ extern "C" tc_status_t tc_buffer_alloc(tc_context* ctx, size_t bytes, tc_buffer*
     return s;
 }
 
+extern "C" tc_status_t tc_buffer_validate(tc_context* ctx,
+                                          const tc_buffer* buf,
+                                          size_t min_bytes) {
+    if (!ctx || !buf || !buf->mtl) return TC_ERR_INVALID_ARG;
+    if (buf->owner != ctx) return TC_ERR_INVALID_ARG;
+    if (min_bytes > buf->bytes) return TC_ERR_INVALID_SHAPE;
+    return TC_OK;
+}
+
 extern "C" tc_status_t tc_buffer_free(tc_context* ctx, tc_buffer* buf) {
-    if (!ctx || !buf) return TC_ERR_INVALID_ARG;
+    tc_status_t s = tc_buffer_validate(ctx, buf, 0);
+    if (s != TC_OK) return s;
     tc_buffer_pool_free(ctx->buffer_pool, buf);
     return TC_OK;
 }
 
 extern "C" tc_status_t tc_buffer_map(tc_buffer* buf, void** out_ptr) {
-    if (!buf || !out_ptr) return TC_ERR_INVALID_ARG;
+    if (!buf || !out_ptr || !buf->mtl) return TC_ERR_INVALID_ARG;
     *out_ptr = [buf->mtl contents];
     if (!*out_ptr) return TC_ERR_INTERNAL;
     return TC_OK;

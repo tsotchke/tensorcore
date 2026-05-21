@@ -18,6 +18,7 @@
 #include "../core/internal.h"
 
 #include <cstdio>
+#include <limits>
 
 extern "C" tc_status_t tc_mps_gemm(tc_context* ctx,
                                    const tc_gemm_desc* desc,
@@ -111,6 +112,73 @@ bool validate(const tc_gemm_desc* d) {
     return true;
 }
 
+bool checked_mul(size_t a, size_t b, size_t* out) {
+    if (a != 0 && b > std::numeric_limits<size_t>::max() / a) return false;
+    *out = a * b;
+    return true;
+}
+
+bool checked_add(size_t a, size_t b, size_t* out) {
+    if (b > std::numeric_limits<size_t>::max() - a) return false;
+    *out = a + b;
+    return true;
+}
+
+bool matrix_bytes(int32_t rows, int32_t cols, tc_dtype_t dtype, size_t* out) {
+    size_t elems = 0;
+    size_t bytes = 0;
+    const size_t elem_size = tc_dtype_size(dtype);
+    if (rows <= 0 || cols <= 0 || elem_size == 0) return false;
+    if (!checked_mul((size_t)rows, (size_t)cols, &elems)) return false;
+    if (!checked_mul(elems, elem_size, &bytes)) return false;
+    *out = bytes;
+    return true;
+}
+
+tc_status_t validate_gemm_buffers(tc_context* ctx,
+                                  const tc_gemm_desc* d,
+                                  const tc_buffer* A,
+                                  const tc_buffer* B,
+                                  tc_buffer* C) {
+    size_t a_bytes = 0;
+    size_t b_bytes = 0;
+    size_t c_bytes = 0;
+    if (!matrix_bytes(d->M, d->K, d->a_dtype, &a_bytes) ||
+        !matrix_bytes(d->K, d->N, d->b_dtype, &b_bytes) ||
+        !matrix_bytes(d->M, d->N, d->c_dtype, &c_bytes)) {
+        return TC_ERR_INVALID_ARG;
+    }
+    tc_status_t s = tc_buffer_validate(ctx, A, a_bytes);
+    if (s != TC_OK) return s;
+    s = tc_buffer_validate(ctx, B, b_bytes);
+    if (s != TC_OK) return s;
+    return tc_buffer_validate(ctx, C, c_bytes);
+}
+
+bool batched_matrix_bytes(int32_t rows,
+                          int32_t cols,
+                          tc_dtype_t dtype,
+                          int32_t batch,
+                          int64_t stride_elems,
+                          size_t* out) {
+    size_t single_elems = 0;
+    size_t total_elems = 0;
+    const size_t elem_size = tc_dtype_size(dtype);
+    if (rows <= 0 || cols <= 0 || batch <= 0 || elem_size == 0) return false;
+    if (!checked_mul((size_t)rows, (size_t)cols, &single_elems)) return false;
+    if (batch == 1) {
+        total_elems = single_elems;
+    } else {
+        if (stride_elems < 0 || (uint64_t)stride_elems < single_elems) return false;
+        size_t batch_offset = 0;
+        if (!checked_mul((size_t)(batch - 1), (size_t)stride_elems, &batch_offset)) {
+            return false;
+        }
+        if (!checked_add(batch_offset, single_elems, &total_elems)) return false;
+    }
+    return checked_mul(total_elems, elem_size, out);
+}
+
 id<MTLComputePipelineState> resolve_pipeline(tc_context* ctx,
                                              NSString* base_name,
                                              bool trans_a, bool trans_b,
@@ -174,6 +242,8 @@ extern "C" tc_status_t tc_gemm(tc_context* ctx,
     if (!ctx)                  return TC_ERR_NOT_INITIALIZED;
     if (!validate(desc))       return TC_ERR_INVALID_ARG;
     if (!A || !B || !C)        return TC_ERR_INVALID_ARG;
+    tc_status_t s = validate_gemm_buffers(ctx, desc, A, B, C);
+    if (s != TC_OK) return s;
 
 #ifdef TC_HAVE_METAL4_SDK
     /* Try the Metal 4 tensor_ops path first on M5+. It is gated on family
@@ -181,7 +251,7 @@ extern "C" tc_status_t tc_gemm(tc_context* ctx,
     if (ctx->info.supports_tensorops_m5 &&
         desc->alpha == 1.0f && desc->beta == 0.0f &&
         !desc->transpose_a && !desc->transpose_b) {
-        tc_status_t s = tc_tensorops_gemm_attempt(ctx, desc, A, B, C);
+        s = tc_tensorops_gemm_attempt(ctx, desc, A, B, C);
         if (s == TC_OK) return TC_OK;
         /* Anything else: fall through to the simdgroup_matrix path. */
     }
@@ -252,6 +322,8 @@ extern "C" tc_status_t tc_gemm_async(tc_context* ctx,
     if (!ctx)                  return TC_ERR_NOT_INITIALIZED;
     if (!validate(desc))       return TC_ERR_INVALID_ARG;
     if (!A || !B || !C)        return TC_ERR_INVALID_ARG;
+    tc_status_t s = validate_gemm_buffers(ctx, desc, A, B, C);
+    if (s != TC_OK) return s;
 
     tc_status_t err = TC_OK;
     auto fallback_gemm = [&]() -> tc_status_t {
@@ -310,6 +382,7 @@ extern "C" tc_status_t tc_gemm_batched(tc_context* ctx,
     if (!ctx || !bd || !A || !B || !C) return TC_ERR_INVALID_ARG;
     const tc_gemm_desc& d = bd->base;
     if (bd->batch <= 0) return TC_ERR_INVALID_ARG;
+    if (!validate(&d)) return TC_ERR_INVALID_ARG;
 
     /* v0.1 batched fast path: fp16 in/out + fp32 accum + no transpose +
      * alpha=1/beta=0. Anything else falls back to the per-batch loop. */
@@ -326,6 +399,21 @@ extern "C" tc_status_t tc_gemm_batched(tc_context* ctx,
     if (bd->batch > 1 && (bd->stride_a <= 0 || bd->stride_b <= 0 || bd->stride_c <= 0)) {
         return TC_ERR_INVALID_SHAPE;
     }
+
+    size_t a_bytes = 0;
+    size_t b_bytes = 0;
+    size_t c_bytes = 0;
+    if (!batched_matrix_bytes(d.M, d.K, d.a_dtype, bd->batch, bd->stride_a, &a_bytes) ||
+        !batched_matrix_bytes(d.K, d.N, d.b_dtype, bd->batch, bd->stride_b, &b_bytes) ||
+        !batched_matrix_bytes(d.M, d.N, d.c_dtype, bd->batch, bd->stride_c, &c_bytes)) {
+        return TC_ERR_INVALID_SHAPE;
+    }
+    tc_status_t s = tc_buffer_validate(ctx, A, a_bytes);
+    if (s != TC_OK) return s;
+    s = tc_buffer_validate(ctx, B, b_bytes);
+    if (s != TC_OK) return s;
+    s = tc_buffer_validate(ctx, C, c_bytes);
+    if (s != TC_OK) return s;
 
     tc_status_t err = TC_OK;
     id<MTLComputePipelineState> pso = tc_pipeline_get(ctx, @"tc_gemm_f16_f32_batched", &err);

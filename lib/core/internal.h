@@ -78,6 +78,12 @@ typedef enum {
 /* Sets the diagnostic per-thread `tc_last_backend`. */
 void tc_set_last_backend(tc_backend_t b);
 
+/* Validates that a public buffer handle belongs to ctx and has at least
+ * min_bytes requested bytes available. */
+tc_status_t tc_buffer_validate(struct tc_context* ctx,
+                               const struct tc_buffer* buf,
+                               size_t min_bytes);
+
 #ifdef __OBJC__
 /* Returns a cached MTLComputePipelineState for `name`. NULL on failure. */
 id<MTLComputePipelineState> tc_pipeline_get(struct tc_context* ctx,

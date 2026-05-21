@@ -32,6 +32,18 @@ foreach(t IN LISTS TC_TESTS)
     )
 endforeach()
 
+add_executable(test_buffer_pool test_buffer_pool.mm)
+target_link_libraries(test_buffer_pool PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
+target_include_directories(test_buffer_pool PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/lib/core
+)
+add_test(NAME test_buffer_pool COMMAND test_buffer_pool)
+set_tests_properties(test_buffer_pool PROPERTIES
+    ENVIRONMENT "TC_METALLIB=${TC_METALLIB_PATH}"
+    TIMEOUT 120
+)
+
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
     execute_process(

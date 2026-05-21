@@ -475,13 +475,20 @@ def buffer_write(buf, arr):
     import numpy as np
     p = buffer_map(buf)
     nbytes = arr.nbytes
+    capacity = buffer_size(buf)
+    if nbytes > capacity:
+        raise ValueError(f"array has {nbytes} bytes but buffer has {capacity} bytes")
     ctypes.memmove(p, arr.ctypes.data, nbytes)
 
 
 def buffer_read(buf, arr):
     """Copy from the buffer into a numpy ndarray (preallocated)."""
     p = buffer_map(buf)
-    ctypes.memmove(arr.ctypes.data, p, arr.nbytes)
+    nbytes = arr.nbytes
+    capacity = buffer_size(buf)
+    if nbytes > capacity:
+        raise ValueError(f"array has {nbytes} bytes but buffer has {capacity} bytes")
+    ctypes.memmove(arr.ctypes.data, p, nbytes)
 
 
 def gemm(ctx, A, B, C, M, N, K, dtype="f16", accum="f32",

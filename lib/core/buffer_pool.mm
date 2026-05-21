@@ -15,23 +15,19 @@
 #include <cstdio>
 #include <new>
 
-static constexpr int  TC_BUCKETS         = 40;   /* up to 2^39 bytes ≈ 512 GB */
+static constexpr int  TC_BUCKETS         = 32;   /* 256B through 512GB buckets */
 static constexpr int  TC_BUCKET_CAPACITY = 8;
 static constexpr size_t TC_MIN_BUCKET    = 256;  /* avoid pool churn on tiny allocs */
 
 static int bucket_for(size_t bytes) {
     if (bytes < TC_MIN_BUCKET) bytes = TC_MIN_BUCKET;
     int b = 0;
-    size_t s = 1;
+    size_t s = TC_MIN_BUCKET;
     while (s < bytes && b < TC_BUCKETS - 1) { s <<= 1; ++b; }
     return b;
 }
-static size_t bucket_bytes(int b) {
-    return ((size_t)1) << (b + 0);  /* bucket i = 2^i bytes (shifted) */
-}
 
-/* We track bucket sizes as 2^i where i starts at log2(TC_MIN_BUCKET).
- * Effective bytes = TC_MIN_BUCKET << b. */
+/* bucket i = TC_MIN_BUCKET * 2^i */
 static size_t bytes_for_bucket(int b) {
     return TC_MIN_BUCKET << b;
 }
