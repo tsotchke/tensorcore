@@ -16,6 +16,8 @@ are the entry points; everything below goes deeper.
    fallback ladder.
 4. **[api_reference.md](api_reference.md)** — every public C symbol, grouped
    by header, with shapes and dtype rules.
+   Or **[api_overview.md](api_overview.md)** for the flat one-line-per-
+   symbol map.
 5. **[cuda_comparison.md](cuda_comparison.md)** — the explicit
    tensorcore-vs-CUDA map. If you came from NVIDIA-land, start here.
 6. **[ROADMAP.md](../ROADMAP.md)** — what's next and how confident we are.
