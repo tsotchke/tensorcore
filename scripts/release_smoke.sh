@@ -135,6 +135,83 @@ missing = [
 if missing:
     raise SystemExit(f"wheel missing native artifacts: {missing}")
 PY
+"$PYTHON_BIN" - "$WHEEL_PATH" <<'PY'
+import pathlib
+import re
+import subprocess
+import sys
+import tempfile
+import zipfile
+
+ARCH_TAGS = {
+    "arm64": {"arm64"},
+    "x86_64": {"x86_64"},
+    "universal2": {"arm64", "x86_64"},
+}
+
+
+def normalize(version):
+    major, minor = version
+    if major > 10:
+        return major, 0
+    return major, minor
+
+
+def platform_tags(platform):
+    tags = []
+    for tag in platform.split("."):
+        match = re.fullmatch(r"macosx_(\d+)_(\d+)_(.+)", tag)
+        if match:
+            tags.append((tag, (int(match.group(1)), int(match.group(2))), match.group(3)))
+    if not tags:
+        raise SystemExit(f"wheel is not tagged for macOS: {platform}")
+    return tags
+
+
+def dylib_macos_version(path):
+    out = subprocess.check_output(["otool", "-l", str(path)], text=True)
+    match = re.search(r"\bminos\s+(\d+)\.(\d+)", out)
+    if not match:
+        match = re.search(
+            r"cmd LC_VERSION_MIN_MACOSX(?:.|\n)*?\n\s*version\s+(\d+)\.(\d+)",
+            out,
+        )
+    if not match:
+        raise SystemExit(f"could not determine minimum macOS version for {path}")
+    return normalize((int(match.group(1)), int(match.group(2))))
+
+
+wheel_path = pathlib.Path(sys.argv[1])
+platform = wheel_path.name[:-4].split("-")[-1]
+with tempfile.TemporaryDirectory(prefix="tensorcore-wheel-native.", dir="/private/tmp") as td:
+    with zipfile.ZipFile(wheel_path) as zf:
+        members = [
+            name for name in zf.namelist()
+            if name == "tensorcore/libtensorcore.dylib"
+            or name.endswith("/tensorcore/libtensorcore.dylib")
+        ]
+        if not members:
+            raise SystemExit("wheel missing tensorcore/libtensorcore.dylib")
+        dylib = pathlib.Path(zf.extract(members[0], td))
+
+    archs = set(subprocess.check_output(["lipo", "-archs", str(dylib)], text=True).split())
+    minos = dylib_macos_version(dylib)
+    for tag, tag_version, arch_tag in platform_tags(platform):
+        required = ARCH_TAGS.get(arch_tag)
+        if required is None:
+            raise SystemExit(f"unsupported macOS wheel architecture tag: {tag}")
+        if not required.issubset(archs):
+            raise SystemExit(
+                f"{wheel_path.name} tag {tag} requires {sorted(required)}, "
+                f"but dylib contains {sorted(archs)}"
+            )
+        if minos > tag_version:
+            raise SystemExit(
+                f"{wheel_path.name} tag {tag} advertises macOS {tag_version[0]}.{tag_version[1]}, "
+                f"but dylib requires {minos[0]}.{minos[1]}"
+            )
+    print(f"{wheel_path.name}: dylib archs={','.join(sorted(archs))} minos={minos[0]}.{minos[1]}")
+PY
 
 PY_VER="$("$PYTHON_BIN" -c 'import sys; print(f"python{sys.version_info.major}.{sys.version_info.minor}")')"
 echo "[tensorcore] python wheel install"

@@ -1,15 +1,23 @@
 from pathlib import Path
 import os
+import re
 import shutil
+import subprocess
 
 from setuptools import setup
 from setuptools.errors import SetupError
 from setuptools.command.build_py import build_py
 from wheel.bdist_wheel import bdist_wheel
+from wheel.macosx_libfile import extract_macosx_min_system_version
 
 
 ROOT = Path(__file__).resolve().parent
 NATIVE_ARTIFACTS = ("libtensorcore.dylib", "tensorcore.metallib")
+MACOS_ARCH_TAGS = {
+    "arm64": {"arm64"},
+    "x86_64": {"x86_64"},
+    "universal2": {"arm64", "x86_64"},
+}
 
 
 def _artifact_dirs():
@@ -47,6 +55,79 @@ def _find_native_artifacts():
     return found
 
 
+def _run_tool(args):
+    try:
+        return subprocess.run(
+            args,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        ).stdout
+    except FileNotFoundError as exc:
+        raise SetupError(f"required native validation tool not found: {args[0]}") from exc
+    except subprocess.CalledProcessError as exc:
+        output = (exc.stderr or exc.stdout or str(exc)).strip()
+        raise SetupError(f"{args[0]} failed while validating native artifact: {output}") from exc
+
+
+def _dylib_arches(dylib):
+    output = _run_tool(["lipo", "-archs", str(dylib)])
+    archs = set(output.split())
+    if not archs:
+        raise SetupError(f"could not determine architectures for {dylib}")
+    return archs
+
+
+def _wheel_macos_version(version):
+    major, minor = version[:2]
+    if major > 10:
+        return major, 0
+    return major, minor
+
+
+def _dylib_macos_version(dylib):
+    version = extract_macosx_min_system_version(str(dylib))
+    if version is None:
+        raise SetupError(f"could not determine minimum macOS version for {dylib}")
+    return _wheel_macos_version(version)
+
+
+def _macos_platform_tags(platform):
+    tags = []
+    for tag in platform.split("."):
+        match = re.fullmatch(r"macosx_(\d+)_(\d+)_(.+)", tag)
+        if match:
+            version = (int(match.group(1)), int(match.group(2)))
+            tags.append((tag, version, match.group(3)))
+    return tags
+
+
+def _validate_dylib_matches_platform_tag(dylib, platform):
+    tags = _macos_platform_tags(platform)
+    if not tags:
+        return
+
+    dylib_arches = _dylib_arches(dylib)
+    dylib_macos = _dylib_macos_version(dylib)
+    for tag, tag_macos, arch_tag in tags:
+        expected_arches = MACOS_ARCH_TAGS.get(arch_tag)
+        if expected_arches is None:
+            raise SetupError(f"cannot validate unsupported macOS wheel architecture tag: {tag}")
+        if not expected_arches.issubset(dylib_arches):
+            raise SetupError(
+                f"{dylib} contains architectures {sorted(dylib_arches)}, "
+                f"but wheel tag {tag} requires {sorted(expected_arches)}"
+            )
+        if dylib_macos > tag_macos:
+            min_tag = f"macosx_{dylib_macos[0]}_{dylib_macos[1]}_{arch_tag}"
+            raise SetupError(
+                f"{dylib} requires macOS {dylib_macos[0]}.{dylib_macos[1]}, "
+                f"but wheel tag {tag} advertises macOS {tag_macos[0]}.{tag_macos[1]}. "
+                f"Use {min_tag} or rebuild the native library for an older deployment target."
+            )
+
+
 class build_py_with_native_artifacts(build_py):
     def run(self):
         super().run()
@@ -68,6 +149,10 @@ class bdist_wheel_with_native_artifacts(bdist_wheel):
 
     def get_tag(self):
         _python, _abi, platform = super().get_tag()
+        found = _find_native_artifacts()
+        dylib = found.get("libtensorcore.dylib")
+        if dylib is not None and Path(self.bdist_dir).exists():
+            _validate_dylib_matches_platform_tag(dylib, platform)
         return "py3", "none", platform
 
     def run(self):
