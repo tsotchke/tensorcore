@@ -105,6 +105,78 @@ static int check_output(const uint16_t* C, const float* Cref,
     return scaled <= 2.0e-2 ? 0 : 1;
 }
 
+static int run_ragged_fallback_probe(tc_context* ctx) {
+    enum { M = 63, N = 64, K = 64 };
+    tc_buffer* A = NULL;
+    tc_buffer* B = NULL;
+    tc_buffer* C = NULL;
+    uint16_t* Ap = NULL;
+    uint16_t* Bp = NULL;
+    uint16_t* Cp = NULL;
+    int rc = 1;
+
+    if (tc_buffer_alloc(ctx, (size_t)M * K * sizeof(uint16_t), &A) != TC_OK ||
+        tc_buffer_alloc(ctx, (size_t)K * N * sizeof(uint16_t), &B) != TC_OK ||
+        tc_buffer_alloc(ctx, (size_t)M * N * sizeof(uint16_t), &C) != TC_OK) {
+        fprintf(stderr, "tensorops ragged fallback allocation failed\n");
+        goto cleanup;
+    }
+    if (tc_buffer_map(A, (void**)&Ap) != TC_OK ||
+        tc_buffer_map(B, (void**)&Bp) != TC_OK ||
+        tc_buffer_map(C, (void**)&Cp) != TC_OK) {
+        fprintf(stderr, "tensorops ragged fallback map failed\n");
+        goto cleanup;
+    }
+
+    memset(Ap, 0, (size_t)M * K * sizeof(uint16_t));
+    memset(Bp, 0, (size_t)K * N * sizeof(uint16_t));
+    memset(Cp, 0, (size_t)M * N * sizeof(uint16_t));
+
+    tc_gemm_desc d = {0};
+    d.M = M;
+    d.N = N;
+    d.K = K;
+    d.a_dtype = TC_DTYPE_F16;
+    d.b_dtype = TC_DTYPE_F16;
+    d.c_dtype = TC_DTYPE_F16;
+    d.accum_dtype = TC_DTYPE_F32;
+    d.alpha = 1.0f;
+    d.beta = 0.0f;
+
+    tc_status_t s = tc_gemm(ctx, &d, A, B, C);
+    tc_backend_t backend = tc_last_backend();
+    const char* backend_name = tc_backend_name(backend);
+
+    if (s != TC_OK) {
+        fprintf(stderr, "tensorops ragged fallback GEMM failed: %s\n",
+                tc_status_string(s));
+        goto cleanup;
+    }
+    if (backend == TC_BACKEND_TENSOROPS_M5) {
+        fprintf(stderr, "tensorops_ragged_fallback_status=failed backend=%s\n",
+                backend_name);
+        goto cleanup;
+    }
+    for (int i = 0; i < M * N; ++i) {
+        if (Cp[i] != 0) {
+            fprintf(stderr,
+                    "tensorops_ragged_fallback_status=failed backend=%s nonzero=%u index=%d\n",
+                    backend_name, (unsigned)Cp[i], i);
+            goto cleanup;
+        }
+    }
+
+    printf("tensorops_ragged_fallback_status=passed backend=%s M=%d N=%d K=%d\n",
+           backend_name, M, N, K);
+    rc = 0;
+
+cleanup:
+    if (A) tc_buffer_free(ctx, A);
+    if (B) tc_buffer_free(ctx, B);
+    if (C) tc_buffer_free(ctx, C);
+    return rc;
+}
+
 int main(void) {
     enum { M = 64, N = 64, K = 64 };
     tc_context* ctx = NULL;
@@ -199,6 +271,9 @@ int main(void) {
         fprintf(stderr,
                 "tensorops_runtime_status=failed backend=%s scaled=%.6e max_abs=%.6e\n",
                 backend_name, scaled, max_abs);
+        goto cleanup;
+    }
+    if (run_ragged_fallback_probe(ctx) != 0) {
         goto cleanup;
     }
 
