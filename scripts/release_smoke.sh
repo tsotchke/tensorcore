@@ -71,6 +71,7 @@ CMAKE_CONSUMER_STATUS="not_run"
 CMAKE_SHARED_CONSUMER_STATUS="not_run"
 CMAKE_STATIC_CONSUMER_STATUS="not_run"
 PKG_CONFIG_CONSUMER_STATUS="not_run"
+PUBLIC_HEADERS_STATUS="not_run"
 PYTHON_FFI_SURFACE_STATUS="not_run"
 PYTHON_CONSTANTS_STATUS="not_run"
 PYTHON_ABI_LAYOUT_STATUS="not_run"
@@ -120,8 +121,8 @@ write_runtime_evidence() {
     export GPU_OK TESTS_STATUS TESTS_MODE WHEEL_PATH WHEEL_TAG_STATUS WHEEL_PLATFORM_TAG
     export INSTALLED_WHEEL_SMOKE_STATUS INSTALLED_WHEEL_SMOKE_MODE
     export CMAKE_CONSUMER_STATUS CMAKE_SHARED_CONSUMER_STATUS CMAKE_STATIC_CONSUMER_STATUS
-    export PKG_CONFIG_CONSUMER_STATUS PYTHON_FFI_SURFACE_STATUS PYTHON_CONSTANTS_STATUS
-    export PYTHON_ABI_LAYOUT_STATUS AUTOTUNE_STATUS
+    export PKG_CONFIG_CONSUMER_STATUS PUBLIC_HEADERS_STATUS PYTHON_FFI_SURFACE_STATUS
+    export PYTHON_CONSTANTS_STATUS PYTHON_ABI_LAYOUT_STATUS AUTOTUNE_STATUS
     export GEMM_128_TILE_STATUS GEMM_ASYNC_STATUS
     export TC_SDK_VERSION METAL4_TENSOROPS_COMPILE_STATUS
     export METAL4_TENSOROPS_RUNTIME_STATUS METAL4_TENSOROPS_RUNTIME_COVERED
@@ -267,6 +268,10 @@ checks = {
             "passed": optional_passed(env("PKG_CONFIG_CONSUMER_STATUS")),
         },
     },
+    "public_headers": {
+        "status": env("PUBLIC_HEADERS_STATUS"),
+        "passed": passed(env("PUBLIC_HEADERS_STATUS")),
+    },
     "python_ffi_surface": {
         "status": env("PYTHON_FFI_SURFACE_STATUS"),
         "passed": passed(env("PYTHON_FFI_SURFACE_STATUS")),
@@ -313,10 +318,12 @@ python_smoke = (
 wheel_import_smoke = checks["installed_wheel_smoke"]["passed"]
 cmake_consumer_smoke = checks["consumers"]["cmake"]["passed"]
 pkg_config_consumer_smoke = checks["consumers"]["pkg_config"]["passed"] is True
+public_headers_smoke = checks["public_headers"]["passed"]
 python_ffi_surface_smoke = checks["python_ffi_surface"]["passed"]
 python_constants_smoke = checks["python_constants"]["passed"]
 python_abi_layout_smoke = checks["python_abi_layout"]["passed"]
 packaging_consumer_smoke = (
+    public_headers_smoke and
     python_ffi_surface_smoke and
     python_constants_smoke and
     python_abi_layout_smoke and
@@ -790,6 +797,7 @@ artifact = {
         "installed_wheel_smoke_passed": checks["installed_wheel_smoke"]["passed"],
         "cmake_consumers_passed": checks["consumers"]["cmake"]["passed"],
         "pkg_config_consumer_passed": checks["consumers"]["pkg_config"]["passed"],
+        "public_headers_passed": checks["public_headers"]["passed"],
         "python_ffi_surface_passed": checks["python_ffi_surface"]["passed"],
         "python_constants_passed": checks["python_constants"]["passed"],
         "python_abi_layout_passed": checks["python_abi_layout"]["passed"],
@@ -826,6 +834,12 @@ fi
 echo "[tensorcore] public export surface"
 RELEASE_SMOKE_PHASE="public_exports"
 BUILD_DIR="$BUILD_DIR" "$ROOT/scripts/check_public_exports.sh"
+
+echo "[tensorcore] public headers"
+RELEASE_SMOKE_PHASE="public_headers"
+PUBLIC_HEADERS_STATUS="running"
+"$ROOT/scripts/check_public_headers.sh"
+PUBLIC_HEADERS_STATUS="passed"
 
 echo "[tensorcore] python FFI surface"
 RELEASE_SMOKE_PHASE="python_ffi_surface"
