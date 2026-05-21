@@ -7,6 +7,14 @@ on:
     branches: [main, master]
 
 jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Documentation links
+        run: python3 scripts/check_docs_links.py
+
   portable-cpu:
     name: portable-cpu (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
