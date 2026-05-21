@@ -4,8 +4,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-"$ROOT/build"}"
 PREFIX="${PREFIX:-/private/tmp/tensorcore-install}"
-PY_PREFIX="${PY_PREFIX:-/private/tmp/tensorcore-py-install}"
-WHEEL_DIR="${WHEEL_DIR:-/private/tmp/tensorcore-wheels}"
+if [ -z "${PY_PREFIX:-}" ]; then
+    PY_PREFIX="$(mktemp -d /private/tmp/tensorcore-py-install.XXXXXX)"
+fi
+if [ -z "${WHEEL_DIR:-}" ]; then
+    WHEEL_DIR="$(mktemp -d /private/tmp/tensorcore-wheels.XXXXXX)"
+fi
 REQUIRE_GPU="${REQUIRE_GPU:-0}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
@@ -52,7 +56,7 @@ import sys
 site.addsitedir(sys.argv[1])
 import tensorcore as tc
 
-assert tc.version().startswith("tensorcore 0.1.6"), tc.version()
+assert tc.version().startswith("tensorcore 0.1.7"), tc.version()
 print(tc.version())
 PY
 
