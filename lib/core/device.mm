@@ -16,6 +16,10 @@
 #include <mutex>
 #include <new>
 
+#ifndef MTLGPUFamilyMetal4
+#define MTLGPUFamilyMetal4 ((MTLGPUFamily)5002)
+#endif
+
 /* Forward — implemented in pipeline_cache.mm / buffer_pool.mm. */
 @class TCPipelineCache;
 @class TCBufferPool;
@@ -98,6 +102,24 @@ extern "C" tc_family_t tc_device_family_from_mtl(id<MTLDevice> dev) {
     }
 #endif
     return fam;
+}
+
+static bool tc_device_supports_tensorops_m5(id<MTLDevice> dev) {
+    if (!dev) return false;
+
+    BOOL metal4 = NO;
+    @try {
+        metal4 = [dev supportsFamily:MTLGPUFamilyMetal4];
+    } @catch (...) {
+        metal4 = NO;
+    }
+    if (!metal4) return false;
+
+    NSString* name = [dev name];
+    if (!name) return false;
+    return [name containsString:@"M5"] ||
+           [name containsString:@"M6"] ||
+           [name containsString:@"M7"];
 }
 
 /* ----------------------------------------------------------------- */
@@ -208,7 +230,7 @@ extern "C" tc_status_t tc_init(tc_context** out_ctx) {
             ctx->info.unified_memory                = [dev hasUnifiedMemory];
             ctx->info.supports_bf16_simdgroup       = (fam >= TC_FAMILY_APPLE9);
             ctx->info.supports_i8_simdgroup         = (fam >= TC_FAMILY_APPLE10);
-            ctx->info.supports_tensorops_m5         = (fam >= TC_FAMILY_APPLE11);
+            ctx->info.supports_tensorops_m5         = tc_device_supports_tensorops_m5(dev);
             ctx->info.supports_fp64_native          = false;
 
             fprintf(stderr,

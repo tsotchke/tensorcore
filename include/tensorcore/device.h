@@ -36,7 +36,7 @@ typedef struct {
     bool        unified_memory;
     bool        supports_bf16_simdgroup;  /* Apple9+                     */
     bool        supports_i8_simdgroup;    /* Apple10+                    */
-    bool        supports_tensorops_m5;    /* Apple11 + macOS 26.2+       */
+    bool        supports_tensorops_m5;    /* Metal4 runtime gate for M5+ */
     bool        supports_fp64_native;     /* false on Apple GPU          */
 } tc_device_info;
 
