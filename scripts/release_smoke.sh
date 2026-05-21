@@ -41,6 +41,9 @@ CMAKE_CONSUMER_STATUS="not_run"
 CMAKE_SHARED_CONSUMER_STATUS="not_run"
 CMAKE_STATIC_CONSUMER_STATUS="not_run"
 PKG_CONFIG_CONSUMER_STATUS="not_run"
+AUTOTUNE_STATUS="not_run"
+GEMM_128_TILE_STATUS="not_run"
+GEMM_ASYNC_STATUS="not_run"
 WHEEL_PATH=""
 
 write_runtime_evidence() {
@@ -53,7 +56,8 @@ write_runtime_evidence() {
     export GPU_OK TESTS_STATUS TESTS_MODE WHEEL_PATH WHEEL_TAG_STATUS WHEEL_PLATFORM_TAG
     export INSTALLED_WHEEL_SMOKE_STATUS INSTALLED_WHEEL_SMOKE_MODE
     export CMAKE_CONSUMER_STATUS CMAKE_SHARED_CONSUMER_STATUS CMAKE_STATIC_CONSUMER_STATUS
-    export PKG_CONFIG_CONSUMER_STATUS
+    export PKG_CONFIG_CONSUMER_STATUS AUTOTUNE_STATUS
+    export GEMM_128_TILE_STATUS GEMM_ASYNC_STATUS
     "$PYTHON_BIN" - "$RELEASE_SMOKE_EVIDENCE_PATH" <<'PY'
 import datetime
 import json
@@ -194,6 +198,20 @@ checks = {
             "passed": optional_passed(env("PKG_CONFIG_CONSUMER_STATUS")),
         },
     },
+    "autotune_cache": {
+        "status": env("AUTOTUNE_STATUS"),
+        "passed": passed(env("AUTOTUNE_STATUS")),
+    },
+    "gemm_env_variants": {
+        "use_128_tile": {
+            "status": env("GEMM_128_TILE_STATUS"),
+            "passed": passed(env("GEMM_128_TILE_STATUS")),
+        },
+        "use_async": {
+            "status": env("GEMM_ASYNC_STATUS"),
+            "passed": passed(env("GEMM_ASYNC_STATUS")),
+        },
+    },
 }
 
 coverage_files = {}
@@ -205,6 +223,9 @@ python_smoke = (
 wheel_import_smoke = checks["installed_wheel_smoke"]["passed"]
 cmake_consumer_smoke = checks["consumers"]["cmake"]["passed"]
 pkg_config_consumer_smoke = checks["consumers"]["pkg_config"]["passed"] is True
+autotune_cache_smoke = checks["autotune_cache"]["passed"]
+gemm_128_tile_smoke = checks["gemm_env_variants"]["use_128_tile"]["passed"]
+gemm_async_smoke = checks["gemm_env_variants"]["use_async"]["passed"]
 
 if native_full_tests:
     native_coverage = {
@@ -219,13 +240,22 @@ if native_full_tests:
             "tc_last_backend",
             "tc_backend_name",
             "tc_version",
+            "tc_device_info_get",
         ],
         "lib/core/buffer_pool.mm": [
             "TCBufferPool",
             "bucket_for",
             "bytes_for_bucket",
+            "tc_buffer_pool_create",
+            "tc_buffer_pool_destroy",
             "tc_buffer_pool_alloc",
             "tc_buffer_pool_free",
+        ],
+        "lib/core/pipeline_cache.mm": [
+            "TCPipelineCache",
+            "tc_pipeline_cache_create",
+            "tc_pipeline_cache_destroy",
+            "tc_pipeline_get",
         ],
         "include/tensorcore/dtype.h": [
             "tc_dtype_size",
@@ -288,7 +318,19 @@ if native_full_tests:
             "tc_gemv_quantized_async",
         ],
         "lib/ops/training.mm": [
+            "pso_for",
             "threads_for_d",
+            "tc_rmsnorm_forward",
+            "tc_rmsnorm_backward",
+            "tc_layernorm_forward",
+            "tc_layernorm_backward",
+            "tc_rope_forward",
+            "tc_swiglu_forward",
+            "tc_swiglu_backward",
+            "tc_softmax_forward",
+            "tc_softmax_backward",
+            "tc_fused_rmsnorm_gemv",
+            "tc_adamw_step",
         ],
         "lib/distributed/ring_local.mm": [
             "sock_send_all",
@@ -298,6 +340,8 @@ if native_full_tests:
         ],
         "lib/io/gguf.c": [
             "rd_bytes",
+            "rd_u32",
+            "rd_u64",
             "rd_str",
             "rd_str_dup_n",
             "rd_str_dup",
@@ -307,6 +351,8 @@ if native_full_tests:
             "type_bytes",
             "tc_gguf_open",
             "tc_gguf_close",
+            "tc_gguf_tensor_count",
+            "tc_gguf_metadata_count",
             "tc_gguf_get_tensor",
             "tc_gguf_tensor_at",
             "tc_gguf_meta_get_str",
@@ -353,9 +399,13 @@ if python_smoke:
         "buffer_free",
         "buffer_map",
         "buffer_size",
+        "stream_create",
+        "stream_sync",
+        "stream_destroy",
         "buffer_write",
         "buffer_read",
         "_check",
+        "_as_handle",
         "_bytes",
         "_dtype",
         "_quant",
@@ -378,21 +428,38 @@ if python_smoke:
         "gemv_quantized",
         "gemv_quantized_async",
         "rmsnorm_forward",
+        "rmsnorm_backward",
         "layernorm_forward",
+        "layernorm_backward",
         "swiglu_forward",
+        "swiglu_backward",
         "rope_forward",
         "softmax_forward",
+        "softmax_backward",
         "fused_rmsnorm_gemv",
         "adamw_step",
         "gguf_open",
         "gguf_close",
+        "gguf_tensor_count",
+        "gguf_metadata_count",
+        "gguf_meta_get_str",
+        "gguf_meta_get_i64",
+        "gguf_meta_get_f64",
+        "gguf_meta_array_count",
         "gguf_meta_array_get_str",
+        "gguf_meta_array_get_i64",
+        "gguf_meta_array_get_f64",
         "gguf_get_tensor",
         "gguf_tensor_at",
         "gguf_tensor_to_buffer",
         "gguf_tensor_quantized_matrix_info",
         "gguf_loaded_tensor_quantized_matrix_info",
         "gguf_load_supported_tensors",
+        "gguf_loaded_model_free",
+        "gguf_loaded_tensor_count",
+        "gguf_loaded_skipped_tensor_count",
+        "gguf_loaded_tensor_at",
+        "gguf_loaded_get_tensor",
         "gguf_get_llama_config",
         "_tensor_info_dict",
         "_tensor_info_from_dict",
@@ -400,13 +467,49 @@ if python_smoke:
         "_loaded_tensor_info_from_dict",
         "_quantized_matrix_info_dict",
         "_llama_config_dict",
+        "TensorcoreError.__init__",
+        "Context.__init__",
+        "Context.__enter__",
+        "Context.__exit__",
+        "Context._remember_buffer",
+        "Context._forget_buffer",
+        "Context._remember_stream",
+        "Context._forget_stream",
+        "Context._remember_loaded_model",
+        "Context._forget_loaded_model",
         "Context.close",
+        "Context.device_info",
         "Context.buffer",
         "Context.buffer_from_array",
         "Context.stream",
         "Context.gemm",
         "Context.gemm_async",
+        "Context.gemm_batched",
+        "Context.attention_forward",
+        "Context.attention_forward_async",
+        "Context.attention_backward",
+        "Context.conv2d_forward",
+        "Context.conv2d_backward_input",
+        "Context.conv2d_backward_weight",
+        "Context.quantize_weights",
+        "Context.gemv_quantized",
+        "Context.gemv_quantized_async",
+        "Context.rmsnorm_forward",
+        "Context.rmsnorm_backward",
+        "Context.layernorm_forward",
+        "Context.layernorm_backward",
+        "Context.rope_forward",
+        "Context.swiglu_forward",
+        "Context.swiglu_backward",
         "Context.softmax_forward",
+        "Context.softmax_backward",
+        "Context.adamw_step",
+        "Context.fused_rmsnorm_gemv",
+        "Context.open_gguf",
+        "Context.load_supported_tensors",
+        "Buffer.__init__",
+        "Buffer.__enter__",
+        "Buffer.__exit__",
         "Buffer.close",
         "Buffer.map",
         "Buffer.size",
@@ -414,22 +517,64 @@ if python_smoke:
         "Buffer.write",
         "Buffer.read",
         "Buffer.to_numpy",
+        "Stream.__init__",
+        "Stream.__enter__",
+        "Stream.__exit__",
         "Stream.sync",
         "Stream.close",
+        "GgufFile.__init__",
+        "GgufFile.__enter__",
+        "GgufFile.__exit__",
         "GgufFile.close",
+        "GgufFile.tensor_count",
+        "GgufFile.metadata_count",
+        "GgufFile.get_tensor",
+        "GgufFile.tensor_at",
+        "GgufFile.meta_get_str",
+        "GgufFile.meta_get_i64",
+        "GgufFile.meta_get_f64",
+        "GgufFile.meta_array_count",
+        "GgufFile.meta_array_get_str",
+        "GgufFile.llama_config",
         "GgufFile.tensor_to_buffer",
         "GgufFile.load_supported_tensors",
+        "LoadedModel.__init__",
+        "LoadedModel.__enter__",
+        "LoadedModel.__exit__",
         "LoadedModel.close",
+        "LoadedModel.tensor_count",
+        "LoadedModel.skipped_tensor_count",
+        "LoadedModel.tensor_at",
         "LoadedModel.get_tensor",
         "LoadedModel.quantized_matrix",
         "LoadedTensor.__init__",
         "LoadedTensor._check_alive",
         "LoadedTensor.__getitem__",
         "LoadedTensor.get",
+        "LoadedTensor.buffer",
         "QuantizedMatrix.__init__",
         "QuantizedMatrix._check_alive",
         "QuantizedMatrix.output",
         "QuantizedMatrix.gemv",
+        "QuantizedMatrix.gemv_async",
+    ])
+
+if autotune_cache_smoke:
+    add_function_calls(coverage_files, root, "lib/core/autotune.cpp", [
+        "tc_autotune_cache_dir",
+        "tc_autotune_load_cache",
+        "tc_autotune_run_sweep",
+        "tc_autotune_save_cache",
+    ])
+
+if gemm_128_tile_smoke:
+    add_function_calls(coverage_files, root, "lib/ops/gemm.mm", [
+        "use_128_tile",
+    ])
+
+if gemm_async_smoke:
+    add_function_calls(coverage_files, root, "lib/ops/gemm.mm", [
+        "use_async_kernel",
     ])
 
 if cmake_consumer_smoke or pkg_config_consumer_smoke:
@@ -490,6 +635,9 @@ artifact = {
         "installed_wheel_smoke_passed": checks["installed_wheel_smoke"]["passed"],
         "cmake_consumers_passed": checks["consumers"]["cmake"]["passed"],
         "pkg_config_consumer_passed": checks["consumers"]["pkg_config"]["passed"],
+        "autotune_cache_passed": checks["autotune_cache"]["passed"],
+        "gemm_128_tile_passed": checks["gemm_env_variants"]["use_128_tile"]["passed"],
+        "gemm_async_passed": checks["gemm_env_variants"]["use_async"]["passed"],
     },
     "checks": checks,
 }
@@ -511,6 +659,15 @@ GPU_OK=0
 if "$BUILD_DIR/tests/test_device"; then
     GPU_OK=1
     ctest --test-dir "$BUILD_DIR" --output-on-failure
+    echo "[tensorcore] GEMM env variants"
+    cmake -E env TC_METALLIB="$BUILD_DIR/tensorcore.metallib" TC_USE_128_TILE=1 \
+        "$BUILD_DIR/tests/test_gemm_f16"
+    cmake -E env TC_METALLIB="$BUILD_DIR/tensorcore.metallib" TC_USE_128_TILE=1 \
+        "$BUILD_DIR/tests/test_gemm_f32"
+    GEMM_128_TILE_STATUS="passed"
+    cmake -E env TC_METALLIB="$BUILD_DIR/tensorcore.metallib" TC_USE_ASYNC=1 \
+        "$BUILD_DIR/tests/test_gemm_f16"
+    GEMM_ASYNC_STATUS="passed"
     TESTS_MODE="full"
 else
     if [ "$REQUIRE_GPU" = "1" ]; then
@@ -520,6 +677,8 @@ else
     echo "No usable Metal device in this environment; skipping GPU tests."
     ctest --test-dir "$BUILD_DIR" --output-on-failure -R 'distributed_ring'
     TESTS_MODE="no_gpu_distributed_ring_only"
+    GEMM_128_TILE_STATUS="skipped_no_gpu"
+    GEMM_ASYNC_STATUS="skipped_no_gpu"
 fi
 TESTS_STATUS="passed"
 
@@ -813,10 +972,15 @@ cmake --build "$CONSUMER_DIR/build"
 "$CONSUMER_DIR/build/consumer"
 CMAKE_SHARED_CONSUMER_STATUS="passed"
 if [ "$GPU_OK" = "1" ]; then
-    "$CONSUMER_DIR/build/static_consumer"
+    AUTOTUNE_HOME="$CONSUMER_DIR/autotune-home"
+    mkdir -p "$AUTOTUNE_HOME"
+    TC_AUTOTUNE=1 HOME="$AUTOTUNE_HOME" "$CONSUMER_DIR/build/static_consumer"
+    TC_AUTOTUNE=1 HOME="$AUTOTUNE_HOME" "$CONSUMER_DIR/build/static_consumer"
     CMAKE_STATIC_CONSUMER_STATUS="passed"
+    AUTOTUNE_STATUS="passed"
 else
     CMAKE_STATIC_CONSUMER_STATUS="skipped_no_gpu"
+    AUTOTUNE_STATUS="skipped_no_gpu"
 fi
 CMAKE_CONSUMER_STATUS="passed"
 

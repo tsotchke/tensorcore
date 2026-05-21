@@ -552,9 +552,32 @@ def _run_owned_api_check():
     sm_rows, sm_dim = 2, 16
     X = (np.random.randn(sm_rows, sm_dim) * 0.5).astype(np.float16)
     Y = np.zeros_like(X)
+    dY = (np.random.randn(sm_rows, sm_dim) * 0.25).astype(np.float16)
+    dX = np.zeros_like(X)
     Xf = X.astype(np.float32)
     exp = np.exp(Xf - np.max(Xf, axis=1, keepdims=True))
     Y_ref = exp / np.sum(exp, axis=1, keepdims=True)
+    dX_ref = Y_ref * (dY.astype(np.float32) - np.sum(dY.astype(np.float32) * Y_ref, axis=1, keepdims=True))
+
+    rms_rows, rms_dim = 2, 64
+    eps = 1e-5
+    R = np.random.randn(rms_rows, rms_dim).astype(np.float16)
+    gamma = (0.5 + np.random.rand(rms_dim)).astype(np.float16)
+    dR = (np.random.randn(rms_rows, rms_dim) * 0.125).astype(np.float16)
+    rstd = np.zeros(rms_rows, dtype=np.float32)
+    RY = np.zeros_like(R)
+    dR_out = np.zeros_like(R)
+    dgamma = np.zeros(rms_dim, dtype=np.float32)
+    Rf = R.astype(np.float32)
+    gf = gamma.astype(np.float32)
+    dRf = dR.astype(np.float32)
+    rstd_ref = 1.0 / np.sqrt(np.mean(Rf * Rf, axis=1) + eps)
+    RY_ref = Rf * rstd_ref[:, None] * gf
+    dot = np.sum(dRf * gf[None, :] * Rf, axis=1)
+    dR_ref = dRf * gf[None, :] * rstd_ref[:, None] - (
+        Rf * dot[:, None] * (rstd_ref[:, None] ** 3) / float(rms_dim)
+    )
+    dgamma_ref = np.sum(dRf * Rf * rstd_ref[:, None], axis=0)
 
     with tc.Context() as ctx:
         a = ctx.buffer_from_array(A)
@@ -571,15 +594,49 @@ def _run_owned_api_check():
 
         xb = ctx.buffer_from_array(X)
         yb = ctx.buffer(Y.nbytes)
+        dyb = ctx.buffer_from_array(dY)
+        dxb = ctx.buffer(dX.nbytes)
         ctx.softmax_forward(xb, yb, sm_rows, sm_dim)
         Y = yb.to_numpy(Y.shape, Y.dtype)
+        ctx.softmax_backward(yb, dyb, dxb, sm_rows, sm_dim)
+        dX = dxb.to_numpy(dX.shape, dX.dtype)
+
+        rb = ctx.buffer_from_array(R)
+        gb = ctx.buffer_from_array(gamma)
+        drb = ctx.buffer_from_array(dR)
+        ryb = ctx.buffer(RY.nbytes)
+        rstdb = ctx.buffer(rstd.nbytes)
+        droutb = ctx.buffer(dR_out.nbytes)
+        dgb = ctx.buffer(dgamma.nbytes)
+        ctx.rmsnorm_forward(rb, gb, ryb, rstdb, rms_rows, rms_dim, eps)
+        ctx.rmsnorm_backward(rb, gb, drb, rstdb, droutb, dgb, rms_rows, rms_dim)
+        RY = ryb.to_numpy(RY.shape, RY.dtype)
+        rstd = rstdb.to_numpy(rstd.shape, rstd.dtype)
+        dR_out = droutb.to_numpy(dR_out.shape, dR_out.dtype)
+        dgamma = dgb.to_numpy(dgamma.shape, dgamma.dtype)
 
     err = np.max(np.abs(C.astype(np.float32) - C_ref.astype(np.float32)))
     err_async = np.max(np.abs(C_async.astype(np.float32) - C_ref.astype(np.float32)))
     sm_err = _scaled_rms(Y, Y_ref)
+    sm_bwd_err = _scaled_rms(dX, dX_ref)
+    rms_fwd_err = _scaled_rms(RY, RY_ref)
+    rms_rstd_err = float(np.max(np.abs(rstd - rstd_ref)))
+    rms_dx_err = _scaled_rms(dR_out, dR_ref)
+    rms_dg_err = _scaled_rms(dgamma.astype(np.float32), dgamma_ref)
+    backward_ok = (
+        sm_bwd_err < 5e-3 and
+        rms_fwd_err < 5e-3 and
+        rms_rstd_err < 1e-4 and
+        rms_dx_err < 5e-3 and
+        rms_dg_err < 1e-5 and
+        np.all(np.isfinite(dX.astype(np.float32))) and
+        np.all(np.isfinite(dR_out.astype(np.float32))) and
+        np.all(np.isfinite(dgamma))
+    )
     return (
-        owned_nbytes_ok and err == 0.0 and err_async == 0.0 and sm_err < 5e-3
-    ), max(float(err), float(err_async), sm_err)
+        owned_nbytes_ok and err == 0.0 and err_async == 0.0 and sm_err < 5e-3 and backward_ok
+    ), max(float(err), float(err_async), sm_err, sm_bwd_err, rms_fwd_err, rms_rstd_err,
+           rms_dx_err, rms_dg_err)
 
 
 def main():
@@ -756,12 +813,28 @@ def main():
         )
         with tc.GgufFile(gguf_path) as owned_g:
             owned_tensor = owned_g.get_tensor("weight.test")
+            owned_tensor0 = owned_g.tensor_at(0)
+            owned_config = owned_g.llama_config()
+            owned_meta_ok = (
+                owned_g.tensor_count() == 1 and
+                owned_g.metadata_count() == 12 and
+                owned_g.meta_get_str("general.architecture") == "llama" and
+                owned_g.meta_get_str("general.name") == "python-test" and
+                owned_g.meta_get_i64("llama.context_length", -1) == 2048 and
+                abs(owned_g.meta_get_f64("llama.attention.layer_norm_rms_epsilon", -1.0) - 0.125) < 1e-12 and
+                owned_g.meta_array_count("tokenizer.ggml.tokens") == 2 and
+                owned_g.meta_array_get_str("tokenizer.ggml.tokens", 1) == "hello" and
+                owned_config["context_length"] == 2048 and
+                owned_config["vocab_size"] == 2
+            )
             with owned_g.tensor_to_buffer(ctx, "weight.test") as owned_gb:
                 owned_copied = ctypes.string_at(owned_gb.map(), owned_gb.size())
             with tc.Context() as owned_ctx:
                 with owned_g.load_supported_tensors(owned_ctx) as owned_loaded:
                     owned_loaded_tensor = owned_loaded.get_tensor("weight.test")
+                    owned_loaded_tensor0 = owned_loaded.tensor_at(0)
                     owned_loaded_buffer = owned_loaded_tensor.get("buffer")
+                    owned_loaded_property_buffer = owned_loaded_tensor.buffer
                     owned_loaded_qinfo = tc.gguf_loaded_tensor_quantized_matrix_info(owned_loaded_tensor)
                     qmat = owned_loaded.quantized_matrix("weight.test")
                     x_ones = np.ones((1, 32), dtype=np.float16)
@@ -771,12 +844,14 @@ def main():
                     owned_loaded_ok = (
                         owned_loaded.tensor_count() == 1 and
                         owned_loaded.skipped_tensor_count() == 0 and
+                        owned_loaded_tensor0["name"] == owned_loaded_tensor["name"] and
                         owned_loaded_qinfo["N"] == 1 and
                         owned_loaded_qinfo["K"] == 32 and
                         qmat.N == 1 and
                         qmat.K == 32 and
                         qmat.quant_type == tc.TC_QUANT_Q4_0 and
                         owned_loaded_buffer == owned_loaded_tensor["buffer"] and
+                        owned_loaded_property_buffer == owned_loaded_tensor["buffer"] and
                         qmat_y[0, 0] == np.float16(40.0)
                     )
                 try:
@@ -784,6 +859,21 @@ def main():
                     owned_tensor_lifetime_ok = False
                 except RuntimeError:
                     owned_tensor_lifetime_ok = True
+            with tc.Context() as owned_ctx:
+                with owned_ctx.open_gguf(gguf_path) as ctx_g:
+                    ctx_open_tensor = ctx_g.get_tensor("weight.test")
+                    with owned_ctx.load_supported_tensors(ctx_g) as ctx_loaded:
+                        ctx_loaded_tensor = ctx_loaded.tensor_at(0)
+                        ctx_loaded_buffer = ctx_loaded_tensor.buffer
+                        ctx_loaded_ok = (
+                            ctx_g.tensor_count() == 1 and
+                            ctx_g.metadata_count() == 12 and
+                            ctx_open_tensor["name"] == "weight.test" and
+                            ctx_loaded.tensor_count() == 1 and
+                            ctx_loaded.skipped_tensor_count() == 0 and
+                            ctx_loaded_tensor["name"] == "weight.test" and
+                            ctx_loaded_buffer == ctx_loaded_tensor["buffer"]
+                        )
         gguf_ok = (
             tc.gguf_tensor_count(g) == 1 and
             tc.gguf_metadata_count(g) == 12 and
@@ -807,11 +897,14 @@ def main():
             tensor["dims"] == (32, 1) and
             tensor["type"] == tc.TC_GGUF_TYPE_Q4_0 and
             tensor["n_bytes"] == 18 and
+            owned_meta_ok and
             owned_tensor["name"] == "weight.test" and
             owned_tensor["dims"] == (32, 1) and
+            owned_tensor0["name"] == owned_tensor["name"] and
             owned_copied == copied and
             owned_loaded_ok and
             owned_tensor_lifetime_ok and
+            ctx_loaded_ok and
             qinfo["N"] == 1 and
             qinfo["K"] == 32 and
             qinfo["quant_type"] == tc.TC_QUANT_Q4_0 and
