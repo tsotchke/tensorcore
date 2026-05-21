@@ -91,6 +91,6 @@ fi
 
 mkdir -p "$OUT_DIR"
 archive="$OUT_DIR/tensorcore-native-sdk-${EXPECTED_VERSION}-macos-$(uname -m).tar.gz"
-LC_ALL=C tar -czf "$archive" -C "$PREFIX" .
+COPYFILE_DISABLE=1 LC_ALL=C tar -czf "$archive" -C "$PREFIX" .
 
 echo "$archive"

@@ -35,7 +35,7 @@ mkdir -p "$sdk"
 
 LC_ALL=C tar -tzf "$ARCHIVE" | while IFS= read -r member; do
     case "$member" in
-        /*|../*|*/../*)
+        ""|.|..|/*|../*|*/..|*/../*)
             echo "unsafe archive member: $member" >&2
             exit 1
             ;;
