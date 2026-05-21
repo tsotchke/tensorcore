@@ -32,9 +32,16 @@ jobs:
       - name: Release smoke
         env:
           PYTHON_BIN: ${{ runner.temp }}/tensorcore-release-venv/bin/python
+          PREFIX: ${{ runner.temp }}/tensorcore-native-sdk
           WHEEL_DIR: dist
           TENSORCORE_RELEASE_SMOKE_EVIDENCE_PATH: build/release_smoke_runtime_evidence.json
         run: scripts/release_smoke.sh
+
+      - name: Create native SDK archive
+        env:
+          PYTHON_BIN: ${{ runner.temp }}/tensorcore-release-venv/bin/python
+          OUT_DIR: dist
+        run: scripts/create_native_sdk_archive.sh "$RUNNER_TEMP/tensorcore-native-sdk"
 
       - name: Upload runtime evidence
         if: always()
@@ -51,6 +58,13 @@ jobs:
           path: dist/tensorcore_apple-*.whl
           if-no-files-found: error
 
+      - name: Upload native SDK artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: tensorcore-native-sdk
+          path: dist/tensorcore-native-sdk-*.tar.gz
+          if-no-files-found: error
+
       - name: Publish GitHub release assets
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -60,5 +74,7 @@ jobs:
             gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
               --title "$GITHUB_REF_NAME" \
               --notes "Automated tensorcore release for $GITHUB_REF_NAME."
-          gh release upload "$GITHUB_REF_NAME" dist/tensorcore_apple-*.whl \
+          gh release upload "$GITHUB_REF_NAME" \
+            dist/tensorcore_apple-*.whl \
+            dist/tensorcore-native-sdk-*.tar.gz \
             --repo "$GITHUB_REPOSITORY" --clobber
