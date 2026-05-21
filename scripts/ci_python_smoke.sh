@@ -46,5 +46,9 @@ if tc.tensorops_gemm_kernel_name("f16") != "tc4_gemm_f16":
     raise SystemExit("tensorops f16 kernel selection mismatch")
 if tc.tensorops_gemm_kernel_name("i8", "i32") is not None:
     raise SystemExit("tensorops unsupported i8 kernel selection mismatch")
+if tc.TC_DIST_SINGLE != 0 or tc.TC_DIST_RING != 1 or tc.TC_DIST_GLOO != 2:
+    raise SystemExit("distributed backend constants mismatch")
+if tc.TC_REDUCE_SUM != 0 or tc.TC_REDUCE_AVG != 1:
+    raise SystemExit("distributed reduce constants mismatch")
 print(actual)
 PY

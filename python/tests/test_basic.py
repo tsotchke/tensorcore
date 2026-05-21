@@ -153,6 +153,40 @@ def _run_diagnostic_api_check():
     return dtype_ok and status_ok and backend_ok and tensorops_ok
 
 
+def _run_distributed_wrapper_check(ctx):
+    values = np.linspace(-2.0, 2.0, 16, dtype=np.float32)
+    gathered = np.zeros_like(values)
+    buf = tc.buffer_alloc(ctx, values.nbytes)
+    out = tc.buffer_alloc(ctx, gathered.nbytes)
+    dist = None
+    try:
+        tc.buffer_write(buf, values)
+        dist = tc.dist_init(ctx, tc.TC_DIST_SINGLE, 1, 0, "single://python-test")
+        metadata_ok = tc.dist_world_size(dist) == 1 and tc.dist_rank(dist) == 0
+        tc.allreduce(dist, buf, values.size, "f32", "sum")
+        tc.broadcast(dist, buf, values.size, "f32", root=0)
+        tc.barrier(dist)
+        after = np.empty_like(values)
+        tc.buffer_read(buf, after)
+        tc.allgather(dist, buf, out, values.size, "f32")
+        tc.buffer_read(out, gathered)
+
+        with tc.DistContext(ctx, "ring", 1, 0, "tb5://single") as owned_dist:
+            owned_ok = owned_dist.world_size == 1 and owned_dist.rank == 0
+            owned_dist.barrier()
+
+        return (
+            metadata_ok and owned_ok and
+            np.array_equal(after, values) and
+            np.array_equal(gathered, values)
+        )
+    finally:
+        if dist:
+            tc.dist_finalize(dist)
+        tc.buffer_free(ctx, out)
+        tc.buffer_free(ctx, buf)
+
+
 def _run_attention_wrapper_check(ctx):
     bufs = []
 
@@ -751,6 +785,9 @@ def main():
     buffer_layout_ok = _run_buffer_layout_check(ctx)
     print(f"Host buffer layouts:   {'OK' if buffer_layout_ok else 'FAIL'}")
 
+    distributed_ok = _run_distributed_wrapper_check(ctx)
+    print(f"Distributed wrapper:   {'OK' if distributed_ok else 'FAIL'}")
+
     batched_ok, batched_err = _run_batched_gemm_wrapper_check(ctx)
     print(f"GEMM batched fp16:     max_abs={batched_err:.3e}  "
           f"{'OK' if batched_ok else 'FAIL'}")
@@ -986,6 +1023,7 @@ def main():
         scaled_async < 1e-2 and
         host_bounds_ok and
         buffer_layout_ok and
+        distributed_ok and
         batched_ok and
         conv_ok and
         attention_ok and

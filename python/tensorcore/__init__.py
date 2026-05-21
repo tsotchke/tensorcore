@@ -115,6 +115,15 @@ TC_BACKEND_ACCELERATE_CPU = 4
 TC_BACKEND_SF64_EMULATED = 5
 TC_BACKEND_OZAKI_II = 6
 
+TC_DIST_SINGLE = 0
+TC_DIST_RING = 1
+TC_DIST_GLOO = 2
+
+TC_REDUCE_SUM = 0
+TC_REDUCE_AVG = 1
+TC_REDUCE_MAX = 2
+TC_REDUCE_MIN = 3
+
 TC_QUANT_Q4_0 = 0
 TC_QUANT_Q8_0 = 1
 
@@ -131,6 +140,27 @@ _DTYPE_MAP = {
     "i8": TC_DTYPE_I8, "i32": TC_DTYPE_I32,
     "f64": TC_DTYPE_F64, "sf64": TC_DTYPE_SF64, "df64": TC_DTYPE_DF64,
     "fp24": TC_DTYPE_FP24, "fp53": TC_DTYPE_FP53,
+}
+
+_DTYPE_SIZE_MAP = {
+    TC_DTYPE_F16: 2, TC_DTYPE_BF16: 2, TC_DTYPE_F32: 4,
+    TC_DTYPE_I8: 1, TC_DTYPE_I32: 4, TC_DTYPE_F64: 8,
+    TC_DTYPE_SF64: 8, TC_DTYPE_DF64: 8, TC_DTYPE_FP24: 4,
+    TC_DTYPE_FP53: 8,
+}
+
+_DIST_BACKEND_MAP = {
+    "single": TC_DIST_SINGLE,
+    "ring": TC_DIST_RING,
+    "gloo": TC_DIST_GLOO,
+}
+
+_REDUCE_OP_MAP = {
+    "sum": TC_REDUCE_SUM,
+    "avg": TC_REDUCE_AVG,
+    "mean": TC_REDUCE_AVG,
+    "max": TC_REDUCE_MAX,
+    "min": TC_REDUCE_MIN,
 }
 
 _QUANT_MAP = {
@@ -389,6 +419,22 @@ if _lib is not None:
     _lib.tc_dtype_name.restype = c_char_p
     _lib.tc_tensorops_gemm_kernel_name.argtypes = [POINTER(TCGemmDesc), POINTER(c_int)]
     _lib.tc_tensorops_gemm_kernel_name.restype = c_char_p
+    _lib.tc_dist_init.argtypes = [c_void_p, c_int, c_int, c_int, c_char_p, POINTER(c_void_p)]
+    _lib.tc_dist_init.restype = c_int
+    _lib.tc_dist_finalize.argtypes = [c_void_p]
+    _lib.tc_dist_finalize.restype = c_int
+    _lib.tc_dist_world_size.argtypes = [c_void_p]
+    _lib.tc_dist_world_size.restype = c_int
+    _lib.tc_dist_rank.argtypes = [c_void_p]
+    _lib.tc_dist_rank.restype = c_int
+    _lib.tc_allreduce.argtypes = [c_void_p, c_void_p, c_size_t, c_int, c_int]
+    _lib.tc_allreduce.restype = c_int
+    _lib.tc_broadcast.argtypes = [c_void_p, c_void_p, c_size_t, c_int, c_int]
+    _lib.tc_broadcast.restype = c_int
+    _lib.tc_allgather.argtypes = [c_void_p, c_void_p, c_void_p, c_size_t, c_int]
+    _lib.tc_allgather.restype = c_int
+    _lib.tc_barrier.argtypes = [c_void_p]
+    _lib.tc_barrier.restype = c_int
     _lib.tc_status_string.argtypes = [c_int]; _lib.tc_status_string.restype = c_char_p
     _lib.tc_version.argtypes = []; _lib.tc_version.restype = c_char_p
 
@@ -435,6 +481,31 @@ def _dtype(dtype):
     if key not in _DTYPE_MAP:
         raise ValueError(f"unknown dtype: {dtype}")
     return _DTYPE_MAP[key]
+
+
+def _dtype_size(dtype):
+    d = _dtype(dtype)
+    if d not in _DTYPE_SIZE_MAP:
+        raise ValueError(f"unknown dtype: {dtype}")
+    return _DTYPE_SIZE_MAP[d]
+
+
+def _dist_backend(backend):
+    if isinstance(backend, int):
+        return backend
+    key = str(backend).lower()
+    if key not in _DIST_BACKEND_MAP:
+        raise ValueError(f"unknown distributed backend: {backend}")
+    return _DIST_BACKEND_MAP[key]
+
+
+def _reduce_op(op):
+    if isinstance(op, int):
+        return op
+    key = str(op).lower()
+    if key not in _REDUCE_OP_MAP:
+        raise ValueError(f"unknown reduce op: {op}")
+    return _REDUCE_OP_MAP[key]
 
 
 def _decode_cstr(value):
@@ -631,6 +702,63 @@ def buffer_read(buf, arr):
         tmp = np.empty(arr.shape, dtype=arr.dtype)
         ctypes.memmove(tmp.ctypes.data, p, nbytes)
         arr[...] = tmp
+
+
+def dist_init(ctx, backend=TC_DIST_SINGLE, world_size=1, rank=0, rendezvous_url=None):
+    """Create a distributed context. TC_DIST_SINGLE works as a local no-op backend."""
+    dist = c_void_p()
+    url = None if rendezvous_url is None else _bytes(rendezvous_url)
+    _check(_lib.tc_dist_init(_as_handle(ctx), _dist_backend(backend),
+                             int(world_size), int(rank), url, byref(dist)))
+    return dist
+
+
+def dist_finalize(dist):
+    _check(_lib.tc_dist_finalize(_as_handle(dist)))
+
+
+def dist_world_size(dist):
+    return int(_lib.tc_dist_world_size(_as_handle(dist)))
+
+
+def dist_rank(dist):
+    return int(_lib.tc_dist_rank(_as_handle(dist)))
+
+
+def _check_collective_buffer(buf, num_elements, dtype, multiplier=1):
+    nbytes = int(num_elements) * _dtype_size(dtype) * int(multiplier)
+    if int(num_elements) <= 0:
+        raise ValueError("num_elements must be positive")
+    capacity = buffer_size(buf)
+    if nbytes > capacity:
+        raise ValueError(f"collective needs {nbytes} bytes but buffer has {capacity} bytes")
+
+
+def allreduce(dist, buf, num_elements, dtype="f32", op=TC_REDUCE_SUM):
+    """In-place all-reduce. TC_DIST_SINGLE leaves the buffer unchanged."""
+    _check_collective_buffer(buf, num_elements, dtype)
+    _check(_lib.tc_allreduce(_as_handle(dist), _as_handle(buf), c_size_t(num_elements),
+                             _dtype(dtype), _reduce_op(op)))
+
+
+def broadcast(dist, buf, num_elements, dtype="f32", root=0):
+    """Broadcast from root. TC_DIST_SINGLE leaves the buffer unchanged."""
+    _check_collective_buffer(buf, num_elements, dtype)
+    _check(_lib.tc_broadcast(_as_handle(dist), _as_handle(buf), c_size_t(num_elements),
+                             _dtype(dtype), int(root)))
+
+
+def allgather(dist, src, dst, num_elements_per_rank, dtype="f32"):
+    """Gather one contribution per rank into dst."""
+    world_size = dist_world_size(dist)
+    _check_collective_buffer(src, num_elements_per_rank, dtype)
+    _check_collective_buffer(dst, num_elements_per_rank, dtype, multiplier=world_size)
+    _check(_lib.tc_allgather(_as_handle(dist), _as_handle(src), _as_handle(dst),
+                             c_size_t(num_elements_per_rank), _dtype(dtype)))
+
+
+def barrier(dist):
+    _check(_lib.tc_barrier(_as_handle(dist)))
 
 
 def gemm(ctx, A, B, C, M, N, K, dtype="f16", accum="f32",
@@ -1104,6 +1232,7 @@ class Context:
         self._buffers = weakref.WeakSet()
         self._streams = weakref.WeakSet()
         self._loaded_models = weakref.WeakSet()
+        self._dist_contexts = weakref.WeakSet()
         self._closed = False
 
     def __enter__(self):
@@ -1137,11 +1266,19 @@ class Context:
     def _forget_loaded_model(self, model):
         self._loaded_models.discard(model)
 
+    def _remember_dist_context(self, dist):
+        self._dist_contexts.add(dist)
+
+    def _forget_dist_context(self, dist):
+        self._dist_contexts.discard(dist)
+
     def close(self):
         if self._closed:
             return
         for stream in list(self._streams):
             stream.close()
+        for dist in list(self._dist_contexts):
+            dist.close()
         for model in list(self._loaded_models):
             model.close()
         for buf in list(self._buffers):
@@ -1167,6 +1304,9 @@ class Context:
 
     def stream(self):
         return Stream(self)
+
+    def dist(self, backend=TC_DIST_SINGLE, world_size=1, rank=0, rendezvous_url=None):
+        return DistContext(self, backend, world_size, rank, rendezvous_url)
 
     def gemm(self, A, B, C, M, N, K, **kwargs):
         return gemm(self, A, B, C, M, N, K, **kwargs)
@@ -1352,6 +1492,63 @@ class Stream:
             self.handle = None
         if hasattr(self.ctx, "_forget_stream"):
             self.ctx._forget_stream(self)
+
+
+class DistContext:
+    """Owned tc_dist_ctx wrapper."""
+
+    def __init__(self, ctx, backend=TC_DIST_SINGLE, world_size=1, rank=0,
+                 rendezvous_url=None):
+        self.ctx = ctx
+        self.handle = dist_init(ctx, backend, world_size, rank, rendezvous_url)
+        if hasattr(ctx, "_remember_dist_context"):
+            ctx._remember_dist_context(self)
+
+    def __bool__(self):
+        return self.handle is not None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    @property
+    def world_size(self):
+        return dist_world_size(self)
+
+    @property
+    def rank(self):
+        return dist_rank(self)
+
+    def allreduce(self, buf, num_elements, dtype="f32", op=TC_REDUCE_SUM):
+        allreduce(self, buf, num_elements, dtype, op)
+        return buf
+
+    def broadcast(self, buf, num_elements, dtype="f32", root=0):
+        broadcast(self, buf, num_elements, dtype, root)
+        return buf
+
+    def allgather(self, src, dst, num_elements_per_rank, dtype="f32"):
+        allgather(self, src, dst, num_elements_per_rank, dtype)
+        return dst
+
+    def barrier(self):
+        barrier(self)
+
+    def close(self):
+        if self.handle is not None:
+            dist_finalize(self)
+            self.handle = None
+        if hasattr(self.ctx, "_forget_dist_context"):
+            self.ctx._forget_dist_context(self)
 
 
 class GgufFile:
