@@ -93,6 +93,37 @@ if command -v lipo >/dev/null 2>&1; then
     esac
 fi
 
+if command -v otool >/dev/null 2>&1; then
+    "$PYTHON_BIN" - "$sdk/lib/libtensorcore.dylib" "$EXPECTED_VERSION" <<'PY'
+import re
+import subprocess
+import sys
+
+dylib = sys.argv[1]
+expected = sys.argv[2]
+major, minor, _patch = expected.split(".", 2)
+expected_compat = f"{major}.{minor}.0"
+
+out = subprocess.check_output(["otool", "-L", dylib], text=True)
+match = re.search(
+    r"@rpath/libtensorcore\.dylib "
+    r"\(compatibility version ([^,]+), current version ([^)]+)\)",
+    out,
+)
+if not match:
+    raise SystemExit("libtensorcore.dylib install name is not @rpath/libtensorcore.dylib")
+
+compat, current = match.groups()
+if current != expected:
+    raise SystemExit(f"libtensorcore.dylib current version mismatch: expected {expected}, got {current}")
+if compat != expected_compat:
+    raise SystemExit(
+        f"libtensorcore.dylib compatibility version mismatch: "
+        f"expected {expected_compat}, got {compat}"
+    )
+PY
+fi
+
 consumer="$tmpdir/consumer"
 mkdir -p "$consumer"
 cat > "$consumer/CMakeLists.txt" <<'CMAKE'

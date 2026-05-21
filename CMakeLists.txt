@@ -67,6 +67,9 @@ set(TC_APPLE_FRAMEWORK_LINKS
     "-framework MetalPerformanceShadersGraph"
     "-framework Accelerate"
 )
+set(TC_MACHO_COMPATIBILITY_VERSION
+    "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.0"
+)
 
 # ----------------------------------------------------------------------------
 # Metal kernel compilation
@@ -180,7 +183,11 @@ endif()
 # Build BOTH static and shared; shared is what Python ctypes loads.
 add_library(tensorcore STATIC ${TC_SOURCES})
 add_library(tensorcore_shared SHARED ${TC_SOURCES})
-set_target_properties(tensorcore_shared PROPERTIES OUTPUT_NAME tensorcore)
+set_target_properties(tensorcore_shared PROPERTIES
+    OUTPUT_NAME tensorcore
+    MACHO_CURRENT_VERSION "${PROJECT_VERSION}"
+    MACHO_COMPATIBILITY_VERSION "${TC_MACHO_COMPATIBILITY_VERSION}"
+)
 add_library(tensorcore::tensorcore_shared ALIAS tensorcore_shared)
 add_dependencies(tensorcore_shared tensorcore_metallib)
 target_include_directories(tensorcore_shared
