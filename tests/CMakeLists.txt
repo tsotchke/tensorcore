@@ -1,6 +1,7 @@
 # tensorcore tests
 #
-# Each .c becomes one ctest case. Tests link against tensorcore + Accelerate.
+# Metal tests link against tensorcore + Accelerate. CPU-only builds use the
+# portable smoke test and return before the Apple-specific test list.
 
 if(NOT TC_ENABLE_METAL)
     add_executable(test_portable_cpu test_portable_cpu.c)
@@ -37,9 +38,9 @@ foreach(t IN LISTS TC_TESTS)
     target_link_libraries(${t} PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
     target_include_directories(${t} PRIVATE ${CMAKE_SOURCE_DIR}/include)
     add_test(NAME ${t} COMMAND ${t})
+    set_tests_properties(${t} PROPERTIES TIMEOUT 120)
     set_tests_properties(${t} PROPERTIES
         ENVIRONMENT "TC_METALLIB=${TC_METALLIB_PATH}"
-        TIMEOUT 120
     )
 endforeach()
 
