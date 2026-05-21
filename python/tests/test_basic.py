@@ -125,6 +125,34 @@ def _scaled_rms(got, ref):
     return float(np.sqrt((err * err).mean()) / (np.sqrt((ref32 * ref32).mean()) + 1e-9))
 
 
+def _run_diagnostic_api_check():
+    dtype_ok = (
+        tc.dtype_name("f16") == "f16" and
+        tc.dtype_name(tc.TC_DTYPE_BF16) == "bf16" and
+        tc.dtype_name(tc.TC_DTYPE_FP53) == "fp53" and
+        tc.dtype_name(9999) == "?"
+    )
+    status_ok = (
+        tc.status_string(tc.TC_OK) == "ok" and
+        tc.status_string(tc.TC_ERR_NO_DEVICE) == "no Metal device available" and
+        tc.status_string(-12345) == "unknown status"
+    )
+    backend_ok = (
+        tc.backend_name(tc.TC_BACKEND_NONE) == "none" and
+        tc.backend_name(tc.TC_BACKEND_TENSOROPS_M5) == "tensorops_m5" and
+        tc.backend_name(9999) == "?" and
+        tc.last_backend() == tc.TC_BACKEND_NONE and
+        tc.last_backend_name() == "none"
+    )
+    tensorops_ok = (
+        tc.tensorops_gemm_kernel_name("f16") == "tc4_gemm_f16" and
+        tc.tensorops_gemm_kernel_name("bf16") == "tc4_gemm_bf16" and
+        tc.tensorops_gemm_kernel_name("f32") == "tc4_gemm_f32" and
+        tc.tensorops_gemm_kernel_name("i8", "i32") is None
+    )
+    return dtype_ok and status_ok and backend_ok and tensorops_ok
+
+
 def _run_attention_wrapper_check(ctx):
     bufs = []
 
@@ -640,6 +668,11 @@ def _run_owned_api_check():
 
 
 def main():
+    diagnostic_ok = _run_diagnostic_api_check()
+    print(f"Diagnostic API:       {'OK' if diagnostic_ok else 'FAIL'}")
+    if not diagnostic_ok:
+        return 5
+
     print(f"tensorcore: {tc.version()}")
     try:
         ctx = tc.init()
@@ -695,6 +728,12 @@ def main():
     scaled = rms / (ref_rms + 1e-9)
     print(f"GEMM fp16 {M}x{N}x{K}:  max_abs={err.max():.3e}  scaled_rms={scaled:.3e}  "
           f"{'OK' if scaled < 1e-2 else 'FAIL'}")
+    gemm_backend = tc.last_backend_name()
+    gemm_backend_ok = gemm_backend in (
+        "simdgroup_matrix", "tensorops_m5", "mps", "accelerate_cpu"
+    )
+    print(f"GEMM backend:         {gemm_backend}  "
+          f"{'OK' if gemm_backend_ok else 'FAIL'}")
 
     tc.buffer_write(c, np.zeros_like(C))
     stream = tc.stream_create(ctx)
@@ -943,6 +982,7 @@ def main():
 
     ok = (
         scaled < 1e-2 and
+        gemm_backend_ok and
         scaled_async < 1e-2 and
         host_bounds_ok and
         buffer_layout_ok and

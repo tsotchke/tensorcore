@@ -18,6 +18,11 @@ fi
 REQUIRE_GPU="${REQUIRE_GPU:-0}"
 REQUIRE_METAL4_TENSOROPS="${REQUIRE_METAL4_TENSOROPS:-0}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+GPU_OK=0
+CONSUMER_DIR=""
+RELEASE_SMOKE_PHASE="init"
+RELEASE_SMOKE_STATUS="running"
+RELEASE_SMOKE_EXIT_STATUS=""
 EXPECTED_VERSION="$("$PYTHON_BIN" - "$ROOT/pyproject.toml" <<'PY'
 import pathlib
 import re
@@ -70,9 +75,9 @@ AUTOTUNE_STATUS="not_run"
 GEMM_128_TILE_STATUS="not_run"
 GEMM_ASYNC_STATUS="not_run"
 if [ "$TC_SDK_SUPPORTS_METAL4" = "1" ]; then
-    METAL4_TENSOROPS_COMPILE_STATUS="compiled"
+    METAL4_TENSOROPS_COMPILE_STATUS="pending_build"
     METAL4_TENSOROPS_RUNTIME_STATUS="skipped_no_m5"
-    METAL4_TENSOROPS_REASON="SDK ${TC_SDK_VERSION} compiled Metal 4 TensorOps sources; runtime probe not covered on this host"
+    METAL4_TENSOROPS_REASON="SDK ${TC_SDK_VERSION} supports Metal 4 TensorOps sources; build has not completed yet"
 else
     METAL4_TENSOROPS_COMPILE_STATUS="skipped_sdk_too_old"
     METAL4_TENSOROPS_RUNTIME_STATUS="skipped_not_compiled"
@@ -81,6 +86,26 @@ fi
 METAL4_TENSOROPS_RUNTIME_COVERED="0"
 METAL4_TENSOROPS_RUNTIME_OUTPUT=""
 WHEEL_PATH=""
+
+release_smoke_on_exit() {
+    local status=$?
+    if [ "$status" -ne 0 ]; then
+        set +e
+        RELEASE_SMOKE_STATUS="failed"
+        RELEASE_SMOKE_EXIT_STATUS="$status"
+        if [ "$TC_SDK_SUPPORTS_METAL4" = "1" ] &&
+           [ "$RELEASE_SMOKE_PHASE" = "build" ] &&
+           [ "$METAL4_TENSOROPS_COMPILE_STATUS" != "compiled" ]; then
+            METAL4_TENSOROPS_COMPILE_STATUS="failed"
+            METAL4_TENSOROPS_REASON="SDK ${TC_SDK_VERSION} supports Metal 4 TensorOps sources, but the build failed before compile evidence was proven"
+        fi
+        write_runtime_evidence >/dev/null 2>&1
+    fi
+    if [ -n "$CONSUMER_DIR" ]; then
+        rm -rf "$CONSUMER_DIR"
+    fi
+}
+trap release_smoke_on_exit EXIT
 
 write_runtime_evidence() {
     if [ -z "$RELEASE_SMOKE_EVIDENCE_PATH" ]; then
@@ -97,6 +122,7 @@ write_runtime_evidence() {
     export TC_SDK_VERSION METAL4_TENSOROPS_COMPILE_STATUS
     export METAL4_TENSOROPS_RUNTIME_STATUS METAL4_TENSOROPS_RUNTIME_COVERED
     export METAL4_TENSOROPS_REASON METAL4_TENSOROPS_RUNTIME_OUTPUT
+    export RELEASE_SMOKE_PHASE RELEASE_SMOKE_STATUS RELEASE_SMOKE_EXIT_STATUS
     "$PYTHON_BIN" - "$RELEASE_SMOKE_EVIDENCE_PATH" <<'PY'
 import datetime
 import json
@@ -713,10 +739,14 @@ artifact = {
         "source": "tensorcore_release_smoke",
     },
     "files": coverage_files,
-    "status": "passed",
+    "status": env("RELEASE_SMOKE_STATUS", "passed"),
     "generated_at": datetime.datetime.now(datetime.timezone.utc)
     .isoformat()
     .replace("+00:00", "Z"),
+    "run": {
+        "phase": env("RELEASE_SMOKE_PHASE"),
+        "exit_status": env("RELEASE_SMOKE_EXIT_STATUS"),
+    },
     "project": {
         "root": env("ROOT"),
         "version": env("EXPECTED_VERSION"),
@@ -757,13 +787,19 @@ PY
 }
 
 echo "[tensorcore] configure"
+RELEASE_SMOKE_PHASE="configure"
 cmake -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release
 
 echo "[tensorcore] build"
+RELEASE_SMOKE_PHASE="build"
 cmake --build "$BUILD_DIR"
+if [ "$TC_SDK_SUPPORTS_METAL4" = "1" ]; then
+    METAL4_TENSOROPS_COMPILE_STATUS="compiled"
+    METAL4_TENSOROPS_REASON="SDK ${TC_SDK_VERSION} compiled Metal 4 TensorOps sources; runtime probe not covered on this host"
+fi
 
 echo "[tensorcore] test"
-GPU_OK=0
+RELEASE_SMOKE_PHASE="test"
 if "$BUILD_DIR/tests/test_device"; then
     GPU_OK=1
     ctest --test-dir "$BUILD_DIR" --output-on-failure
@@ -828,15 +864,18 @@ fi
 TESTS_STATUS="passed"
 
 echo "[tensorcore] install"
+RELEASE_SMOKE_PHASE="install"
 cmake --install "$BUILD_DIR" --prefix "$PREFIX"
 
 echo "[tensorcore] python syntax"
+RELEASE_SMOKE_PHASE="python_syntax"
 "$PYTHON_BIN" -m py_compile \
     "$ROOT/setup.py" \
     "$ROOT/python/tensorcore/__init__.py" \
     "$ROOT/python/tests/test_basic.py"
 
 echo "[tensorcore] python native loader policy"
+RELEASE_SMOKE_PHASE="python_loader_policy"
 "$PYTHON_BIN" - "$ROOT" "$BUILD_DIR/libtensorcore.dylib" <<'PY'
 import os
 import pathlib
@@ -882,6 +921,7 @@ finally:
 PY
 
 echo "[tensorcore] python wheel"
+RELEASE_SMOKE_PHASE="python_wheel"
 mkdir -p "$WHEEL_DIR"
 TENSORCORE_NATIVE_DIR="$PREFIX/lib" \
     "$PYTHON_BIN" -m pip wheel "$ROOT" --no-build-isolation -w "$WHEEL_DIR"
@@ -996,6 +1036,7 @@ WHEEL_PLATFORM_TAG="${WHEEL_PLATFORM_TAG##*-}"
 
 PY_VER="$("$PYTHON_BIN" -c 'import sys; print(f"python{sys.version_info.major}.{sys.version_info.minor}")')"
 echo "[tensorcore] python wheel install"
+RELEASE_SMOKE_PHASE="python_wheel_install"
 "$PYTHON_BIN" -m pip install "$WHEEL_PATH" --no-deps --prefix "$WHEEL_PREFIX"
 WHEEL_SITE="$WHEEL_PREFIX/lib/$PY_VER/site-packages"
 TENSORCORE_LIB= TC_METALLIB= "$PYTHON_BIN" - "$WHEEL_SITE" <<'PY'
@@ -1018,6 +1059,7 @@ print(tc.version())
 PY
 
 echo "[tensorcore] python editable install"
+RELEASE_SMOKE_PHASE="python_editable_install"
 "$PYTHON_BIN" -m pip install -e "$ROOT" --no-build-isolation --prefix "$PY_PREFIX"
 PY_SITE="$PY_PREFIX/lib/$PY_VER/site-packages"
 TENSORCORE_LIB="$PREFIX/lib/libtensorcore.dylib" "$PYTHON_BIN" - "$PY_SITE" <<'PY'
@@ -1034,6 +1076,7 @@ print(tc.version())
 PY
 
 echo "[tensorcore] installed wheel python smoke"
+RELEASE_SMOKE_PHASE="installed_wheel_python_smoke"
 if [ "$GPU_OK" = "1" ]; then
     TENSORCORE_LIB= TC_METALLIB= \
     TENSORCORE_TEST_INSTALLED=1 \
@@ -1052,8 +1095,8 @@ else
 fi
 
 echo "[tensorcore] out-of-tree CMake consumer"
+RELEASE_SMOKE_PHASE="cmake_consumer"
 CONSUMER_DIR="$(mktemp -d /private/tmp/tensorcore-consumer.XXXXXX)"
-trap 'rm -rf "$CONSUMER_DIR"' EXIT
 cat > "$CONSUMER_DIR/CMakeLists.txt" <<'CMAKE'
 cmake_minimum_required(VERSION 3.20)
 project(tensorcore_consumer LANGUAGES C)
@@ -1130,6 +1173,7 @@ fi
 CMAKE_CONSUMER_STATUS="passed"
 
 echo "[tensorcore] pkg-config consumer"
+RELEASE_SMOKE_PHASE="pkg_config_consumer"
 if command -v pkg-config >/dev/null 2>&1; then
     CC_BIN="${CC:-cc}"
     PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" \
@@ -1144,6 +1188,7 @@ else
 fi
 
 if [ "$REQUIRE_METAL4_TENSOROPS" = "1" ]; then
+    RELEASE_SMOKE_PHASE="require_metal4_tensorops"
     if [ "$METAL4_TENSOROPS_COMPILE_STATUS" != "compiled" ] ||
        [ "$METAL4_TENSOROPS_RUNTIME_STATUS" != "passed" ]; then
         write_runtime_evidence
@@ -1152,5 +1197,8 @@ if [ "$REQUIRE_METAL4_TENSOROPS" = "1" ]; then
     fi
 fi
 
+RELEASE_SMOKE_PHASE="complete"
+RELEASE_SMOKE_STATUS="passed"
+RELEASE_SMOKE_EXIT_STATUS="0"
 write_runtime_evidence
 echo "[tensorcore] release smoke OK"

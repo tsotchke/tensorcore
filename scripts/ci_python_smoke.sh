@@ -17,14 +17,16 @@ PY
 )"
 
 python3 -m venv "$VENV"
-# shellcheck disable=SC1091
-source "$VENV/bin/activate"
+PYTHON="$VENV/bin/python3"
+if [[ ! -x "$PYTHON" ]]; then
+    PYTHON="$VENV/bin/python"
+fi
 
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -e . --no-build-isolation
+"$PYTHON" -m pip install --upgrade pip setuptools wheel
+"$PYTHON" -m pip install -e . --no-build-isolation
 
 TENSORCORE_LIB="$PREFIX/lib/libtensorcore.dylib" \
-    python - "$EXPECTED_VERSION" <<'PY'
+    "$PYTHON" - "$EXPECTED_VERSION" <<'PY'
 import sys
 import tensorcore as tc
 
@@ -32,5 +34,17 @@ expected = sys.argv[1]
 actual = tc.version()
 if not actual.startswith(f"tensorcore {expected}"):
     raise SystemExit(f"version mismatch: expected tensorcore {expected}, got {actual}")
+if tc.status_string(tc.TC_OK) != "ok":
+    raise SystemExit("status_string(TC_OK) mismatch")
+if tc.dtype_name("fp53") != "fp53":
+    raise SystemExit("dtype_name(fp53) mismatch")
+if tc.backend_name(tc.TC_BACKEND_TENSOROPS_M5) != "tensorops_m5":
+    raise SystemExit("backend_name(TENSOROPS_M5) mismatch")
+if tc.last_backend_name() != "none":
+    raise SystemExit("initial last_backend_name mismatch")
+if tc.tensorops_gemm_kernel_name("f16") != "tc4_gemm_f16":
+    raise SystemExit("tensorops f16 kernel selection mismatch")
+if tc.tensorops_gemm_kernel_name("i8", "i32") is not None:
+    raise SystemExit("tensorops unsupported i8 kernel selection mismatch")
 print(actual)
 PY

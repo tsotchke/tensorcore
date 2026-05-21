@@ -83,13 +83,37 @@ _lib = ctypes.CDLL(_find_lib())
 # ---------------------------------------------------------------------------
 
 TC_OK = 0
+TC_ERR_NOT_INITIALIZED = -1
 TC_ERR_ALREADY_INITIALIZED = -2
 TC_ERR_NO_DEVICE = -3
+TC_ERR_UNSUPPORTED_FAMILY = -4
+TC_ERR_UNSUPPORTED_DTYPE = -5
+TC_ERR_INVALID_SHAPE = -6
+TC_ERR_INVALID_ARG = -7
+TC_ERR_ALLOC = -8
+TC_ERR_KERNEL_NOT_FOUND = -9
+TC_ERR_PIPELINE = -10
+TC_ERR_DISPATCH = -11
+TC_ERR_INTERNAL = -99
+
 TC_DTYPE_F16 = 0
 TC_DTYPE_BF16 = 1
 TC_DTYPE_F32 = 2
 TC_DTYPE_I8 = 3
 TC_DTYPE_I32 = 4
+TC_DTYPE_F64 = 5
+TC_DTYPE_SF64 = 6
+TC_DTYPE_DF64 = 7
+TC_DTYPE_FP24 = 8
+TC_DTYPE_FP53 = 9
+
+TC_BACKEND_NONE = 0
+TC_BACKEND_SIMDGROUP_MATRIX = 1
+TC_BACKEND_TENSOROPS_M5 = 2
+TC_BACKEND_MPS = 3
+TC_BACKEND_ACCELERATE_CPU = 4
+TC_BACKEND_SF64_EMULATED = 5
+TC_BACKEND_OZAKI_II = 6
 
 TC_QUANT_Q4_0 = 0
 TC_QUANT_Q8_0 = 1
@@ -105,6 +129,8 @@ TC_GGUF_TYPE_UNSUPPORTED = -1
 _DTYPE_MAP = {
     "f16": TC_DTYPE_F16, "bf16": TC_DTYPE_BF16, "f32": TC_DTYPE_F32,
     "i8": TC_DTYPE_I8, "i32": TC_DTYPE_I32,
+    "f64": TC_DTYPE_F64, "sf64": TC_DTYPE_SF64, "df64": TC_DTYPE_DF64,
+    "fp24": TC_DTYPE_FP24, "fp53": TC_DTYPE_FP53,
 }
 
 _QUANT_MAP = {
@@ -355,6 +381,14 @@ if _lib is not None:
     _lib.tc_gguf_loaded_tensor_at.restype = c_int
     _lib.tc_gguf_loaded_get_tensor.argtypes = [c_void_p, c_char_p, POINTER(TCGGufLoadedTensorInfo)]
     _lib.tc_gguf_loaded_get_tensor.restype = c_int
+    _lib.tc_backend_name.argtypes = [c_int]
+    _lib.tc_backend_name.restype = c_char_p
+    _lib.tc_last_backend.argtypes = []
+    _lib.tc_last_backend.restype = c_int
+    _lib.tc_dtype_name.argtypes = [c_int]
+    _lib.tc_dtype_name.restype = c_char_p
+    _lib.tc_tensorops_gemm_kernel_name.argtypes = [POINTER(TCGemmDesc), POINTER(c_int)]
+    _lib.tc_tensorops_gemm_kernel_name.restype = c_char_p
     _lib.tc_status_string.argtypes = [c_int]; _lib.tc_status_string.restype = c_char_p
     _lib.tc_version.argtypes = []; _lib.tc_version.restype = c_char_p
 
@@ -365,7 +399,7 @@ if _lib is not None:
 
 class TensorcoreError(RuntimeError):
     def __init__(self, status):
-        msg = _lib.tc_status_string(status).decode() if _lib else f"status {status}"
+        msg = status_string(status) if _lib else f"status {status}"
         super().__init__(f"tensorcore error {status}: {msg}")
         self.status = status
 
@@ -401,6 +435,35 @@ def _dtype(dtype):
     if key not in _DTYPE_MAP:
         raise ValueError(f"unknown dtype: {dtype}")
     return _DTYPE_MAP[key]
+
+
+def _decode_cstr(value):
+    return value.decode("utf-8") if value else None
+
+
+def status_string(status):
+    """Return the C ABI status text for a tensorcore status code."""
+    return _decode_cstr(_lib.tc_status_string(int(status))) or "unknown status"
+
+
+def dtype_name(dtype):
+    """Return the C ABI dtype name for a tensorcore dtype enum or alias."""
+    return _decode_cstr(_lib.tc_dtype_name(_dtype(dtype))) or "?"
+
+
+def backend_name(backend):
+    """Return the C ABI backend name for a tc_backend_t value."""
+    return _decode_cstr(_lib.tc_backend_name(int(backend))) or "?"
+
+
+def last_backend():
+    """Return the thread-local backend enum used by the most recent kernel call."""
+    return int(_lib.tc_last_backend())
+
+
+def last_backend_name():
+    """Return the name of the thread-local backend used by the most recent kernel call."""
+    return backend_name(last_backend())
 
 
 def _tensor_info_dict(info):
@@ -618,6 +681,19 @@ def _gemm_desc(M, N, K, dtype, accum, alpha, beta, transpose_a, transpose_b):
         alpha=alpha, beta=beta,
         lda=0, ldb=0, ldc=0,
     )
+
+
+def tensorops_gemm_kernel_name(dtype="f16", accum="f32"):
+    """Return the Metal 4 TensorOps GEMM kernel name for a dtype combo, or None."""
+    desc = _gemm_desc(1, 1, 1, dtype, accum, 1.0, 0.0, False, False)
+    err = c_int(TC_OK)
+    name = _lib.tc_tensorops_gemm_kernel_name(byref(desc), byref(err))
+    if name:
+        return _decode_cstr(name)
+    if err.value == TC_ERR_UNSUPPORTED_DTYPE:
+        return None
+    _check(err.value)
+    return None
 
 
 def _attention_desc(batch, heads, seq_q, seq_kv, head_dim, dtype, accum,
@@ -1076,6 +1152,12 @@ class Context:
 
     def device_info(self):
         return device_info(self)
+
+    def last_backend(self):
+        return last_backend()
+
+    def last_backend_name(self):
+        return last_backend_name()
 
     def buffer(self, nbytes):
         return Buffer(self, nbytes)

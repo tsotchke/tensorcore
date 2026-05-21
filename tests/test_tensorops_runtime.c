@@ -110,9 +110,14 @@ int main(void) {
     tc_context* ctx = NULL;
     tc_status_t s = tc_init(&ctx);
     if (s != TC_OK && s != TC_ERR_ALREADY_INITIALIZED) {
-        printf("tensorops_runtime_status=skipped_no_gpu reason=%s\n",
-               tc_status_string(s));
-        return 0;
+        if (s == TC_ERR_NO_DEVICE) {
+            printf("tensorops_runtime_status=skipped_no_gpu reason=%s\n",
+                   tc_status_string(s));
+            return 0;
+        }
+        fprintf(stderr, "tensorops_runtime_status=failed_init reason=%s\n",
+                tc_status_string(s));
+        return 1;
     }
 
     tc_device_info info;

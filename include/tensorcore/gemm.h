@@ -85,6 +85,11 @@ typedef enum {
 tc_backend_t tc_last_backend(void);
 const char*  tc_backend_name(tc_backend_t b);
 
+/* Diagnostic selector for the Metal 4 TensorOps GEMM path. Returns NULL and
+ * writes TC_ERR_UNSUPPORTED_DTYPE when the dtype combo has no TensorOps kernel. */
+const char*  tc_tensorops_gemm_kernel_name(const tc_gemm_desc* desc,
+                                           tc_status_t* err);
+
 #ifdef __cplusplus
 }
 #endif
