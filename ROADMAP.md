@@ -117,7 +117,7 @@ to consume it on day one.**
 
 ### v0.3 — Metal 4 / M5 TensorOps (when M5 hardware lands in the lab)
 
-- `MTLTensor` + `MTL4MachineLearningCommandEncoder` path (macOS 26.2+)
+- Metal 4 `mpp::tensor_ops` kernels (macOS SDK 26.0+, M5 runtime)
 - Runtime select: TensorOps vs simdgroup_matrix per (shape, dtype)
 - Target Apple's reported 4× speedup at small-shape end (M5 "neural accelerators")
 - Pre-compile every kernel via both backends; auto-bench at first dispatch

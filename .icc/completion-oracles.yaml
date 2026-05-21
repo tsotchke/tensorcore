@@ -1,0 +1,83 @@
+oracles:
+  - name: cuda-for-apple-public-integration
+    target: cuda-for-apple-public-integration
+    aliases:
+      - cuda-for-apple
+      - tensorcore-public-integration
+    criteria:
+      - id: release_smoke_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: Release smoke runtime evidence is present
+        action: run_release_smoke
+
+      - id: release_smoke_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: Release smoke is failure-free
+        action: fix_runtime_failure
+
+      - id: public_core_paths_covered
+        runtime_event:
+          event_kinds: [coverage_file]
+        required_names:
+          - lib/core/device.mm
+          - lib/ops/gemm.mm
+          - lib/ops/attention.mm
+          - lib/ops/conv.mm
+          - lib/ops/training.mm
+          - lib/ops/quantized.mm
+          - lib/io/gguf.c
+          - lib/tensorops/tensorops_select.c
+          - python/tensorcore/__init__.py
+        severity: high
+        label: Public core runtime paths are covered by release smoke
+        action: extend_release_smoke_coverage
+
+      - id: packaging_and_consumers_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.public_integration.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Wheel, editable install, CMake, pkg-config, and autotune consumers passed
+        action: fix_public_integration_smoke
+
+      - id: no_synthetic_public_prod_paths
+        no_stubbed_paths:
+          - production_fallback
+          - synthetic_model_only
+        path_prefixes:
+          - include
+          - lib
+          - python/tensorcore
+        severity: high
+        label: Public production paths are not synthetic-only
+        action: wire_real_path_or_mark_fallback
+
+      - id: metal4_tensorops_compile_status_recorded
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.metal4_tensorops.runtime_compile_status]
+          event_values: [compiled, skipped_sdk_too_old]
+        severity: high
+        label: Metal 4 TensorOps compile status is explicit
+        action: emit_tensorops_compile_status
+
+      - id: metal4_tensorops_compiled_with_sdk26
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.metal4_tensorops.runtime_compile_status]
+          event_values: [compiled]
+        severity: high
+        label: Metal 4 TensorOps compiled with SDK 26 or newer
+        action: run_release_smoke_on_sdk26
+
+      - id: metal4_tensorops_runtime_covered
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.metal4_tensorops.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Metal 4 TensorOps runtime path is covered on M5
+        action: run_m5_tensorops_runtime_smoke

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(tensorcore
-    VERSION 0.1.19
+    VERSION 0.1.20
     LANGUAGES C CXX OBJC OBJCXX
     DESCRIPTION "CUDA-equivalent tensor-core acceleration for Apple Silicon"
 )
@@ -48,7 +48,6 @@ add_compile_options($<$<CONFIG:Release>:-DNDEBUG>)
 option(TC_BUILD_TESTS  "Build correctness tests" ON)
 option(TC_BUILD_BENCH  "Build TFLOPS bench harness" ON)
 option(TC_BUILD_EXAMPLES "Build example programs" ON)
-option(TC_ENABLE_TENSOROPS "Compile the M5 / Metal 4 TensorOps path (macOS 26.2+)" OFF)
 
 # ----------------------------------------------------------------------------
 # Frameworks

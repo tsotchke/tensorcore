@@ -75,7 +75,7 @@ tc_status_t tc_gemm_batched(tc_context* ctx,
 typedef enum {
     TC_BACKEND_NONE             = 0,
     TC_BACKEND_SIMDGROUP_MATRIX = 1,   /* MSL simdgroup_matrix kernels    */
-    TC_BACKEND_TENSOROPS_M5     = 2,   /* MTL4MachineLearningCommandEncoder */
+    TC_BACKEND_TENSOROPS_M5     = 2,   /* Metal 4 mpp::tensor_ops kernels   */
     TC_BACKEND_MPS              = 3,   /* MPSMatrix fallback              */
     TC_BACKEND_ACCELERATE_CPU   = 4,   /* cblas_*gemm fallback            */
     TC_BACKEND_SF64_EMULATED    = 5,   /* SoftFloat-64 emulation          */

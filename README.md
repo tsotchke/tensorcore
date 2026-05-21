@@ -79,9 +79,10 @@ projects can retire their bespoke kernels and consume one shared library.
 
 bf16 kernels gated to Apple9+ (M3, A17 Pro+).
 int8 kernels gated to Apple10+ (M4+).
-Metal-4 `MTL4MachineLearningCommandEncoder` gated to Apple11+/M5 via
-`TC_ENABLE_TENSOROPS=ON` (stub; phase v0.3 will fill in).
-All gating is runtime-detected via `MTLGPUFamily*`.
+Metal 4 `mpp::tensor_ops` sources compile only with SDK 26.0+ and dispatch
+only on Apple11+/M5 runtime probes. On older SDKs the TensorOps sources are
+excluded and the simdgroup-matrix path remains the production backend.
+All runtime gating is detected via `MTLGPUFamily*` plus device-name checks.
 
 ## What's on the v0.2 horizon (see ROADMAP.md)
 

@@ -31,6 +31,30 @@ PY
 )"
 export EXPECTED_VERSION
 
+TC_SDK_VERSION="$(xcrun --show-sdk-version 2>/dev/null || true)"
+if [ -z "$TC_SDK_VERSION" ]; then
+    TC_SDK_VERSION="0.0"
+fi
+TC_SDK_SUPPORTS_METAL4="$("$PYTHON_BIN" - "$TC_SDK_VERSION" <<'PY'
+import sys
+
+
+def parse(version):
+    parts = []
+    for item in version.split("."):
+        try:
+            parts.append(int(item))
+        except ValueError:
+            parts.append(0)
+    while len(parts) < 2:
+        parts.append(0)
+    return tuple(parts[:2])
+
+
+print("1" if parse(sys.argv[1]) >= (26, 0) else "0")
+PY
+)"
+
 TESTS_STATUS="not_run"
 TESTS_MODE="not_run"
 WHEEL_TAG_STATUS="not_run"
@@ -44,6 +68,16 @@ PKG_CONFIG_CONSUMER_STATUS="not_run"
 AUTOTUNE_STATUS="not_run"
 GEMM_128_TILE_STATUS="not_run"
 GEMM_ASYNC_STATUS="not_run"
+if [ "$TC_SDK_SUPPORTS_METAL4" = "1" ]; then
+    METAL4_TENSOROPS_COMPILE_STATUS="compiled"
+    METAL4_TENSOROPS_RUNTIME_STATUS="skipped_no_m5"
+    METAL4_TENSOROPS_REASON="SDK ${TC_SDK_VERSION} compiled Metal 4 TensorOps sources; runtime probe not covered on this host"
+else
+    METAL4_TENSOROPS_COMPILE_STATUS="skipped_sdk_too_old"
+    METAL4_TENSOROPS_RUNTIME_STATUS="skipped_not_compiled"
+    METAL4_TENSOROPS_REASON="SDK ${TC_SDK_VERSION} is below the SDK 26.0 requirement for Metal 4 mpp::tensor_ops"
+fi
+METAL4_TENSOROPS_RUNTIME_COVERED="0"
 WHEEL_PATH=""
 
 write_runtime_evidence() {
@@ -58,6 +92,9 @@ write_runtime_evidence() {
     export CMAKE_CONSUMER_STATUS CMAKE_SHARED_CONSUMER_STATUS CMAKE_STATIC_CONSUMER_STATUS
     export PKG_CONFIG_CONSUMER_STATUS AUTOTUNE_STATUS
     export GEMM_128_TILE_STATUS GEMM_ASYNC_STATUS
+    export TC_SDK_VERSION METAL4_TENSOROPS_COMPILE_STATUS
+    export METAL4_TENSOROPS_RUNTIME_STATUS METAL4_TENSOROPS_RUNTIME_COVERED
+    export METAL4_TENSOROPS_REASON
     "$PYTHON_BIN" - "$RELEASE_SMOKE_EVIDENCE_PATH" <<'PY'
 import datetime
 import json
@@ -212,6 +249,14 @@ checks = {
             "passed": passed(env("GEMM_ASYNC_STATUS")),
         },
     },
+    "metal4_tensorops": {
+        "sdk_version": env("TC_SDK_VERSION"),
+        "compile_status": env("METAL4_TENSOROPS_COMPILE_STATUS"),
+        "runtime_compile_status": env("METAL4_TENSOROPS_COMPILE_STATUS"),
+        "runtime_status": env("METAL4_TENSOROPS_RUNTIME_STATUS"),
+        "runtime_covered": env("METAL4_TENSOROPS_RUNTIME_COVERED") == "1",
+        "reason": env("METAL4_TENSOROPS_REASON"),
+    },
 }
 
 coverage_files = {}
@@ -226,6 +271,20 @@ pkg_config_consumer_smoke = checks["consumers"]["pkg_config"]["passed"] is True
 autotune_cache_smoke = checks["autotune_cache"]["passed"]
 gemm_128_tile_smoke = checks["gemm_env_variants"]["use_128_tile"]["passed"]
 gemm_async_smoke = checks["gemm_env_variants"]["use_async"]["passed"]
+public_integration_smoke = (
+    native_full_tests and
+    wheel_import_smoke and
+    checks["wheel_tag"]["inspected"] and
+    cmake_consumer_smoke and
+    pkg_config_consumer_smoke and
+    autotune_cache_smoke and
+    gemm_128_tile_smoke and
+    gemm_async_smoke
+)
+checks["public_integration"] = {
+    "runtime_status": "passed" if public_integration_smoke else "failed",
+    "runtime_covered": public_integration_smoke,
+}
 
 if native_full_tests:
     native_coverage = {
@@ -641,6 +700,9 @@ artifact = {
         "autotune_cache_passed": checks["autotune_cache"]["passed"],
         "gemm_128_tile_passed": checks["gemm_env_variants"]["use_128_tile"]["passed"],
         "gemm_async_passed": checks["gemm_env_variants"]["use_async"]["passed"],
+        "public_integration_runtime_passed": checks["public_integration"]["runtime_covered"],
+        "metal4_tensorops_compile_passed": checks["metal4_tensorops"]["compile_status"] == "compiled",
+        "metal4_tensorops_runtime_passed": checks["metal4_tensorops"]["runtime_status"] == "passed",
     },
     "checks": checks,
 }

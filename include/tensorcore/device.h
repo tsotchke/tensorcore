@@ -22,7 +22,7 @@ typedef enum {
     TC_FAMILY_APPLE8    = 8,   /* M2                                  */
     TC_FAMILY_APPLE9    = 9,   /* M3, A17 Pro (+ bf16 simdgroup_matrix) */
     TC_FAMILY_APPLE10   = 10,  /* M4 (+ i8 simdgroup_matrix, + SME on CPU) */
-    TC_FAMILY_APPLE11   = 11,  /* M5  (+ TensorOps / MTL4MachineLearningCommandEncoder) */
+    TC_FAMILY_APPLE11   = 11,  /* M5  (+ Metal 4 mpp::tensor_ops)          */
 } tc_family_t;
 
 typedef struct {
