@@ -58,6 +58,7 @@ add_compile_options($<$<CONFIG:Release>:-DNDEBUG>)
 option(TC_BUILD_TESTS  "Build correctness tests" ON)
 option(TC_BUILD_BENCH  "Build TFLOPS bench harness" ON)
 option(TC_BUILD_EXAMPLES "Build example programs" ON)
+option(TC_ENABLE_TENSOROPS "Build Metal 4 mpp::tensor_ops kernels when the SDK supports them" ON)
 
 set(TC_MACHO_COMPATIBILITY_VERSION
     "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.0"
@@ -128,10 +129,14 @@ if(TC_ENABLE_METAL)
         set(TC_SDK_VERSION "0.0")
     endif()
 
-    if(TC_SDK_VERSION VERSION_GREATER_EQUAL "26.0")
+    if(TC_SDK_VERSION VERSION_GREATER_EQUAL "26.0" AND TC_ENABLE_TENSOROPS)
         set(TC_HAVE_METAL4 ON)
         set(TC_METAL_STD "metal4.0")
         message(STATUS "tensorcore: SDK ${TC_SDK_VERSION} -- ENABLING Metal 4 / mpp::tensor_ops path")
+    elseif(TC_SDK_VERSION VERSION_GREATER_EQUAL "26.0")
+        set(TC_HAVE_METAL4 OFF)
+        set(TC_METAL_STD "metal3.1")
+        message(STATUS "tensorcore: SDK ${TC_SDK_VERSION} -- Metal 4 / mpp::tensor_ops path disabled by TC_ENABLE_TENSOROPS=OFF")
     else()
         set(TC_HAVE_METAL4 OFF)
         set(TC_METAL_STD "metal3.1")
@@ -359,7 +364,7 @@ install(FILES
     DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig"
 )
 
-message(STATUS "tensorcore: configured (Metal=${TC_ENABLE_METAL}, Metal4=${TC_HAVE_METAL4}, tests=${TC_BUILD_TESTS}, bench=${TC_BUILD_BENCH})")
+message(STATUS "tensorcore: configured (Metal=${TC_ENABLE_METAL}, Metal4=${TC_HAVE_METAL4}, TensorOps=${TC_ENABLE_TENSOROPS}, tests=${TC_BUILD_TESTS}, bench=${TC_BUILD_BENCH})")
 if(TC_ENABLE_METAL)
     message(STATUS "  metallib -> ${TC_METALLIB_PATH}")
 endif()
