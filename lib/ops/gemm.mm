@@ -427,12 +427,11 @@ extern "C" tc_status_t tc_gemm_batched(tc_context* ctx,
     if (bd->batch <= 0) return TC_ERR_INVALID_ARG;
     if (!validate(&d)) return TC_ERR_INVALID_ARG;
 
-    /* v0.1 batched fast path: fp16 in/out + fp32 accum + no transpose +
-     * alpha=1/beta=0. Anything else falls back to the per-batch loop. */
+    /* Batched fast path: fp16 in/out + fp32 accum. Transposes are specialized
+     * through the same function constants as single GEMM. */
     const bool fast_path =
         (d.a_dtype == TC_DTYPE_F16 && d.b_dtype == TC_DTYPE_F16 &&
-         d.c_dtype == TC_DTYPE_F16 && d.accum_dtype == TC_DTYPE_F32 &&
-         !d.transpose_a && !d.transpose_b);
+         d.c_dtype == TC_DTYPE_F16 && d.accum_dtype == TC_DTYPE_F32);
 
     if (!fast_path) {
         if (bd->batch != 1) return TC_ERR_INVALID_SHAPE;
@@ -446,9 +445,13 @@ extern "C" tc_status_t tc_gemm_batched(tc_context* ctx,
     size_t a_bytes = 0;
     size_t b_bytes = 0;
     size_t c_bytes = 0;
-    if (!batched_matrix_bytes(d.M, d.K, effective_lda(&d),
+    const int32_t a_rows = d.transpose_a ? d.K : d.M;
+    const int32_t a_cols = d.transpose_a ? d.M : d.K;
+    const int32_t b_rows = d.transpose_b ? d.N : d.K;
+    const int32_t b_cols = d.transpose_b ? d.K : d.N;
+    if (!batched_matrix_bytes(a_rows, a_cols, effective_lda(&d),
                               d.a_dtype, bd->batch, bd->stride_a, &a_bytes) ||
-        !batched_matrix_bytes(d.K, d.N, effective_ldb(&d),
+        !batched_matrix_bytes(b_rows, b_cols, effective_ldb(&d),
                               d.b_dtype, bd->batch, bd->stride_b, &b_bytes) ||
         !batched_matrix_bytes(d.M, d.N, effective_ldc(&d),
                               d.c_dtype, bd->batch, bd->stride_c, &c_bytes)) {
@@ -463,7 +466,7 @@ extern "C" tc_status_t tc_gemm_batched(tc_context* ctx,
 
     tc_status_t err = TC_OK;
     id<MTLComputePipelineState> pso = resolve_pipeline(ctx, @"tc_gemm_f16_f32_batched",
-                                                        false, false, &err);
+                                                        d.transpose_a, d.transpose_b, &err);
     if (!pso) return err;
 
     const uint32_t M = (uint32_t)d.M;

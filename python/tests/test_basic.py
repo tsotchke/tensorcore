@@ -391,9 +391,9 @@ def _run_padded_gemm_wrapper_check(ctx):
 
 def _run_batched_padded_gemm_wrapper_check(ctx):
     batch, M, N, K = 2, 16, 12, 16
-    lda, ldb, ldc = K + 3, N + 5, N + 7
-    storage_a = (M - 1) * lda + K
-    storage_b = (K - 1) * ldb + N
+    lda, ldb, ldc = M + 3, K + 5, N + 7
+    storage_a = (K - 1) * lda + M
+    storage_b = (N - 1) * ldb + K
     storage_c = (M - 1) * ldc + N
     total_a = (batch - 1) * storage_a + storage_a
     total_b = (batch - 1) * storage_b + storage_b
@@ -408,14 +408,15 @@ def _run_batched_padded_gemm_wrapper_check(ctx):
         a0 = b_i * storage_a
         b0 = b_i * storage_b
         c0 = b_i * storage_c
-        Am = (np.random.randn(M, K) * 0.2).astype(np.float16)
-        Bm = (np.random.randn(K, N) * 0.2).astype(np.float16)
-        Cm = (Am.astype(np.float32) @ Bm.astype(np.float32)).astype(np.float16)
-        for m in range(M):
-            A[a0 + m * lda:a0 + m * lda + K] = Am[m]
-            C_ref[c0 + m * ldc:c0 + m * ldc + N] = Cm[m]
+        Aphys = (np.random.randn(K, M) * 0.2).astype(np.float16)
+        Bphys = (np.random.randn(N, K) * 0.2).astype(np.float16)
+        Cm = (Aphys.astype(np.float32).T @ Bphys.astype(np.float32).T).astype(np.float16)
         for k in range(K):
-            B[b0 + k * ldb:b0 + k * ldb + N] = Bm[k]
+            A[a0 + k * lda:a0 + k * lda + M] = Aphys[k]
+        for n in range(N):
+            B[b0 + n * ldb:b0 + n * ldb + K] = Bphys[n]
+        for m in range(M):
+            C_ref[c0 + m * ldc:c0 + m * ldc + N] = Cm[m]
 
     ab = tc.buffer_alloc(ctx, A.nbytes)
     bb = tc.buffer_alloc(ctx, B.nbytes)
@@ -425,6 +426,7 @@ def _run_batched_padded_gemm_wrapper_check(ctx):
         tc.buffer_write(bb, B)
         tc.buffer_write(cb, C)
         tc.gemm_batched(ctx, ab, bb, cb, batch, M, N, K,
+                        transpose_a=True, transpose_b=True,
                         lda=lda, ldb=ldb, ldc=ldc)
         tc.buffer_read(cb, C)
         max_abs = 0.0
