@@ -533,6 +533,7 @@ def stream_destroy(ctx, stream):
 def buffer_write(buf, arr):
     """Copy a numpy ndarray into the buffer."""
     import numpy as np
+    arr = np.ascontiguousarray(arr)
     p = buffer_map(buf)
     nbytes = arr.nbytes
     capacity = buffer_size(buf)
@@ -543,12 +544,18 @@ def buffer_write(buf, arr):
 
 def buffer_read(buf, arr):
     """Copy from the buffer into a numpy ndarray (preallocated)."""
+    import numpy as np
     p = buffer_map(buf)
     nbytes = arr.nbytes
     capacity = buffer_size(buf)
     if nbytes > capacity:
         raise ValueError(f"array has {nbytes} bytes but buffer has {capacity} bytes")
-    ctypes.memmove(arr.ctypes.data, p, nbytes)
+    if arr.flags.c_contiguous:
+        ctypes.memmove(arr.ctypes.data, p, nbytes)
+    else:
+        tmp = np.empty(arr.shape, dtype=arr.dtype)
+        ctypes.memmove(tmp.ctypes.data, p, nbytes)
+        arr[...] = tmp
 
 
 def gemm(ctx, A, B, C, M, N, K, dtype="f16", accum="f32",
@@ -1064,8 +1071,45 @@ class Context:
     def rmsnorm_forward(self, X, gamma, Y, rstd_out, N, D, eps=1e-5):
         return rmsnorm_forward(self, X, gamma, Y, rstd_out, N, D, eps)
 
+    def rmsnorm_backward(self, X, gamma, dY, rstd, dX, dgamma, N, D):
+        return rmsnorm_backward(self, X, gamma, dY, rstd, dX, dgamma, N, D)
+
+    def layernorm_forward(self, X, gamma, beta, Y, mean_out, rstd_out, N, D, eps=1e-5):
+        return layernorm_forward(self, X, gamma, beta, Y, mean_out, rstd_out, N, D, eps)
+
+    def layernorm_backward(self, X, gamma, dY, mean, rstd, dX, N, D):
+        return layernorm_backward(self, X, gamma, dY, mean, rstd, dX, N, D)
+
+    def rope_forward(self, X, cos_t, sin_t, batch, heads, seq, head_dim):
+        return rope_forward(self, X, cos_t, sin_t, batch, heads, seq, head_dim)
+
+    def swiglu_forward(self, gate, up, out, n):
+        return swiglu_forward(self, gate, up, out, n)
+
+    def swiglu_backward(self, gate, up, dout, dgate, dup, n):
+        return swiglu_backward(self, gate, up, dout, dgate, dup, n)
+
+    def softmax_forward(self, X, Y, N, D):
+        return softmax_forward(self, X, Y, N, D)
+
+    def softmax_backward(self, Y, dY, dX, N, D):
+        return softmax_backward(self, Y, dY, dX, N, D)
+
+    def adamw_step(self, params_fp32, m_fp32, v_fp32, grads, grad_dtype, n,
+                   lr, beta1, beta2, eps, weight_decay, bias_correction1,
+                   bias_correction2):
+        return adamw_step(self, params_fp32, m_fp32, v_fp32, grads, grad_dtype, n,
+                          lr, beta1, beta2, eps, weight_decay, bias_correction1,
+                          bias_correction2)
+
     def fused_rmsnorm_gemv(self, X, gamma, W, Y, M, N, K, eps=1e-5):
         return fused_rmsnorm_gemv(self, X, gamma, W, Y, M, N, K, eps)
+
+    def open_gguf(self, path):
+        return GgufFile(path)
+
+    def load_supported_tensors(self, gguf):
+        return LoadedModel(self, gguf)
 
 
 class Buffer:

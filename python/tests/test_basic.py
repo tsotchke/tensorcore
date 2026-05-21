@@ -293,6 +293,28 @@ def _run_conv_wrapper_check(ctx):
         tc.buffer_free(ctx, scratch)
 
 
+def _run_buffer_layout_check(ctx):
+    src_base = np.arange(48, dtype=np.float32).reshape(6, 8)
+    src_view = src_base[:, ::2]
+    buf = tc.buffer_alloc(ctx, src_view.nbytes)
+    try:
+        tc.buffer_write(buf, src_view)
+        got = np.empty(src_view.shape, dtype=src_view.dtype)
+        tc.buffer_read(buf, got)
+        write_ok = np.array_equal(got, np.ascontiguousarray(src_view))
+
+        out_base = np.full((6, 8), -1.0, dtype=np.float32)
+        out_view = out_base[:, ::2]
+        tc.buffer_read(buf, out_view)
+        read_ok = (
+            np.array_equal(out_view, np.ascontiguousarray(src_view)) and
+            np.all(out_base[:, 1::2] == -1.0)
+        )
+        return write_ok and read_ok
+    finally:
+        tc.buffer_free(ctx, buf)
+
+
 def _run_training_wrapper_checks(ctx):
     bufs = []
 
@@ -459,6 +481,12 @@ def _run_owned_api_check():
     C = np.zeros((M, N), dtype=np.float16)
     C_async = np.zeros_like(C)
     C_ref = (A.astype(np.float32) @ B.astype(np.float32)).astype(np.float16)
+    sm_rows, sm_dim = 2, 16
+    X = (np.random.randn(sm_rows, sm_dim) * 0.5).astype(np.float16)
+    Y = np.zeros_like(X)
+    Xf = X.astype(np.float32)
+    exp = np.exp(Xf - np.max(Xf, axis=1, keepdims=True))
+    Y_ref = exp / np.sum(exp, axis=1, keepdims=True)
 
     with tc.Context() as ctx:
         a = ctx.buffer_from_array(A)
@@ -472,9 +500,15 @@ def _run_owned_api_check():
             stream.sync()
         C_async = c.to_numpy((M, N), np.float16)
 
+        xb = ctx.buffer_from_array(X)
+        yb = ctx.buffer(Y.nbytes)
+        ctx.softmax_forward(xb, yb, sm_rows, sm_dim)
+        Y = yb.to_numpy(Y.shape, Y.dtype)
+
     err = np.max(np.abs(C.astype(np.float32) - C_ref.astype(np.float32)))
     err_async = np.max(np.abs(C_async.astype(np.float32) - C_ref.astype(np.float32)))
-    return err == 0.0 and err_async == 0.0, max(float(err), float(err_async))
+    sm_err = _scaled_rms(Y, Y_ref)
+    return err == 0.0 and err_async == 0.0 and sm_err < 5e-3, max(float(err), float(err_async), sm_err)
 
 
 def main():
@@ -546,6 +580,9 @@ def main():
     print(f"GEMM async fp16:       max_abs={err_async.max():.3e}  scaled_rms={scaled_async:.3e}  "
           f"{'OK' if scaled_async < 1e-2 else 'FAIL'}")
     print(f"Host buffer bounds:    {'OK' if host_bounds_ok else 'FAIL'}")
+
+    buffer_layout_ok = _run_buffer_layout_check(ctx)
+    print(f"Host buffer layouts:   {'OK' if buffer_layout_ok else 'FAIL'}")
 
     batched_ok, batched_err = _run_batched_gemm_wrapper_check(ctx)
     print(f"GEMM batched fp16:     max_abs={batched_err:.3e}  "
@@ -728,6 +765,7 @@ def main():
         scaled < 1e-2 and
         scaled_async < 1e-2 and
         host_bounds_ok and
+        buffer_layout_ok and
         batched_ok and
         conv_ok and
         attention_ok and
