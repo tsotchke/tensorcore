@@ -91,7 +91,7 @@ consumer="$tmpdir/consumer"
 mkdir -p "$consumer"
 cat > "$consumer/CMakeLists.txt" <<'CMAKE'
 cmake_minimum_required(VERSION 3.20)
-project(tensorcore_native_sdk_consumer LANGUAGES C)
+project(tensorcore_native_sdk_consumer LANGUAGES C CXX)
 
 find_package(tensorcore CONFIG REQUIRED)
 
@@ -102,6 +102,10 @@ tensorcore_copy_metallib(consumer)
 add_executable(static_consumer main.c)
 target_link_libraries(static_consumer PRIVATE tensorcore::tensorcore)
 tensorcore_copy_metallib(static_consumer)
+
+add_executable(cxx_consumer main.cpp)
+target_link_libraries(cxx_consumer PRIVATE tensorcore::tensorcore_shared)
+tensorcore_copy_metallib(cxx_consumer)
 CMAKE
 cat > "$consumer/main.c" <<'C'
 #include <stdio.h>
@@ -140,6 +144,31 @@ int main(void) {
     return 0;
 }
 C
+cat > "$consumer/main.cpp" <<'CXX'
+#include <cstring>
+#include <iostream>
+#include "tensorcore/tensorcore.h"
+
+#define TC_STR2(x) #x
+#define TC_STR(x) TC_STR2(x)
+
+int main() {
+    const char* expected =
+        "tensorcore " TC_STR(TENSORCORE_VERSION_MAJOR)
+        "." TC_STR(TENSORCORE_VERSION_MINOR)
+        "." TC_STR(TENSORCORE_VERSION_PATCH);
+    if (std::strcmp(tc_version(), expected) != 0) {
+        std::cerr << "unexpected version: " << tc_version() << "\n";
+        return 1;
+    }
+    if (tc_dtype_size(TC_DTYPE_F16) != 2 ||
+        std::strcmp(tc_backend_name(TC_BACKEND_NONE), "none") != 0) {
+        return 1;
+    }
+    std::cout << tc_version() << "\n";
+    return 0;
+}
+CXX
 
 cmake -S "$consumer" -B "$consumer/build" -DCMAKE_PREFIX_PATH="$sdk"
 cmake --build "$consumer/build"
@@ -149,6 +178,8 @@ if [ ! -f "$consumer/build/tensorcore.metallib" ]; then
 fi
 DYLD_LIBRARY_PATH="$sdk/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
     "$consumer/build/consumer"
+DYLD_LIBRARY_PATH="$sdk/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
+    "$consumer/build/cxx_consumer"
 "$consumer/build/static_consumer"
 
 if command -v pkg-config >/dev/null 2>&1; then
