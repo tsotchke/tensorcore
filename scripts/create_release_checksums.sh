@@ -34,4 +34,9 @@ fi
         LC_ALL=C sort -k2
 ) > "$OUT"
 
+(
+    cd "$DIST_DIR"
+    LC_ALL=C shasum -a 256 -c "$(basename "$OUT")"
+)
+
 echo "$OUT"
