@@ -24,56 +24,25 @@ jobs:
           xcodebuild -version
           xcrun --show-sdk-version
 
-      - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
-
-      - name: Build
-        run: cmake --build build -j
-
-      - name: Public export surface
-        run: scripts/check_public_exports.sh
-
-      - name: Hardware-aware tests
-        run: scripts/ci_macos_test.sh
-
-      - name: Install native artifacts
-        run: cmake --install build --prefix "$RUNNER_TEMP/tensorcore-install"
-
-      - name: Build wheel
+      - name: Prepare release Python
         run: |
           python3 -m venv "$RUNNER_TEMP/tensorcore-release-venv"
-          source "$RUNNER_TEMP/tensorcore-release-venv/bin/activate"
-          python -m pip install --upgrade pip setuptools wheel
-          mkdir -p dist
-          TENSORCORE_NATIVE_DIR="$RUNNER_TEMP/tensorcore-install/lib" \
-            python -m pip wheel . --no-build-isolation -w dist
+          "$RUNNER_TEMP/tensorcore-release-venv/bin/python" -m pip install --upgrade pip setuptools wheel
 
-      - name: Verify wheel
-        run: |
-          source "$RUNNER_TEMP/tensorcore-release-venv/bin/activate"
-          python -m pip install dist/tensorcore_apple-*.whl --force-reinstall --no-deps
-          EXPECTED_VERSION="$(python - <<'PY'
-          import pathlib
-          import re
+      - name: Release smoke
+        env:
+          PYTHON_BIN: ${{ runner.temp }}/tensorcore-release-venv/bin/python
+          WHEEL_DIR: dist
+          TENSORCORE_RELEASE_SMOKE_EVIDENCE_PATH: build/release_smoke_runtime_evidence.json
+        run: scripts/release_smoke.sh
 
-          text = pathlib.Path("pyproject.toml").read_text()
-          match = re.search(r'(?m)^version\s*=\s*"([^"]+)"\s*$', text)
-          if not match:
-              raise SystemExit("project.version not found in pyproject.toml")
-          print(match.group(1))
-          PY
-          )"
-          TENSORCORE_LIB= TC_METALLIB= \
-            python - "$EXPECTED_VERSION" <<'PY'
-          import sys
-          import tensorcore as tc
-
-          expected = sys.argv[1]
-          actual = tc.version()
-          if not actual.startswith(f"tensorcore {expected}"):
-              raise SystemExit(f"version mismatch: expected tensorcore {expected}, got {actual}")
-          print(actual)
-          PY
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: tensorcore-release-smoke-evidence
+          path: build/release_smoke_runtime_evidence.json
+          if-no-files-found: error
 
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v7
