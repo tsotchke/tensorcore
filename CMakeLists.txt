@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(tensorcore
-    VERSION 0.1.18
+    VERSION 0.1.19
     LANGUAGES C CXX OBJC OBJCXX
     DESCRIPTION "CUDA-equivalent tensor-core acceleration for Apple Silicon"
 )
@@ -158,6 +158,7 @@ set(TC_SOURCES
     lib/distributed/ring_local.mm
     lib/ops/quantized.mm
     lib/io/gguf.c
+    lib/tensorops/tensorops_select.c
     lib/fallback/mps_gemm.mm
     lib/fallback/accelerate_gemm.c
     lib/c_api/c_api.mm

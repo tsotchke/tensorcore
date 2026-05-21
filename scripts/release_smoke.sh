@@ -332,6 +332,9 @@ if native_full_tests:
             "tc_fused_rmsnorm_gemv",
             "tc_adamw_step",
         ],
+        "lib/tensorops/tensorops_select.c": [
+            "tc_tensorops_gemm_kernel_name",
+        ],
         "lib/distributed/ring_local.mm": [
             "sock_send_all",
             "sock_recv_all",

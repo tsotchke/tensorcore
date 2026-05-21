@@ -19,6 +19,7 @@ set(TC_TESTS
     test_fused_norm_gemv
     test_distributed_ring_fork
     test_gguf
+    test_tensorops_select
 )
 
 foreach(t IN LISTS TC_TESTS)

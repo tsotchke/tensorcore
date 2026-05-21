@@ -21,6 +21,7 @@
 
 #include "tensorcore/tensorcore.h"
 #include "../core/internal.h"
+#include "tensorops/tensorops_select.h"
 
 #include <cstdio>
 #include <cstring>
@@ -59,24 +60,6 @@ bool runtime_supports_tensor_unit(id<MTLDevice> dev) {
     return false;
 }
 
-NSString* tc4_kernel_name_for_gemm(const tc_gemm_desc* d, tc_status_t* err) {
-    *err = TC_OK;
-    if (d->a_dtype == TC_DTYPE_F16 && d->b_dtype == TC_DTYPE_F16 &&
-        d->c_dtype == TC_DTYPE_F16 && d->accum_dtype == TC_DTYPE_F32) {
-        return @"tc4_gemm_f16";
-    }
-    if (d->a_dtype == TC_DTYPE_BF16 && d->b_dtype == TC_DTYPE_BF16 &&
-        d->c_dtype == TC_DTYPE_BF16 && d->accum_dtype == TC_DTYPE_F32) {
-        return @"tc4_gemm_bf16";
-    }
-    if (d->a_dtype == TC_DTYPE_F32 && d->b_dtype == TC_DTYPE_F32 &&
-        d->c_dtype == TC_DTYPE_F32 && d->accum_dtype == TC_DTYPE_F32) {
-        return @"tc4_gemm_f32";
-    }
-    *err = TC_ERR_UNSUPPORTED_DTYPE;
-    return nil;
-}
-
 }  /* namespace */
 
 extern "C" tc_status_t tc_tensorops_available(tc_context* ctx, bool* out) {
@@ -98,8 +81,9 @@ extern "C" tc_status_t tc_tensorops_gemm_attempt(tc_context* ctx,
     }
 
     tc_status_t err = TC_OK;
-    NSString* kname = tc4_kernel_name_for_gemm(desc, &err);
-    if (!kname) return err;
+    const char* cname = tc_tensorops_gemm_kernel_name(desc, &err);
+    if (!cname) return err;
+    NSString* kname = [NSString stringWithUTF8String:cname];
 
     /* v0.1 of this path: alpha=1, beta=0 only. */
     if (desc->alpha != 1.0f || desc->beta != 0.0f) {
