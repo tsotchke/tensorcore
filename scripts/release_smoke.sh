@@ -268,21 +268,32 @@ python_smoke = (
 wheel_import_smoke = checks["installed_wheel_smoke"]["passed"]
 cmake_consumer_smoke = checks["consumers"]["cmake"]["passed"]
 pkg_config_consumer_smoke = checks["consumers"]["pkg_config"]["passed"] is True
+packaging_consumer_smoke = (
+    wheel_import_smoke and
+    checks["wheel_tag"]["inspected"] and
+    cmake_consumer_smoke and
+    pkg_config_consumer_smoke
+)
 autotune_cache_smoke = checks["autotune_cache"]["passed"]
 gemm_128_tile_smoke = checks["gemm_env_variants"]["use_128_tile"]["passed"]
 gemm_async_smoke = checks["gemm_env_variants"]["use_async"]["passed"]
 public_integration_smoke = (
     native_full_tests and
-    wheel_import_smoke and
-    checks["wheel_tag"]["inspected"] and
-    cmake_consumer_smoke and
-    pkg_config_consumer_smoke and
+    packaging_consumer_smoke and
     autotune_cache_smoke and
     gemm_128_tile_smoke and
     gemm_async_smoke
 )
+checks["packaging_and_consumers"] = {
+    "runtime_status": "passed" if packaging_consumer_smoke else "failed",
+    "runtime_covered": packaging_consumer_smoke,
+}
 checks["public_integration"] = {
-    "runtime_status": "passed" if public_integration_smoke else "failed",
+    "runtime_status": (
+        "passed" if public_integration_smoke else
+        "skipped_no_gpu" if not checks["tests"]["gpu_device_available"] else
+        "failed"
+    ),
     "runtime_covered": public_integration_smoke,
 }
 
@@ -697,6 +708,7 @@ artifact = {
         "installed_wheel_smoke_passed": checks["installed_wheel_smoke"]["passed"],
         "cmake_consumers_passed": checks["consumers"]["cmake"]["passed"],
         "pkg_config_consumer_passed": checks["consumers"]["pkg_config"]["passed"],
+        "packaging_and_consumers_passed": checks["packaging_and_consumers"]["runtime_covered"],
         "autotune_cache_passed": checks["autotune_cache"]["passed"],
         "gemm_128_tile_passed": checks["gemm_env_variants"]["use_128_tile"]["passed"],
         "gemm_async_passed": checks["gemm_env_variants"]["use_async"]["passed"],

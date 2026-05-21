@@ -37,10 +37,10 @@ oracles:
       - id: packaging_and_consumers_passed
         runtime_event:
           event_kinds: [runtime_backend]
-          event_names: [checks.public_integration.runtime_status]
+          event_names: [checks.packaging_and_consumers.runtime_status]
           event_values: [passed]
         severity: high
-        label: Wheel, editable install, CMake, pkg-config, and autotune consumers passed
+        label: Wheel, editable install, CMake, and pkg-config consumers passed
         action: fix_public_integration_smoke
 
       - id: no_synthetic_public_prod_paths
