@@ -49,6 +49,13 @@ jobs:
           TENSORCORE_LIB= TC_METALLIB= \
             python -c 'import tensorcore as tc; print(tc.version())'
 
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: tensorcore-apple-wheel
+          path: dist/tensorcore_apple-*.whl
+          if-no-files-found: error
+
       - name: Publish GitHub release assets
         if: startsWith(github.ref, 'refs/tags/')
         env:
