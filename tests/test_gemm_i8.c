@@ -159,6 +159,119 @@ static int run_case(tc_context* ctx, int M, int N, int K) {
     return (s == TC_OK && errors == 0) ? 0 : 5;
 }
 
+static int run_padded_transpose_beta_case(tc_context* ctx) {
+    enum { M = 35, N = 33, K = 29, LDA = 39, LDB = 34, LDC = 40 };
+    const size_t elems_a = (size_t)(K - 1) * LDA + M;
+    const size_t elems_b = (size_t)(N - 1) * LDB + K;
+    const size_t elems_c = (size_t)(M - 1) * LDC + N;
+    tc_buffer *A = NULL, *B = NULL, *C = NULL;
+    int8_t *Ap = NULL, *Bp = NULL;
+    int32_t *Cp = NULL, *Cr = NULL;
+    int rc = 7;
+
+    if (tc_buffer_alloc(ctx, elems_a, &A) != TC_OK ||
+        tc_buffer_alloc(ctx, elems_b, &B) != TC_OK ||
+        tc_buffer_alloc(ctx, elems_c * sizeof(int32_t), &C) != TC_OK) {
+        fprintf(stderr, "  padded transpose i8: allocation failed\n");
+        goto cleanup;
+    }
+    if (tc_buffer_map(A, (void**)&Ap) != TC_OK ||
+        tc_buffer_map(B, (void**)&Bp) != TC_OK ||
+        tc_buffer_map(C, (void**)&Cp) != TC_OK) {
+        fprintf(stderr, "  padded transpose i8: map failed\n");
+        goto cleanup;
+    }
+    Cr = (int32_t*)calloc(elems_c, sizeof(int32_t));
+    if (!Cr) {
+        fprintf(stderr, "  padded transpose i8: reference allocation failed\n");
+        goto cleanup;
+    }
+
+    memset(Ap, 0x3d, elems_a);
+    memset(Bp, 0x27, elems_b);
+    for (size_t i = 0; i < elems_c; ++i) {
+        Cp[i] = -1234567;
+        Cr[i] = -1234567;
+    }
+
+    for (int k = 0; k < K; ++k) {
+        for (int m = 0; m < M; ++m) {
+            Ap[(size_t)k * LDA + m] = (int8_t)(((k * 17 + m * 13) % 31) - 15);
+        }
+    }
+    for (int n = 0; n < N; ++n) {
+        for (int k = 0; k < K; ++k) {
+            Bp[(size_t)n * LDB + k] = (int8_t)(((n * 11 + k * 7) % 29) - 14);
+        }
+    }
+    for (int m = 0; m < M; ++m) {
+        for (int n = 0; n < N; ++n) {
+            const int32_t c0 = (int32_t)(((m * 5 + n * 3) % 23) - 11);
+            Cp[(size_t)m * LDC + n] = c0;
+            Cr[(size_t)m * LDC + n] = c0;
+        }
+    }
+
+    for (int m = 0; m < M; ++m) {
+        for (int n = 0; n < N; ++n) {
+            int32_t sum = 0;
+            for (int k = 0; k < K; ++k) {
+                sum += (int32_t)Ap[(size_t)k * LDA + m] *
+                       (int32_t)Bp[(size_t)n * LDB + k];
+            }
+            Cr[(size_t)m * LDC + n] += sum;
+        }
+    }
+
+    tc_gemm_desc d = {0};
+    d.M = M; d.N = N; d.K = K;
+    d.a_dtype = TC_DTYPE_I8;
+    d.b_dtype = TC_DTYPE_I8;
+    d.c_dtype = TC_DTYPE_I32;
+    d.accum_dtype = TC_DTYPE_I32;
+    d.transpose_a = 1;
+    d.transpose_b = 1;
+    d.alpha = 1.0f;
+    d.beta = 1.0f;
+    d.lda = LDA;
+    d.ldb = LDB;
+    d.ldc = LDC;
+    tc_status_t s = tc_gemm(ctx, &d, A, B, C);
+
+    int errors = 0;
+    int64_t max_abs = 0;
+    int padding_ok = 1;
+    if (s == TC_OK) {
+        for (int m = 0; m < M; ++m) {
+            for (int n = 0; n < N; ++n) {
+                const size_t idx = (size_t)m * LDC + n;
+                int64_t e = (int64_t)Cp[idx] - (int64_t)Cr[idx];
+                if (e < 0) e = -e;
+                if (e > max_abs) max_abs = e;
+                if (e != 0) ++errors;
+            }
+            if (m < M - 1) {
+                for (int n = N; n < LDC; ++n) {
+                    if (Cp[(size_t)m * LDC + n] != -1234567) padding_ok = 0;
+                }
+            }
+        }
+    }
+
+    printf("  padded transpose beta i8 backend=%-18s  errors=%d/%d  max_abs=%lld padding=%s  %s\n",
+           tc_backend_name(tc_last_backend()), errors, M * N, (long long)max_abs,
+           padding_ok ? "OK" : "FAIL",
+           (s == TC_OK && errors == 0 && padding_ok) ? "OK" : tc_status_string(s));
+    rc = (s == TC_OK && errors == 0 && padding_ok) ? 0 : 7;
+
+cleanup:
+    free(Cr);
+    if (A) tc_buffer_free(ctx, A);
+    if (B) tc_buffer_free(ctx, B);
+    if (C) tc_buffer_free(ctx, C);
+    return rc;
+}
+
 int main(void) {
     tc_context* ctx = NULL;
     tc_status_t s = tc_init(&ctx);
@@ -180,6 +293,7 @@ int main(void) {
     rc |= run_case(ctx, 64, 64, 64);
     rc |= run_case(ctx, 128, 128, 128);
     rc |= run_case(ctx, 256, 256, 256);
+    rc |= run_padded_transpose_beta_case(ctx);
     tc_shutdown(ctx);
     return rc;
 }

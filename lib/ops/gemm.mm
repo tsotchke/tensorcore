@@ -98,6 +98,12 @@ TileChoice kernel_for(const tc_gemm_desc* d, tc_family_t fam, tc_context* ctx, t
     if (d->a_dtype == TC_DTYPE_I8 && d->b_dtype == TC_DTYPE_I8 &&
         d->c_dtype == TC_DTYPE_I32 && d->accum_dtype == TC_DTYPE_I32) {
         if (fam < TC_FAMILY_APPLE10) { *err = TC_ERR_UNSUPPORTED_FAMILY; return {nil,0,0,0}; }
+        if (d->transpose_a || d->transpose_b ||
+            d->alpha != 1.0f || d->beta != 0.0f ||
+            (d->M % 8) != 0 || (d->N % 8) != 0) {
+            *err = TC_ERR_UNSUPPORTED_DTYPE;
+            return {nil,0,0,0};
+        }
         /* 128-tile i8 variant lands in phase 2; for now use 64 tile. */
         return { @"tc_gemm_i8_i32", 64, 64, 128 };
     }

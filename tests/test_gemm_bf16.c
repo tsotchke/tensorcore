@@ -169,6 +169,125 @@ static int run_case(tc_context* ctx, int M, int N, int K) {
     return (s == TC_OK && scaled < 5e-2) ? 0 : 5;
 }
 
+static int run_padded_transpose_beta_case(tc_context* ctx) {
+    enum { M = 35, N = 33, K = 29, LDA = 39, LDB = 34, LDC = 40 };
+    const float alpha = 0.75f;
+    const float beta = 0.25f;
+    const size_t elems_a = (size_t)(K - 1) * LDA + M;
+    const size_t elems_b = (size_t)(N - 1) * LDB + K;
+    const size_t elems_c = (size_t)(M - 1) * LDC + N;
+
+    tc_buffer *A = NULL, *B = NULL, *C = NULL;
+    uint16_t *Ap = NULL, *Bp = NULL, *Cp = NULL;
+    float *Cref = NULL;
+    int rc = 7;
+
+    if (tc_buffer_alloc(ctx, elems_a * sizeof(uint16_t), &A) != TC_OK ||
+        tc_buffer_alloc(ctx, elems_b * sizeof(uint16_t), &B) != TC_OK ||
+        tc_buffer_alloc(ctx, elems_c * sizeof(uint16_t), &C) != TC_OK) {
+        fprintf(stderr, "  padded transpose bf16: allocation failed\n");
+        goto cleanup;
+    }
+    if (tc_buffer_map(A, (void**)&Ap) != TC_OK ||
+        tc_buffer_map(B, (void**)&Bp) != TC_OK ||
+        tc_buffer_map(C, (void**)&Cp) != TC_OK) {
+        fprintf(stderr, "  padded transpose bf16: map failed\n");
+        goto cleanup;
+    }
+    Cref = (float*)calloc(elems_c, sizeof(float));
+    if (!Cref) {
+        fprintf(stderr, "  padded transpose bf16: reference allocation failed\n");
+        goto cleanup;
+    }
+
+    for (size_t i = 0; i < elems_a; ++i) Ap[i] = f32_to_bf16(-37.0f);
+    for (size_t i = 0; i < elems_b; ++i) Bp[i] = f32_to_bf16(19.0f);
+    for (size_t i = 0; i < elems_c; ++i) {
+        Cp[i] = f32_to_bf16(-11.0f);
+        Cref[i] = -11.0f;
+    }
+
+    for (int k = 0; k < K; ++k) {
+        for (int m = 0; m < M; ++m) {
+            const float v = (float)(((k * 17 + m * 13) % 31) - 15) * 0.03125f;
+            Ap[(size_t)k * LDA + m] = f32_to_bf16(v);
+        }
+    }
+    for (int n = 0; n < N; ++n) {
+        for (int k = 0; k < K; ++k) {
+            const float v = (float)(((n * 11 + k * 7) % 29) - 14) * 0.02734375f;
+            Bp[(size_t)n * LDB + k] = f32_to_bf16(v);
+        }
+    }
+    for (int m = 0; m < M; ++m) {
+        for (int n = 0; n < N; ++n) {
+            const float v = (float)(((m * 5 + n * 3) % 23) - 11) * 0.015625f;
+            Cp[(size_t)m * LDC + n] = f32_to_bf16(v);
+            Cref[(size_t)m * LDC + n] = bf16_to_f32(f32_to_bf16(v));
+        }
+    }
+
+    for (int m = 0; m < M; ++m) {
+        for (int n = 0; n < N; ++n) {
+            float sum = 0.0f;
+            for (int k = 0; k < K; ++k) {
+                sum += bf16_to_f32(Ap[(size_t)k * LDA + m]) *
+                       bf16_to_f32(Bp[(size_t)n * LDB + k]);
+            }
+            Cref[(size_t)m * LDC + n] = alpha * sum + beta * Cref[(size_t)m * LDC + n];
+        }
+    }
+
+    tc_gemm_desc d = {0};
+    d.M = M; d.N = N; d.K = K;
+    d.a_dtype = TC_DTYPE_BF16;
+    d.b_dtype = TC_DTYPE_BF16;
+    d.c_dtype = TC_DTYPE_BF16;
+    d.accum_dtype = TC_DTYPE_F32;
+    d.transpose_a = 1;
+    d.transpose_b = 1;
+    d.alpha = alpha;
+    d.beta = beta;
+    d.lda = LDA;
+    d.ldb = LDB;
+    d.ldc = LDC;
+    tc_status_t s = tc_gemm(ctx, &d, A, B, C);
+
+    double rms_err = 0.0, rms_ref = 0.0, max_abs = 0.0;
+    int padding_ok = 1;
+    if (s == TC_OK) {
+        for (int m = 0; m < M; ++m) {
+            for (int n = 0; n < N; ++n) {
+                const size_t idx = (size_t)m * LDC + n;
+                const double e = fabs((double)bf16_to_f32(Cp[idx]) - (double)Cref[idx]);
+                rms_err += e * e;
+                rms_ref += (double)Cref[idx] * (double)Cref[idx];
+                if (e > max_abs) max_abs = e;
+            }
+            if (m < M - 1) {
+                for (int n = N; n < LDC; ++n) {
+                    if (bf16_to_f32(Cp[(size_t)m * LDC + n]) != -11.0f) padding_ok = 0;
+                }
+            }
+        }
+    }
+    rms_err = sqrt(rms_err / (M * N));
+    rms_ref = sqrt(rms_ref / (M * N));
+    const double scaled = rms_err / (rms_ref + 1e-9);
+    printf("  padded transpose beta bf16 backend=%-18s  max_abs=%.3e scaled=%.3e padding=%s  %s\n",
+           tc_backend_name(tc_last_backend()), max_abs, scaled,
+           padding_ok ? "OK" : "FAIL",
+           (s == TC_OK && scaled < 5e-2 && padding_ok) ? "OK" : tc_status_string(s));
+    rc = (s == TC_OK && scaled < 5e-2 && padding_ok) ? 0 : 7;
+
+cleanup:
+    free(Cref);
+    if (A) tc_buffer_free(ctx, A);
+    if (B) tc_buffer_free(ctx, B);
+    if (C) tc_buffer_free(ctx, C);
+    return rc;
+}
+
 int main(void) {
     tc_context* ctx = NULL;
     tc_status_t s = tc_init(&ctx);
@@ -191,6 +310,7 @@ int main(void) {
     rc |= run_case(ctx, 128, 128, 128);
     rc |= run_case(ctx, 256, 256, 256);
     rc |= run_case(ctx, 512, 512, 512);
+    rc |= run_padded_transpose_beta_case(ctx);
     tc_shutdown(ctx);
     return rc;
 }
