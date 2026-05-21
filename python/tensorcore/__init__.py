@@ -48,6 +48,7 @@ def _find_lib():
         return env
     here = os.path.dirname(os.path.abspath(__file__))
     candidates = [
+        os.path.join(here, "libtensorcore.dylib"),
         os.path.join(here, "..", "..", "build", "libtensorcore.dylib"),
         os.path.join(here, "..", "..", "build", "libtensorcore.a"),  # static — won't load via ctypes
         "/opt/tensorcore/lib/libtensorcore.dylib",

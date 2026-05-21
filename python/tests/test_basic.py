@@ -13,7 +13,8 @@ import ctypes
 
 # Make our local checkout importable.
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, ".."))
+if os.environ.get("TENSORCORE_TEST_INSTALLED") != "1":
+    sys.path.insert(0, os.path.join(HERE, ".."))
 
 import numpy as np
 import tensorcore as tc

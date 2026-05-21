@@ -20,7 +20,7 @@ extern "C" {
 
 #define TENSORCORE_VERSION_MAJOR 0
 #define TENSORCORE_VERSION_MINOR 1
-#define TENSORCORE_VERSION_PATCH 7
+#define TENSORCORE_VERSION_PATCH 8
 
 const char* tc_version(void);
 

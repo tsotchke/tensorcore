@@ -10,6 +10,9 @@ fi
 if [ -z "${WHEEL_DIR:-}" ]; then
     WHEEL_DIR="$(mktemp -d /private/tmp/tensorcore-wheels.XXXXXX)"
 fi
+if [ -z "${WHEEL_PREFIX:-}" ]; then
+    WHEEL_PREFIX="$(mktemp -d /private/tmp/tensorcore-wheel-install.XXXXXX)"
+fi
 REQUIRE_GPU="${REQUIRE_GPU:-0}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
@@ -38,16 +41,67 @@ cmake --install "$BUILD_DIR" --prefix "$PREFIX"
 
 echo "[tensorcore] python syntax"
 "$PYTHON_BIN" -m py_compile \
+    "$ROOT/setup.py" \
     "$ROOT/python/tensorcore/__init__.py" \
     "$ROOT/python/tests/test_basic.py"
 
 echo "[tensorcore] python wheel"
 mkdir -p "$WHEEL_DIR"
-"$PYTHON_BIN" -m pip wheel "$ROOT" --no-build-isolation -w "$WHEEL_DIR"
+TENSORCORE_NATIVE_DIR="$PREFIX/lib" \
+    "$PYTHON_BIN" -m pip wheel "$ROOT" --no-build-isolation -w "$WHEEL_DIR"
+
+WHEEL_PATH="$("$PYTHON_BIN" - "$WHEEL_DIR" <<'PY'
+import pathlib
+import sys
+
+wheels = sorted(pathlib.Path(sys.argv[1]).glob("tensorcore_apple-*.whl"))
+if not wheels:
+    raise SystemExit("no tensorcore_apple wheel was built")
+print(wheels[-1])
+PY
+)"
+"$PYTHON_BIN" - "$WHEEL_PATH" <<'PY'
+import sys
+import zipfile
+
+required = {
+    "tensorcore/libtensorcore.dylib",
+    "tensorcore/tensorcore.metallib",
+}
+with zipfile.ZipFile(sys.argv[1]) as zf:
+    names = set(zf.namelist())
+missing = [
+    suffix for suffix in sorted(required)
+    if not any(name == suffix or name.endswith(f"/purelib/{suffix}") for name in names)
+]
+if missing:
+    raise SystemExit(f"wheel missing native artifacts: {missing}")
+PY
+
+PY_VER="$("$PYTHON_BIN" -c 'import sys; print(f"python{sys.version_info.major}.{sys.version_info.minor}")')"
+echo "[tensorcore] python wheel install"
+"$PYTHON_BIN" -m pip install "$WHEEL_PATH" --no-deps --prefix "$WHEEL_PREFIX"
+WHEEL_SITE="$WHEEL_PREFIX/lib/$PY_VER/site-packages"
+TENSORCORE_LIB= TC_METALLIB= "$PYTHON_BIN" - "$WHEEL_SITE" <<'PY'
+import os
+import sys
+
+sys.path.insert(0, sys.argv[1])
+import tensorcore as tc
+
+lib = os.path.realpath(tc._find_lib())
+expected_suffix = os.path.join("tensorcore", "libtensorcore.dylib")
+if not lib.endswith(expected_suffix):
+    raise SystemExit(f"package-local dylib was not selected: {lib}")
+metallib = os.path.join(os.path.dirname(lib), "tensorcore.metallib")
+if not os.path.exists(metallib):
+    raise SystemExit(f"package-local metallib missing: {metallib}")
+assert tc.version().startswith("tensorcore 0.1.8"), tc.version()
+print(tc.version())
+PY
 
 echo "[tensorcore] python editable install"
 "$PYTHON_BIN" -m pip install -e "$ROOT" --no-build-isolation --prefix "$PY_PREFIX"
-PY_VER="$("$PYTHON_BIN" -c 'import sys; print(f"python{sys.version_info.major}.{sys.version_info.minor}")')"
 PY_SITE="$PY_PREFIX/lib/$PY_VER/site-packages"
 TENSORCORE_LIB="$PREFIX/lib/libtensorcore.dylib" "$PYTHON_BIN" - "$PY_SITE" <<'PY'
 import site
@@ -56,18 +110,19 @@ import sys
 site.addsitedir(sys.argv[1])
 import tensorcore as tc
 
-assert tc.version().startswith("tensorcore 0.1.7"), tc.version()
+assert tc.version().startswith("tensorcore 0.1.8"), tc.version()
 print(tc.version())
 PY
 
-echo "[tensorcore] installed python smoke"
+echo "[tensorcore] installed wheel python smoke"
 if [ "$GPU_OK" = "1" ]; then
-    TENSORCORE_LIB="$PREFIX/lib/libtensorcore.dylib" \
-    PYTHONPATH="$ROOT/python" \
+    TENSORCORE_LIB= TC_METALLIB= \
+    TENSORCORE_TEST_INSTALLED=1 \
+    PYTHONPATH="$WHEEL_SITE" \
         "$PYTHON_BIN" "$ROOT/python/tests/test_basic.py"
 else
-    TENSORCORE_LIB="$PREFIX/lib/libtensorcore.dylib" \
-    PYTHONPATH="$ROOT/python" \
+    TENSORCORE_LIB= TC_METALLIB= \
+    PYTHONPATH="$WHEEL_SITE" \
         "$PYTHON_BIN" -c 'import tensorcore as tc; print(tc.version())'
 fi
 
