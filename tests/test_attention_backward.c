@@ -146,12 +146,86 @@ static double rms_scaled(const uint16_t* got, const float* ref, int n) {
 }
 
 static int run_backward_case(int B, int H, int Sq, int Sk, int D);
+static int run_backward_validation_case(void);
 
 int main(void) {
     int rc = 0;
     /* Reference handles 1 (batch, head). Use H=1 for both cases. */
     rc |= run_backward_case(1, 1, 64, 64, 64);
     rc |= run_backward_case(1, 1, 32, 32, 128);
+    rc |= run_backward_validation_case();
+    return rc;
+}
+
+static int expect_status(const char* label, tc_status_t got, tc_status_t want) {
+    const int ok = (got == want);
+    printf("%s got=%s want=%s  %s\n",
+           label, tc_status_string(got), tc_status_string(want), ok ? "OK" : "FAIL");
+    return ok ? 0 : 13;
+}
+
+static int run_backward_validation_case(void) {
+    tc_context* ctx = NULL;
+    tc_status_t s = tc_init(&ctx);
+    if (s != TC_OK && s != TC_ERR_ALREADY_INITIALIZED) {
+        fprintf(stderr, "tc_init failed: %s\n", tc_status_string(s));
+        return 1;
+    }
+
+    const int B = 1, H = 2, Sq = 64, Sk = 64, D = 64;
+    const size_t q_elems = (size_t)B * H * Sq * D;
+    const size_t kv_elems = (size_t)B * H * Sk * D;
+    int rc = 0;
+
+    tc_buffer *Q = NULL, *K = NULL, *V = NULL, *O = NULL, *dO = NULL;
+    tc_buffer *LSE = NULL, *dQ = NULL, *dK = NULL, *dV = NULL, *dQ_small = NULL;
+    tc_buffer_alloc(ctx, q_elems * sizeof(uint16_t), &Q);
+    tc_buffer_alloc(ctx, kv_elems * sizeof(uint16_t), &K);
+    tc_buffer_alloc(ctx, kv_elems * sizeof(uint16_t), &V);
+    tc_buffer_alloc(ctx, q_elems * sizeof(uint16_t), &O);
+    tc_buffer_alloc(ctx, q_elems * sizeof(uint16_t), &dO);
+    tc_buffer_alloc(ctx, q_elems * sizeof(uint16_t), &dQ);
+    tc_buffer_alloc(ctx, kv_elems * sizeof(uint16_t), &dK);
+    tc_buffer_alloc(ctx, kv_elems * sizeof(uint16_t), &dV);
+    tc_buffer_alloc(ctx, (size_t)B * H * Sq * sizeof(float), &LSE);
+    tc_buffer_alloc(ctx, sizeof(uint16_t), &dQ_small);
+
+    tc_attention_desc d = {0};
+    d.batch = B; d.heads = H; d.seq_q = Sq; d.seq_kv = Sk; d.head_dim = D;
+    d.io_dtype = TC_DTYPE_F16; d.accum_dtype = TC_DTYPE_F32;
+    d.softmax_scale = 1.0f / sqrtf((float)D); d.causal = 1;
+
+    rc |= expect_status("backward_validation_missing_lse",
+                        tc_attention_backward(ctx, &d, Q, K, V, O, dO, NULL, dQ, dK, dV),
+                        TC_ERR_INVALID_ARG);
+
+    d.seq_q = 0;
+    rc |= expect_status("backward_validation_zero_seq",
+                        tc_attention_backward(ctx, &d, Q, K, V, O, dO, LSE, dQ, dK, dV),
+                        TC_ERR_INVALID_SHAPE);
+
+    d.seq_q = Sq;
+    d.kv_heads = 3;
+    rc |= expect_status("backward_validation_bad_kv_heads",
+                        tc_attention_backward(ctx, &d, Q, K, V, O, dO, LSE, dQ, dK, dV),
+                        TC_ERR_INVALID_SHAPE);
+
+    d.kv_heads = 0;
+    d.window_size = 8;
+    rc |= expect_status("backward_validation_window_unsupported",
+                        tc_attention_backward(ctx, &d, Q, K, V, O, dO, LSE, dQ, dK, dV),
+                        TC_ERR_UNSUPPORTED_DTYPE);
+
+    d.window_size = 0;
+    rc |= expect_status("backward_validation_small_dq",
+                        tc_attention_backward(ctx, &d, Q, K, V, O, dO, LSE, dQ_small, dK, dV),
+                        TC_ERR_INVALID_SHAPE);
+
+    tc_buffer_free(ctx, Q); tc_buffer_free(ctx, K); tc_buffer_free(ctx, V);
+    tc_buffer_free(ctx, O); tc_buffer_free(ctx, dO); tc_buffer_free(ctx, LSE);
+    tc_buffer_free(ctx, dQ); tc_buffer_free(ctx, dK); tc_buffer_free(ctx, dV);
+    tc_buffer_free(ctx, dQ_small);
+    tc_shutdown(ctx);
     return rc;
 }
 

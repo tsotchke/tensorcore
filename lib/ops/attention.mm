@@ -85,6 +85,22 @@ bool lse_tensor_bytes(const tc_attention_desc* d, size_t* out) {
     return checked_mul(elems, sizeof(float), out);
 }
 
+tc_status_t common_attention_shape(const tc_attention_desc* desc, int32_t* kv_heads_out) {
+    if (!desc || !kv_heads_out) return TC_ERR_INVALID_ARG;
+    if (desc->batch <= 0 || desc->heads <= 0 || desc->seq_q <= 0 ||
+        desc->seq_kv <= 0 || desc->head_dim <= 0) {
+        return TC_ERR_INVALID_SHAPE;
+    }
+    if (desc->window_size < 0) return TC_ERR_INVALID_ARG;
+
+    const int32_t kv_heads = (desc->kv_heads > 0) ? desc->kv_heads : desc->heads;
+    if (kv_heads <= 0 || kv_heads > desc->heads || (desc->heads % kv_heads) != 0) {
+        return TC_ERR_INVALID_SHAPE;
+    }
+    *kv_heads_out = kv_heads;
+    return TC_OK;
+}
+
 KernelChoice kernel_name_for(const tc_attention_desc* d, tc_status_t* err) {
     *err = TC_OK;
     if (d->io_dtype == TC_DTYPE_F16 && d->accum_dtype == TC_DTYPE_F32) {
@@ -150,17 +166,10 @@ tc_status_t make_forward_plan(tc_context* ctx,
                               uint32_t block_rows,
                               ForwardPlan* plan) {
     if (!desc || !Q || !K || !V || !O || !plan) return TC_ERR_INVALID_ARG;
-    if (desc->batch <= 0 || desc->heads <= 0 || desc->seq_q <= 0 ||
-        desc->seq_kv <= 0 || desc->head_dim <= 0) {
-        return TC_ERR_INVALID_SHAPE;
-    }
-    if (desc->window_size < 0) return TC_ERR_INVALID_ARG;
     if (desc->return_lse && !LSE) return TC_ERR_INVALID_ARG;
-
-    const int32_t kv_heads = (desc->kv_heads > 0) ? desc->kv_heads : desc->heads;
-    if (kv_heads <= 0 || kv_heads > desc->heads || (desc->heads % kv_heads) != 0) {
-        return TC_ERR_INVALID_SHAPE;
-    }
+    int32_t kv_heads = 0;
+    tc_status_t shape_status = common_attention_shape(desc, &kv_heads);
+    if (shape_status != TC_OK) return shape_status;
 
     size_t q_bytes = 0;
     size_t kv_bytes = 0;
@@ -240,6 +249,48 @@ void encode_forward(id<MTLComputeCommandEncoder> enc,
         threadsPerThreadgroup:MTLSizeMake(threads, 1, 1)];
 }
 
+tc_status_t validate_backward_buffers(tc_context* ctx,
+                                      const tc_attention_desc* desc,
+                                      int32_t kv_heads,
+                                      const tc_buffer* Q,
+                                      const tc_buffer* K,
+                                      const tc_buffer* V,
+                                      const tc_buffer* O,
+                                      const tc_buffer* dO,
+                                      const tc_buffer* LSE,
+                                      tc_buffer* dQ,
+                                      tc_buffer* dK,
+                                      tc_buffer* dV) {
+    size_t q_bytes = 0;
+    size_t kv_bytes = 0;
+    size_t lse_bytes = 0;
+    if (!attention_tensor_bytes(desc->batch, desc->heads, desc->seq_q,
+                                desc->head_dim, desc->io_dtype, &q_bytes) ||
+        !attention_tensor_bytes(desc->batch, kv_heads, desc->seq_kv,
+                                desc->head_dim, desc->io_dtype, &kv_bytes) ||
+        !lse_tensor_bytes(desc, &lse_bytes)) {
+        return TC_ERR_INVALID_ARG;
+    }
+
+    tc_status_t s = tc_buffer_validate(ctx, Q, q_bytes);
+    if (s != TC_OK) return s;
+    s = tc_buffer_validate(ctx, K, kv_bytes);
+    if (s != TC_OK) return s;
+    s = tc_buffer_validate(ctx, V, kv_bytes);
+    if (s != TC_OK) return s;
+    s = tc_buffer_validate(ctx, O, q_bytes);
+    if (s != TC_OK) return s;
+    s = tc_buffer_validate(ctx, dO, q_bytes);
+    if (s != TC_OK) return s;
+    s = tc_buffer_validate(ctx, LSE, lse_bytes);
+    if (s != TC_OK) return s;
+    s = tc_buffer_validate(ctx, dQ, q_bytes);
+    if (s != TC_OK) return s;
+    s = tc_buffer_validate(ctx, dK, kv_bytes);
+    if (s != TC_OK) return s;
+    return tc_buffer_validate(ctx, dV, kv_bytes);
+}
+
 }  /* namespace */
 
 extern "C" tc_status_t tc_attention_forward(tc_context* ctx,
@@ -305,14 +356,22 @@ extern "C" tc_status_t tc_attention_backward(tc_context* ctx,
     if (!ctx) return TC_ERR_NOT_INITIALIZED;
     if (!desc || !Q || !K || !V || !O || !dO || !LSE || !dQ || !dK || !dV)
         return TC_ERR_INVALID_ARG;
+    int32_t kv_heads_i = 0;
+    tc_status_t s = common_attention_shape(desc, &kv_heads_i);
+    if (s != TC_OK) return s;
+    if (desc->window_size > 0 || desc->alibi_slopes)
+        return TC_ERR_UNSUPPORTED_DTYPE;
     if (desc->io_dtype != TC_DTYPE_F16 || desc->accum_dtype != TC_DTYPE_F32)
         return TC_ERR_UNSUPPORTED_DTYPE;
     if (desc->head_dim != 64 && desc->head_dim != 128)
         return TC_ERR_UNSUPPORTED_DTYPE;
+    s = validate_backward_buffers(ctx, desc, kv_heads_i,
+                                  Q, K, V, O, dO, LSE, dQ, dK, dV);
+    if (s != TC_OK) return s;
 
     const uint32_t batch    = (uint32_t)desc->batch;
     const uint32_t heads    = (uint32_t)desc->heads;
-    const uint32_t kv_heads = (desc->kv_heads > 0) ? (uint32_t)desc->kv_heads : heads;
+    const uint32_t kv_heads = (uint32_t)kv_heads_i;
     const uint32_t seq_q    = (uint32_t)desc->seq_q;
     const uint32_t seq_kv   = (uint32_t)desc->seq_kv;
     const float    sm_scale = desc->softmax_scale;
@@ -327,8 +386,6 @@ extern "C" tc_status_t tc_attention_backward(tc_context* ctx,
     NSString* dkv_name = (desc->head_dim == 64)
         ? @"tc_flash_attention_backward_dk_dv"
         : @"tc_flash_attention_backward_dk_dv_d128";
-
-    tc_status_t err = TC_OK;
 
     bool causal = desc->causal;
     MTLFunctionConstantValues* cv = [MTLFunctionConstantValues new];
@@ -410,7 +467,6 @@ extern "C" tc_status_t tc_attention_backward(tc_context* ctx,
     }
     tc_set_last_backend(TC_BACKEND_SIMDGROUP_MATRIX);
     return TC_OK;
-    (void)err;
 }
 
 extern "C" tc_status_t tc_attention_forward_async(tc_context* ctx,

@@ -30,6 +30,7 @@ For perf-critical loops, use the async variants and tc.stream_sync().
 """
 
 import ctypes
+import math
 import os
 import sys
 import weakref
@@ -141,6 +142,24 @@ class TCGemmDesc(Structure):
     ]
 
 
+class TCAttentionDesc(Structure):
+    _fields_ = [
+        ("batch", c_int32),
+        ("heads", c_int32),
+        ("seq_q", c_int32),
+        ("seq_kv", c_int32),
+        ("head_dim", c_int32),
+        ("io_dtype", c_int),
+        ("accum_dtype", c_int),
+        ("softmax_scale", c_float),
+        ("causal", c_bool),
+        ("return_lse", c_bool),
+        ("kv_heads", c_int32),
+        ("window_size", c_int32),
+        ("alibi_slopes", POINTER(c_float)),
+    ]
+
+
 class TCGGufTensorInfo(Structure):
     _fields_ = [
         ("name", c_char_p),
@@ -207,6 +226,19 @@ if _lib is not None:
     _lib.tc_gemm.restype  = c_int
     _lib.tc_gemm_async.argtypes = [c_void_p, POINTER(TCGemmDesc), c_void_p, c_void_p, c_void_p, c_void_p]
     _lib.tc_gemm_async.restype = c_int
+    _lib.tc_attention_forward.argtypes = [
+        c_void_p, POINTER(TCAttentionDesc), c_void_p, c_void_p, c_void_p, c_void_p, c_void_p
+    ]
+    _lib.tc_attention_forward.restype = c_int
+    _lib.tc_attention_forward_async.argtypes = [
+        c_void_p, POINTER(TCAttentionDesc), c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_void_p
+    ]
+    _lib.tc_attention_forward_async.restype = c_int
+    _lib.tc_attention_backward.argtypes = [
+        c_void_p, POINTER(TCAttentionDesc), c_void_p, c_void_p, c_void_p, c_void_p,
+        c_void_p, c_void_p, c_void_p, c_void_p, c_void_p
+    ]
+    _lib.tc_attention_backward.restype = c_int
     _lib.tc_quantize_weights.argtypes = [c_void_p, c_void_p, c_void_p, c_int, c_int, c_int]
     _lib.tc_quantize_weights.restype = c_int
     _lib.tc_gemv_quantized.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int, c_int, c_int]
@@ -518,6 +550,87 @@ def _gemm_desc(M, N, K, dtype, accum, alpha, beta, transpose_a, transpose_b):
         alpha=alpha, beta=beta,
         lda=0, ldb=0, ldc=0,
     )
+
+
+def _attention_desc(batch, heads, seq_q, seq_kv, head_dim, dtype, accum,
+                    softmax_scale, causal, return_lse, kv_heads,
+                    window_size, alibi_slopes):
+    if softmax_scale is None:
+        softmax_scale = 1.0 / math.sqrt(float(head_dim))
+    slopes = None
+    slopes_ptr = None
+    if alibi_slopes is not None:
+        values = [float(x) for x in alibi_slopes]
+        if len(values) != int(heads):
+            raise ValueError(f"alibi_slopes must contain {int(heads)} values")
+        slopes = (c_float * len(values))(*values)
+        slopes_ptr = ctypes.cast(slopes, POINTER(c_float))
+    desc = TCAttentionDesc(
+        batch=int(batch),
+        heads=int(heads),
+        seq_q=int(seq_q),
+        seq_kv=int(seq_kv),
+        head_dim=int(head_dim),
+        io_dtype=_dtype(dtype),
+        accum_dtype=_dtype(accum),
+        softmax_scale=c_float(float(softmax_scale)),
+        causal=bool(causal),
+        return_lse=bool(return_lse),
+        kv_heads=int(kv_heads),
+        window_size=int(window_size),
+        alibi_slopes=slopes_ptr,
+    )
+    return desc, slopes
+
+
+def attention_forward(ctx, Q, K, V, O, batch, heads, seq_q, seq_kv, head_dim,
+                      LSE=None, dtype="f16", accum="f32", softmax_scale=None,
+                      causal=True, return_lse=False, kv_heads=0,
+                      window_size=0, alibi_slopes=None):
+    """Compute fused scaled-dot-product attention."""
+    return_lse = bool(return_lse or LSE is not None)
+    desc, slopes = _attention_desc(batch, heads, seq_q, seq_kv, head_dim,
+                                   dtype, accum, softmax_scale, causal,
+                                   return_lse, kv_heads, window_size,
+                                   alibi_slopes)
+    _check(_lib.tc_attention_forward(
+        _as_handle(ctx), byref(desc), _as_handle(Q), _as_handle(K),
+        _as_handle(V), _as_handle(O), _as_handle(LSE)
+    ))
+    _ = slopes
+
+
+def attention_forward_async(ctx, Q, K, V, O, batch, heads, seq_q, seq_kv,
+                            head_dim, stream, LSE=None, dtype="f16",
+                            accum="f32", softmax_scale=None, causal=True,
+                            return_lse=False, kv_heads=0, window_size=0,
+                            alibi_slopes=None):
+    """Encode fused attention into a stream."""
+    return_lse = bool(return_lse or LSE is not None)
+    desc, slopes = _attention_desc(batch, heads, seq_q, seq_kv, head_dim,
+                                   dtype, accum, softmax_scale, causal,
+                                   return_lse, kv_heads, window_size,
+                                   alibi_slopes)
+    _check(_lib.tc_attention_forward_async(
+        _as_handle(ctx), byref(desc), _as_handle(Q), _as_handle(K),
+        _as_handle(V), _as_handle(O), _as_handle(LSE), _as_handle(stream)
+    ))
+    _ = slopes
+
+
+def attention_backward(ctx, Q, K, V, O, dO, LSE, dQ, dK, dV, batch, heads,
+                       seq_q, seq_kv, head_dim, dtype="f16", accum="f32",
+                       softmax_scale=None, causal=True, kv_heads=0):
+    """Compute gradients for fused attention."""
+    desc, slopes = _attention_desc(batch, heads, seq_q, seq_kv, head_dim,
+                                   dtype, accum, softmax_scale, causal,
+                                   False, kv_heads, 0, None)
+    _check(_lib.tc_attention_backward(
+        _as_handle(ctx), byref(desc), _as_handle(Q), _as_handle(K),
+        _as_handle(V), _as_handle(O), _as_handle(dO), _as_handle(LSE),
+        _as_handle(dQ), _as_handle(dK), _as_handle(dV)
+    ))
+    _ = slopes
 
 
 def quantized_size(fmt, N, K):
@@ -834,6 +947,18 @@ class Context:
 
     def gemm_async(self, A, B, C, M, N, K, stream, **kwargs):
         return gemm_async(self, A, B, C, M, N, K, stream, **kwargs)
+
+    def attention_forward(self, Q, K, V, O, batch, heads, seq_q, seq_kv, head_dim, **kwargs):
+        return attention_forward(self, Q, K, V, O, batch, heads, seq_q, seq_kv, head_dim, **kwargs)
+
+    def attention_forward_async(self, Q, K, V, O, batch, heads, seq_q, seq_kv, head_dim, stream, **kwargs):
+        return attention_forward_async(self, Q, K, V, O, batch, heads, seq_q, seq_kv,
+                                       head_dim, stream, **kwargs)
+
+    def attention_backward(self, Q, K, V, O, dO, LSE, dQ, dK, dV,
+                           batch, heads, seq_q, seq_kv, head_dim, **kwargs):
+        return attention_backward(self, Q, K, V, O, dO, LSE, dQ, dK, dV,
+                                  batch, heads, seq_q, seq_kv, head_dim, **kwargs)
 
     def quantize_weights(self, W_fp16, W_quant, fmt, N, K):
         return quantize_weights(self, W_fp16, W_quant, fmt, N, K)

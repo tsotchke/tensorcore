@@ -125,6 +125,73 @@ def _scaled_rms(got, ref):
     return float(np.sqrt((err * err).mean()) / (np.sqrt((ref32 * ref32).mean()) + 1e-9))
 
 
+def _run_attention_wrapper_check(ctx):
+    bufs = []
+
+    def make(arr):
+        b = tc.buffer_alloc(ctx, arr.nbytes)
+        bufs.append(b)
+        tc.buffer_write(b, arr)
+        return b
+
+    def empty(arr):
+        b = tc.buffer_alloc(ctx, arr.nbytes)
+        bufs.append(b)
+        return b
+
+    try:
+        B, H, S, D = 1, 1, 64, 64
+        scale = 1.0 / np.sqrt(float(D))
+        Q = (np.random.randn(B, H, S, D) * 0.25).astype(np.float16)
+        K = (np.random.randn(B, H, S, D) * 0.25).astype(np.float16)
+        V = (np.random.randn(B, H, S, D) * 0.25).astype(np.float16)
+        O = np.zeros_like(Q)
+        O_async = np.zeros_like(Q)
+        LSE = np.zeros((B, H, S), dtype=np.float32)
+
+        qf = Q.astype(np.float32)
+        kf = K.astype(np.float32)
+        vf = V.astype(np.float32)
+        scores = np.einsum("bhqd,bhkd->bhqk", qf, kf) * scale
+        causal_mask = np.triu(np.ones((S, S), dtype=bool), 1)
+        scores = np.where(causal_mask[None, None, :, :], -np.inf, scores)
+        m = np.max(scores, axis=-1, keepdims=True)
+        exp_scores = np.exp(scores - m)
+        denom = np.sum(exp_scores, axis=-1, keepdims=True)
+        probs = exp_scores / denom
+        O_ref = np.einsum("bhqk,bhkd->bhqd", probs, vf)
+        LSE_ref = (m[..., 0] + np.log(denom[..., 0])).astype(np.float32)
+
+        qb = make(Q)
+        kb = make(K)
+        vb = make(V)
+        ob = empty(O)
+        oab = empty(O_async)
+        lseb = empty(LSE)
+
+        tc.attention_forward(ctx, qb, kb, vb, ob, B, H, S, S, D,
+                             LSE=lseb, return_lse=True)
+        tc.buffer_read(ob, O)
+        tc.buffer_read(lseb, LSE)
+
+        stream = tc.stream_create(ctx)
+        try:
+            tc.attention_forward_async(ctx, qb, kb, vb, oab, B, H, S, S, D, stream)
+            tc.stream_sync(stream)
+        finally:
+            tc.stream_destroy(ctx, stream)
+        tc.buffer_read(oab, O_async)
+
+        out_err = _scaled_rms(O, O_ref)
+        lse_err = float(np.max(np.abs(LSE - LSE_ref)))
+        async_err = float(np.max(np.abs(O_async.astype(np.float32) - O.astype(np.float32))))
+        ok = out_err < 2e-2 and lse_err < 2e-2 and async_err < 1e-3
+        return ok, {"out": out_err, "lse": lse_err, "async": async_err}
+    finally:
+        for b in reversed(bufs):
+            tc.buffer_free(ctx, b)
+
+
 def _run_training_wrapper_checks(ctx):
     bufs = []
 
@@ -379,6 +446,11 @@ def main():
           f"{'OK' if scaled_async < 1e-2 else 'FAIL'}")
     print(f"Host buffer bounds:    {'OK' if host_bounds_ok else 'FAIL'}")
 
+    attention_ok, attention_errs = _run_attention_wrapper_check(ctx)
+    print(f"Attention wrapper:     scaled={attention_errs['out']:.3e}  "
+          f"lse={attention_errs['lse']:.3e}  async={attention_errs['async']:.3e}  "
+          f"{'OK' if attention_ok else 'FAIL'}")
+
     qM, qN, qK = 1, 4, 64
     Xq_np = np.random.randn(qM, qK).astype(np.float16)
     Wq_fp16_np = np.random.randn(qN, qK).astype(np.float16)
@@ -547,6 +619,7 @@ def main():
         scaled < 1e-2 and
         scaled_async < 1e-2 and
         host_bounds_ok and
+        attention_ok and
         q_ok and
         q8_ok and
         training_ok and
