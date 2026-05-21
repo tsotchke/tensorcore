@@ -37,10 +37,23 @@ jobs:
           REQUIRE_METAL4_TENSOROPS: ${{ inputs.require_metal4_tensorops == 'true' && '1' || '0' }}
         run: scripts/release_smoke.sh
 
+      - name: Check runtime evidence
+        env:
+          REQUIRE_METAL4_TENSOROPS: ${{ inputs.require_metal4_tensorops == 'true' && '1' || '0' }}
+        run: |
+          args=(--require-gpu)
+          if [ "$REQUIRE_METAL4_TENSOROPS" = "1" ]; then
+            args+=(--require-metal4-tensorops)
+          fi
+          python3 scripts/check_release_evidence.py build/release_smoke_runtime_evidence.json "${args[@]}"
+
       - name: Upload runtime evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: tensorcore-hardware-evidence
-          path: build/release_smoke_runtime_evidence.json
+          path: |
+            build/release_smoke_runtime_evidence.json
+            build/release_smoke_device.log
+            build/Testing/Temporary/LastTest.log
           if-no-files-found: error

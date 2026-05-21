@@ -37,6 +37,9 @@ jobs:
           TENSORCORE_RELEASE_SMOKE_EVIDENCE_PATH: build/release_smoke_runtime_evidence.json
         run: scripts/release_smoke.sh
 
+      - name: Check runtime evidence
+        run: python3 scripts/check_release_evidence.py build/release_smoke_runtime_evidence.json
+
       - name: Create native SDK archive
         env:
           PYTHON_BIN: ${{ runner.temp }}/tensorcore-release-venv/bin/python
