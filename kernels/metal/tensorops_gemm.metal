@@ -54,9 +54,9 @@ kernel void tc4_gemm_f16(
 {
     /* Wrap the device buffers as 2D tensors. Element order is (col, row) per
      * the mpp::tensor_ops convention: dextents<int32_t, 2>(cols, rows). */
-    auto A = tensor<device const half, dextents<int32_t, 2>, tensor_inline>(
+    auto A = tensor<device       half, dextents<int32_t, 2>, tensor_inline>(
                 A_buf, dextents<int32_t, 2>(int32_t(K), int32_t(M)));
-    auto B = tensor<device const half, dextents<int32_t, 2>, tensor_inline>(
+    auto B = tensor<device       half, dextents<int32_t, 2>, tensor_inline>(
                 B_buf, dextents<int32_t, 2>(int32_t(N), int32_t(K)));
     auto C = tensor<device       half, dextents<int32_t, 2>, tensor_inline>(
                 C_buf, dextents<int32_t, 2>(int32_t(N), int32_t(M)));
@@ -101,9 +101,9 @@ kernel void tc4_gemm_bf16(
     constant float& beta           [[buffer(7)]],
     uint2 tgid                     [[threadgroup_position_in_grid]])
 {
-    auto A = tensor<device const bfloat, dextents<int32_t, 2>, tensor_inline>(
+    auto A = tensor<device       bfloat, dextents<int32_t, 2>, tensor_inline>(
                 A_buf, dextents<int32_t, 2>(int32_t(K), int32_t(M)));
-    auto B = tensor<device const bfloat, dextents<int32_t, 2>, tensor_inline>(
+    auto B = tensor<device       bfloat, dextents<int32_t, 2>, tensor_inline>(
                 B_buf, dextents<int32_t, 2>(int32_t(N), int32_t(K)));
     auto C = tensor<device       bfloat, dextents<int32_t, 2>, tensor_inline>(
                 C_buf, dextents<int32_t, 2>(int32_t(N), int32_t(M)));
@@ -140,9 +140,9 @@ kernel void tc4_gemm_f32(
     constant float& beta           [[buffer(7)]],
     uint2 tgid                     [[threadgroup_position_in_grid]])
 {
-    auto A = tensor<device const float, dextents<int32_t, 2>, tensor_inline>(
+    auto A = tensor<device       float, dextents<int32_t, 2>, tensor_inline>(
                 A_buf, dextents<int32_t, 2>(int32_t(K), int32_t(M)));
-    auto B = tensor<device const float, dextents<int32_t, 2>, tensor_inline>(
+    auto B = tensor<device       float, dextents<int32_t, 2>, tensor_inline>(
                 B_buf, dextents<int32_t, 2>(int32_t(N), int32_t(K)));
     auto C = tensor<device       float, dextents<int32_t, 2>, tensor_inline>(
                 C_buf, dextents<int32_t, 2>(int32_t(N), int32_t(M)));
