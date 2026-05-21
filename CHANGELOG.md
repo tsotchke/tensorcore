@@ -74,6 +74,11 @@ v0.1.22:
   `hello`, `inspect`, `decode`, `train`, `examples`, `check-version`,
   `check-headers`, `check-exports`, `check-python`, `docs-check`,
   `icc-audit`, `install`, `wheel`. See `make help`.
+- `bench_gemm` accepts `TC_BENCH_SIZES`, `TC_BENCH_DTYPES`,
+  `TC_BENCH_WARMUP`, and `TC_BENCH_ITERS` so public users can run
+  bounded GPU smoke tests or CPU-only reference sweeps without invoking
+  the full 4096³ default pass. CPU-scale throughput now prints as GFLOPS
+  instead of rounding to `0.00 TFLOPS`.
 - Pyproject metadata: expanded keywords (13 entries), classifiers
   (Python 3.9-3.13, C/C++ language tags, Science/Research audience),
   and `[project.urls]` with homepage / repo / docs / changelog /

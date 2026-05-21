@@ -26,6 +26,30 @@ the numbers reproduce inside ±5%.
 | 2048³ | F32 | 7.61 ms | 2.26 | simdgroup_matrix |
 | **4096³** | **F32** | **55.89 ms** | **2.46** | simdgroup_matrix |
 
+## Portable CPU backend
+
+The portable CPU backend is a correctness-first reference path. Its job
+is to keep the public C ABI usable on non-Metal hosts and mesh workers,
+not to compete with the `simdgroup_matrix` kernels. Build it explicitly
+with Metal disabled:
+
+```sh
+cmake -B build-cpu -DTC_ENABLE_METAL=OFF -DTC_BUILD_BENCH=ON
+cmake --build build-cpu -j
+TC_BENCH_DTYPES=f32 TC_BENCH_SIZES=256,512 TC_BENCH_WARMUP=1 TC_BENCH_ITERS=3 \
+  ./build-cpu/bench/bench_gemm
+```
+
+The full default GEMM sweep includes 2048³ and 4096³ shapes and is meant
+for the GPU path. Keep CPU sweeps bounded unless you are deliberately
+measuring the triple-loop reference implementation. The CPU build reports
+`family=Apple0` (= `TC_FAMILY_UNKNOWN`) and `device=portable-cpu`; this
+is documented behavior, not a misfire. See [family_gating.md](family_gating.md).
+
+The v0.2 polish path is to delegate GEMM to `cblas_sgemm` on macOS or
+system BLAS on Linux for a much faster host fallback. Today the reference
+implementation is intentionally simple.
+
 Reference points:
 - MLX on M3 Max: ~13.3 TFLOPS fp16 (philipturner/metal-benchmarks).
 - M2 Ultra fp16 theoretical peak: ~27 TFLOPS at 76-core × 1.4 GHz.
@@ -136,8 +160,16 @@ Total Test time (real) =   3.16 sec
 ./build/bench/bench_gemm
 ```
 
-Sweeps 256..4096 across fp16 / fp32 and prints median TFLOPS plus
-backend. Reproduces the table above inside ±5%.
+Sweeps 256..4096 across fp16 / fp32 and prints median throughput plus
+backend. GPU-scale results print as TFLOPS; tiny or CPU-scale results
+print as GFLOPS. Reproduces the table above inside ±5%.
+
+Use the same binary for bounded smoke or CPU runs:
+
+```sh
+TC_BENCH_DTYPES=f32 TC_BENCH_SIZES=256,512 TC_BENCH_WARMUP=1 TC_BENCH_ITERS=3 \
+  ./build/bench/bench_gemm
+```
 
 ### Attention TFLOPS
 

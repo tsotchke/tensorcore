@@ -16,8 +16,8 @@ report median TFLOPS / tok-s with the backend that served it. See
 
 ## `bench_gemm.c`
 
-GEMM TFLOPS sweep across square shapes 256-4096 and dtypes fp16 / fp32.
-Prints one line per (dtype, shape) cell:
+GEMM throughput sweep across square shapes 256-4096 and dtypes fp16 /
+fp32. Prints one line per (dtype, shape) cell:
 
 ```
 f16  M=4096 N=4096 K=4096   simdgroup_matrix    median=7.69 ms   17.88 TFLOPS
@@ -27,6 +27,17 @@ The reported backend should be `simdgroup_matrix` on every M-series
 chip; if it's `mps` or `accelerate_cpu`, you found a kernel-coverage
 gap or a path that fell back unexpectedly. See
 [../docs/family_gating.md](../docs/family_gating.md).
+
+The default sweep is sized for GPU runs. For bounded smoke tests or the
+portable CPU backend, override the sweep:
+
+```sh
+TC_BENCH_DTYPES=f32 TC_BENCH_SIZES=256,512 TC_BENCH_WARMUP=1 TC_BENCH_ITERS=3 \
+  ./build/bench/bench_gemm
+```
+
+Supported `TC_BENCH_DTYPES` entries are `f16`, `f32`, and `bf16`. GPU-scale
+results print as TFLOPS; tiny or CPU-scale results print as GFLOPS.
 
 Try the experimental large tile:
 
