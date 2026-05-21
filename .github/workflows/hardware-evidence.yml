@@ -33,9 +33,15 @@ jobs:
 
       - name: Release smoke with required Metal GPU
         env:
+          BUILD_DIR: build
           REQUIRE_GPU: "1"
           REQUIRE_METAL4_TENSOROPS: ${{ inputs.require_metal4_tensorops == 'true' && '1' || '0' }}
-        run: scripts/release_smoke.sh
+        run: |
+          if [ "$REQUIRE_METAL4_TENSOROPS" = "1" ]; then
+            scripts/run_m5_tensorops_runtime_smoke.sh
+          else
+            scripts/release_smoke.sh
+          fi
 
       - name: Check runtime evidence
         env:

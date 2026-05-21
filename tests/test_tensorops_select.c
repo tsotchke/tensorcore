@@ -53,6 +53,25 @@ static int expect_invalid(void) {
     return ok ? 0 : 1;
 }
 
+static int expect_shape(int32_t M, int32_t N, int32_t K, int expected) {
+    tc_gemm_desc d = {0};
+    d.M = M;
+    d.N = N;
+    d.K = K;
+    d.a_dtype = TC_DTYPE_F16;
+    d.b_dtype = TC_DTYPE_F16;
+    d.c_dtype = TC_DTYPE_F16;
+    d.accum_dtype = TC_DTYPE_F32;
+    d.alpha = 1.0f;
+    d.beta = 0.0f;
+
+    const int got = tc_tensorops_gemm_shape_supported(&d) ? 1 : 0;
+    const int ok = (got == expected);
+    printf("  tensorops_shape %dx%dx%d -> %-3s %s\n",
+           M, N, K, got ? "yes" : "no", ok ? "OK" : "FAIL");
+    return ok ? 0 : 1;
+}
+
 int main(void) {
     int rc = 0;
     rc |= expect_kernel(TC_DTYPE_F16, "tc4_gemm_f16");
@@ -60,5 +79,15 @@ int main(void) {
     rc |= expect_kernel(TC_DTYPE_F32, "tc4_gemm_f32");
     rc |= expect_unsupported();
     rc |= expect_invalid();
+    rc |= expect_shape(64, 64, 64, 1);
+    rc |= expect_shape(63, 64, 64, 0);
+    rc |= expect_shape(64, 31, 64, 0);
+    rc |= expect_shape(64, 64, 31, 0);
+    if (tc_tensorops_gemm_shape_supported(NULL)) {
+        printf("  tensorops_shape null -> yes FAIL\n");
+        rc |= 1;
+    } else {
+        printf("  tensorops_shape null -> no  OK\n");
+    }
     return rc;
 }

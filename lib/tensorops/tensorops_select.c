@@ -28,3 +28,14 @@ const char* tc_tensorops_gemm_kernel_name(const tc_gemm_desc* desc,
     if (err) *err = TC_ERR_UNSUPPORTED_DTYPE;
     return 0;
 }
+
+bool tc_tensorops_gemm_shape_supported(const tc_gemm_desc* desc) {
+    if (!desc) return false;
+
+    /* The SDK26 TensorOps kernel currently writes 64x32 output tiles and uses
+     * the public dynamic-K matmul2d shape. Keep dispatch to fully covered
+     * tiles until M5 runtime evidence proves ragged edges. */
+    return (desc->M % 64) == 0 &&
+           (desc->N % 32) == 0 &&
+           (desc->K % 32) == 0;
+}

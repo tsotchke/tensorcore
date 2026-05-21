@@ -9,6 +9,7 @@ extern "C" {
 
 const char* tc_tensorops_gemm_kernel_name(const tc_gemm_desc* desc,
                                           tc_status_t* err);
+bool tc_tensorops_gemm_shape_supported(const tc_gemm_desc* desc);
 
 #ifdef __cplusplus
 }

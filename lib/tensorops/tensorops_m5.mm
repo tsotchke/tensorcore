@@ -85,7 +85,10 @@ extern "C" tc_status_t tc_tensorops_gemm_attempt(tc_context* ctx,
     if (!cname) return err;
     NSString* kname = [NSString stringWithUTF8String:cname];
 
-    /* v0.1 of this path: alpha=1, beta=0 only. */
+    /* v0.1 of this path: exact TensorOps tiles with alpha=1, beta=0 only. */
+    if (!tc_tensorops_gemm_shape_supported(desc)) {
+        return TC_ERR_INVALID_SHAPE;
+    }
     if (desc->alpha != 1.0f || desc->beta != 0.0f) {
         return TC_ERR_UNSUPPORTED_DTYPE;
     }
