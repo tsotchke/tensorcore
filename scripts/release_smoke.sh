@@ -862,6 +862,18 @@ PYTHON_ABI_LAYOUT_STATUS="passed"
 echo "[tensorcore] test"
 RELEASE_SMOKE_PHASE="test"
 DEVICE_LOG="$BUILD_DIR/release_smoke_device.log"
+# Defense in depth: refuse to write to an empty or system-critical path.
+require_output_file_path() {
+    local label="$1"
+    local path="$2"
+    case "$path" in
+        ""|"/"|"/etc"|"/etc/"*|"/bin"|"/bin/"*|"/usr"|"/usr/"*|"/sbin"|"/sbin/"*|"/System"|"/System/"*)
+            echo "$label: refusing to write to system path: $path" >&2
+            exit 2
+            ;;
+    esac
+}
+require_output_file_path "DEVICE_LOG" "$DEVICE_LOG"
 if "$BUILD_DIR/tests/test_device" >"$DEVICE_LOG" 2>&1; then
     cat "$DEVICE_LOG"
     if grep -Eq 'family[[:space:]]*:[[:space:]]*Apple(0|[1-6]\b)' "$DEVICE_LOG" ||
