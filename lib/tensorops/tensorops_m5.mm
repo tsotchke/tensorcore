@@ -100,7 +100,7 @@ extern "C" tc_status_t tc_tensorops_gemm_attempt(tc_context* ctx,
     const float    beta  = desc->beta;
 
     constexpr uint32_t BM = 64;
-    constexpr uint32_t BN = 64;
+    constexpr uint32_t BN = 32;
     constexpr uint32_t TPG = 128;   /* 4 simdgroups */
 
     @autoreleasepool {

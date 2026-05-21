@@ -27,9 +27,11 @@ using namespace metal;
 using namespace mpp::tensor_ops;
 
 /* Tile constants. matmul2d_descriptor accepts static or dynamic dims; we use
- * static M_tile / N_tile (compiler can optimize layouts) with K dynamic. */
+ * static M_tile / N_tile (compiler can optimize layouts) with K dynamic.
+ * SDK26's matmul2d implementation accepts the 64x32 output tile shape used
+ * by Apple's public examples; 64x64 trips a destination-type static_assert. */
 constant constexpr int TC4_M_TILE = 64;
-constant constexpr int TC4_N_TILE = 64;
+constant constexpr int TC4_N_TILE = 32;
 
 /* Number of simdgroups cooperating on a single matmul2d. M5's tensor unit
  * splits work across simdgroups; 4 simdgroups (128 threads) matches the
@@ -40,8 +42,8 @@ constant constexpr int TC4_SG_COUNT = 4;
  * tc4_gemm_f16  —  fp16 inputs, fp16 output, fp32 cooperative-tensor accum *
  * ====================================================================== */
 kernel void tc4_gemm_f16(
-    device const half* A_buf       [[buffer(0)]],
-    device const half* B_buf       [[buffer(1)]],
+    device       half* A_buf       [[buffer(0)]],
+    device       half* B_buf       [[buffer(1)]],
     device       half* C_buf       [[buffer(2)]],
     constant uint& M               [[buffer(3)]],
     constant uint& N               [[buffer(4)]],
@@ -60,11 +62,12 @@ kernel void tc4_gemm_f16(
                 C_buf, dextents<int32_t, 2>(int32_t(N), int32_t(M)));
 
     /* Descriptor: M_tile, N_tile, K=dynamic (auto-sliced through the K loop).
-     * mode: multiply_accumulate so we can fold beta*C in if needed. */
+     * mode: multiply overwrites the destination tile. v0.1 only dispatches
+     * this path for alpha=1, beta=0. */
     constexpr auto md = matmul2d_descriptor(
         /*M*/ TC4_M_TILE, /*N*/ TC4_N_TILE, /*K*/ dynamic_length_v<int>,
         /*transA*/ false, /*transB*/ false, /*transC*/ false,
-        matmul2d_descriptor::mode::multiply_accumulate);
+        matmul2d_descriptor::mode::multiply);
 
     matmul2d<md, execution_simdgroups<TC4_SG_COUNT>> mm;
 
@@ -77,9 +80,7 @@ kernel void tc4_gemm_f16(
     auto mB = B.slice(col0, 0);
 
     /* Run the matmul. mpp::tensor_ops handles the K-loop internally based on
-     * the dynamic K extent in mA's dextents. v0.1 only dispatches this path
-     * for alpha=1, beta=0; runtime validation initializes C to zero before
-     * exercising this Metal4 path. */
+     * the dynamic K extent in mA's dextents. */
     auto cSlice = C.slice(col0, row0);
     mm.run(mA, mB, cSlice);
 
@@ -90,8 +91,8 @@ kernel void tc4_gemm_f16(
  * tc4_gemm_bf16 — bf16 in/out, fp32 cooperative-tensor accum               *
  * ====================================================================== */
 kernel void tc4_gemm_bf16(
-    device const bfloat* A_buf     [[buffer(0)]],
-    device const bfloat* B_buf     [[buffer(1)]],
+    device       bfloat* A_buf     [[buffer(0)]],
+    device       bfloat* B_buf     [[buffer(1)]],
     device       bfloat* C_buf     [[buffer(2)]],
     constant uint& M               [[buffer(3)]],
     constant uint& N               [[buffer(4)]],
@@ -110,7 +111,7 @@ kernel void tc4_gemm_bf16(
     constexpr auto md = matmul2d_descriptor(
         TC4_M_TILE, TC4_N_TILE, dynamic_length_v<int>,
         false, false, false,
-        matmul2d_descriptor::mode::multiply_accumulate);
+        matmul2d_descriptor::mode::multiply);
     matmul2d<md, execution_simdgroups<TC4_SG_COUNT>> mm;
 
     const uint row0 = tgid.y * TC4_M_TILE;
@@ -129,8 +130,8 @@ kernel void tc4_gemm_bf16(
  * tc4_gemm_f32 — fp32 in/out, fp32 cooperative-tensor accum                *
  * ====================================================================== */
 kernel void tc4_gemm_f32(
-    device const float* A_buf      [[buffer(0)]],
-    device const float* B_buf      [[buffer(1)]],
+    device       float* A_buf      [[buffer(0)]],
+    device       float* B_buf      [[buffer(1)]],
     device       float* C_buf      [[buffer(2)]],
     constant uint& M               [[buffer(3)]],
     constant uint& N               [[buffer(4)]],
@@ -149,7 +150,7 @@ kernel void tc4_gemm_f32(
     constexpr auto md = matmul2d_descriptor(
         TC4_M_TILE, TC4_N_TILE, dynamic_length_v<int>,
         false, false, false,
-        matmul2d_descriptor::mode::multiply_accumulate);
+        matmul2d_descriptor::mode::multiply);
     matmul2d<md, execution_simdgroups<TC4_SG_COUNT>> mm;
 
     const uint row0 = tgid.y * TC4_M_TILE;
