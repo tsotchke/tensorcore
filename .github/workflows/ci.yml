@@ -24,13 +24,8 @@ jobs:
       - name: Build
         run: cmake --build build -j
 
-      - name: Test when Metal is available
-        run: |
-          if ./build/tests/test_device; then
-            ctest --test-dir build --output-on-failure
-          else
-            echo "No usable Metal device on this runner; skipping GPU tests."
-          fi
+      - name: Hardware-aware tests
+        run: scripts/ci_macos_test.sh
       - name: Install smoke
         run: |
           cmake --install build --prefix "$RUNNER_TEMP/tensorcore-install"
@@ -60,13 +55,8 @@ jobs:
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release
       - name: Build
         run: cmake --build build -j
-      - name: Test when Metal is available
-        run: |
-          if ./build/tests/test_device; then
-            ctest --test-dir build --output-on-failure
-          else
-            echo "No usable Metal device on this runner; skipping GPU tests."
-          fi
+      - name: Hardware-aware tests
+        run: scripts/ci_macos_test.sh
       - name: Install smoke
         run: |
           cmake --install build --prefix "$RUNNER_TEMP/tensorcore-install"
