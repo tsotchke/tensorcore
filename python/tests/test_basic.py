@@ -331,6 +331,124 @@ def _run_batched_gemm_wrapper_check(ctx):
         tc.buffer_free(ctx, cb)
 
 
+def _run_padded_gemm_wrapper_check(ctx):
+    M, N, K = 37, 41, 29
+    lda, ldb, ldc = M + 3, K + 5, N + 7
+    alpha, beta = 0.75, -0.25
+
+    A = np.full((K, lda), -37.0, dtype=np.float32)
+    B = np.full((N, ldb), 19.0, dtype=np.float32)
+    C0 = np.full((M, ldc), -11.0, dtype=np.float32)
+    A[:, :M] = (np.random.randn(K, M) * 0.2).astype(np.float32)
+    B[:, :K] = (np.random.randn(N, K) * 0.2).astype(np.float32)
+    C0[:, :N] = (np.random.randn(M, N) * 0.1).astype(np.float32)
+
+    C_ref = C0.copy()
+    C_ref[:, :N] = alpha * (A[:, :M].T @ B[:, :K].T) + beta * C0[:, :N]
+
+    ab = tc.buffer_alloc(ctx, A.nbytes)
+    bb = tc.buffer_alloc(ctx, B.nbytes)
+    cb = tc.buffer_alloc(ctx, C0.nbytes)
+    C = np.empty_like(C0)
+    C_async = np.empty_like(C0)
+    try:
+        tc.buffer_write(ab, A)
+        tc.buffer_write(bb, B)
+
+        tc.buffer_write(cb, C0)
+        tc.gemm(ctx, ab, bb, cb, M, N, K, dtype="f32",
+                alpha=alpha, beta=beta, transpose_a=True, transpose_b=True,
+                lda=lda, ldb=ldb, ldc=ldc)
+        tc.buffer_read(cb, C)
+
+        tc.buffer_write(cb, C0)
+        stream = tc.stream_create(ctx)
+        try:
+            tc.gemm_async(ctx, ab, bb, cb, M, N, K, stream, dtype="f32",
+                          alpha=alpha, beta=beta,
+                          transpose_a=True, transpose_b=True,
+                          lda=lda, ldb=ldb, ldc=ldc)
+            tc.stream_sync(stream)
+        finally:
+            tc.stream_destroy(ctx, stream)
+        tc.buffer_read(cb, C_async)
+
+        sync_err = float(np.max(np.abs(C[:, :N] - C_ref[:, :N])))
+        async_err = float(np.max(np.abs(C_async[:, :N] - C_ref[:, :N])))
+        padding_ok = (
+            np.array_equal(C[:, N:], C0[:, N:]) and
+            np.array_equal(C_async[:, N:], C0[:, N:])
+        )
+        return sync_err < 5e-4 and async_err < 5e-4 and padding_ok, {
+            "sync": sync_err,
+            "async": async_err,
+        }
+    finally:
+        tc.buffer_free(ctx, ab)
+        tc.buffer_free(ctx, bb)
+        tc.buffer_free(ctx, cb)
+
+
+def _run_batched_padded_gemm_wrapper_check(ctx):
+    batch, M, N, K = 2, 16, 12, 16
+    lda, ldb, ldc = K + 3, N + 5, N + 7
+    storage_a = (M - 1) * lda + K
+    storage_b = (K - 1) * ldb + N
+    storage_c = (M - 1) * ldc + N
+    total_a = (batch - 1) * storage_a + storage_a
+    total_b = (batch - 1) * storage_b + storage_b
+    total_c = (batch - 1) * storage_c + storage_c
+
+    A = np.full(total_a, -3.0, dtype=np.float16)
+    B = np.full(total_b, 5.0, dtype=np.float16)
+    C = np.full(total_c, -7.0, dtype=np.float16)
+    C_ref = C.copy()
+
+    for b_i in range(batch):
+        a0 = b_i * storage_a
+        b0 = b_i * storage_b
+        c0 = b_i * storage_c
+        Am = (np.random.randn(M, K) * 0.2).astype(np.float16)
+        Bm = (np.random.randn(K, N) * 0.2).astype(np.float16)
+        Cm = (Am.astype(np.float32) @ Bm.astype(np.float32)).astype(np.float16)
+        for m in range(M):
+            A[a0 + m * lda:a0 + m * lda + K] = Am[m]
+            C_ref[c0 + m * ldc:c0 + m * ldc + N] = Cm[m]
+        for k in range(K):
+            B[b0 + k * ldb:b0 + k * ldb + N] = Bm[k]
+
+    ab = tc.buffer_alloc(ctx, A.nbytes)
+    bb = tc.buffer_alloc(ctx, B.nbytes)
+    cb = tc.buffer_alloc(ctx, C.nbytes)
+    try:
+        tc.buffer_write(ab, A)
+        tc.buffer_write(bb, B)
+        tc.buffer_write(cb, C)
+        tc.gemm_batched(ctx, ab, bb, cb, batch, M, N, K,
+                        lda=lda, ldb=ldb, ldc=ldc)
+        tc.buffer_read(cb, C)
+        max_abs = 0.0
+        padding_ok = True
+        for b_i in range(batch):
+            c0 = b_i * storage_c
+            for m in range(M):
+                row = slice(c0 + m * ldc, c0 + m * ldc + N)
+                err = np.max(np.abs(
+                    C[row].astype(np.float32) - C_ref[row].astype(np.float32)
+                ))
+                max_abs = max(max_abs, float(err))
+                if m < M - 1:
+                    pad = slice(c0 + m * ldc + N, c0 + (m + 1) * ldc)
+                    padding_ok = padding_ok and np.array_equal(
+                        C[pad], np.full(ldc - N, -7.0, dtype=np.float16),
+                    )
+        return max_abs < 1e-3 and padding_ok, max_abs
+    finally:
+        tc.buffer_free(ctx, ab)
+        tc.buffer_free(ctx, bb)
+        tc.buffer_free(ctx, cb)
+
+
 def _run_conv_wrapper_check(ctx):
     B, IC, OC = 2, 2, 3
     H, W_in, kH, kW = 8, 8, 3, 3
@@ -792,6 +910,15 @@ def main():
     print(f"GEMM batched fp16:     max_abs={batched_err:.3e}  "
           f"{'OK' if batched_ok else 'FAIL'}")
 
+    padded_ok, padded_errs = _run_padded_gemm_wrapper_check(ctx)
+    print(f"GEMM padded f32:       sync={padded_errs['sync']:.3e}  "
+          f"async={padded_errs['async']:.3e}  "
+          f"{'OK' if padded_ok else 'FAIL'}")
+
+    batched_padded_ok, batched_padded_err = _run_batched_padded_gemm_wrapper_check(ctx)
+    print(f"GEMM batched padded:   max_abs={batched_padded_err:.3e}  "
+          f"{'OK' if batched_padded_ok else 'FAIL'}")
+
     conv_ok, conv_errs = _run_conv_wrapper_check(ctx)
     print(f"Conv2D wrapper:        fwd={conv_errs['forward']:.3e}  "
           f"dX={conv_errs['dX']:.3e}  dW={conv_errs['dW']:.3e}  "
@@ -1025,6 +1152,8 @@ def main():
         buffer_layout_ok and
         distributed_ok and
         batched_ok and
+        padded_ok and
+        batched_padded_ok and
         conv_ok and
         attention_ok and
         q_ok and

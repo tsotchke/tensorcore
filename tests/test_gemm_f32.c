@@ -236,6 +236,132 @@ static int run_case(tc_context* ctx, int M, int N, int K, int trans_a, int trans
     return (max_rel < 1e-3) ? 0 : 5;
 }
 
+static int run_padded_transpose_case(tc_context* ctx) {
+    enum { M = 37, N = 41, K = 29, LDA = 40, LDB = 34, LDC = 48 };
+    const size_t elems_a = (size_t)(K - 1) * LDA + M;
+    const size_t elems_b = (size_t)(N - 1) * LDB + K;
+    const size_t elems_c = (size_t)(M - 1) * LDC + N;
+    const size_t bytes_a = elems_a * sizeof(float);
+    const size_t bytes_b = elems_b * sizeof(float);
+    const size_t bytes_c = elems_c * sizeof(float);
+    const float alpha = 0.75f;
+    const float beta = -0.25f;
+
+    float *Ahost = (float*)malloc(bytes_a);
+    float *Bhost = (float*)malloc(bytes_b);
+    float *Chost = (float*)malloc(bytes_c);
+    float *Cref = (float*)malloc(bytes_c);
+    tc_buffer *Abuf = NULL, *Bbuf = NULL, *Cbuf = NULL;
+    float *Ap = NULL, *Bp = NULL, *Cp = NULL;
+    int rc = 7;
+
+    if (!Ahost || !Bhost || !Chost || !Cref) {
+        fprintf(stderr, "  padded transpose case: host allocation failed\n");
+        goto cleanup;
+    }
+
+    for (size_t i = 0; i < elems_a; ++i) Ahost[i] = -37.0f;
+    for (size_t i = 0; i < elems_b; ++i) Bhost[i] = 19.0f;
+    for (size_t i = 0; i < elems_c; ++i) Chost[i] = -11.0f;
+
+    for (int k = 0; k < K; ++k) {
+        for (int m = 0; m < M; ++m) {
+            Ahost[k * LDA + m] = (float)(((k * 17 + m * 13) % 31) - 15) * 0.03125f;
+        }
+    }
+    for (int n = 0; n < N; ++n) {
+        for (int k = 0; k < K; ++k) {
+            Bhost[n * LDB + k] = (float)(((n * 11 + k * 7) % 29) - 14) * 0.02734375f;
+        }
+    }
+    for (int m = 0; m < M; ++m) {
+        for (int n = 0; n < N; ++n) {
+            Chost[m * LDC + n] = (float)(((m * 5 + n * 3) % 23) - 11) * 0.015625f;
+        }
+    }
+    memcpy(Cref, Chost, bytes_c);
+
+    cblas_sgemm(CblasRowMajor,
+                CblasTrans,
+                CblasTrans,
+                M, N, K,
+                alpha, Ahost, LDA,
+                       Bhost, LDB,
+                beta, Cref, LDC);
+
+    if (tc_buffer_alloc(ctx, bytes_a, &Abuf) != TC_OK ||
+        tc_buffer_alloc(ctx, bytes_b, &Bbuf) != TC_OK ||
+        tc_buffer_alloc(ctx, bytes_c, &Cbuf) != TC_OK) {
+        fprintf(stderr, "  padded transpose case: device allocation failed\n");
+        goto cleanup;
+    }
+    if (tc_buffer_map(Abuf, (void**)&Ap) != TC_OK ||
+        tc_buffer_map(Bbuf, (void**)&Bp) != TC_OK ||
+        tc_buffer_map(Cbuf, (void**)&Cp) != TC_OK) {
+        fprintf(stderr, "  padded transpose case: map failed\n");
+        goto cleanup;
+    }
+    memcpy(Ap, Ahost, bytes_a);
+    memcpy(Bp, Bhost, bytes_b);
+    memcpy(Cp, Chost, bytes_c);
+
+    tc_gemm_desc d = {0};
+    d.M = M; d.N = N; d.K = K;
+    d.a_dtype = TC_DTYPE_F32;
+    d.b_dtype = TC_DTYPE_F32;
+    d.c_dtype = TC_DTYPE_F32;
+    d.accum_dtype = TC_DTYPE_F32;
+    d.transpose_a = 1;
+    d.transpose_b = 1;
+    d.alpha = alpha;
+    d.beta = beta;
+    d.lda = LDA;
+    d.ldb = LDB;
+    d.ldc = LDC;
+
+    tc_status_t s = tc_gemm(ctx, &d, Abuf, Bbuf, Cbuf);
+    if (s != TC_OK) {
+        fprintf(stderr, "  padded transpose tc_gemm failed: %s\n", tc_status_string(s));
+        goto cleanup;
+    }
+
+    double max_abs = 0.0;
+    double max_rel = 0.0;
+    double sum_sq = 0.0;
+    int padding_ok = 1;
+    for (int m = 0; m < M; ++m) {
+        for (int n = 0; n < N; ++n) {
+            const double got = Cp[m * LDC + n];
+            const double want = Cref[m * LDC + n];
+            const double e = fabs(got - want);
+            const double re = e / (fabs(want) + 1e-9);
+            if (e > max_abs) max_abs = e;
+            if (re > max_rel) max_rel = re;
+            sum_sq += e * e;
+        }
+        if (m < M - 1) {
+            for (int n = N; n < LDC; ++n) {
+                if (Cp[m * LDC + n] != -11.0f) padding_ok = 0;
+            }
+        }
+    }
+    const double rmse = sqrt(sum_sq / (M * N));
+    const char* backend = tc_backend_name(tc_last_backend());
+    printf("  padded transpose f32     backend=%-18s  max_abs=%.3e  max_rel=%.3e  rmse=%.3e  padding=%s\n",
+           backend, max_abs, max_rel, rmse, padding_ok ? "OK" : "FAIL");
+    rc = (max_rel < 1e-3 && max_abs < 1e-3 && padding_ok) ? 0 : 7;
+
+cleanup:
+    if (Abuf) tc_buffer_free(ctx, Abuf);
+    if (Bbuf) tc_buffer_free(ctx, Bbuf);
+    if (Cbuf) tc_buffer_free(ctx, Cbuf);
+    free(Ahost);
+    free(Bhost);
+    free(Chost);
+    free(Cref);
+    return rc;
+}
+
 int main(void) {
     tc_context* ctx = NULL;
     tc_status_t s = tc_init(&ctx);
@@ -259,6 +385,7 @@ int main(void) {
     /* Non-aligned (exercises bounds-check slow path) */
     rc |= run_case(ctx,  65,  63,  47, 0, 0);
     rc |= run_case(ctx, 100, 200, 300, 0, 0);
+    rc |= run_padded_transpose_case(ctx);
 
     tc_shutdown(ctx);
     return rc;

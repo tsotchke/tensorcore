@@ -497,6 +497,31 @@ def _dtype_size(dtype):
     return _DTYPE_SIZE_MAP[d]
 
 
+def _matrix_storage_elements(rows, cols, ld):
+    rows = int(rows)
+    cols = int(cols)
+    ld = int(ld)
+    if rows <= 0 or cols <= 0 or ld < cols:
+        raise ValueError(f"invalid matrix layout: rows={rows} cols={cols} ld={ld}")
+    return (rows - 1) * ld + cols
+
+
+def _gemm_storage_elements(M, N, K, transpose_a, transpose_b, lda=0, ldb=0, ldc=0):
+    M, N, K = int(M), int(N), int(K)
+    a_rows = K if transpose_a else M
+    a_cols = M if transpose_a else K
+    b_rows = N if transpose_b else K
+    b_cols = K if transpose_b else N
+    lda = int(lda) if lda else a_cols
+    ldb = int(ldb) if ldb else b_cols
+    ldc = int(ldc) if ldc else N
+    return (
+        _matrix_storage_elements(a_rows, a_cols, lda),
+        _matrix_storage_elements(b_rows, b_cols, ldb),
+        _matrix_storage_elements(M, N, ldc),
+    )
+
+
 def _dist_backend(backend):
     if isinstance(backend, int):
         return backend
@@ -769,17 +794,21 @@ def barrier(dist):
 
 
 def gemm(ctx, A, B, C, M, N, K, dtype="f16", accum="f32",
-         alpha=1.0, beta=0.0, transpose_a=False, transpose_b=False):
+         alpha=1.0, beta=0.0, transpose_a=False, transpose_b=False,
+         lda=0, ldb=0, ldc=0):
     """Compute C = alpha * op(A) @ op(B) + beta * C."""
-    desc = _gemm_desc(M, N, K, dtype, accum, alpha, beta, transpose_a, transpose_b)
+    desc = _gemm_desc(M, N, K, dtype, accum, alpha, beta,
+                      transpose_a, transpose_b, lda, ldb, ldc)
     _check(_lib.tc_gemm(_as_handle(ctx), byref(desc),
                         _as_handle(A), _as_handle(B), _as_handle(C)))
 
 
 def gemm_async(ctx, A, B, C, M, N, K, stream, dtype="f16", accum="f32",
-               alpha=1.0, beta=0.0, transpose_a=False, transpose_b=False):
+               alpha=1.0, beta=0.0, transpose_a=False, transpose_b=False,
+               lda=0, ldb=0, ldc=0):
     """Encode C = alpha * op(A) @ op(B) + beta * C into stream."""
-    desc = _gemm_desc(M, N, K, dtype, accum, alpha, beta, transpose_a, transpose_b)
+    desc = _gemm_desc(M, N, K, dtype, accum, alpha, beta,
+                      transpose_a, transpose_b, lda, ldb, ldc)
     _check(_lib.tc_gemm_async(_as_handle(ctx), byref(desc),
                               _as_handle(A), _as_handle(B), _as_handle(C),
                               _as_handle(stream)))
@@ -787,16 +816,21 @@ def gemm_async(ctx, A, B, C, M, N, K, stream, dtype="f16", accum="f32",
 
 def gemm_batched(ctx, A, B, C, batch, M, N, K, dtype="f16", accum="f32",
                  alpha=1.0, beta=0.0, transpose_a=False, transpose_b=False,
-                 stride_a=0, stride_b=0, stride_c=0):
+                 stride_a=0, stride_b=0, stride_c=0,
+                 lda=0, ldb=0, ldc=0):
     """Compute strided batched C[b] = alpha * op(A[b]) @ op(B[b]) + beta * C[b]."""
+    storage_a, storage_b, storage_c = _gemm_storage_elements(
+        M, N, K, transpose_a, transpose_b, lda, ldb, ldc,
+    )
     if stride_a == 0:
-        stride_a = M * K
+        stride_a = storage_a
     if stride_b == 0:
-        stride_b = K * N
+        stride_b = storage_b
     if stride_c == 0:
-        stride_c = M * N
+        stride_c = storage_c
     desc = TCGemmBatchedDesc(
-        base=_gemm_desc(M, N, K, dtype, accum, alpha, beta, transpose_a, transpose_b),
+        base=_gemm_desc(M, N, K, dtype, accum, alpha, beta,
+                        transpose_a, transpose_b, lda, ldb, ldc),
         batch=int(batch),
         stride_a=int(stride_a),
         stride_b=int(stride_b),
@@ -806,15 +840,16 @@ def gemm_batched(ctx, A, B, C, batch, M, N, K, dtype="f16", accum="f32",
                                 _as_handle(A), _as_handle(B), _as_handle(C)))
 
 
-def _gemm_desc(M, N, K, dtype, accum, alpha, beta, transpose_a, transpose_b):
+def _gemm_desc(M, N, K, dtype, accum, alpha, beta, transpose_a, transpose_b,
+               lda=0, ldb=0, ldc=0):
     d_in = _dtype(dtype)
     d_acc = _dtype(accum)
     return TCGemmDesc(
-        M=M, N=N, K=K,
+        M=int(M), N=int(N), K=int(K),
         a_dtype=d_in, b_dtype=d_in, c_dtype=d_in, accum_dtype=d_acc,
-        transpose_a=transpose_a, transpose_b=transpose_b,
-        alpha=alpha, beta=beta,
-        lda=0, ldb=0, ldc=0,
+        transpose_a=bool(transpose_a), transpose_b=bool(transpose_b),
+        alpha=float(alpha), beta=float(beta),
+        lda=int(lda), ldb=int(ldb), ldc=int(ldc),
     )
 
 
