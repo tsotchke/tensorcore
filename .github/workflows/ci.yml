@@ -42,10 +42,7 @@ jobs:
             echo "pkg-config not found; skipping pkg-config smoke."
           fi
       - name: Python package smoke
-        run: |
-          python3 -m pip install -e . --no-build-isolation
-          TENSORCORE_LIB="$RUNNER_TEMP/tensorcore-install/lib/libtensorcore.dylib" \
-            python3 -c 'import tensorcore as tc; print(tc.version())'
+        run: scripts/ci_python_smoke.sh
 
   build-macos-15:
     runs-on: macos-15
@@ -73,7 +70,4 @@ jobs:
             echo "pkg-config not found; skipping pkg-config smoke."
           fi
       - name: Python package smoke
-        run: |
-          python3 -m pip install -e . --no-build-isolation
-          TENSORCORE_LIB="$RUNNER_TEMP/tensorcore-install/lib/libtensorcore.dylib" \
-            python3 -c 'import tensorcore as tc; print(tc.version())'
+        run: scripts/ci_python_smoke.sh
