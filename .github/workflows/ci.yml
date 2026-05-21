@@ -7,6 +7,22 @@ on:
     branches: [main, master]
 
 jobs:
+  portable-cpu:
+    name: portable-cpu (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Version consistency
+        run: scripts/check_version_consistency.sh
+
+      - name: CPU backend build, tests, and install consumer
+        run: scripts/ci_portable_cpu.sh
+
   build-and-test:
     runs-on: macos-14
     steps:
