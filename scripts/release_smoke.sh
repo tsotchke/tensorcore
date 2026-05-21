@@ -7,6 +7,7 @@ PREFIX="${PREFIX:-/private/tmp/tensorcore-install}"
 PY_PREFIX="${PY_PREFIX:-/private/tmp/tensorcore-py-install}"
 WHEEL_DIR="${WHEEL_DIR:-/private/tmp/tensorcore-wheels}"
 REQUIRE_GPU="${REQUIRE_GPU:-0}"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 echo "[tensorcore] configure"
 cmake -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release
@@ -32,19 +33,19 @@ echo "[tensorcore] install"
 cmake --install "$BUILD_DIR" --prefix "$PREFIX"
 
 echo "[tensorcore] python syntax"
-python3 -m py_compile \
+"$PYTHON_BIN" -m py_compile \
     "$ROOT/python/tensorcore/__init__.py" \
     "$ROOT/python/tests/test_basic.py"
 
 echo "[tensorcore] python wheel"
 mkdir -p "$WHEEL_DIR"
-python3 -m pip wheel "$ROOT" --no-build-isolation -w "$WHEEL_DIR"
+"$PYTHON_BIN" -m pip wheel "$ROOT" --no-build-isolation -w "$WHEEL_DIR"
 
 echo "[tensorcore] python editable install"
-python3 -m pip install -e "$ROOT" --no-build-isolation --prefix "$PY_PREFIX"
-PY_VER="$(python3 -c 'import sys; print(f"python{sys.version_info.major}.{sys.version_info.minor}")')"
+"$PYTHON_BIN" -m pip install -e "$ROOT" --no-build-isolation --prefix "$PY_PREFIX"
+PY_VER="$("$PYTHON_BIN" -c 'import sys; print(f"python{sys.version_info.major}.{sys.version_info.minor}")')"
 PY_SITE="$PY_PREFIX/lib/$PY_VER/site-packages"
-TENSORCORE_LIB="$PREFIX/lib/libtensorcore.dylib" python3 - "$PY_SITE" <<'PY'
+TENSORCORE_LIB="$PREFIX/lib/libtensorcore.dylib" "$PYTHON_BIN" - "$PY_SITE" <<'PY'
 import site
 import sys
 
@@ -59,11 +60,11 @@ echo "[tensorcore] installed python smoke"
 if [ "$GPU_OK" = "1" ]; then
     TENSORCORE_LIB="$PREFIX/lib/libtensorcore.dylib" \
     PYTHONPATH="$ROOT/python" \
-        python3 "$ROOT/python/tests/test_basic.py"
+        "$PYTHON_BIN" "$ROOT/python/tests/test_basic.py"
 else
     TENSORCORE_LIB="$PREFIX/lib/libtensorcore.dylib" \
     PYTHONPATH="$ROOT/python" \
-        python3 -c 'import tensorcore as tc; print(tc.version())'
+        "$PYTHON_BIN" -c 'import tensorcore as tc; print(tc.version())'
 fi
 
 echo "[tensorcore] out-of-tree CMake consumer"
@@ -77,6 +78,10 @@ find_package(tensorcore CONFIG REQUIRED)
 
 add_executable(consumer main.c)
 target_link_libraries(consumer PRIVATE tensorcore::tensorcore_shared)
+
+add_executable(static_consumer static_main.c)
+target_link_libraries(static_consumer PRIVATE tensorcore::tensorcore)
+tensorcore_copy_metallib(static_consumer)
 CMAKE
 cat > "$CONSUMER_DIR/main.c" <<'C'
 #include <stdio.h>
@@ -100,10 +105,29 @@ int main(void) {
     return 0;
 }
 C
+cat > "$CONSUMER_DIR/static_main.c" <<'C'
+#include <stdio.h>
+#include "tensorcore/tensorcore.h"
+
+int main(void) {
+    tc_context* ctx = NULL;
+    tc_status_t s = tc_init(&ctx);
+    if (s != TC_OK && s != TC_ERR_ALREADY_INITIALIZED) {
+        fprintf(stderr, "tc_init: %s\n", tc_status_string(s));
+        return 1;
+    }
+    tc_shutdown(ctx);
+    printf("%s\n", tc_version());
+    return 0;
+}
+C
 cmake -S "$CONSUMER_DIR" -B "$CONSUMER_DIR/build" \
     -DCMAKE_PREFIX_PATH="$PREFIX"
 cmake --build "$CONSUMER_DIR/build"
 "$CONSUMER_DIR/build/consumer"
+if [ "$GPU_OK" = "1" ]; then
+    "$CONSUMER_DIR/build/static_consumer"
+fi
 
 echo "[tensorcore] pkg-config consumer"
 if command -v pkg-config >/dev/null 2>&1; then

@@ -211,6 +211,8 @@ target_link_libraries(tensorcore PUBLIC
     ${METALPERFORMANCESHADERS_FRAMEWORK}
     ${METALPERFORMANCESHADERSGRAPH_FRAMEWORK}
     ${ACCELERATE_FRAMEWORK}
+    $<$<LINK_LANGUAGE:C>:c++>
+    objc
 )
 
 set_target_properties(tensorcore PROPERTIES
