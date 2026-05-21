@@ -20,6 +20,7 @@ set(TC_TESTS
     test_distributed_ring_fork
     test_gguf
     test_tensorops_select
+    test_tensorops_runtime
 )
 
 foreach(t IN LISTS TC_TESTS)

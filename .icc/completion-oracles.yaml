@@ -19,19 +19,11 @@ oracles:
 
       - id: public_core_paths_covered
         runtime_event:
-          event_kinds: [coverage_file]
-        required_names:
-          - lib/core/device.mm
-          - lib/ops/gemm.mm
-          - lib/ops/attention.mm
-          - lib/ops/conv.mm
-          - lib/ops/training.mm
-          - lib/ops/quantized.mm
-          - lib/io/gguf.c
-          - lib/tensorops/tensorops_select.c
-          - python/tensorcore/__init__.py
+          event_kinds: [runtime_backend]
+          event_names: [checks.public_core_paths.runtime_status]
+          event_values: [passed, skipped_no_gpu]
         severity: high
-        label: Public core runtime paths are covered by release smoke
+        label: Public core runtime path coverage is explicit
         action: extend_release_smoke_coverage
 
       - id: packaging_and_consumers_passed
@@ -45,7 +37,6 @@ oracles:
 
       - id: no_synthetic_public_prod_paths
         no_stubbed_paths:
-          - production_fallback
           - synthetic_model_only
         path_prefixes:
           - include

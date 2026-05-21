@@ -1,0 +1,45 @@
+name: Hardware Evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      require_metal4_tensorops:
+        description: "Fail unless SDK26+ Metal 4 TensorOps compiles and runs on M5+"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  contents: read
+
+jobs:
+  apple-gpu-release-smoke:
+    runs-on: [self-hosted, macOS, ARM64]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Version consistency
+        run: scripts/check_version_consistency.sh
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          xcrun --show-sdk-version
+          system_profiler SPDisplaysDataType || true
+
+      - name: Release smoke with required Metal GPU
+        env:
+          REQUIRE_GPU: "1"
+          REQUIRE_METAL4_TENSOROPS: ${{ inputs.require_metal4_tensorops == 'true' && '1' || '0' }}
+        run: scripts/release_smoke.sh
+
+      - name: Upload runtime evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: tensorcore-hardware-evidence
+          path: build/release_smoke_runtime_evidence.json
+          if-no-files-found: error

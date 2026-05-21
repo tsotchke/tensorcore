@@ -6,12 +6,12 @@ DEVICE_LOG="${RUNNER_TEMP:-/tmp}/tensorcore-device.log"
 
 run_no_device_subset() {
     ctest --test-dir "$BUILD_DIR" --output-on-failure \
-        -R '^(test_distributed_ring|test_distributed_ring_fork|test_tensorops_select)$'
+        -R '^(test_distributed_ring|test_distributed_ring_fork|test_tensorops_select|test_tensorops_runtime)$'
 }
 
 run_paravirtual_subset() {
     ctest --test-dir "$BUILD_DIR" --output-on-failure \
-        -R '^(test_device|test_distributed_ring|test_distributed_ring_fork|test_tensorops_select|test_gguf)$'
+        -R '^(test_device|test_distributed_ring|test_distributed_ring_fork|test_tensorops_select|test_tensorops_runtime|test_gguf)$'
 }
 
 if ! "$BUILD_DIR/tests/test_device" >"$DEVICE_LOG" 2>&1; then

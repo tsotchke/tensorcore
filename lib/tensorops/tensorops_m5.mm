@@ -147,6 +147,12 @@ extern "C" tc_status_t tc_tensorops_attention_attempt(tc_context* ctx,
         return TC_ERR_UNSUPPORTED_FAMILY;
     }
 
+    /* The Metal 4 attention kernel is still a compile-time scaffold. Keep the
+     * production path on the validated simdgroup_matrix implementation until
+     * an M5 correctness probe can prove this backend numerically. */
+    (void)LSE;
+    return TC_ERR_UNSUPPORTED_FAMILY;
+
     if (d->io_dtype != TC_DTYPE_F16 || d->accum_dtype != TC_DTYPE_F32) {
         return TC_ERR_UNSUPPORTED_DTYPE;
     }

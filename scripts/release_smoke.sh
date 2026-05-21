@@ -16,6 +16,7 @@ if [ -z "${WHEEL_PREFIX:-}" ]; then
     WHEEL_PREFIX="$(mktemp -d /private/tmp/tensorcore-wheel-install.XXXXXX)"
 fi
 REQUIRE_GPU="${REQUIRE_GPU:-0}"
+REQUIRE_METAL4_TENSOROPS="${REQUIRE_METAL4_TENSOROPS:-0}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 EXPECTED_VERSION="$("$PYTHON_BIN" - "$ROOT/pyproject.toml" <<'PY'
 import pathlib
@@ -78,6 +79,7 @@ else
     METAL4_TENSOROPS_REASON="SDK ${TC_SDK_VERSION} is below the SDK 26.0 requirement for Metal 4 mpp::tensor_ops"
 fi
 METAL4_TENSOROPS_RUNTIME_COVERED="0"
+METAL4_TENSOROPS_RUNTIME_OUTPUT=""
 WHEEL_PATH=""
 
 write_runtime_evidence() {
@@ -94,7 +96,7 @@ write_runtime_evidence() {
     export GEMM_128_TILE_STATUS GEMM_ASYNC_STATUS
     export TC_SDK_VERSION METAL4_TENSOROPS_COMPILE_STATUS
     export METAL4_TENSOROPS_RUNTIME_STATUS METAL4_TENSOROPS_RUNTIME_COVERED
-    export METAL4_TENSOROPS_REASON
+    export METAL4_TENSOROPS_REASON METAL4_TENSOROPS_RUNTIME_OUTPUT
     "$PYTHON_BIN" - "$RELEASE_SMOKE_EVIDENCE_PATH" <<'PY'
 import datetime
 import json
@@ -256,6 +258,7 @@ checks = {
         "runtime_status": env("METAL4_TENSOROPS_RUNTIME_STATUS"),
         "runtime_covered": env("METAL4_TENSOROPS_RUNTIME_COVERED") == "1",
         "reason": env("METAL4_TENSOROPS_REASON"),
+        "runtime_output": env("METAL4_TENSOROPS_RUNTIME_OUTPUT"),
     },
 }
 
@@ -676,6 +679,33 @@ if cmake_consumer_smoke:
 for entry in coverage_files.values():
     entry["executed_lines"].sort()
 
+public_core_required_files = [
+    "lib/core/device.mm",
+    "lib/ops/gemm.mm",
+    "lib/ops/attention.mm",
+    "lib/ops/conv.mm",
+    "lib/ops/training.mm",
+    "lib/ops/quantized.mm",
+    "lib/io/gguf.c",
+    "lib/tensorops/tensorops_select.c",
+    "python/tensorcore/__init__.py",
+]
+public_core_missing = sorted(
+    rel_path for rel_path in public_core_required_files
+    if rel_path not in coverage_files
+)
+public_core_covered = checks["tests"]["gpu_device_available"] and not public_core_missing
+checks["public_core_paths"] = {
+    "runtime_status": (
+        "passed" if public_core_covered else
+        "skipped_no_gpu" if not checks["tests"]["gpu_device_available"] else
+        "failed"
+    ),
+    "runtime_covered": public_core_covered,
+    "required_files": public_core_required_files,
+    "missing_files": public_core_missing,
+}
+
 artifact = {
     "schema": "tensorcore.release_smoke.runtime_evidence.v1",
     "meta": {
@@ -709,6 +739,7 @@ artifact = {
         "cmake_consumers_passed": checks["consumers"]["cmake"]["passed"],
         "pkg_config_consumer_passed": checks["consumers"]["pkg_config"]["passed"],
         "packaging_and_consumers_passed": checks["packaging_and_consumers"]["runtime_covered"],
+        "public_core_paths_passed": checks["public_core_paths"]["runtime_covered"],
         "autotune_cache_passed": checks["autotune_cache"]["passed"],
         "gemm_128_tile_passed": checks["gemm_env_variants"]["use_128_tile"]["passed"],
         "gemm_async_passed": checks["gemm_env_variants"]["use_async"]["passed"],
@@ -745,6 +776,43 @@ if "$BUILD_DIR/tests/test_device"; then
     cmake -E env TC_METALLIB="$BUILD_DIR/tensorcore.metallib" TC_USE_ASYNC=1 \
         "$BUILD_DIR/tests/test_gemm_f16"
     GEMM_ASYNC_STATUS="passed"
+    echo "[tensorcore] Metal 4 TensorOps runtime probe"
+    set +e
+    TENSOROPS_RUNTIME_OUTPUT="$(
+        cmake -E env TC_METALLIB="$BUILD_DIR/tensorcore.metallib" \
+            "$BUILD_DIR/tests/test_tensorops_runtime" 2>&1
+    )"
+    TENSOROPS_RUNTIME_RC=$?
+    set -e
+    printf "%s\n" "$TENSOROPS_RUNTIME_OUTPUT"
+    METAL4_TENSOROPS_RUNTIME_OUTPUT="$TENSOROPS_RUNTIME_OUTPUT"
+    if [ "$TENSOROPS_RUNTIME_RC" -ne 0 ]; then
+        METAL4_TENSOROPS_RUNTIME_STATUS="failed"
+        METAL4_TENSOROPS_RUNTIME_COVERED="0"
+        METAL4_TENSOROPS_REASON="TensorOps runtime probe failed with exit ${TENSOROPS_RUNTIME_RC}"
+        TESTS_STATUS="failed"
+        write_runtime_evidence
+        exit 1
+    elif printf "%s\n" "$TENSOROPS_RUNTIME_OUTPUT" | grep -q 'tensorops_runtime_status=passed'; then
+        METAL4_TENSOROPS_RUNTIME_STATUS="passed"
+        METAL4_TENSOROPS_RUNTIME_COVERED="1"
+        METAL4_TENSOROPS_REASON="Metal 4 TensorOps GEMM runtime probe used TC_BACKEND_TENSOROPS_M5"
+    elif printf "%s\n" "$TENSOROPS_RUNTIME_OUTPUT" | grep -q 'tensorops_runtime_status=skipped_no_m5'; then
+        METAL4_TENSOROPS_RUNTIME_STATUS="skipped_no_m5"
+        METAL4_TENSOROPS_RUNTIME_COVERED="0"
+        METAL4_TENSOROPS_REASON="Host GPU does not report supports_tensorops_m5"
+    elif printf "%s\n" "$TENSOROPS_RUNTIME_OUTPUT" | grep -q 'tensorops_runtime_status=skipped_no_gpu'; then
+        METAL4_TENSOROPS_RUNTIME_STATUS="skipped_no_gpu"
+        METAL4_TENSOROPS_RUNTIME_COVERED="0"
+        METAL4_TENSOROPS_REASON="No usable Metal device for TensorOps runtime probe"
+    else
+        METAL4_TENSOROPS_RUNTIME_STATUS="failed"
+        METAL4_TENSOROPS_RUNTIME_COVERED="0"
+        METAL4_TENSOROPS_REASON="TensorOps runtime probe did not emit a recognized status"
+        TESTS_STATUS="failed"
+        write_runtime_evidence
+        exit 1
+    fi
     TESTS_MODE="full"
 else
     if [ "$REQUIRE_GPU" = "1" ]; then
@@ -1073,6 +1141,15 @@ if command -v pkg-config >/dev/null 2>&1; then
 else
     echo "pkg-config not found; skipping pkg-config consumer smoke."
     PKG_CONFIG_CONSUMER_STATUS="skipped_pkg_config_unavailable"
+fi
+
+if [ "$REQUIRE_METAL4_TENSOROPS" = "1" ]; then
+    if [ "$METAL4_TENSOROPS_COMPILE_STATUS" != "compiled" ] ||
+       [ "$METAL4_TENSOROPS_RUNTIME_STATUS" != "passed" ]; then
+        write_runtime_evidence
+        echo "Metal 4 TensorOps runtime evidence required but not passed: ${METAL4_TENSOROPS_COMPILE_STATUS}/${METAL4_TENSOROPS_RUNTIME_STATUS}" >&2
+        exit 1
+    fi
 fi
 
 write_runtime_evidence
