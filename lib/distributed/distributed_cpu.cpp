@@ -1,9 +1,9 @@
 /*
- * tensorcore - portable CPU distributed backend.
+ * tensorcore - portable CPU distributed surface.
  *
- * The only active CPU backend today is SINGLE. It is enough for unit tests,
- * bindings, and single-worker execution, while keeping the ABI identical to
- * the future multi-worker backends.
+ * v0 CPU backend supports TC_DIST_SINGLE so training loops can keep their
+ * collective calls in place on Linux workers. Real multi-host transports stay
+ * behind the Metal/JACCL or future Gloo work.
  */
 
 #include "tensorcore/tensorcore.h"
@@ -14,11 +14,11 @@
 #include <string>
 
 struct tc_dist_ctx {
-    tc_context* tc;
+    tc_context*       tc;
     tc_dist_backend_t backend;
-    int world_size;
-    int rank;
-    std::string rendezvous;
+    int               world_size;
+    int               rank;
+    std::string       rendezvous;
 };
 
 extern "C" tc_status_t tc_dist_init(tc_context* tc,
@@ -30,12 +30,12 @@ extern "C" tc_status_t tc_dist_init(tc_context* tc,
     if (!tc || !out || world_size <= 0 || rank < 0 || rank >= world_size) {
         return TC_ERR_INVALID_ARG;
     }
-    if (backend == TC_DIST_RING || backend == TC_DIST_GLOO) {
-        if (world_size > 1) return TC_ERR_UNSUPPORTED_FAMILY;
+    if ((backend == TC_DIST_RING || backend == TC_DIST_GLOO) && world_size > 1) {
+        return TC_ERR_UNSUPPORTED_FAMILY;
     }
     if (world_size == 1) backend = TC_DIST_SINGLE;
 
-    tc_dist_ctx* d = new (std::nothrow) tc_dist_ctx{};
+    tc_dist_ctx* d = new (std::nothrow) tc_dist_ctx();
     if (!d) return TC_ERR_ALLOC;
     d->tc = tc;
     d->backend = backend;
@@ -65,12 +65,12 @@ extern "C" tc_status_t tc_allreduce(tc_dist_ctx* d,
                                     size_t num_elements,
                                     tc_dtype_t dtype,
                                     tc_reduce_op_t op) {
-    if (!d || !buf || num_elements == 0 || tc_dtype_size(dtype) == 0) {
-        return TC_ERR_INVALID_ARG;
+    if (!d || !buf || num_elements == 0 || tc_dtype_size(dtype) == 0) return TC_ERR_INVALID_ARG;
+    if (d->backend == TC_DIST_SINGLE) {
+        (void)op;
+        return tc_buffer_validate(d->tc, buf, num_elements * tc_dtype_size(dtype));
     }
-    if (d->backend != TC_DIST_SINGLE) return TC_ERR_UNSUPPORTED_FAMILY;
-    (void)op;
-    return tc_buffer_validate(d->tc, buf, num_elements * tc_dtype_size(dtype));
+    return TC_ERR_UNSUPPORTED_FAMILY;
 }
 
 extern "C" tc_status_t tc_broadcast(tc_dist_ctx* d,
@@ -81,8 +81,11 @@ extern "C" tc_status_t tc_broadcast(tc_dist_ctx* d,
     if (!d || !buf || root < 0 || root >= d->world_size || tc_dtype_size(dtype) == 0) {
         return TC_ERR_INVALID_ARG;
     }
-    if (d->backend != TC_DIST_SINGLE) return TC_ERR_UNSUPPORTED_FAMILY;
-    return tc_buffer_validate(d->tc, buf, num_elements * tc_dtype_size(dtype));
+    if (d->backend == TC_DIST_SINGLE) {
+        (void)num_elements;
+        return tc_buffer_validate(d->tc, buf, num_elements * tc_dtype_size(dtype));
+    }
+    return TC_ERR_UNSUPPORTED_FAMILY;
 }
 
 extern "C" tc_status_t tc_allgather(tc_dist_ctx* d,
@@ -90,17 +93,19 @@ extern "C" tc_status_t tc_allgather(tc_dist_ctx* d,
                                     tc_buffer* out,
                                     size_t num_elements_per_rank,
                                     tc_dtype_t dtype) {
-    if (!d || !in || !out || tc_dtype_size(dtype) == 0) return TC_ERR_INVALID_ARG;
+    if (!d || !in || !out || num_elements_per_rank == 0 || tc_dtype_size(dtype) == 0) {
+        return TC_ERR_INVALID_ARG;
+    }
     if (d->backend != TC_DIST_SINGLE) return TC_ERR_UNSUPPORTED_FAMILY;
 
     const size_t bytes = num_elements_per_rank * tc_dtype_size(dtype);
+    if (bytes == 0) return TC_ERR_INVALID_ARG;
+    void* src = nullptr;
+    void* dst = nullptr;
     tc_status_t s = tc_buffer_validate(d->tc, in, bytes);
     if (s != TC_OK) return s;
     s = tc_buffer_validate(d->tc, out, bytes);
     if (s != TC_OK) return s;
-
-    void* src = nullptr;
-    void* dst = nullptr;
     s = tc_buffer_map((tc_buffer*)in, &src);
     if (s != TC_OK) return s;
     s = tc_buffer_map(out, &dst);
@@ -111,5 +116,5 @@ extern "C" tc_status_t tc_allgather(tc_dist_ctx* d,
 
 extern "C" tc_status_t tc_barrier(tc_dist_ctx* d) {
     if (!d) return TC_ERR_INVALID_ARG;
-    return TC_OK;
+    return d->backend == TC_DIST_SINGLE ? TC_OK : TC_ERR_UNSUPPORTED_FAMILY;
 }
