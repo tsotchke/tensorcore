@@ -72,6 +72,11 @@ activation-checkpointing API, and memory-tier hints.
   device diagnostics plus a hidden cuBLAS dispatch hook. Default builds
   return deterministic unsupported statuses until `TC_ENABLE_CUDA` is wired
   to a CUDA toolchain.
+- `Add opt-in CUDA/HIP CMake detection`: `TC_ENABLE_CUDA=ON` now enables
+  the direct CUDA scaffolding only when CMake finds `CUDA::cudart` and
+  `CUDA::cublas`; `TC_ENABLE_HIP=ON` requires HIP runtime plus hipBLAS
+  imported targets. Installed CMake packages rediscover those dependencies
+  before loading tensorcore targets.
 - `Wire portable CPU GLOO TCP collectives`: `lib/distributed/gloo_tcp.cpp`
   now backs public multi-rank `TC_DIST_GLOO` on the portable CPU build for
   fp32 SUM/AVG/MIN/MAX all-reduce, fp16 SUM/AVG all-reduce, byte-level

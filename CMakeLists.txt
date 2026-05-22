@@ -59,6 +59,51 @@ option(TC_BUILD_TESTS  "Build correctness tests" ON)
 option(TC_BUILD_BENCH  "Build TFLOPS bench harness" ON)
 option(TC_BUILD_EXAMPLES "Build example programs" ON)
 option(TC_ENABLE_TENSOROPS "Build Metal 4 mpp::tensor_ops kernels when the SDK supports them" ON)
+option(TC_ENABLE_CUDA "Build direct CUDA backend for NVIDIA hardware (requires CUDA toolkit)" OFF)
+option(TC_ENABLE_HIP "Build chipStar HIP backend (requires chipStar/LLVM 19/SPIRV)" OFF)
+
+# ----------------------------------------------------------------------------
+# CUDA / HIP backend detection
+# ----------------------------------------------------------------------------
+set(TC_CUDA_LINK_LIBS)
+set(TC_HIP_LINK_LIBS)
+
+if(TC_ENABLE_CUDA)
+    find_package(CUDAToolkit QUIET)
+    if(CUDAToolkit_FOUND AND TARGET CUDA::cudart AND TARGET CUDA::cublas)
+        message(STATUS "tensorcore: CUDA backend enabled (CUDA ${CUDAToolkit_VERSION})")
+        list(APPEND TC_CUDA_LINK_LIBS CUDA::cudart CUDA::cublas)
+        add_compile_definitions(TC_ENABLE_CUDA=1)
+    else()
+        message(WARNING "tensorcore: TC_ENABLE_CUDA=ON but CUDA runtime/cuBLAS targets were not found; disabling")
+        set(TC_ENABLE_CUDA OFF)
+    endif()
+endif()
+
+if(TC_ENABLE_HIP)
+    find_package(hip QUIET)
+    find_package(hipblas QUIET)
+    set(TC_HIP_RUNTIME_TARGET)
+    if(TARGET hip::host)
+        set(TC_HIP_RUNTIME_TARGET hip::host)
+    elseif(TARGET hip::device)
+        set(TC_HIP_RUNTIME_TARGET hip::device)
+    endif()
+    set(TC_HIPBLAS_TARGET)
+    if(TARGET roc::hipblas)
+        set(TC_HIPBLAS_TARGET roc::hipblas)
+    elseif(TARGET hipblas::hipblas)
+        set(TC_HIPBLAS_TARGET hipblas::hipblas)
+    endif()
+    if(hip_FOUND AND hipblas_FOUND AND TC_HIP_RUNTIME_TARGET AND TC_HIPBLAS_TARGET)
+        message(STATUS "tensorcore: HIP backend enabled (chipStar)")
+        list(APPEND TC_HIP_LINK_LIBS ${TC_HIP_RUNTIME_TARGET} ${TC_HIPBLAS_TARGET})
+        add_compile_definitions(TC_ENABLE_HIP=1)
+    else()
+        message(WARNING "tensorcore: TC_ENABLE_HIP=ON but HIP runtime/hipBLAS targets were not found; disabling")
+        set(TC_ENABLE_HIP OFF)
+    endif()
+endif()
 
 set(TC_MACHO_COMPATIBILITY_VERSION
     "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.0"
@@ -408,6 +453,8 @@ endif()
 target_link_libraries(tensorcore_shared PUBLIC
     ${TC_APPLE_FRAMEWORK_LINKS}
     ${TC_CBLAS_LIBRARIES}
+    ${TC_CUDA_LINK_LIBS}
+    ${TC_HIP_LINK_LIBS}
 )
 if(TC_ENABLE_METAL)
     target_link_options(tensorcore_shared PRIVATE
@@ -441,6 +488,8 @@ endif()
 target_link_libraries(tensorcore PUBLIC
     ${TC_APPLE_FRAMEWORK_LINKS}
     ${TC_CBLAS_LIBRARIES}
+    ${TC_CUDA_LINK_LIBS}
+    ${TC_HIP_LINK_LIBS}
     ${TC_STATIC_RUNTIME_LINKS}
 )
 
@@ -511,7 +560,7 @@ install(FILES
     DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig"
 )
 
-message(STATUS "tensorcore: configured (Metal=${TC_ENABLE_METAL}, Metal4=${TC_HAVE_METAL4}, TensorOps=${TC_ENABLE_TENSOROPS}, tests=${TC_BUILD_TESTS}, bench=${TC_BUILD_BENCH})")
+message(STATUS "tensorcore: configured (Metal=${TC_ENABLE_METAL}, Metal4=${TC_HAVE_METAL4}, TensorOps=${TC_ENABLE_TENSOROPS}, CUDA=${TC_ENABLE_CUDA}, HIP=${TC_ENABLE_HIP}, tests=${TC_BUILD_TESTS}, bench=${TC_BUILD_BENCH})")
 if(TC_ENABLE_METAL)
     message(STATUS "  metallib -> ${TC_METALLIB_PATH}")
 endif()

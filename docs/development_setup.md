@@ -129,6 +129,22 @@ What doesn't (returns `TC_ERR_UNSUPPORTED_FAMILY`):
 `tc_last_backend()` reports `portable_cpu` for every served call on
 this build.
 
+## Optional CUDA / HIP Scaffolding
+
+The direct NVIDIA CUDA and chipStar HIP backends are opt-in build paths:
+
+```bash
+cmake -S . -B build-cuda -DTC_ENABLE_METAL=OFF -DTC_ENABLE_CUDA=ON
+cmake -S . -B build-hip  -DTC_ENABLE_METAL=OFF -DTC_ENABLE_HIP=ON
+```
+
+`TC_ENABLE_CUDA=ON` requires CMake's `CUDAToolkit` package with
+`CUDA::cudart` and `CUDA::cublas`. `TC_ENABLE_HIP=ON` requires HIP runtime
+and hipBLAS imported targets. If those dependencies are missing, configure
+prints a warning and falls back to the deterministic unsupported stubs used
+by default builds. Installed CMake packages preserve the effective backend
+flags and rediscover CUDA/HIP dependencies before loading exported targets.
+
 The portable build does not build or install `tensorcore.metallib`.
 Consumers should treat the metallib as a Metal-backend artifact and skip
 that lookup when `TC_ENABLE_METAL=OFF`.
