@@ -302,8 +302,9 @@ diagnose "why is this slow?": if you see `TC_BACKEND_MPS` or
 `TC_BACKEND_ACCELERATE_CPU` on a path you expected
 `TC_BACKEND_SIMDGROUP_MATRIX`, you found a kernel-coverage gap.
 
-For attention, only the SIMDGROUP path exists today; unsupported D values
-return `TC_ERR_UNSUPPORTED_DTYPE` rather than falling back.
+For attention on Metal builds, only the SIMDGROUP path exists today;
+unsupported D values return `TC_ERR_UNSUPPORTED_DTYPE` rather than
+falling back. CPU-only builds use the portable attention implementation.
 
 **Scope of `tc_last_backend`:** at the v0.1.x checkpoint, the diagnostic
 is updated from `lib/ops/gemm.mm` (5 sites), `lib/ops/attention.mm` (3

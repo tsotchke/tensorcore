@@ -320,6 +320,7 @@ else()
         lib/ops/quantized_cpu.cpp
         lib/ops/unsupported_cpu.cpp
         lib/distributed/distributed_cpu.cpp
+        lib/distributed/gloo_tcp.cpp
         lib/c_api/c_api_cpu.c
     )
 endif()

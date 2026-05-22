@@ -149,35 +149,19 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-22/22 should pass on Apple M2 Ultra in ~3-5 s. The full CTest suite is
-the 20-test correctness surface plus two executable example smokes:
+24/24 should pass on Apple M2 Ultra in roughly 5-15 s. The default CTest
+suite is 22 library/package tests plus two executable example smokes:
 
 ```
-1/22 Test  #1: test_device ........................ Passed
-2/22 Test  #2: test_gemm_f32 ...................... Passed
-3/22 Test  #3: test_gemm_f16 ...................... Passed
-4/22 Test  #4: test_gemm_bf16 ..................... Passed
-5/22 Test  #5: test_gemm_i8 ....................... Passed
-6/22 Test  #6: test_attention_correctness ......... Passed
-7/22 Test  #7: test_attention_backward ............ Passed
-8/22 Test  #8: test_training_kernels .............. Passed
-9/22 Test  #9: test_transformer_block ............. Passed
-10/22 Test #10: test_e2e_training .................. Passed
-11/22 Test #11: test_conv2d ......................... Passed
-12/22 Test #12: test_distributed_ring ............... Passed
-13/22 Test #13: test_quantized ...................... Passed
-14/22 Test #14: test_fused_norm_gemv ................ Passed
-15/22 Test #15: test_distributed_ring_fork .......... Passed
-16/22 Test #16: test_gguf ........................... Passed
-17/22 Test #17: test_tensorops_select ............... Passed
-18/22 Test #18: test_tensorops_runtime .............. Passed
-19/22 Test #19: test_buffer_pool .................... Passed
-20/22 Test #20: python_basic ........................ Passed
-21/22 Test #21: example_decode_step ................. Passed
-22/22 Test #22: example_training_step ............... Passed
+test_device, test_gemm_f32, test_gemm_f16, test_gemm_bf16, test_gemm_i8
+test_attention_correctness, test_attention_backward, test_training_kernels
+test_transformer_block, test_e2e_training, test_conv2d
+test_distributed_ring, test_quantized, test_fused_norm_gemv
+test_distributed_ring_fork, test_gguf, test_tensorops_select
+test_tensorops_runtime, test_diloco, test_sparse_compress
+test_buffer_pool, python_basic, example_decode_step, example_training_step
 
-100% tests passed, 0 tests failed out of 22
-Total Test time (real) =   3.16 sec
+100% tests passed, 0 tests failed out of 24
 ```
 
 ### GEMM TFLOPS

@@ -46,10 +46,11 @@ cmake --build build -j8
 ctest --test-dir build --output-on-failure
 ```
 
-Expected: **22/22 tests pass** in ~3-5 seconds.
+Expected: **24/24 tests pass** in roughly 5-15 seconds on a local Apple
+build.
 
-If `ctest` shows fewer than 22 tests, your Python or NumPy isn't visible
-to CMake — `python_basic` skips, dropping the count to 21.
+If `ctest` shows fewer than 24 tests, your Python or NumPy may not be
+visible to CMake -- `python_basic` skips, dropping the count by one.
 
 ### 5. Quick smoke
 
@@ -84,8 +85,7 @@ ctest --test-dir build --output-on-failure
 
 This builds only the portable CPU backend: pure C/C++17, no Metal, no
 Apple frameworks. The C ABI is identical to the Metal-enabled build;
-ops that don't have a CPU implementation (`tc_attention_forward`,
-`tc_conv2d_forward`, `tc_rope_forward`, …) return
+ops that still depend on an external backend return
 `TC_ERR_UNSUPPORTED_FAMILY` cleanly.
 
 What works on the portable CPU build:
@@ -94,18 +94,24 @@ What works on the portable CPU build:
 - `tc_buffer_alloc` / `tc_buffer_free` / `tc_buffer_map` / `tc_buffer_size`
 - `tc_stream_create` / `tc_stream_sync` / `tc_stream_destroy`
 - `tc_gemm` (all dtypes, transpose flags, batched, async)
+- `tc_attention_forward` / `tc_attention_backward`
+- `tc_rmsnorm_*`, `tc_layernorm_*`, `tc_rope_forward`, `tc_swiglu_*`,
+  `tc_softmax_*`, `tc_adamw_step`, `tc_fused_rmsnorm_gemv`
+- `tc_conv2d_forward`, `tc_conv2d_backward_input`,
+  `tc_conv2d_backward_weight`
 - `tc_quantize_weights` / `tc_gemv_quantized` (Q4_0, Q8_0)
 - `tc_gguf_*` (full reader surface)
 - `tc_dist_*` with `TC_DIST_SINGLE` backend (`world_size=1` no-ops)
+- DiLoCo single-rank outer steps
+- sparse top-k compression helpers
+- memory-tier and activation-checkpointing stub baselines
 - `tc_status_string` / `tc_dtype_name` / `tc_backend_name`
 
 What doesn't (returns `TC_ERR_UNSUPPORTED_FAMILY`):
 
-- `tc_attention_forward`/`_backward`
-- `tc_conv2d_*`
-- `tc_rmsnorm_*`, `tc_layernorm_*`, `tc_rope_forward`, `tc_swiglu_*`,
-  `tc_softmax_*`, `tc_adamw_step`, `tc_fused_rmsnorm_gemv`
 - `tc_dist_*` with `TC_DIST_RING` or `TC_DIST_GLOO` (single-host only)
+- HIP/chipStar execution
+- DiLoCo multi-rank WAN transport
 
 `tc_last_backend()` reports `portable_cpu` for every served call on
 this build.

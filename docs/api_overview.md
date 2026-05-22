@@ -187,8 +187,13 @@ and shape semantics, see [api_reference.md](api_reference.md).
 | `quantized.h` | `tc_quant_t`, Q4_0 / Q8_0 quantize + GEMV. |
 | `gguf.h` | `tc_gguf_type_t`, file + tensor handles, metadata getters, bulk load. |
 | `distributed.h` | `tc_dist_backend_t`, `tc_reduce_op_t`, distributed primitives. |
+| `diloco.h` | DiLoCo config, parameter registration, local outer-step runtime. |
+| `hip.h` | HIP/chipStar device discovery and backend selection diagnostics. |
+| `memory_tier.h` | Buffer tier hints, promote/demote hooks, tier usage counters. |
+| `checkpoint.h` | Activation-checkpoint lifecycle and resident/discarded counters. |
+| `tensorcore.h` | Umbrella include for the public ABI. |
 
-11 headers, 71 exported symbols (`cmake/tensorcore.exports`), full
+15 headers, 100 exported symbols (`cmake/tensorcore.exports`), full
 Python wrapper parity in `python/tensorcore/__init__.py`.
 
 ## Per-backend coverage matrix
@@ -198,19 +203,20 @@ Python wrapper parity in `python/tensorcore/__init__.py`.
 | `tc_gemm` (fp16/fp32) | ✓ | ✓ (M5 + SDK 26) | ✓ (fallback) | ✓ (fallback) | ✓ |
 | `tc_gemm` (bf16) | ✓ (Apple9+) | ✓ (M5 + SDK 26) | ✓ (fallback) | ✓ (cast) | ✓ |
 | `tc_gemm` (int8) | ✓ (Apple10+) | ✓ (M5 + SDK 26) | ✓ (fallback) | ✓ (widen) | ✓ |
-| `tc_attention_forward` | ✓ | (v0.2) | — | — | — |
-| `tc_attention_backward` | ✓ (D=64) | — | — | — | — |
-| `tc_conv2d_*` | ✓ (im2col + gemm) | (inherits) | (inherits) | (inherits) | — |
-| `tc_rmsnorm_*` / training kernels | ✓ | — | — | — | — |
-| `tc_fused_rmsnorm_gemv` | ✓ | — | — | — | — |
+| `tc_attention_forward` | ✓ | (v0.2) | — | — | ✓ |
+| `tc_attention_backward` | ✓ (D=64) | — | — | — | ✓ |
+| `tc_conv2d_*` | ✓ (im2col + gemm) | (inherits) | (inherits) | (inherits) | ✓ |
+| `tc_rmsnorm_*` / training kernels | ✓ | — | — | — | ✓ |
+| `tc_fused_rmsnorm_gemv` | ✓ | — | — | — | ✓ |
 | `tc_gemv_quantized` | ✓ | — | — | — | ✓ |
 | `tc_quantize_weights` | ✓ | — | — | — | ✓ |
 | `tc_gguf_*` | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `tc_allreduce` / `_broadcast` / `_allgather` / `_barrier` | ✓ (single, ring, fork) | ✓ | ✓ | ✓ | ✓ (single only) |
 
 `—` means returns `TC_ERR_UNSUPPORTED_FAMILY` on that build. The
-portable-CPU backend deliberately covers only the surface non-Apple
-mesh workers need; the GPU-only ops have no CPU equivalent today.
+portable-CPU backend now covers the main math surface for non-Apple mesh
+workers while HIP execution and multi-rank WAN transport remain explicit
+unsupported paths.
 
 ## See also
 

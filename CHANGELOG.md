@@ -20,9 +20,9 @@ activation-checkpointing API, and memory-tier hints.
   `tc_rope_forward`, `tc_swiglu_forward/backward`,
   `tc_softmax_forward/backward`, `tc_adamw_step` (fp16 and fp32 grad
   paths), `tc_fused_rmsnorm_gemv`. All OpenMP-parallel.
-- `Add CPU Conv2D forward`: `lib/ops/conv2d_cpu.cpp` via im2col+GEMM,
-  inheriting the BLAS-delegate fast path. Backward (`tc_conv2d_backward_*`)
-  still returns `TC_ERR_UNSUPPORTED_FAMILY`.
+- `Add CPU Conv2D forward + backward`: `lib/ops/conv2d_cpu.cpp` via
+  im2col/col2im + GEMM, inheriting the BLAS-delegate fast path and
+  matching the Metal path's shape/buffer validation.
 - `Wire BLAS-delegate (Accelerate / MKL / OpenBLAS) into CPU GEMM`:
   `lib/ops/gemm_cpu.cpp` detects CBLAS at CMake time and delegates fp32 /
   fp16-through-fp32 GEMM. Measured on old-donkey (Xeon E5-2699 v4 x 2
@@ -51,6 +51,10 @@ activation-checkpointing API, and memory-tier hints.
   `lib/hip/hip_stub.cpp`, and `lib/hip/README.md`. The public API exports
   deterministic unsupported stubs today and documents the porting plan for
   Intel Level Zero plus NVIDIA/AMD/ARM OpenCL through chipStar.
+- `Keep Gloo TCP transport compiling in CPU builds`: the portable backend
+  now compiles `lib/distributed/gloo_tcp.cpp` so the future Ethernet
+  transport cannot silently rot, while public multi-rank `TC_DIST_GLOO`
+  still returns an explicit unsupported status.
 - `Add memory-tier public ABI`: `include/tensorcore/memory_tier.h` and
   `lib/core/memory_tier_stub.cpp` expose buffer tier hints, async
   promote/demote entry points, and usage accounting. The shipped baseline
@@ -114,9 +118,9 @@ v0.1.22:
 - The Python binding and wheel packaging can load/package a Linux
   `libtensorcore.so` for portable CPU builds while preserving the macOS
   dylib + metallib release contract.
-- Uncovered backend paths (Conv2D backward, HIP execution, multi-rank
-  DiLoCo transport) return explicit unsupported statuses so downstream FFI
-  imports can bind the full ABI surface without requiring Metal symbols.
+- Uncovered backend paths (HIP execution and multi-rank DiLoCo transport)
+  return explicit unsupported statuses so downstream FFI imports can bind
+  the full ABI surface without requiring Metal symbols.
 
 ### Test surface
 
@@ -133,7 +137,7 @@ v0.1.22:
   (`tokenizer.ggml.token_ids`) so `gguf_meta_array_get_i64` has test
   coverage. `QuantizedMatrix.gemv_async` is also exercised against the
   sync path. Both were previously dead-code-flagged.
-- Test count: 22 / 22 pass (was 20).
+- Test count: 24 / 24 pass (was 22).
 
 ### CI hardening
 

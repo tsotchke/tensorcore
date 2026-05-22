@@ -133,7 +133,7 @@ binding.
 
 Asserts the Python `TC_*` module constants match the enum values declared
 in the public headers. Catches drift like "Python says
-`TC_BACKEND_TENSOROPS_M5 = 2` but the header now numbers it 3."
+`TC_BACKEND_PORTABLE_CPU = 6` but the header declares 7."
 
 ### `create_native_sdk_archive.sh`
 

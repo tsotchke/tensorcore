@@ -65,14 +65,14 @@ equivalent, see **[docs/cuda_comparison.md](docs/cuda_comparison.md)**.
 | Python ctypes binding | full ABI surface, NumPy interop | covered by CTest `python_basic` |
 | Distributed (single-host ring) | bit-exact 4 ranks fp32 | thread + fork transports |
 | MPS + Accelerate fallback | wired, exercised by dispatch | — |
-| **Portable CPU backend** | builds on Linux / Intel-Mac with `TC_ENABLE_METAL=OFF`; covers buffers, streams, GGUF loading, distributed-single, GEMM. Other ops return `TC_ERR_UNSUPPORTED_FAMILY`. | for non-Apple mesh workers |
-| CTest suite | 22/22 pass on M2 Ultra (20 correctness tests + 2 example smokes) | `ctest --test-dir build` |
+| **Portable CPU backend** | builds on Linux / Intel-Mac with `TC_ENABLE_METAL=OFF`; covers buffers, streams, GEMM, attention/training/conv, GGUF, distributed-single, DiLoCo, and sparse compression. | for non-Apple mesh workers |
+| CTest suite | 24/24 pass on M2 Ultra (22 library/package tests + 2 example smokes) | `ctest --test-dir build` |
 | CMake / pkg-config / Python install | `tensorcore::tensorcore[_shared]`, `tensorcore.pc` | tested out-of-tree |
 
 ## Public C ABI — `include/tensorcore/*.h`
 
-A 3.5K-line C ABI you can read end-to-end in an afternoon. Eleven headers
-plus an umbrella. Grouped:
+A 1.3K-line C ABI you can read end-to-end in an afternoon. Fifteen public
+headers including the umbrella. Grouped:
 
 - **Lifecycle:** `tc_init`, `tc_shutdown`, `tc_device_info_get`,
   `tc_buffer_alloc`/`_free`/`_map`/`_size`, `tc_stream_create`/`_destroy`/`_sync`.
@@ -145,7 +145,7 @@ named dtypes.
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 
-ctest --test-dir build --output-on-failure          # 22/22
+ctest --test-dir build --output-on-failure          # 24/24
 ./build/bench/bench_gemm                             # TFLOPS sweep
 ./build/bench/bench_attention                        # FlashAttention TFLOPS
 ./build/bench/bench_inference_7b                     # Q4_0 7B decode harness
@@ -208,7 +208,7 @@ tensorcore/
 │   └── c_api/            ← ABI shims
 ├── kernels/metal/        ← .metal sources → default.metallib
 ├── cmake/                ← compile_metallib.cmake, tensorcoreConfig.cmake.in, .pc.in
-├── tests/                ← 20 correctness tests (vs Accelerate / fp64 reference)
+├── tests/                ← CTest correctness, ABI, Python, and CPU-portability tests
 ├── bench/                ← TFLOPS / tok/s harness
 ├── examples/             ← hello_gemm, gguf_inspect
 ├── eshkol/               ← .esk bindings + FFI bridge for the Eshkol toolchain

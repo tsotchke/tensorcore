@@ -3,8 +3,7 @@
  *
  * Standard im2col-then-GEMM. Memory-inefficient for large feature maps
  * but correctness-first and dispatch-clean: each Conv2D becomes a
- * call into tc_gemm, which already has the AVX2 / OpenBLAS / MKL fast
- * paths wired in.
+ * call into the same BLAS-backed fp32 GEMM path used by tc_gemm.
  *
  * Layout: NCHW for input X, weight W is [out_C × in_C × kH × kW] (PyTorch
  * convention). The im2col buffer is the standard [in_C * kH * kW] × [out_H * out_W]
@@ -29,7 +28,58 @@
 #include <omp.h>
 #endif
 
+#if defined(TC_HAS_CBLAS)
+#  if defined(__APPLE__)
+#    include <Accelerate/Accelerate.h>
+#  else
+#    include <cblas.h>
+#  endif
+#endif
+
 namespace {
+
+/* Direct fp32 GEMM helper for the backward conv path. Avoids the
+ * tc_buffer_alloc/free/memcpy dance that runs through tensorcore's buffer
+ * pool — keeps memory ownership entirely on the stack/std::vector side. */
+void direct_sgemm_f32(bool transpose_a, bool transpose_b,
+                      int M, int N, int K,
+                      float alpha,
+                      const float* A, int lda,
+                      const float* B, int ldb,
+                      float beta,
+                      float* C, int ldc) {
+#if defined(TC_HAS_CBLAS)
+#  if defined(__APPLE__) && defined(__clang__)
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#  endif
+    const CBLAS_TRANSPOSE ta = transpose_a ? CblasTrans : CblasNoTrans;
+    const CBLAS_TRANSPOSE tb = transpose_b ? CblasTrans : CblasNoTrans;
+    cblas_sgemm(CblasRowMajor, ta, tb, M, N, K, alpha, A, lda, B, ldb, beta, C, ldc);
+#  if defined(__APPLE__) && defined(__clang__)
+#    pragma clang diagnostic pop
+#  endif
+#else
+    /* Reference triple loop. Conv backward shapes are small (≤ tens of MB);
+     * the BLAS path is the fast one, this is the correctness floor. */
+    for (int m = 0; m < M; ++m) {
+        for (int n = 0; n < N; ++n) {
+            float acc = beta * C[(size_t)m * ldc + n];
+            for (int k = 0; k < K; ++k) {
+                const float av = transpose_a ? A[(size_t)k * lda + m] : A[(size_t)m * lda + k];
+                const float bv = transpose_b ? B[(size_t)n * ldb + k] : B[(size_t)k * ldb + n];
+                acc += alpha * av * bv;
+            }
+            C[(size_t)m * ldc + n] = acc;
+        }
+    }
+#endif
+}
+
+/* Convert an fp16 [n] array into a packed fp32 host vector. */
+void f16_to_f32_block(const uint16_t* src, size_t n, float* dst) {
+    for (size_t i = 0; i < n; ++i) dst[i] = tc_cpu_f16_to_f32(src[i]);
+}
 
 bool checked_mul(size_t a, size_t b, size_t* out) {
     if (a != 0 && b > std::numeric_limits<size_t>::max() / a) return false;
@@ -288,24 +338,20 @@ extern "C" tc_status_t tc_conv2d_forward(tc_context* ctx,
  *   dX = W^T @ dY → col2im                  (gradient w.r.t. input)
  *   dW = sum_b dY @ im2col(X[b])^T          (gradient w.r.t. weight)
  *
- * Both delegate the dense linear algebra to tc_gemm (which on CPU goes
- * through MKL/OpenBLAS for the 1.5+ TFLOPS path); only the im2col /
- * col2im transformations live here.
+ * Both delegate the dense linear algebra to direct fp32 GEMM / CBLAS;
+ * only the im2col / col2im transformations live here.
  * ----------------------------------------------------------------------- */
 
 namespace {
 
-/* col2im accumulates a [in_C * kH * kW] × [out_H * out_W] gradient column
- * matrix back into a [in_C × H × W_in] input gradient, summing contributions
- * from overlapping receptive fields. fp32 internal because the accumulator
- * needs to handle many contributions per pixel. */
-void col2im_acc_fp16_to_fp32(const uint16_t* col, int in_C, int H, int W_in,
-                             int kH, int kW, int pad_h, int pad_w,
-                             int stride_h, int stride_w,
-                             int out_H, int out_W,
-                             float* dX_acc) {
+/* fp32-input variant of col2im — used when the upstream gradient is already
+ * in fp32 (e.g. from a direct cblas_sgemm result). */
+void col2im_acc_fp32(const float* col, int in_C, int H, int W_in,
+                     int kH, int kW, int pad_h, int pad_w,
+                     int stride_h, int stride_w,
+                     int out_H, int out_W,
+                     float* dX_acc) {
     const int out_HW = out_H * out_W;
-    /* dX_acc is fp32, in_C * H * W_in. The caller zeroes it. */
     for (int c = 0; c < in_C * kH * kW; ++c) {
         const int ic = c / (kH * kW);
         const int kh = (c % (kH * kW)) / kW;
@@ -313,12 +359,12 @@ void col2im_acc_fp16_to_fp32(const uint16_t* col, int in_C, int H, int W_in,
         for (int oh = 0; oh < out_H; ++oh) {
             const int ih = oh * stride_h + kh - pad_h;
             if (ih < 0 || ih >= H) continue;
-            const uint16_t* col_row = col + (size_t)c * out_HW + (size_t)oh * out_W;
+            const float* col_row = col + (size_t)c * out_HW + (size_t)oh * out_W;
             float* dst_row = dX_acc + ((size_t)ic * H + ih) * W_in;
             for (int ow = 0; ow < out_W; ++ow) {
                 const int iw = ow * stride_w + kw - pad_w;
                 if (iw < 0 || iw >= W_in) continue;
-                dst_row[iw] += tc_cpu_f16_to_f32(col_row[ow]);
+                dst_row[iw] += col_row[ow];
             }
         }
     }
@@ -362,14 +408,12 @@ extern "C" tc_status_t tc_conv2d_backward_input(tc_context* ctx,
         if (s != TC_OK) return s;
     }
 
-    void *dYp, *Wp, *dXp, *colp, *dX_f32p = nullptr;
+    void *dYp, *Wp, *dXp, *dX_f32p = nullptr;
     s = tc_buffer_map((tc_buffer*)dY, &dYp);
     if (s != TC_OK) return s;
     s = tc_buffer_map((tc_buffer*)weight, &Wp);
     if (s != TC_OK) return s;
     s = tc_buffer_map(dX, &dXp);
-    if (s != TC_OK) return s;
-    s = tc_buffer_map(scratch_col, &colp);
     if (s != TC_OK) return s;
     if (scratch_dX_f32) {
         s = tc_buffer_map(scratch_dX_f32, &dX_f32p);
@@ -379,7 +423,6 @@ extern "C" tc_status_t tc_conv2d_backward_input(tc_context* ctx,
     const uint16_t* dYd = (const uint16_t*)dYp;
     const uint16_t* Wd = (const uint16_t*)Wp;
     uint16_t* dXd = (uint16_t*)dXp;
-    uint16_t* cold = (uint16_t*)colp;
 
     const int out_HW = out_H * out_W;
     const int K = in_channels * kH * kW;
@@ -395,44 +438,37 @@ extern "C" tc_status_t tc_conv2d_backward_input(tc_context* ctx,
         dX_acc_data = dX_acc.data();
     }
 
+    /* Pre-convert W to fp32 host buffer once (reused across batches). */
+    std::vector<float> W_f32((size_t)out_channels * K);
+    f16_to_f32_block(Wd, (size_t)out_channels * K, W_f32.data());
+
+    /* Per-batch fp32 dY and col-gradient scratch. */
+    std::vector<float> dY_f32((size_t)out_channels * out_HW);
+    std::vector<float> col_grad_f32((size_t)K * out_HW);
+
     for (int b = 0; b < batch; ++b) {
-        /* col_gradient = W^T @ dY[b] :  [K × out_HW] = [K × out_C] @ [out_C × out_HW]
-         * We need W^T, which is just tc_gemm with transpose_a=true on a [out_C × K] W. */
-        tc_gemm_desc d = {};
-        d.M = K; d.N = out_HW; d.K = out_channels;
-        d.a_dtype = TC_DTYPE_F16; d.b_dtype = TC_DTYPE_F16; d.c_dtype = TC_DTYPE_F16;
-        d.accum_dtype = TC_DTYPE_F32;
-        d.alpha = 1.0f; d.beta = 0.0f;
-        d.transpose_a = true;     /* W is [out_C × K]; we want W^T [K × out_C] */
-        d.lda = K;
-        d.ldb = out_HW;
-        d.ldc = out_HW;
+        /* dY[b]: fp16 → fp32 */
+        f16_to_f32_block(dYd + (size_t)b * out_size,
+                         (size_t)out_channels * out_HW, dY_f32.data());
 
-        tc_buffer *Wb = nullptr, *dYb = nullptr, *colb = nullptr;
-        void *Wbp, *dYbp, *colbp;
-        s = alloc_mapped_buffer(ctx, (size_t)out_channels * K * sizeof(uint16_t), &Wb, &Wbp);
-        if (s != TC_OK) return s;
-        s = alloc_mapped_buffer(ctx, (size_t)out_channels * out_HW * sizeof(uint16_t), &dYb, &dYbp);
-        if (s != TC_OK) { tc_buffer_free(ctx, Wb); return s; }
-        s = alloc_mapped_buffer(ctx, (size_t)K * out_HW * sizeof(uint16_t), &colb, &colbp);
-        if (s != TC_OK) { tc_buffer_free(ctx, Wb); tc_buffer_free(ctx, dYb); return s; }
-        std::memcpy(Wbp, Wd, (size_t)out_channels * K * sizeof(uint16_t));
-        std::memcpy(dYbp, dYd + (size_t)b * out_size, (size_t)out_channels * out_HW * sizeof(uint16_t));
-        s = tc_gemm(ctx, &d, Wb, dYb, colb);
-        if (s == TC_OK) {
-            std::memcpy(cold, colbp, (size_t)K * out_HW * sizeof(uint16_t));
-        }
-        tc_buffer_free(ctx, Wb);
-        tc_buffer_free(ctx, dYb);
-        tc_buffer_free(ctx, colb);
-        if (s != TC_OK) return s;
+        /* col_grad = W^T @ dY[b]
+         *   W is [out_C × K]; W^T is [K × out_C]
+         *   dY[b] is [out_C × out_HW]
+         *   col_grad is [K × out_HW]
+         * Direct sgemm with transpose_a=true on W. */
+        direct_sgemm_f32(true, false,
+                         K, out_HW, out_channels,
+                         1.0f,
+                         W_f32.data(), K,           /* W [out_C × K], lda = K (row-major) */
+                         dY_f32.data(), out_HW,     /* dY [out_C × out_HW] */
+                         0.0f,
+                         col_grad_f32.data(), out_HW);
 
-        /* Zero this batch's dX_acc slice (we accumulate from receptive fields). */
+        /* col2im accumulates col_grad → dX_acc. */
         std::memset(dX_acc_data, 0, (size_t)in_size * sizeof(float));
-
-        col2im_acc_fp16_to_fp32(cold, in_channels, H, W_in,
-                                kH, kW, pad_h, pad_w, stride_h, stride_w,
-                                out_H, out_W, dX_acc_data);
+        col2im_acc_fp32(col_grad_f32.data(), in_channels, H, W_in,
+                        kH, kW, pad_h, pad_w, stride_h, stride_w,
+                        out_H, out_W, dX_acc_data);
 
         /* Convert to fp16 output. */
         uint16_t* dX_b = dXd + (size_t)b * in_size;
@@ -500,42 +536,33 @@ extern "C" tc_status_t tc_conv2d_backward_weight(tc_context* ctx,
     /* fp32 accumulator for dW: shape [out_C × K]. */
     std::vector<float> dW_acc((size_t)out_channels * K, 0.0f);
 
+    /* fp32 scratch reused across batches. */
+    std::vector<float> col_f32((size_t)K * out_HW);
+    std::vector<float> dY_f32((size_t)out_channels * out_HW);
+    std::vector<float> dW_b_f32((size_t)out_channels * K);
+
     for (int b = 0; b < batch; ++b) {
-        /* col = im2col(X[b])  shape [K × out_HW]  (reuses forward routine) */
+        /* col = im2col(X[b]); convert to fp32 host scratch. */
         im2col_fp16(Xd + (size_t)b * in_size, in_channels, H, W_in,
                     kH, kW, pad_h, pad_w, stride_h, stride_w, out_H, out_W, cold);
+        f16_to_f32_block(cold, (size_t)K * out_HW, col_f32.data());
+        f16_to_f32_block(dYd + (size_t)b * out_size,
+                         (size_t)out_channels * out_HW, dY_f32.data());
 
-        /* dW_b = dY[b] @ col^T  shape [out_C × K] = [out_C × out_HW] @ [out_HW × K]
-         * Use tc_gemm with transpose_b=true. */
-        tc_gemm_desc d = {};
-        d.M = out_channels; d.N = K; d.K = out_HW;
-        d.a_dtype = TC_DTYPE_F16; d.b_dtype = TC_DTYPE_F16; d.c_dtype = TC_DTYPE_F16;
-        d.accum_dtype = TC_DTYPE_F32;
-        d.alpha = 1.0f; d.beta = 0.0f;
-        d.transpose_b = true;
-        d.lda = out_HW; d.ldb = out_HW; d.ldc = K;
+        /* dW_b = dY[b] @ col^T :  [out_C × K] = [out_C × out_HW] @ [out_HW × K]
+         * col is laid out [K × out_HW]; we want col^T, hence transpose_b=true. */
+        direct_sgemm_f32(false, true,
+                         out_channels, K, out_HW,
+                         1.0f,
+                         dY_f32.data(), out_HW,
+                         col_f32.data(), out_HW,
+                         0.0f,
+                         dW_b_f32.data(), K);
 
-        tc_buffer *dYb = nullptr, *colb = nullptr, *dW_b = nullptr;
-        void *dYbp, *colbp, *dW_bp;
-        s = alloc_mapped_buffer(ctx, (size_t)out_channels * out_HW * sizeof(uint16_t), &dYb, &dYbp);
-        if (s != TC_OK) return s;
-        s = alloc_mapped_buffer(ctx, (size_t)K * out_HW * sizeof(uint16_t), &colb, &colbp);
-        if (s != TC_OK) { tc_buffer_free(ctx, dYb); return s; }
-        s = alloc_mapped_buffer(ctx, (size_t)out_channels * K * sizeof(uint16_t), &dW_b, &dW_bp);
-        if (s != TC_OK) { tc_buffer_free(ctx, dYb); tc_buffer_free(ctx, colb); return s; }
-        std::memcpy(dYbp, dYd + (size_t)b * out_size, (size_t)out_channels * out_HW * sizeof(uint16_t));
-        std::memcpy(colbp, cold, (size_t)K * out_HW * sizeof(uint16_t));
-        s = tc_gemm(ctx, &d, dYb, colb, dW_b);
-        if (s == TC_OK) {
-            const uint16_t* contrib = (const uint16_t*)dW_bp;
-            for (size_t i = 0; i < (size_t)out_channels * K; ++i) {
-                dW_acc[i] += tc_cpu_f16_to_f32(contrib[i]);
-            }
+        /* Accumulate into the running dW_acc. */
+        for (size_t i = 0; i < (size_t)out_channels * K; ++i) {
+            dW_acc[i] += dW_b_f32[i];
         }
-        tc_buffer_free(ctx, dYb);
-        tc_buffer_free(ctx, colb);
-        tc_buffer_free(ctx, dW_b);
-        if (s != TC_OK) return s;
     }
 
     /* fp32 accumulator → fp16 output */

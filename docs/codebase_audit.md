@@ -17,28 +17,29 @@ $ICC_HOME/bin/icc build-memory --repo tensorcore
 $ICC_HOME/bin/icc architecture-summary --repo tensorcore --bundle --include-cheatsheet
 ```
 
-## Indexed surface (v0.1.22+ checkpoint, post-doc-overhaul)
+## Indexed surface (v0.1.22+ heterogeneous/checkpoint surface)
 
 | Metric | Value |
 |---|---:|
-| Files indexed | 142 |
-| Total lines indexed | 29,879 |
+| Files indexed | 190 |
+| Total lines indexed | 43,384 |
 | Languages | C, Metal, ObjC++, C headers, Markdown, CMake, Python, C++, Eshkol, TOML, shell, text |
-| Public symbols in `include/tensorcore/*.h` | 86 |
-| Python binding symbols | 187+ |
-| Call-graph edges (total) | 1,777 |
-| Call-graph edges (resolved cross-file) | 924 |
-| Call-graph edges (unresolved system / runtime) | 822 |
-| Call-graph edges (ambiguous) | 31 |
-| Doc coverage (public symbols) | 159 / 205 (78%) |
-| Unreferenced docs (orphan files) | 0 / 32 |
-| Test suite | 22 / 22 passing (20 correctness + 2 example smokes), 2-3s |
+| Public headers in `include/tensorcore/*.h` | 15 |
+| Public exported symbols | 100 |
+| Python FFI symbols | 100 |
+| Call-graph edges (total) | 3,385 |
+| Call-graph edges (resolved cross-file) | 1,433 |
+| Call-graph edges (unresolved system / runtime) | 1,446 |
+| Call-graph edges (ambiguous) | 506 |
+| Docs links checked | 240 / 240 local links |
+| Test suite | 24 / 24 default Apple tests, 4 / 4 portable CPU tests |
 
 ## Public module roots
 
 - `lib/core` — device init, pipeline cache, buffer pool, autotune
 - `lib/ops` — gemm, attention, training, conv, quantized
 - `lib/distributed` — distributed primitives
+- `lib/hip` — HIP/chipStar public stubs
 - `lib/fallback` — MPS / Accelerate fallback paths
 - `lib/c_api` — ABI shims
 - `lib/io` — GGUF reader
@@ -48,11 +49,11 @@ $ICC_HOME/bin/icc architecture-summary --repo tensorcore --bundle --include-chea
 
 | Lines | File | Language |
 |---:|---|---|
-| 1,396 | `python/tensorcore/__init__.py` | Python |
-| 803 | `lib/io/gguf.c` | C |
-| 782 | `python/tests/test_basic.py` | Python |
-| 544 | `kernels/metal/flash_attention_backward.metal` | Metal |
-| 513 | `lib/ops/attention.mm` | ObjC++ |
+| 2,314 | `python/tensorcore/__init__.py` | Python |
+| 1,283 | `scripts/release_smoke.sh` | shell |
+| 1,193 | `python/tests/test_basic.py` | Python |
+| 802 | `lib/io/gguf.c` | C |
+| 551 | `lib/ops/gemm_cpu.cpp` | C++ |
 
 ## Most-included headers
 
@@ -128,12 +129,15 @@ Excerpts:
 
 - `tc_family_t`: `APPLE7..APPLE11` (M1 → M5)
 - `tc_dtype_t`: 10 dtypes; first-class F16/BF16/F32/I8/I32; emulated F64/SF64/DF64/FP24/FP53
-- `tc_backend_t`: NONE, SIMDGROUP_MATRIX, TENSOROPS_M5, MPS, ACCELERATE_CPU, SF64_EMULATED, OZAKI_II
+- `tc_backend_t`: NONE, SIMDGROUP_MATRIX, TENSOROPS_M5, MPS, ACCELERATE_CPU, SF64_EMULATED, OZAKI_II, PORTABLE_CPU
 - `tc_status_t`: TC_OK plus 11 error codes
 - `tc_dist_backend_t`: SINGLE, RING, GLOO
 - `tc_reduce_op_t`: SUM, AVG, MAX, MIN
 - `tc_gguf_type_t`: F32, F16, Q4_0, Q4_1, Q8_0, BF16, UNSUPPORTED
 - `tc_quant_t`: Q4_0, Q8_0
+- `tc_diloco_compress_t`: NONE, FP16, FP8, TOPK_1PCT, TOPK_01PCT, LOWRANK, SIGNSGD
+- `tc_hip_vendor_t`: UNKNOWN, INTEL, NVIDIA, AMD, ARM_MALI
+- `tc_memory_tier_t`: L0_DEVICE through L4_REMOTE_NVME
 
 The full table is in
 `artifacts/repos/tensorcore/architecture/` after `icc architecture-summary`.
