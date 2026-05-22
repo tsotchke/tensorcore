@@ -18,9 +18,11 @@
  * keeps in sync with new silicon.
  *
  * Scope of this file (v0.2 - session 1.5):
- *   - fp32 only, single-thread, single-cluster.
+ *   - fp32 only; one AMX worker for small shapes, two GCD workers for
+ *     M >= 256 unless TC_AMX_THREADS=1 is set.
  *   - K-tiled mega-pack inside the (i, j) loop with KC=256 -> ~0.37 TFLOPS
- *     at 4096^3 on M2 Ultra (vs 0.08 TFLOPS for the single-thread NEON kernel).
+ *     at 4096^3 on M2 Ultra before multi-worker experiments (vs 0.08 TFLOPS
+ *     for the single-thread NEON kernel).
  *   - alpha = 1, beta = 0 only (other alpha/beta combos fall through to NEON/CBLAS).
  *   - Non-transposed A, B only (transposed falls through).
  *   - M and N must be multiples of 16 (the AMX tile size for fp32 outer
@@ -28,13 +30,12 @@
  *   - Apple Silicon only (__APPLE__ && __aarch64__).
  *
  * Roadmap for sessions 2+:
- *   - **Multi-cluster scheduling that actually works.** A naive pthread +
- *     thread_affinity_policy_data split regressed perf (workers either
- *     co-located on one cluster and serialized on its AMX unit, or split
- *     across clusters but paid heavy UltraFusion-fabric reads for the
- *     shared mega-pack). Needs a different primitive: GCD dispatch_apply
- *     with explicit QOS, per-worker cluster-local packing, or
- *     IORegistry-driven topology discovery.
+ *   - **Multi-cluster scheduling that scales past two workers.** A naive
+ *     pthread + thread_affinity_policy_data split regressed perf (workers
+ *     either co-located on one cluster and serialized on its AMX unit, or
+ *     split across clusters but paid heavy UltraFusion-fabric reads for the
+ *     shared mega-pack). The current GCD path uses per-worker local packs;
+ *     broader worker counts still need topology-aware scheduling.
  *   - **fp16 / bf16 paths** via the corresponding AMX opcodes (FMA16,
  *     MAC16 with the proper accumulator-precision flags).
  *   - **Edge tiles** for M, N not divisible by 16 - pack with zero
@@ -69,6 +70,37 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <dispatch/dispatch.h>
+
+#include <atomic>
+#include <dlfcn.h>
+
+/* Private libsystem_pthread hook: asks the kernel to schedule the calling
+ * thread on the cluster OTHER than the one its parent / siblings are on.
+ * Apple's Accelerate uses this to spread its two AMX-using threads across
+ * the two clusters of M-series Ultra chips, doubling AMX throughput.
+ *
+ * The symbol lives in /usr/lib/system/libsystem_pthread.dylib at the same
+ * address as `_pthread_prefer_alternate_amx_self` — they're aliases of one
+ * function that tail-calls `__pthread_set_properties_self(0x20, 0, 0)`.
+ *
+ * Not declared in any public header, and not in the Mach-O export table of
+ * libSystem so static linking fails to resolve it. We fetch via dlsym at
+ * runtime — null pointer is treated as a graceful no-op (older OS, or some
+ * stripped variant). */
+using pthread_prefer_alternate_cluster_self_fn = void (*)(void);
+static pthread_prefer_alternate_cluster_self_fn load_prefer_alternate_cluster() {
+    /* Note: pass the C symbol name without the leading underscore. dlsym
+     * prepends one when searching the Mach-O symbol table — passing
+     * "_pthread_..." here would resolve to "__pthread_..." which doesn't
+     * exist. Verified the unprefixed lookup returns a non-null address on
+     * macOS 15.1. */
+    static pthread_prefer_alternate_cluster_self_fn fn = []() {
+        return reinterpret_cast<pthread_prefer_alternate_cluster_self_fn>(
+            dlsym(RTLD_DEFAULT, "pthread_prefer_alternate_cluster_self"));
+    }();
+    return fn;
+}
 
 /* ----------------------------------------------------------------------------
  * AMX instruction encoding
@@ -173,8 +205,9 @@ inline uint64_t amx_z_op(const void* addr, int slot) {
  * The AMX unit retires one FMA32 per cycle = 256 fp32 FMA = 512 fp32 ops/cycle.
  * At ~3.2 GHz cluster frequency that's ~1.6 TFLOPS per cluster. M2 Ultra has
  * two clusters -> ~3.2 TFLOPS aggregate ceiling for fp32 GEMM (matches what
- * Accelerate measures). This kernel is single-threaded and exercises one
- * cluster, so the ceiling here is ~1.6 TFLOPS. */
+ * Accelerate measures). The small-shape path exercises one cluster; the
+ * large-shape GCD path attempts to use both clusters with worker-local
+ * packing. */
 /* The AMX Z register file is partitioned into 4 banks of 16 slots each
  * (slots 0..15, 16..31, 32..47, 48..63). For fp32 outer products, row r of
  * the result lands at Z slot r * 4 - so 16 result rows occupy positions
@@ -277,6 +310,53 @@ inline float* aligned_alloc_fp32(size_t n_floats) {
     return static_cast<float*>(p);
 }
 
+static void amx_process_tile_strip(int i_start, int i_end,
+                                   int N, int K, int ldc,
+                                   const float* A_pack_mega,
+                                   const float* B_pack_mega,
+                                   float* C);
+
+/* Worker-local pack of A's i-strip and the full B, then process its tile
+ * strip. Cluster-local: the pack writes go into whichever cluster the
+ * worker landed on, so the AMX kernel's LDX/LDY reads stay local. Halves
+ * the inter-cluster traffic at large M compared to a shared mega-pack. */
+static bool amx_worker_local(int i_start, int i_end,
+                             int N, int K, int lda, int ldb, int ldc,
+                             const float* A, const float* B, float* C) {
+    static thread_local float* tls_A_pack = nullptr;
+    static thread_local size_t tls_A_pack_cap = 0;
+    static thread_local float* tls_B_pack = nullptr;
+    static thread_local size_t tls_B_pack_cap = 0;
+
+    const int M_strip = i_end - i_start;
+    const size_t A_pack_needed = (size_t)M_strip * K;
+    const size_t B_pack_needed = (size_t)K * N;
+    if (tls_A_pack_cap < A_pack_needed) {
+        std::free(tls_A_pack);
+        tls_A_pack = aligned_alloc_fp32(A_pack_needed);
+        tls_A_pack_cap = A_pack_needed;
+    }
+    if (tls_B_pack_cap < B_pack_needed) {
+        std::free(tls_B_pack);
+        tls_B_pack = aligned_alloc_fp32(B_pack_needed);
+        tls_B_pack_cap = B_pack_needed;
+    }
+    if (!tls_A_pack || !tls_B_pack) return false;
+
+    /* Pack the worker's A strip (M_strip rows starting at i_start) and the
+     * full B. Each worker writes pack output cluster-locally. */
+    pack_A_mega(A + (size_t)i_start * lda, lda, M_strip, K, tls_A_pack);
+    pack_B_mega(B, ldb, K, N, tls_B_pack);
+
+    /* Process tiles into C at the absolute (i_start + relative_i) offset.
+     * amx_process_tile_strip walks [0, M_strip) inside the worker's local
+     * pack, and writes into C base-offset by i_start*ldc. */
+    amx_process_tile_strip(0, M_strip, N, K, ldc,
+                           tls_A_pack, tls_B_pack,
+                           C + (size_t)i_start * ldc);
+    return true;
+}
+
 /* ----------------------------------------------------------------------------
  * Per-thread tile processor.
  *
@@ -348,51 +428,80 @@ extern "C" TC_INTERNAL_SYMBOL int tc_amx_gemm_f32(int M, int N, int K,
     if (transpose_a || transpose_b) return -1;
     if ((M & 15) != 0 || (N & 15) != 0) return -1;
 
-    /* Mega pack buffers: pack ALL of A and B once each, then iterate
-     * (i, j, kp) with no re-packing. Memory cost is M*K + K*N fp32 (e.g.
-     * 64 MB + 64 MB at 4096^3), but the AMX kernel reads stay in L1 because
-     * each (i, j, kp) iteration only touches KC x 16 = 16 KB of packed data.
-     *
-     * This is the BLIS pre-pack pattern; alternative incremental-pack
-     * variants will land in session 2 when the buffers stop fitting in
-     * available memory. */
-    static thread_local float* tls_A_pack = nullptr;
-    static thread_local size_t tls_A_pack_cap = 0;
-    static thread_local float* tls_B_pack = nullptr;
-    static thread_local size_t tls_B_pack_cap = 0;
+    /* Threading policy:
+     *   - For M < 256: too small for parallel overhead to amortize. Pack
+     *     once on the main thread (cluster-local for that thread) and run
+     *     the single-thread strip processor.
+     *   - For M >= 256: use GCD dispatch_apply. Each worker packs ITS OWN
+     *     A strip + full B locally, so the AMX kernel reads stay in the
+     *     worker's cluster (no UltraFusion-fabric round-trip on every K
+     *     iter). Memory cost doubles vs shared pack (~2× M·K + 2× K·N
+     *     fp32) but pack throughput parallelizes too.
+     *   - TC_AMX_THREADS=1 forces single-thread (for A/B measurement). */
+    const char* threads_env = std::getenv("TC_AMX_THREADS");
+    const bool single_thread = (threads_env && threads_env[0] == '1');
+    const bool use_multi = !single_thread && M >= 256;
 
-    const size_t A_pack_needed = (size_t)M * K;
-    const size_t B_pack_needed = (size_t)K * N;
-    if (tls_A_pack_cap < A_pack_needed) {
-        std::free(tls_A_pack);
-        tls_A_pack = aligned_alloc_fp32(A_pack_needed);
-        tls_A_pack_cap = A_pack_needed;
+    if (use_multi) {
+        constexpr int N_WORKERS = 2;
+        const int strips_total = M / 16;
+        const int strips_per_worker = strips_total / N_WORKERS;
+        std::atomic<int> worker_failed{0};
+        std::atomic<int>* failed = &worker_failed;
+        /* QOS_CLASS_USER_INTERACTIVE is the highest user-space QoS class —
+         * it pins workers to P-cores (where AMX lives). USER_INITIATED was
+         * not enough: empirically about half the dispatched workers ended
+         * up on E-cores 16-23 (no/weak AMX), regressing throughput. */
+        dispatch_queue_t q = dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0);
+        dispatch_apply(N_WORKERS, q, ^(size_t t) {
+            /* Worker 1 asks the kernel to migrate it to the alternate AMX
+             * cluster (the one the main thread / worker 0 are NOT on).
+             * Without this, both workers land on the same cluster and
+             * serialize on its single AMX unit. The hook is a no-op on
+             * single-cluster M-series silicon. */
+            if (t == 1) {
+                auto prefer_alt = load_prefer_alternate_cluster();
+                if (prefer_alt) prefer_alt();
+            }
+            const int i_start = (int)(t * strips_per_worker * 16);
+            const int i_end = (t == N_WORKERS - 1)
+                ? M
+                : (int)((t + 1) * strips_per_worker * 16);
+            if (!amx_worker_local(i_start, i_end, N, K, lda, ldb, ldc, A, B, C)) {
+                failed->store(1, std::memory_order_relaxed);
+            }
+        });
+        if (worker_failed.load(std::memory_order_relaxed)) return -1;
+    } else {
+        /* Mega pack buffers: pack ALL of A and B once each, then iterate
+         * (i, j, kp) with no re-packing. Memory cost is M*K + K*N fp32
+         * (e.g. 64 MB + 64 MB at 4096^3), but each (i, j, kp) iteration
+         * only touches KC x 16 = 16 KB of packed data.
+         *
+         * The multi-worker path uses worker-local pack buffers instead, so
+         * keep these main-thread buffers out of the large-shape path. */
+        static thread_local float* tls_A_pack = nullptr;
+        static thread_local size_t tls_A_pack_cap = 0;
+        static thread_local float* tls_B_pack = nullptr;
+        static thread_local size_t tls_B_pack_cap = 0;
+
+        const size_t A_pack_needed = (size_t)M * K;
+        const size_t B_pack_needed = (size_t)K * N;
+        if (tls_A_pack_cap < A_pack_needed) {
+            std::free(tls_A_pack);
+            tls_A_pack = aligned_alloc_fp32(A_pack_needed);
+            tls_A_pack_cap = A_pack_needed;
+        }
+        if (tls_B_pack_cap < B_pack_needed) {
+            std::free(tls_B_pack);
+            tls_B_pack = aligned_alloc_fp32(B_pack_needed);
+            tls_B_pack_cap = B_pack_needed;
+        }
+        if (!tls_A_pack || !tls_B_pack) return -1;
+        pack_A_mega(A, lda, M, K, tls_A_pack);
+        pack_B_mega(B, ldb, K, N, tls_B_pack);
+        amx_process_tile_strip(0, M, N, K, ldc, tls_A_pack, tls_B_pack, C);
     }
-    if (tls_B_pack_cap < B_pack_needed) {
-        std::free(tls_B_pack);
-        tls_B_pack = aligned_alloc_fp32(B_pack_needed);
-        tls_B_pack_cap = B_pack_needed;
-    }
-    if (!tls_A_pack || !tls_B_pack) return -1;
-
-    /* Pack the entire A and B matrices into mega buffers once. After this
-     * the inner loops touch only contiguous slices of these buffers. */
-    pack_A_mega(A, lda, M, K, tls_A_pack);
-    pack_B_mega(B, ldb, K, N, tls_B_pack);
-
-    /* Single-thread execution. A previous attempt at 2-worker pthread
-     * multi-cluster threading via thread_affinity_policy_data hints
-     * actively regressed throughput on macOS 15.1 / M2 Ultra (0.37 -> 0.31
-     * TFLOPS at 4096^3, getting worse as M grew). Two likely causes:
-     *   (1) macOS does not honor advisory affinity hints strongly enough
-     *       to keep workers on distinct AMX clusters — they often co-locate
-     *       and serialize on the one cluster's AMX unit.
-     *   (2) When workers do land on different clusters, the shared mega-pack
-     *       sits in one cluster's L2; the remote worker reads it across the
-     *       UltraFusion fabric, dwarfing any compute parallelism.
-     * Multi-cluster AMX is left for a future session that uses a different
-     * primitive (GCD dispatch_apply, or explicit topology probing). */
-    amx_process_tile_strip(0, M, N, K, ldc, tls_A_pack, tls_B_pack, C);
 
     /* Do not AMX_CLR - see comment in amx_process_tile_strip. */
     return 0;

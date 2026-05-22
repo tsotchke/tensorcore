@@ -187,7 +187,8 @@ on the dist_ctx the user provided.
 ## Implementation status
 
 `include/tensorcore/diloco.h` declares the surface and
-`lib/distributed/diloco.cpp` implements the local single-rank path plus a
-dense multi-rank outer-step baseline over portable CPU `TC_DIST_GLOO`.
-Sparse packed all-reduce, dropout-tolerant GLOO integration, and async
-overlap are still staged work. See [ROADMAP.md](../ROADMAP.md).
+`lib/distributed/diloco.cpp` implements the local single-rank path plus
+dense and sparse TOPK multi-rank outer steps over portable CPU
+`TC_DIST_GLOO`. Sparse TOPK uses `(idx, fp16)` payloads through the
+internal GLOO sparse all-reduce hook. Dropout-tolerant WAN recovery and
+broader WAN soak remain staged work. See [ROADMAP.md](../ROADMAP.md).

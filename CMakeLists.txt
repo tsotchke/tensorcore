@@ -285,7 +285,10 @@ set(TC_COMMON_SOURCES
     lib/tensorops/tensorops_select.c
     lib/distributed/diloco.cpp
     lib/distributed/sparse_compress.cpp
-    lib/hip/hip_stub.cpp
+    lib/hip/device.cpp
+    lib/hip/gemm.cpp
+    lib/cuda/device.cpp
+    lib/cuda/gemm.cpp
     lib/core/memory_tier_stub.cpp
     lib/core/checkpoint_stub.cpp
 )

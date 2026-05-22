@@ -55,6 +55,17 @@ if(NOT TC_ENABLE_METAL)
         SKIP_RETURN_CODE 77
         TIMEOUT 60
     )
+
+    # Sparse-compressed multi-rank DiLoCo: exercises the TOPK path through
+    # GLOO sparse_allreduce. Verifies bytes-on-the-wire is < dense.
+    add_executable(test_diloco_sparse_fork test_diloco_sparse_fork.c)
+    target_link_libraries(test_diloco_sparse_fork PRIVATE tensorcore)
+    target_include_directories(test_diloco_sparse_fork PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    add_test(NAME test_diloco_sparse_fork COMMAND test_diloco_sparse_fork)
+    set_tests_properties(test_diloco_sparse_fork PROPERTIES
+        SKIP_RETURN_CODE 77
+        TIMEOUT 60
+    )
     return()
 endif()
 

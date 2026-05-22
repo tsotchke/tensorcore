@@ -395,6 +395,25 @@ class TCHipDeviceInfo(Structure):
     ]
 
 
+class TCCudaDeviceInfo(Structure):
+    _fields_ = [
+        ("device_name", ctypes.c_char * 128),
+        ("compute_capability", ctypes.c_char * 16),
+        ("major", c_int),
+        ("minor", c_int),
+        ("global_memory_bytes", c_uint64),
+        ("shared_memory_per_block", c_uint64),
+        ("multiprocessor_count", c_uint32),
+        ("max_threads_per_block", c_uint32),
+        ("warp_size", c_uint32),
+        ("supports_fp16", c_bool),
+        ("supports_bf16", c_bool),
+        ("supports_int8_tensor_core", c_bool),
+        ("supports_tf32", c_bool),
+        ("unified_memory", c_bool),
+    ]
+
+
 class TCDiLoCoConfig(Structure):
     _fields_ = [
         ("inner_steps", c_int),
@@ -603,6 +622,16 @@ if _lib is not None:
     _lib.tc_hip_select_device.restype = c_int
     _lib.tc_hip_last_kernel_name.argtypes = []
     _lib.tc_hip_last_kernel_name.restype = c_char_p
+    _lib.tc_cuda_init.argtypes = [c_void_p]
+    _lib.tc_cuda_init.restype = c_int
+    _lib.tc_cuda_device_count.argtypes = []
+    _lib.tc_cuda_device_count.restype = c_int
+    _lib.tc_cuda_device_at.argtypes = [c_int, POINTER(TCCudaDeviceInfo)]
+    _lib.tc_cuda_device_at.restype = c_int
+    _lib.tc_cuda_select_device.argtypes = [c_void_p, c_int]
+    _lib.tc_cuda_select_device.restype = c_int
+    _lib.tc_cuda_last_kernel_name.argtypes = []
+    _lib.tc_cuda_last_kernel_name.restype = c_char_p
     _lib.tc_diloco_init.argtypes = [c_void_p, POINTER(TCDiLoCoConfig), POINTER(c_void_p)]
     _lib.tc_diloco_init.restype = c_int
     _lib.tc_diloco_finalize.argtypes = [c_void_p]
@@ -777,6 +806,25 @@ def _hip_info_dict(info):
         "supports_fp16": bool(info.supports_fp16),
         "supports_fp64": bool(info.supports_fp64),
         "supports_int8_dot": bool(info.supports_int8_dot),
+        "unified_memory": bool(info.unified_memory),
+    }
+
+
+def _cuda_info_dict(info):
+    return {
+        "device_name": _decode_fixed_cstr(info.device_name),
+        "compute_capability": _decode_fixed_cstr(info.compute_capability),
+        "major": int(info.major),
+        "minor": int(info.minor),
+        "global_memory_bytes": int(info.global_memory_bytes),
+        "shared_memory_per_block": int(info.shared_memory_per_block),
+        "multiprocessor_count": int(info.multiprocessor_count),
+        "max_threads_per_block": int(info.max_threads_per_block),
+        "warp_size": int(info.warp_size),
+        "supports_fp16": bool(info.supports_fp16),
+        "supports_bf16": bool(info.supports_bf16),
+        "supports_int8_tensor_core": bool(info.supports_int8_tensor_core),
+        "supports_tf32": bool(info.supports_tf32),
         "unified_memory": bool(info.unified_memory),
     }
 
@@ -1154,6 +1202,33 @@ def hip_select_device(ctx, index):
 def hip_last_kernel_name():
     """Return the diagnostic HIP kernel name from the last HIP-dispatched call."""
     return _decode_cstr(_lib.tc_hip_last_kernel_name()) or "none"
+
+
+def cuda_init(ctx):
+    """Initialize the CUDA backend, if available on this host."""
+    _check(_lib.tc_cuda_init(_as_handle(ctx)))
+
+
+def cuda_device_count():
+    """Return the number of CUDA devices visible to tensorcore."""
+    return int(_lib.tc_cuda_device_count())
+
+
+def cuda_device_at(index):
+    """Return CUDA device metadata for a device index."""
+    info = TCCudaDeviceInfo()
+    _check(_lib.tc_cuda_device_at(int(index), byref(info)))
+    return _cuda_info_dict(info)
+
+
+def cuda_select_device(ctx, index):
+    """Select the CUDA device used by the current tensorcore context."""
+    _check(_lib.tc_cuda_select_device(_as_handle(ctx), int(index)))
+
+
+def cuda_last_kernel_name():
+    """Return the diagnostic CUDA kernel name from the last CUDA-dispatched call."""
+    return _decode_cstr(_lib.tc_cuda_last_kernel_name()) or "none"
 
 
 def diloco_config(inner_steps=100, outer_lr=1.0, outer_momentum=0.9,
@@ -1791,6 +1866,12 @@ class Context:
 
     def hip_select_device(self, index):
         return hip_select_device(self, index)
+
+    def cuda_init(self):
+        return cuda_init(self)
+
+    def cuda_select_device(self, index):
+        return cuda_select_device(self, index)
 
     def gemm(self, A, B, C, M, N, K, **kwargs):
         return gemm(self, A, B, C, M, N, K, **kwargs)

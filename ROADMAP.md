@@ -120,11 +120,16 @@ some still queued.
       local single-rank steps, and dense multi-rank outer steps over portable
       CPU `TC_DIST_GLOO` are wired. NONE / FP16-intent / TOPK masks,
       Nesterov / SGD / Adam outer optimizers, and async overlap are present;
-      sparse packed transport and dropout-tolerant WAN recovery remain queued.
+      TOPK over GLOO uses sparse packed transport. Dropout-tolerant WAN
+      recovery remains queued.
 - [x] **HIP/chipStar backend scaffold** — `include/tensorcore/hip.h` +
-      `lib/hip/hip_stub.cpp` + `lib/hip/README.md`. Public ABI frozen;
-      runtime implementation lands after chipStar runtime is validated
-      on cosbox (NVIDIA driver fix pending).
+      `lib/hip/device.cpp` + `lib/hip/gemm.cpp` + `lib/hip/README.md`.
+      Public ABI frozen; full runtime implementation lands after chipStar
+      runtime is validated on cosbox (NVIDIA driver fix pending).
+- [x] **Direct CUDA backend scaffold** — `include/tensorcore/cuda.h` +
+      `lib/cuda/device.cpp` + `lib/cuda/gemm.cpp`. Public diagnostics and
+      a hidden cuBLAS hook exist so NVIDIA-native support can land without
+      changing the ABI.
 - [x] **chipStar 1.1 built on cosbox (RTX 3090 host)** — hipcc + libCHIP.so
       verified; HIP source compiles. Runtime test blocked on NVIDIA driver
       mismatch; restart-pending.
@@ -141,12 +146,13 @@ some still queued.
 - [x] **`TC_DIST_GLOO` backend** for portable CPU collectives over TCP:
       fp32/fp16 all-reduce, min/max, broadcast, allgather, barrier, sparse
       packed exchange, and DiLoCo dense outer steps. Real WAN soak remains.
-- [ ] **Sparse top-k compressed all-reduce** in DiLoCo (today's top-k
-      sparsifies but still sends a dense fp32 vector). Phase 4.
+- [x] **Sparse top-k compressed all-reduce** in DiLoCo — portable CPU GLOO
+      now ships TOPK deltas as sparse `(idx, fp16)` payloads and validates
+      the bandwidth cut with a forked localhost smoke. Real WAN soak remains.
 
 ### v0.1 — Foundation (shipped this checkpoint)
 - [x] CMake + metallib precompile + cross-family runtime detect
-- [x] Public C ABI (`include/tensorcore/`) — 15 headers, 100 exported symbols
+- [x] Public C ABI (`include/tensorcore/`) — 16 headers, 105 exported symbols
 - [x] Device init / pipeline cache / power-of-2 buffer pool, autotune sweep + JSON cache
 - [x] **`simdgroup_matrix` GEMM** — fp16/fp32 (64×64 tile, BK=32, vec4 loads,
       f32-accum) — **17.88 TFLOPS @ 4096³ on M2 Ultra, fp32 bit-exact vs Accelerate**
@@ -174,7 +180,7 @@ some still queued.
       SDK 26.0+ gated, runtime selector
 - [x] MPS + Accelerate fallback paths
 - [x] Correctness tests vs `cblas_sgemm` + fp64 reference — **24/24 pass** on M2 Ultra
-      in the default tree, plus 6/6 portable CPU backend tests
+      in the default tree, plus 7/7 portable CPU backend tests
 - [x] TFLOPS bench harness (GEMM sweep, attention sweep, 7B Q4_0 inference)
 - [x] Eshkol binding skeleton + bridge file dropped into both `eshkol/` and
       `eshkol-platform/`, opt-in via `ESHKOL_ENABLE_TENSORCORE=1`

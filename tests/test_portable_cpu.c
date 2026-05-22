@@ -584,13 +584,21 @@ static int run_future_backend_stubs(tc_context* ctx) {
     tc_buffer* theta = NULL;
     float* theta_p = NULL;
     tc_hip_device_info hip_info;
+    tc_cuda_device_info cuda_info;
     memset(&hip_info, 0, sizeof(hip_info));
+    memset(&cuda_info, 0, sizeof(cuda_info));
 
     rc |= expect_status("hip init unsupported", tc_hip_init(ctx), TC_ERR_UNSUPPORTED_FAMILY);
     rc |= expect_status("hip device info unsupported",
                         tc_hip_device_info_get(ctx, &hip_info), TC_ERR_UNSUPPORTED_FAMILY);
     if (tc_hip_device_count() != 0) rc = 1;
     if (strcmp(tc_hip_last_kernel_name(), "none") != 0) rc = 1;
+
+    rc |= expect_status("cuda init unsupported", tc_cuda_init(ctx), TC_ERR_UNSUPPORTED_FAMILY);
+    rc |= expect_status("cuda device at unsupported",
+                        tc_cuda_device_at(0, &cuda_info), TC_ERR_UNSUPPORTED_FAMILY);
+    if (tc_cuda_device_count() != 0) rc = 1;
+    if (strcmp(tc_cuda_last_kernel_name(), "none") != 0) rc = 1;
 
     rc |= expect_status("dist init for diloco",
                         tc_dist_init(ctx, TC_DIST_SINGLE, 1, 0, "single://diloco", &dist),

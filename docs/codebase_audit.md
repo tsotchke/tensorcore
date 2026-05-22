@@ -39,7 +39,8 @@ $ICC_HOME/bin/icc architecture-summary --repo tensorcore --bundle --include-chea
 - `lib/core` — device init, pipeline cache, buffer pool, autotune
 - `lib/ops` — gemm, attention, training, conv, quantized
 - `lib/distributed` — distributed primitives
-- `lib/hip` — HIP/chipStar public stubs
+- `lib/hip` — HIP/chipStar scaffold and default unsupported stubs
+- `lib/cuda` — CUDA scaffold and default unsupported stubs
 - `lib/fallback` — MPS / Accelerate fallback paths
 - `lib/c_api` — ABI shims
 - `lib/io` — GGUF reader

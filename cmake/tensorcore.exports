@@ -27,6 +27,11 @@ _tc_checkpoint_unregister
 _tc_conv2d_backward_input
 _tc_conv2d_backward_weight
 _tc_conv2d_forward
+_tc_cuda_device_at
+_tc_cuda_device_count
+_tc_cuda_init
+_tc_cuda_last_kernel_name
+_tc_cuda_select_device
 _tc_device_info_get
 _tc_dist_finalize
 _tc_dist_init

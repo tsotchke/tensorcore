@@ -28,11 +28,13 @@
  *   LOWRANK   — PowerSGD: rank-r approximation of each parameter tensor
  *   SIGNSGD   — 1-bit per element, scaled at receive end
  *
- * For now, the in-tree implementation covers the local/single-rank outer
- * step for NONE, FP16-intent, and TOPK masking with error feedback.
- * Multi-rank WAN transport and FP8 / LOWRANK / SIGNSGD return explicit
- * unsupported statuses so downstream code gets a stable failure instead
- * of incorrect results.
+ * For now, the in-tree implementation covers local/single-rank outer
+ * steps plus portable-CPU GLOO multi-rank outer steps for NONE,
+ * FP16-intent, and TOPK masking with error feedback. TOPK over GLOO
+ * uses sparse (idx, fp16-val) payloads on the wire. FP8 / LOWRANK /
+ * SIGNSGD and dropout-tolerant WAN recovery return explicit unsupported
+ * statuses so downstream code gets a stable failure instead of incorrect
+ * results.
  *
  * Memory cost: one anchor θ + one momentum buffer + (top-k) one
  * error-feedback buffer per parameter, all fp32. For a 70B model that's
@@ -57,6 +59,22 @@
 #endif
 
 extern "C" TC_DILOCO_INTERNAL_SYMBOL tc_context* tc_dist_get_context(tc_dist_ctx* d);
+
+/* GLOO sparse-compressed allreduce hook. Returns the GlooState* if the
+ * transport is TC_DIST_GLOO, nullptr otherwise. When present, DiLoCo
+ * can invoke tc_gloo_sparse_allreduce to ship Δθ as (idx, fp16) pairs
+ * instead of dense fp32 — 100-1000× less bandwidth at top-k 0.1%-1%. */
+struct GlooState;
+extern "C" TC_DILOCO_INTERNAL_SYMBOL GlooState* tc_dist_get_gloo_state(tc_dist_ctx* d);
+extern "C" TC_DILOCO_INTERNAL_SYMBOL int tc_gloo_sparse_allreduce(GlooState* s, int world_size, int rank,
+                                                                    const void* payload_in, size_t payload_in_bytes,
+                                                                    float* dense_out, size_t n_total);
+
+/* Sparse pack primitives from lib/distributed/sparse_compress.cpp. */
+extern "C" TC_DILOCO_INTERNAL_SYMBOL size_t tc_diloco_sparse_pack(float* delta_fp32, size_t n,
+                                                                   float keep_fraction,
+                                                                   void* out_payload, size_t out_cap);
+extern "C" TC_DILOCO_INTERNAL_SYMBOL size_t tc_diloco_sparse_packed_size(size_t n, float keep_fraction);
 
 #include <algorithm>
 #include <atomic>
@@ -398,35 +416,76 @@ tc_status_t do_outer_step(tc_diloco_ctx* d) {
             return TC_ERR_UNSUPPORTED_DTYPE;
         }
 
-        /* Multi-rank: cross-site all-reduce-AVG of Δθ. The top-k path has
-         * already zeroed sub-threshold entries in `delta`, so the
-         * transport sees mostly zeros. Bandwidth-optimal compression in
-         * transit (packing only the non-zero (idx, val) pairs) is a follow-
-         * up; this dense AVG-allreduce path is correct + the K-step
-         * amortization already provides ~100-1000× over per-step DDP. */
+        /* Multi-rank: cross-site all-reduce-AVG of Δθ. Dense compression
+         * modes use fp32 AVG allreduce; TOPK over portable GLOO takes the
+         * sparse hook below so the transport ships only non-zero
+         * (idx, fp16-val) pairs. */
         const int world = d->dist ? tc_dist_world_size(d->dist) : 1;
         if (world > 1) {
             tc_context* parent_ctx = tc_dist_get_context(d->dist);
             if (!parent_ctx) return TC_ERR_INTERNAL;
-            const size_t bytes = p.num_elements * sizeof(float);
-            tc_buffer* delta_buf = nullptr;
-            if (tc_buffer_alloc(parent_ctx, bytes, &delta_buf) != TC_OK) {
-                return TC_ERR_ALLOC;
-            }
-            void* mp = nullptr;
-            if (tc_buffer_map(delta_buf, &mp) != TC_OK) {
+            const int rank = tc_dist_rank(d->dist);
+
+            /* Sparse-compressed path: when compression is TOPK and the
+             * underlying transport is GLOO, ship only the (idx, fp16-val)
+             * pairs instead of the dense fp32 delta. Bandwidth dropped from
+             * 4N bytes per rank to ~8 * keep_fraction * N bytes — for top-k
+             * 0.1% on a 70B model that's 140 MB instead of 280 GB on the
+             * wire per outer step. */
+            GlooState* gloo_state = tc_dist_get_gloo_state(d->dist);
+            const bool sparse_path =
+                gloo_state &&
+                (d->cfg.compress == TC_DILOCO_COMPRESS_TOPK_1PCT ||
+                 d->cfg.compress == TC_DILOCO_COMPRESS_TOPK_01PCT);
+
+            if (sparse_path) {
+                const float keep = (d->cfg.compress == TC_DILOCO_COMPRESS_TOPK_1PCT)
+                                       ? 0.01f : 0.001f;
+                const size_t pack_cap = tc_diloco_sparse_packed_size(p.num_elements, keep);
+                std::vector<uint8_t> payload(pack_cap);
+                /* Note: compute_delta_topk already ran and zeroed sub-threshold
+                 * entries; pack here just emits the non-zero (idx, val) pairs.
+                 * Calling pack again on the masked delta is correct — the
+                 * threshold logic is idempotent on an already-sparse input. */
+                const size_t written = tc_diloco_sparse_pack(
+                    delta.data(), p.num_elements, keep, payload.data(), pack_cap);
+                if (written == 0) return TC_ERR_INTERNAL;
+
+                std::vector<float> merged(p.num_elements, 0.0f);
+                const int rc = tc_gloo_sparse_allreduce(
+                    gloo_state, world, rank,
+                    payload.data(), written, merged.data(), p.num_elements);
+                if (rc != 0) return TC_ERR_INTERNAL;
+
+                /* AVG: divide by world_size. */
+                const float inv = 1.0f / (float)world;
+                for (size_t i = 0; i < p.num_elements; ++i) {
+                    delta[i] = merged[i] * inv;
+                }
+                total_bytes_sent += written;
+            } else {
+                /* Dense fp32 allreduce — used for NONE/FP16 compression
+                 * and for transports without sparse support. */
+                const size_t bytes = p.num_elements * sizeof(float);
+                tc_buffer* delta_buf = nullptr;
+                if (tc_buffer_alloc(parent_ctx, bytes, &delta_buf) != TC_OK) {
+                    return TC_ERR_ALLOC;
+                }
+                void* mp = nullptr;
+                if (tc_buffer_map(delta_buf, &mp) != TC_OK) {
+                    tc_buffer_free(parent_ctx, delta_buf);
+                    return TC_ERR_INTERNAL;
+                }
+                std::memcpy(mp, delta.data(), bytes);
+                tc_status_t s = tc_allreduce(d->dist, delta_buf, p.num_elements,
+                                              TC_DTYPE_F32, TC_REDUCE_AVG);
+                if (s == TC_OK) {
+                    std::memcpy(delta.data(), mp, bytes);
+                    total_bytes_sent += bytes;
+                }
                 tc_buffer_free(parent_ctx, delta_buf);
-                return TC_ERR_INTERNAL;
+                if (s != TC_OK) return s;
             }
-            std::memcpy(mp, delta.data(), bytes);
-            tc_status_t s = tc_allreduce(d->dist, delta_buf, p.num_elements,
-                                          TC_DTYPE_F32, TC_REDUCE_AVG);
-            if (s == TC_OK) {
-                std::memcpy(delta.data(), mp, bytes);
-                total_bytes_sent += bytes;
-            }
-            tc_buffer_free(parent_ctx, delta_buf);
-            if (s != TC_OK) return s;
         }
 
         /* Outer-optimizer step on θ_anchor. */

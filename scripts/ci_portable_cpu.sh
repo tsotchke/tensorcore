@@ -207,7 +207,7 @@ import math
 import os
 import tensorcore as tc
 
-M = N = K = 32
+M = N = K = int(os.environ.get("TC_GEMM_VARIANT_SIZE", "32"))
 ctx = tc.init()
 bufs = []
 try:
@@ -260,7 +260,12 @@ finally:
 def _run_gemm_variant_smokes():
     _run_gemm_variant_smoke("AVX2 opt-in", {"TC_USE_AVX2_GEMM": "1"})
     _run_gemm_variant_smoke("NEON opt-in", {"TC_USE_NEON_GEMM": "1"})
-    _run_gemm_variant_smoke("AMX opt-in", {"TC_USE_AMX_GEMM": "1"},
+    machine = os.uname().machine if hasattr(os, "uname") else ""
+    amx_size = "256" if sys.platform == "darwin" and machine in ("arm64", "aarch64") else "32"
+    _run_gemm_variant_smoke("AMX opt-in", {
+                                "TC_USE_AMX_GEMM": "1",
+                                "TC_GEMM_VARIANT_SIZE": amx_size,
+                            },
                             allow_sigill_skip=True,
                             require=os.environ.get("REQUIRE_AMX_GEMM") == "1")
 
@@ -341,6 +346,16 @@ try:
                 raise
         else:
             raise SystemExit("portable CPU should not initialize HIP")
+
+        if tc.cuda_device_count() != 0 or tc.cuda_last_kernel_name() != "none":
+            raise SystemExit("portable CUDA inactive diagnostics mismatch")
+        try:
+            tc.cuda_init(ctx)
+        except tc.TensorcoreError as exc:
+            if exc.status != tc.TC_ERR_UNSUPPORTED_FAMILY:
+                raise
+        else:
+            raise SystemExit("portable CPU should not initialize CUDA")
 
         Theta_vals = (ctypes.c_float * 4)(1.0, 2.0, 3.0, 4.0)
         Theta = tc.buffer_alloc(ctx, ctypes.sizeof(Theta_vals))

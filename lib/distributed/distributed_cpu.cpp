@@ -113,8 +113,21 @@ extern "C" int tc_dist_rank(const tc_dist_ctx* d) {
 
 /* Internal helper for sibling TUs (DiLoCo runtime) that need to allocate
  * tc_buffers tied to the same parent context. Not part of the public ABI. */
-extern "C" TC_INTERNAL_SYMBOL tc_context* tc_dist_get_context(tc_dist_ctx* d) {
+#if defined(__GNUC__) || defined(__clang__)
+#  define TC_DIST_INTERNAL __attribute__((visibility("hidden")))
+#else
+#  define TC_DIST_INTERNAL
+#endif
+
+extern "C" TC_DIST_INTERNAL tc_context* tc_dist_get_context(tc_dist_ctx* d) {
     return d ? d->tc : nullptr;
+}
+
+/* Internal accessor for the GLOO transport state. Returns nullptr for
+ * non-GLOO backends. Used by DiLoCo to invoke the sparse-compressed
+ * allreduce primitive when the transport supports it. */
+extern "C" TC_DIST_INTERNAL GlooState* tc_dist_get_gloo_state(tc_dist_ctx* d) {
+    return (d && d->backend == TC_DIST_GLOO) ? d->gloo : nullptr;
 }
 
 namespace {

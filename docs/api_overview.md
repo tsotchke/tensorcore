@@ -189,11 +189,12 @@ and shape semantics, see [api_reference.md](api_reference.md).
 | `distributed.h` | `tc_dist_backend_t`, `tc_reduce_op_t`, distributed primitives. |
 | `diloco.h` | DiLoCo config, parameter registration, local outer-step runtime. |
 | `hip.h` | HIP/chipStar device discovery and backend selection diagnostics. |
+| `cuda.h` | CUDA device discovery and backend selection diagnostics. |
 | `memory_tier.h` | Buffer tier hints, promote/demote hooks, tier usage counters. |
 | `checkpoint.h` | Activation-checkpoint lifecycle and resident/discarded counters. |
 | `tensorcore.h` | Umbrella include for the public ABI. |
 
-15 headers, 100 exported symbols (`cmake/tensorcore.exports`), full
+16 headers, 105 exported symbols (`cmake/tensorcore.exports`), full
 Python wrapper parity in `python/tensorcore/__init__.py`.
 
 ## Per-backend coverage matrix
@@ -215,8 +216,8 @@ Python wrapper parity in `python/tensorcore/__init__.py`.
 
 `—` means returns `TC_ERR_UNSUPPORTED_FAMILY` on that build. The
 portable-CPU backend now covers the main math and GLOO TCP collective
-surface for non-Apple mesh workers while HIP execution remains an explicit
-unsupported path.
+surface for non-Apple mesh workers while HIP/CUDA execution remains an
+explicit unsupported path.
 
 ## See also
 

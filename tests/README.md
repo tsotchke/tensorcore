@@ -5,8 +5,8 @@ correctness/Python tests plus two executable example smokes in the Metal
 build. The portable
 CPU-only build registers `test_portable_cpu.c`, `test_conv2d.c`,
 `test_diloco.c`, `test_sparse_compress.c`, `test_gloo_fork.c`, and
-`test_diloco_gloo_fork.c`. Each native test is a single `.c` file (or
-`.mm` for the buffer pool, which needs ObjC++).
+`test_diloco_gloo_fork.c`, plus `test_diloco_sparse_fork.c`. Each native
+test is a single `.c` file (or `.mm` for the buffer pool, which needs ObjC++).
 Numerical tests compare against an fp64 CPU reference or a bit-exact CPU
 oracle and pass the tolerances documented in
 [../docs/numerics.md](../docs/numerics.md).
@@ -20,12 +20,13 @@ Runs in ~5-15s on M2 Ultra.
 With `TC_ENABLE_METAL=OFF`, `test_portable_cpu.c` covers the portable
 buffer/device path plus padded f32/f16 GEMM, batched GEMM, i8 GEMM,
 quantized GEMV, `TC_DIST_SINGLE` collectives, memory-tier and
-checkpoint baseline APIs, HIP inactive diagnostics, local DiLoCo, and
+checkpoint baseline APIs, HIP/CUDA inactive diagnostics, local DiLoCo, and
 the localhost GLOO TCP collective and DiLoCo-over-GLOO smokes. The
 portable build also runs Conv2D, DiLoCo, sparse-compression, GLOO TCP,
-and DiLoCo-over-GLOO tests. `scripts/ci_portable_cpu.sh` adds installed
-SDK consumer checks plus subprocess smokes for the opt-in AVX2, NEON, and
-AMX GEMM environment variants.
+DiLoCo-over-GLOO, and sparse TOPK DiLoCo-over-GLOO tests.
+`scripts/ci_portable_cpu.sh` adds installed SDK consumer checks plus
+subprocess smokes for the opt-in AVX2, NEON, and AMX GEMM environment
+variants.
 
 ## Test inventory
 

@@ -88,6 +88,22 @@ int main(void) {
     FIELD(tc_hip_device_info, supports_int8_dot);
     FIELD(tc_hip_device_info, unified_memory);
 
+    SIZE(tc_cuda_device_info);
+    FIELD(tc_cuda_device_info, device_name);
+    FIELD(tc_cuda_device_info, compute_capability);
+    FIELD(tc_cuda_device_info, major);
+    FIELD(tc_cuda_device_info, minor);
+    FIELD(tc_cuda_device_info, global_memory_bytes);
+    FIELD(tc_cuda_device_info, shared_memory_per_block);
+    FIELD(tc_cuda_device_info, multiprocessor_count);
+    FIELD(tc_cuda_device_info, max_threads_per_block);
+    FIELD(tc_cuda_device_info, warp_size);
+    FIELD(tc_cuda_device_info, supports_fp16);
+    FIELD(tc_cuda_device_info, supports_bf16);
+    FIELD(tc_cuda_device_info, supports_int8_tensor_core);
+    FIELD(tc_cuda_device_info, supports_tf32);
+    FIELD(tc_cuda_device_info, unified_memory);
+
     SIZE(tc_diloco_config);
     FIELD(tc_diloco_config, inner_steps);
     FIELD(tc_diloco_config, outer_lr);
@@ -193,6 +209,13 @@ def python_layout() -> dict[str, int]:
             "global_memory_bytes", "local_memory_bytes", "compute_units",
             "max_workgroup_size", "preferred_subgroup_size", "supports_fp16",
             "supports_fp64", "supports_int8_dot", "unified_memory",
+        ]),
+        "tc_cuda_device_info": (tc.TCCudaDeviceInfo, [
+            "device_name", "compute_capability", "major", "minor",
+            "global_memory_bytes", "shared_memory_per_block",
+            "multiprocessor_count", "max_threads_per_block", "warp_size",
+            "supports_fp16", "supports_bf16", "supports_int8_tensor_core",
+            "supports_tf32", "unified_memory",
         ]),
         "tc_diloco_config": (tc.TCDiLoCoConfig, [
             "inner_steps", "outer_lr", "outer_momentum", "outer_beta2",

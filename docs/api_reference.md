@@ -727,9 +727,11 @@ portable CPU GLOO TCP baseline, and the v0.5 TB5 transport plan.
 ## DiLoCo — `diloco.h`
 
 DiLoCo is layered above an existing `tc_dist_ctx`. The current runtime
-implements local single-rank outer steps and dense multi-rank outer steps
-over portable CPU `TC_DIST_GLOO`. Sparse packed all-reduce, dropout
-tolerance, and async overlap still return explicit unsupported statuses.
+implements local single-rank outer steps plus dense and sparse TOPK
+multi-rank outer steps over portable CPU `TC_DIST_GLOO`. Sparse TOPK
+uses `(idx, fp16)` payloads through the internal GLOO sparse all-reduce
+hook. Dropout-tolerant WAN recovery and non-shipped compression modes
+still return explicit unsupported statuses.
 
 ```c
 typedef struct tc_diloco_ctx tc_diloco_ctx;
@@ -826,6 +828,38 @@ const char* tc_hip_last_kernel_name(void);
 
 See [../lib/hip/README.md](../lib/hip/README.md) for the chipStar porting
 plan.
+
+## CUDA — `cuda.h`
+
+CUDA is the staged NVIDIA-native fast path. The public symbols are
+exported today as deterministic unsupported stubs so SDK consumers and FFI
+generators can bind the future surface while default builds stay
+CUDA-free.
+
+```c
+typedef struct {
+    char device_name[128];
+    char compute_capability[16];
+    int major;
+    int minor;
+    uint64_t global_memory_bytes;
+    uint64_t shared_memory_per_block;
+    uint32_t multiprocessor_count;
+    uint32_t max_threads_per_block;
+    uint32_t warp_size;
+    bool supports_fp16;
+    bool supports_bf16;
+    bool supports_int8_tensor_core;
+    bool supports_tf32;
+    bool unified_memory;
+} tc_cuda_device_info;
+
+tc_status_t tc_cuda_init(tc_context* ctx);
+int tc_cuda_device_count(void);
+tc_status_t tc_cuda_device_at(int index, tc_cuda_device_info* out_info);
+tc_status_t tc_cuda_select_device(tc_context* ctx, int index);
+const char* tc_cuda_last_kernel_name(void);
+```
 
 ## Notes for ABI consumers
 

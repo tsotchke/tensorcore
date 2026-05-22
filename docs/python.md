@@ -132,6 +132,11 @@ reallocate support lands.
 backend currently exposes deterministic unsupported diagnostics when no
 runtime is built in.
 
+### CUDA
+`cuda_init`, `cuda_device_count`, `cuda_device_at`, `cuda_select_device`,
+`cuda_last_kernel_name`. The in-tree CUDA backend currently exposes
+deterministic unsupported diagnostics when no CUDA runtime is built in.
+
 ### GEMM
 `gemm`, `gemm_async`, `gemm_batched`.
 
@@ -254,7 +259,7 @@ with ctx.dist(backend=tc.TC_DIST_SINGLE, world_size=1, rank=0) as d:
 
 Portable CPU builds also expose `backend="gloo"` / `TC_DIST_GLOO` with
 `gloo+tcp://host:port` rendezvous URLs for TCP all-reduce, broadcast,
-allgather, barrier, and dense DiLoCo outer steps.
+allgather, barrier, and dense or sparse TOPK DiLoCo outer steps.
 
 ### `DiLoCoContext`
 
@@ -269,9 +274,9 @@ with ctx.dist("single", 1, 0, "single://diloco") as dist:
         print(d.outer_steps_completed, d.last_outer_bytes_sent)
 ```
 
-The portable runtime covers local/single-rank DiLoCo outer steps and dense
-multi-rank outer steps over portable CPU `TC_DIST_GLOO`. Sparse packed
-all-reduce, dropout-tolerant WAN recovery, and advanced compression modes
+The portable runtime covers local/single-rank DiLoCo outer steps plus
+dense and sparse TOPK multi-rank outer steps over portable CPU
+`TC_DIST_GLOO`. Dropout-tolerant WAN recovery and advanced compression modes
 raise `TensorcoreError` with explicit unsupported status codes until those
 paths land.
 

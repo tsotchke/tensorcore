@@ -31,9 +31,10 @@ beyond Apple-only without requiring a CUDA dependency.
     Vecchio, iGPU)      A100, ...)          MI300, ...)
 ```
 
-## Files in this directory (skeleton; filled in Phase 1)
+## Files in this directory
 
 - `device.cpp` — `tc_hip_init`, `tc_hip_device_info_get`, device enumeration.
+  Without `TC_ENABLE_HIP`, it compiles to deterministic unsupported behavior.
 - `buffer.cpp` — `tc_hip_buffer_alloc`, `tc_hip_buffer_map`. Pinned-memory
   allocation through chipStar (`hipHostMalloc` with `hipHostMallocMapped`).
   Equivalent to Apple's `MTLStorageModeShared` for the iGPU / Tegra case;
@@ -42,7 +43,8 @@ beyond Apple-only without requiring a CUDA dependency.
   to `lib/core/pipeline_cache.mm` but for HIP.
 - `gemm.cpp` — `tc_gemm` dispatch into the HIP path. Uses chipStar's
   hipBLAS port for the bulk of the work; only the dispatch wrapper lives
-  here.
+  here. Without `TC_ENABLE_HIP`, the internal HIP GEMM hook returns
+  `TC_ERR_UNSUPPORTED_FAMILY`.
 - `attention.cpp` — FlashAttention-2 forward / backward, ported from
   `kernels/metal/flash_attention.metal` to HIP. The algorithm is
   identical; only the thread-block / warp / shared-memory primitives
@@ -102,8 +104,9 @@ custom kernels (attention, quantized GEMV, training kernels) live in
 
 ## Status
 
-**Phase 0** (this commit): API + scaffolding only. Header declares
-`tc_hip_*` surface; `lib/hip/` directory exists with this README.
+**Phase 0** (current): API + scaffolding. Header declares `tc_hip_*`;
+`device.cpp` and `gemm.cpp` build as unsupported stubs unless
+`TC_ENABLE_HIP` is compiled in.
 
 **Phase 1.1-1.3**: chipStar install on cosbox, xavier, old-donkey.
 

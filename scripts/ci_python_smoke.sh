@@ -62,6 +62,8 @@ if tc.TC_DILOCO_OUTER_SGD != 0 or tc.TC_DILOCO_OUTER_NESTEROV != 1:
     raise SystemExit("DiLoCo optimizer constants mismatch")
 if tc.hip_device_count() != 0 or tc.hip_last_kernel_name() != "none":
     raise SystemExit("HIP inactive diagnostics mismatch")
+if tc.cuda_device_count() != 0 or tc.cuda_last_kernel_name() != "none":
+    raise SystemExit("CUDA inactive diagnostics mismatch")
 if (tc.checkpoint_count_resident() != 0 or
         tc.checkpoint_count_discarded() != 0 or
         tc.checkpoint_total_bytes_discarded() != 0):

@@ -1,12 +1,12 @@
 /*
  * tensorcore — distributed primitives.
  *
- * v0.1: TC_DIST_SINGLE backend (world_size=1, all collectives are no-ops).
- * The API is the same as the planned RING/GLOO backends; user code written
- * against this header will work unchanged once those backends ship.
+ * Apple/Metal build: TC_DIST_SINGLE backend (world_size=1, all collectives
+ * are no-ops). Portable CPU builds own the TC_DIST_GLOO TCP backend; this
+ * file rejects multi-rank RING/GLOO until the Apple TB5 ring lands.
  *
  * The RING backend (Thunderbolt-5 ring all-reduce, JACCL-style RDMA) is
- * scoped for v0.5 — see ROADMAP.md.  When implementing, the entrypoints
+ * scoped for v0.5 — see ROADMAP.md. When implementing, the entrypoints
  * to fill in are below; the SINGLE path's behavior is the semantic
  * specification.
  */
@@ -78,6 +78,26 @@ extern "C" int tc_dist_rank(const tc_dist_ctx* d) {
  * need to allocate temporary buffers in the same arena (DiLoCo runtime). */
 extern "C" TC_INTERNAL_SYMBOL tc_context* tc_dist_get_context(tc_dist_ctx* d) {
     return d ? d->tc : nullptr;
+}
+
+/* Apple build doesn't have the GLOO TCP transport; return nullptr so
+ * DiLoCo's sparse-on-the-wire path falls through to dense allreduce. */
+struct GlooState;
+extern "C" TC_INTERNAL_SYMBOL GlooState* tc_dist_get_gloo_state(tc_dist_ctx* d) {
+    (void)d;
+    return nullptr;
+}
+
+/* Stub for tc_gloo_sparse_allreduce on Mac — DiLoCo will never call it
+ * (since tc_dist_get_gloo_state returns nullptr) but the symbol must
+ * resolve at link time. */
+extern "C" TC_INTERNAL_SYMBOL int tc_gloo_sparse_allreduce(GlooState* s, int world_size, int rank,
+                                                            const void* payload_in,
+                                                            size_t payload_in_bytes,
+                                                            float* dense_out, size_t n_total) {
+    (void)s; (void)world_size; (void)rank;
+    (void)payload_in; (void)payload_in_bytes; (void)dense_out; (void)n_total;
+    return -1;
 }
 
 extern "C" tc_status_t tc_allreduce(tc_dist_ctx* d, tc_buffer* buf,

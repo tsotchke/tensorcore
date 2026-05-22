@@ -4,9 +4,9 @@
 
 Heterogeneous compute substrate work: CPU-side attention/training/conv
 kernels, BLAS delegation (Accelerate/MKL/OpenBLAS), opt-in AVX2/NEON/AMX
-GEMM kernels, HIP/chipStar public stubs for non-Apple GPU work, a DiLoCo
-runtime with tested single-rank and dense GLOO outer-step paths, sparse
-top-k compression primitives for cross-continent bandwidth efficiency, an
+GEMM kernels, HIP/chipStar and CUDA public scaffolding for non-Apple GPU
+work, a DiLoCo runtime with tested single-rank, dense GLOO, and sparse TOPK GLOO
+outer-step paths for cross-continent bandwidth efficiency, an
 activation-checkpointing API, and memory-tier hints.
 
 ### CPU compute stack expanded
@@ -41,11 +41,10 @@ activation-checkpointing API, and memory-tier hints.
   throughput data is collected.
 - `Add opt-in Apple AMX fp32 GEMM prototype`: `lib/ops/gemm_cpu_amx.cpp`.
   Apple-Silicon-only 16×16 fp32 tile path, gated by `TC_USE_AMX_GEMM=1`
-  and falling through to NEON/CBLAS for unsupported shapes. A pthread
-  affinity-tag multi-cluster prototype was tested and left out because it
-  regressed throughput on M2 Ultra; the committed AMX path remains
-  single-threaded and opt-in. Local smokes validate 32³ and 256³ output;
-  CBLAS remains the default path.
+  and falling through to NEON/CBLAS for unsupported shapes. The committed
+  path remains opt-in and uses GCD worker-local packs for M>=256, with
+  `TC_AMX_THREADS=1` preserving the single-worker path for A/B checks.
+  Local smokes validate 32³ and 256³ output; CBLAS remains the default path.
 
 ### Heterogeneous-mesh substrate
 
@@ -53,12 +52,19 @@ activation-checkpointing API, and memory-tier hints.
   `lib/distributed/diloco.cpp`, and `docs/diloco.md`. The single-rank path
   is implemented and covered in portable CPU tests; dense multi-rank outer
   steps over portable `TC_DIST_GLOO` are covered by a forked localhost
-  smoke. Sparse packed all-reduce, dropout tolerance, and async overlap
-  remain staged.
+  smoke. Sparse TOPK outer steps now use GLOO sparse packed all-reduce and
+  have a separate forked localhost smoke; dropout-tolerant WAN recovery
+  remains staged.
 - `Add HIP/chipStar backend scaffolding`: `include/tensorcore/hip.h`,
-  `lib/hip/hip_stub.cpp`, and `lib/hip/README.md`. The public API exports
-  deterministic unsupported stubs today and documents the porting plan for
-  Intel Level Zero plus NVIDIA/AMD/ARM OpenCL through chipStar.
+  `lib/hip/device.cpp`, `lib/hip/gemm.cpp`, and `lib/hip/README.md`. The
+  public API exports deterministic unsupported behavior when HIP is not
+  compiled in, while the split TUs stage chipStar device discovery and
+  hipBLAS dispatch for Intel Level Zero plus NVIDIA/AMD/ARM OpenCL.
+- `Add direct CUDA backend scaffolding`: `include/tensorcore/cuda.h`,
+  `lib/cuda/device.cpp`, and `lib/cuda/gemm.cpp` expose NVIDIA-native
+  device diagnostics plus a hidden cuBLAS dispatch hook. Default builds
+  return deterministic unsupported statuses until `TC_ENABLE_CUDA` is wired
+  to a CUDA toolchain.
 - `Wire portable CPU GLOO TCP collectives`: `lib/distributed/gloo_tcp.cpp`
   now backs public multi-rank `TC_DIST_GLOO` on the portable CPU build for
   fp32 SUM/AVG/MIN/MAX all-reduce, fp16 SUM/AVG all-reduce, byte-level
@@ -116,7 +122,8 @@ v0.1.22:
   + batched + async), attention forward/backward, training kernels,
   `tc_conv2d_forward`, `tc_quantize_weights`, `tc_gemv_quantized`,
   `tc_gguf_*`, `tc_dist_*` (`SINGLE` plus portable GLOO TCP),
-  DiLoCo single-rank and dense GLOO outer steps, and diagnostic API
+  DiLoCo single-rank, dense GLOO, and sparse TOPK GLOO outer steps,
+  CUDA/HIP diagnostics, and diagnostic API
   (`tc_status_string`, `tc_dtype_name`, `tc_backend_name`).
 - The portable CPU GEMM path now delegates fp32 GEMM and fp16-through-fp32
   GEMM to CBLAS when available (Accelerate on macOS, system BLAS on
@@ -128,8 +135,8 @@ v0.1.22:
 - The Python binding and wheel packaging can load/package a Linux
   `libtensorcore.so` for portable CPU builds while preserving the macOS
   dylib + metallib release contract.
-- Uncovered backend paths (HIP execution, DiLoCo sparse packed all-reduce,
-  dropout tolerance, and async overlap) return explicit unsupported
+- Uncovered backend paths (HIP/CUDA execution, dropout tolerance, and
+  non-shipped compression modes) return explicit unsupported
   statuses so downstream FFI imports can bind the full ABI surface without
   requiring Metal symbols.
 

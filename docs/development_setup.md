@@ -105,22 +105,24 @@ What works on the portable CPU build:
 - `tc_dist_*` with `TC_DIST_GLOO` on portable CPU builds: TCP rendezvous,
   fp32 SUM/AVG/MIN/MAX all-reduce, fp16 SUM/AVG all-reduce, byte-level
   broadcast, allgather, and barrier
-- DiLoCo single-rank outer steps and dense multi-rank outer steps over
-  portable CPU `TC_DIST_GLOO`
+- DiLoCo single-rank, dense multi-rank, and sparse TOPK multi-rank outer
+  steps over portable CPU `TC_DIST_GLOO`
 - opt-in CPU GEMM variants via `TC_USE_AVX2_GEMM=1`,
   `TC_USE_NEON_GEMM=1`, and `TC_USE_AMX_GEMM=1`; the portable CI script
   smokes these in isolated Python subprocesses
 - sparse top-k compression helpers
 - memory-tier and activation-checkpointing stub baselines
+- HIP and CUDA backend diagnostics with deterministic unsupported stubs
 - `tc_status_string` / `tc_dtype_name` / `tc_backend_name`
 
 What doesn't (returns `TC_ERR_UNSUPPORTED_FAMILY`):
 
 - `tc_dist_*` with `TC_DIST_RING`
-- `tc_dist_*` with `TC_DIST_GLOO` bf16/int8 reductions and sparse packed
-  wire format
+- `tc_dist_*` with `TC_DIST_GLOO` bf16/int8 reductions and public generic
+  sparse packed wire-format APIs
 - HIP/chipStar execution
-- DiLoCo sparse packed all-reduce, dropout tolerance, and async overlap
+- CUDA execution
+- DiLoCo dropout tolerance and non-shipped compression modes
 
 `tc_last_backend()` reports `portable_cpu` for every served call on
 this build.
