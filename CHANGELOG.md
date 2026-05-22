@@ -16,7 +16,8 @@ every architectural primitive in code and tested:
   fp32 at 4096³** on 88-core Xeon E5-2699 v4.
 - AVX2 / NEON / AMX in-tree GEMM micro-kernels (opt-in, self-contained).
 - **Direct CUDA backend** — `tc_cuda_gemm` validated against cuBLAS
-  on RTX 3090: **5.93 TFLOPS fp16** via tensor cores, 3.39 TFLOPS fp32.
+  managed-memory dispatch on RTX 3090: **31.32 TFLOPS fp32**,
+  **32.28 TFLOPS fp16/fp32-accum**, and **60.42 TFLOPS fp16-accum**.
 - **chipStar HIP backend** scaffolding for Intel Level Zero, AMD OpenCL,
   ARM Mali — runs on every Khronos-standards GPU vendor.
 - GLOO TCP transport with full collective set: SUM/AVG/MIN/MAX, broadcast
@@ -112,13 +113,14 @@ every architectural primitive in code and tested:
   compiled in, while the split TUs stage chipStar device discovery and
   hipBLAS dispatch for Intel Level Zero plus NVIDIA/AMD/ARM OpenCL.
 - `Add direct CUDA backend scaffolding`: `include/tensorcore/cuda.h`,
-  `lib/cuda/device.cpp`, `lib/cuda/buffer.cpp`, and `lib/cuda/gemm.cpp`
-  expose NVIDIA-native device diagnostics plus a hidden cuBLAS dispatch
-  hook. `TC_BACKEND_CUDA` now identifies successful opt-in
+  `lib/cuda/device.cpp`, and `lib/cuda/gemm.cpp` expose NVIDIA-native
+  device diagnostics, hidden managed-buffer hooks, and a hidden cuBLAS
+  dispatch hook. `TC_BACKEND_CUDA` now identifies successful opt-in
   `TC_USE_CUDA_GEMM=1` cuBLAS GEMM dispatches; runtime allocations use
   CUDA managed memory in that mode, while wrapped host pointers use the
-  staged fallback. `scripts/ci_cuda_smoke.sh` covers fp32/fp16 GEMM on
-  CUDA hosts. Default builds return deterministic unsupported statuses
+  staged fallback. `scripts/ci_cuda_smoke.sh` and `test_cuda_gemm` cover
+  fp32/fp16 GEMM on CUDA hosts, including a 4096^3 managed-memory perf
+  gate on high-end Ampere+ devices. Default builds return deterministic unsupported statuses
   until `TC_ENABLE_CUDA` is wired to a CUDA toolchain.
 - `Add opt-in CUDA/HIP CMake detection`: `TC_ENABLE_CUDA=ON` now enables
   the direct CUDA scaffolding only when CMake finds `CUDA::cudart` and

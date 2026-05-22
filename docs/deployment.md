@@ -309,6 +309,8 @@ network issue.
 - Heterogeneous-vendor mesh (Apple GPU + Linux CPU + NVIDIA-capable
   host all in one DiLoCo run)
 - Direct CUDA backend init + device introspection (RTX 3090 validated)
+- Opt-in CUDA GEMM with managed-memory tc_buffer allocations
+  (`TC_USE_CUDA_GEMM=1`, RTX 3090 validated)
 
 **Coming, not blocking:**
 - CUDA GEMM default selection without `TC_USE_CUDA_GEMM=1`; the opt-in
@@ -316,8 +318,8 @@ network issue.
   selection still waits for broader correctness/perf evidence.
 - Auto-select backend in `tc_init` (`Metal>CUDA>HIP>CPU` priority)
 - Ring all-reduce in GLOO (replaces broker for >2-rank meshes)
-- CUDA tc_buffer device storage (currently host-only; needed before CUDA
-  can become the default no-copy GEMM path)
+- Broader CUDA allocator policy for default no-copy GEMM without an env
+  flag.
 - Activation checkpointing real impl (currently registry-stub)
 - AVX2 GEMM multi-thread (single-thread 40 GFLOPS shipped; multi-thread
   needs BLIS-style 5-loop)

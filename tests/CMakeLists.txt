@@ -73,6 +73,19 @@ if(NOT TC_ENABLE_METAL)
     add_executable(test_dist_remote test_dist_remote.c)
     target_link_libraries(test_dist_remote PRIVATE tensorcore)
     target_include_directories(test_dist_remote PRIVATE ${CMAKE_SOURCE_DIR}/include)
+
+    # CUDA backend smoke + perf gate. Only compiled when TC_ENABLE_CUDA=ON.
+    # At runtime, exits 77 (skip) when no NVIDIA device is present.
+    if(TC_ENABLE_CUDA)
+        add_executable(test_cuda_gemm test_cuda_gemm.c)
+        target_link_libraries(test_cuda_gemm PRIVATE tensorcore)
+        target_include_directories(test_cuda_gemm PRIVATE ${CMAKE_SOURCE_DIR}/include)
+        add_test(NAME test_cuda_gemm COMMAND test_cuda_gemm)
+        set_tests_properties(test_cuda_gemm PROPERTIES
+            SKIP_RETURN_CODE 77
+            TIMEOUT 60
+        )
+    endif()
     return()
 endif()
 
