@@ -24,7 +24,7 @@ if(NOT TC_ENABLE_METAL)
     add_test(NAME test_diloco COMMAND test_diloco)
     set_tests_properties(test_diloco PROPERTIES TIMEOUT 60)
 
-    # Sparse top-k compression round-trip — exercises lib/distributed/sparse_compress.cpp.
+    # Sparse top-k compression round-trip - exercises lib/distributed/sparse_compress.cpp.
     add_executable(test_sparse_compress test_sparse_compress.c)
     target_link_libraries(test_sparse_compress PRIVATE tensorcore)
     target_include_directories(test_sparse_compress PRIVATE ${CMAKE_SOURCE_DIR}/include)
@@ -66,6 +66,13 @@ if(NOT TC_ENABLE_METAL)
         SKIP_RETURN_CODE 77
         TIMEOUT 60
     )
+
+    # Split-binary remote distributed test for real multi-machine deployment.
+    # Run manually with --rank/--world/--url. Not registered with ctest since
+    # it requires coordinated launch across two hosts.
+    add_executable(test_dist_remote test_dist_remote.c)
+    target_link_libraries(test_dist_remote PRIVATE tensorcore)
+    target_include_directories(test_dist_remote PRIVATE ${CMAKE_SOURCE_DIR}/include)
     return()
 endif()
 
@@ -101,7 +108,7 @@ foreach(t IN LISTS TC_TESTS)
     )
 endforeach()
 
-# DiLoCo single-rank runtime smoke — same source as the CPU build's test,
+# DiLoCo single-rank runtime smoke - same source as the CPU build's test,
 # runs on Apple too because the runtime is platform-independent.
 add_executable(test_diloco test_diloco.c)
 target_link_libraries(test_diloco PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
@@ -109,16 +116,47 @@ target_include_directories(test_diloco PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME test_diloco COMMAND test_diloco)
 set_tests_properties(test_diloco PROPERTIES TIMEOUT 60)
 
-# Sparse top-k compression round-trip — exercises lib/distributed/sparse_compress.cpp.
+# Split-binary remote distributed test. Launch manually with
+# --rank/--world/--url against another machine.
+add_executable(test_dist_remote test_dist_remote.c)
+target_link_libraries(test_dist_remote PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
+target_include_directories(test_dist_remote PRIVATE ${CMAKE_SOURCE_DIR}/include)
+
+# Sparse top-k compression round-trip - exercises lib/distributed/sparse_compress.cpp.
 add_executable(test_sparse_compress test_sparse_compress.c)
 target_link_libraries(test_sparse_compress PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
 target_include_directories(test_sparse_compress PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME test_sparse_compress COMMAND test_sparse_compress)
 set_tests_properties(test_sparse_compress PROPERTIES TIMEOUT 30)
 
-# GLOO multi-rank fork test (CPU-only; Apple builds use distributed.mm which
-# doesn't have the GLOO TCP transport wired yet). Only registered on the CPU
-# branch via the earlier return().
+# GLOO multi-rank fork tests. Apple builds use distributed.mm, portable CPU
+# builds use distributed_cpu.cpp, and both share lib/distributed/gloo_tcp.cpp.
+add_executable(test_gloo_fork test_gloo_fork.c)
+target_link_libraries(test_gloo_fork PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
+target_include_directories(test_gloo_fork PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME test_gloo_fork COMMAND test_gloo_fork)
+set_tests_properties(test_gloo_fork PROPERTIES
+    SKIP_RETURN_CODE 77
+    TIMEOUT 60
+)
+
+add_executable(test_diloco_gloo_fork test_diloco_gloo_fork.c)
+target_link_libraries(test_diloco_gloo_fork PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
+target_include_directories(test_diloco_gloo_fork PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME test_diloco_gloo_fork COMMAND test_diloco_gloo_fork)
+set_tests_properties(test_diloco_gloo_fork PROPERTIES
+    SKIP_RETURN_CODE 77
+    TIMEOUT 60
+)
+
+add_executable(test_diloco_sparse_fork test_diloco_sparse_fork.c)
+target_link_libraries(test_diloco_sparse_fork PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
+target_include_directories(test_diloco_sparse_fork PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME test_diloco_sparse_fork COMMAND test_diloco_sparse_fork)
+set_tests_properties(test_diloco_sparse_fork PROPERTIES
+    SKIP_RETURN_CODE 77
+    TIMEOUT 60
+)
 
 add_executable(test_buffer_pool test_buffer_pool.mm)
 target_link_libraries(test_buffer_pool PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})

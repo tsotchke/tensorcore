@@ -63,6 +63,18 @@ tc_status_t tc_rope_forward(tc_context* ctx,
                             const tc_buffer* sin_t,
                             int batch, int heads, int seq, int head_dim);
 
+/* Backward pass through RoPE, in-place on dX = [B, H, S, D].
+ * Since RoPE is an orthonormal rotation, this applies the inverse rotation
+ * to the incoming gradient:
+ *   dx0 = dy0 * cos + dy1 * sin
+ *   dx1 = -dy0 * sin + dy1 * cos
+ */
+tc_status_t tc_rope_backward(tc_context* ctx,
+                             tc_buffer*       dX,
+                             const tc_buffer* cos_t,
+                             const tc_buffer* sin_t,
+                             int batch, int heads, int seq, int head_dim);
+
 /* ----------------------------------------------------------------------- *
  * SwiGLU: y = silu(gate) * up                                              *
  * ----------------------------------------------------------------------- */

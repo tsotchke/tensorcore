@@ -65,6 +65,7 @@ and shape semantics, see [api_reference.md](api_reference.md).
 | `tc_layernorm_forward(ctx, X, γ, β, Y, mean_out, rstd_out, N, D, eps)` | Standard LayerNorm. |
 | `tc_layernorm_backward(ctx, X, γ, dY, mean, rstd, dX, N, D)` | LayerNorm backward. |
 | `tc_rope_forward(ctx, X, cos_t, sin_t, B, H, S, D)` | Rotary position embedding in-place. |
+| `tc_rope_backward(ctx, dX, cos_t, sin_t, B, H, S, D)` | Inverse RoPE rotation for gradients, in-place. |
 | `tc_swiglu_forward(ctx, gate, up, out, n)` | `silu(gate) * up`. |
 | `tc_swiglu_backward(ctx, gate, up, dout, dgate, dup, n)` | SwiGLU backward. |
 | `tc_softmax_forward(ctx, X, Y, N, D)` | Standalone row-wise softmax. |
@@ -128,7 +129,7 @@ and shape semantics, see [api_reference.md](api_reference.md).
 | `tc_allgather(d, in, out, n_per_rank, dtype)` | Concatenate `world_size × n_per_rank` elements. |
 | `tc_barrier(d)` | All ranks meet before any continues. |
 
-`tc_dist_backend_t`: `TC_DIST_SINGLE` (no-op), `TC_DIST_RING` (TB5, v0.5), `TC_DIST_GLOO` (portable CPU TCP collectives).
+`tc_dist_backend_t`: `TC_DIST_SINGLE` (no-op), `TC_DIST_RING` (TB5, v0.5), `TC_DIST_GLOO` (TCP collectives on Apple/portable CPU builds).
 
 ## Dtype + status
 
@@ -194,7 +195,7 @@ and shape semantics, see [api_reference.md](api_reference.md).
 | `checkpoint.h` | Activation-checkpoint lifecycle and resident/discarded counters. |
 | `tensorcore.h` | Umbrella include for the public ABI. |
 
-16 headers, 105 exported symbols (`cmake/tensorcore.exports`), full
+16 headers, 106 exported symbols (`cmake/tensorcore.exports`), full
 Python wrapper parity in `python/tensorcore/__init__.py`.
 
 ## Per-backend coverage matrix
@@ -212,12 +213,12 @@ Python wrapper parity in `python/tensorcore/__init__.py`.
 | `tc_gemv_quantized` | ✓ | — | — | — | ✓ |
 | `tc_quantize_weights` | ✓ | — | — | — | ✓ |
 | `tc_gguf_*` | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `tc_allreduce` / `_broadcast` / `_allgather` / `_barrier` | ✓ (single, ring, fork) | ✓ | ✓ | ✓ | ✓ (single + GLOO TCP) |
+| `tc_allreduce` / `_broadcast` / `_allgather` / `_barrier` | ✓ (single, ring, GLOO fork) | ✓ | ✓ | ✓ | ✓ (single + GLOO TCP) |
 
 `—` means returns `TC_ERR_UNSUPPORTED_FAMILY` on that build. The
-portable-CPU backend now covers the main math and GLOO TCP collective
-surface for non-Apple mesh workers while HIP/CUDA execution remains an
-explicit unsupported path.
+portable-CPU backend covers the main math while default Apple and portable
+CPU builds both cover the GLOO TCP collective surface. HIP/CUDA execution
+remains an explicit unsupported path.
 
 ## See also
 

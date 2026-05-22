@@ -148,7 +148,7 @@ Descriptor fields: `causal`, `return_lse`, `kv_heads`, `window_size`,
 
 ### Training kernels
 `rmsnorm_forward`, `rmsnorm_backward`, `layernorm_forward`,
-`layernorm_backward`, `rope_forward`, `swiglu_forward`, `swiglu_backward`,
+`layernorm_backward`, `rope_forward`, `rope_backward`, `swiglu_forward`, `swiglu_backward`,
 `softmax_forward`, `softmax_backward`, `adamw_step`, `fused_rmsnorm_gemv`.
 
 ### Conv2D
@@ -208,7 +208,7 @@ Methods (excerpt):
 | `attention_backward(Q, K, V, O, dO, LSE, dQ, dK, dV, ...)` | backward |
 | `conv2d_forward(...)`, `conv2d_backward_input(...)`, `conv2d_backward_weight(...)` | conv2d |
 | `quantize_weights(...)`, `gemv_quantized(...)`, `gemv_quantized_async(...)` | quantized |
-| `rmsnorm_*`, `layernorm_*`, `rope_forward`, `swiglu_*`, `softmax_*`, `adamw_step`, `fused_rmsnorm_gemv` | training kernels |
+| `rmsnorm_*`, `layernorm_*`, `rope_*`, `swiglu_*`, `softmax_*`, `adamw_step`, `fused_rmsnorm_gemv` | training kernels |
 | `open_gguf(path)` | Open a GGUF file, return a `GgufFile` |
 | `load_supported_tensors(gguf)` | Bulk-load supported tensors, return a `LoadedModel` |
 | `last_backend()` / `last_backend_name()` | Read the diagnostic backend enum |
@@ -257,7 +257,8 @@ with ctx.dist(backend=tc.TC_DIST_SINGLE, world_size=1, rank=0) as d:
     d.barrier()
 ```
 
-Portable CPU builds also expose `backend="gloo"` / `TC_DIST_GLOO` with
+Default Apple and portable CPU builds expose `backend="gloo"` /
+`TC_DIST_GLOO` with
 `gloo+tcp://host:port` rendezvous URLs for TCP all-reduce, broadcast,
 allgather, barrier, and dense or sparse TOPK DiLoCo outer steps.
 
@@ -274,11 +275,10 @@ with ctx.dist("single", 1, 0, "single://diloco") as dist:
         print(d.outer_steps_completed, d.last_outer_bytes_sent)
 ```
 
-The portable runtime covers local/single-rank DiLoCo outer steps plus
-dense and sparse TOPK multi-rank outer steps over portable CPU
-`TC_DIST_GLOO`. Dropout-tolerant WAN recovery and advanced compression modes
-raise `TensorcoreError` with explicit unsupported status codes until those
-paths land.
+The runtime covers local/single-rank DiLoCo outer steps plus dense and
+sparse TOPK multi-rank outer steps over `TC_DIST_GLOO`. Dropout-tolerant
+WAN recovery and advanced compression modes raise `TensorcoreError` with
+explicit unsupported status codes until those paths land.
 
 Methods: `world_size`, `rank`, `allreduce(buf, n, dtype, op)`,
 `broadcast(buf, n, dtype, root)`, `allgather(src, dst, n_per_rank, dtype)`,
@@ -348,7 +348,7 @@ with ctx.stream() as s:
 - Q4_0 sync + async
 - Q8_0 GPU quantize + GEMV
 - GGUF round-trip and bulk load
-- distributed single-host primitives plus portable CPU GLOO smoke coverage
+- distributed single-host primitives plus GLOO smoke coverage
 - LoadedModel / LoadedTensor / QuantizedMatrix wrappers
 
 Registered as the CTest target `python_basic` when Python + NumPy are

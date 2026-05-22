@@ -308,17 +308,30 @@ static int test_softmax(tc_context* ctx) {
 
 static int test_rope(tc_context* ctx) {
     const int B = 1, H = 2, S = 4, D = 32;
-    tc_buffer *Xb, *cb, *sb;
+    tc_buffer *Xb, *dXb, *cb, *sb;
     tc_buffer_alloc(ctx, B*H*S*D*2, &Xb);
+    tc_buffer_alloc(ctx, B*H*S*D*2, &dXb);
     tc_buffer_alloc(ctx, S*(D/2)*4, &cb);
     tc_buffer_alloc(ctx, S*(D/2)*4, &sb);
-    uint16_t *Xp; float *cp, *sp;
-    tc_buffer_map(Xb, (void**)&Xp); tc_buffer_map(cb, (void**)&cp); tc_buffer_map(sb, (void**)&sp);
+    uint16_t *Xp, *dXp; float *cp, *sp;
+    tc_buffer_map(Xb, (void**)&Xp); tc_buffer_map(dXb, (void**)&dXp);
+    tc_buffer_map(cb, (void**)&cp); tc_buffer_map(sb, (void**)&sp);
 
     float *Xf = malloc(B*H*S*D*sizeof(float));
     float *Xref = malloc(B*H*S*D*sizeof(float));
+    float *dXf = malloc(B*H*S*D*sizeof(float));
+    float *dXref = malloc(B*H*S*D*sizeof(float));
     srand(0xBB);
-    for (int i = 0; i < B*H*S*D; ++i) { float v = ((float)rand()/RAND_MAX-0.5f); Xf[i]=v; Xref[i]=v; Xp[i]=f32_to_f16(v); }
+    for (int i = 0; i < B*H*S*D; ++i) {
+        float v = ((float)rand()/RAND_MAX-0.5f);
+        Xp[i]=f32_to_f16(v);
+        Xf[i]=f16_to_f32(Xp[i]);
+        Xref[i]=Xf[i];
+        float dv = ((float)rand()/RAND_MAX-0.5f);
+        dXp[i]=f32_to_f16(dv);
+        dXf[i]=f16_to_f32(dXp[i]);
+        dXref[i]=dXf[i];
+    }
     for (int p = 0; p < S; ++p)
         for (int d = 0; d < D/2; ++d) {
             float th = (float)p / powf(10000.0f, (float)d * 2.0f / (float)D);
@@ -333,14 +346,21 @@ static int test_rope(tc_context* ctx) {
         float c = cp[s*(D/2)+d2], si = sp[s*(D/2)+d2];
         Xref[base+d2] = x*c - y*si;
         Xref[base+d2+D/2] = x*si + y*c;
+        float dx = dXref[base+d2], dy = dXref[base+d2+D/2];
+        dXref[base+d2] = dx*c + dy*si;
+        dXref[base+d2+D/2] = -dx*si + dy*c;
     }
     tc_status_t s = tc_rope_forward(ctx, Xb, cb, sb, B, H, S, D);
+    tc_status_t sbw = tc_rope_backward(ctx, dXb, cb, sb, B, H, S, D);
     const double err = rms_scaled(Xp, Xref, B*H*S*D);
+    const double bw_err = rms_scaled(dXp, dXref, B*H*S*D);
     printf("  rope_forward      B=%d H=%d S=%d D=%d  rms_scaled=%.3e  %s\n",
            B, H, S, D, err, (s==TC_OK && err<5e-3) ? "OK" : "FAIL");
-    free(Xf); free(Xref);
-    tc_buffer_free(ctx, Xb); tc_buffer_free(ctx, cb); tc_buffer_free(ctx, sb);
-    return (s == TC_OK && err < 5e-3) ? 0 : 1;
+    printf("  rope_backward     B=%d H=%d S=%d D=%d  rms_scaled=%.3e  %s\n",
+           B, H, S, D, bw_err, (sbw==TC_OK && bw_err<5e-3) ? "OK" : "FAIL");
+    free(Xf); free(Xref); free(dXf); free(dXref);
+    tc_buffer_free(ctx, Xb); tc_buffer_free(ctx, dXb); tc_buffer_free(ctx, cb); tc_buffer_free(ctx, sb);
+    return (s == TC_OK && sbw == TC_OK && err < 5e-3 && bw_err < 5e-3) ? 0 : 1;
 }
 
 static int test_adamw(tc_context* ctx) {

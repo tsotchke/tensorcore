@@ -189,8 +189,17 @@ extern "C" tc_status_t tc_rope_forward(tc_context* ctx,
                                        tc_buffer* X,
                                        const tc_buffer* cos_t, const tc_buffer* sin_t,
                                        int batch, int heads, int seq, int head_dim) {
-    if (!ctx || !X || !cos_t || !sin_t || head_dim % 2 != 0)
+    if (!ctx || !X || !cos_t || !sin_t || batch <= 0 || heads <= 0 || seq <= 0 ||
+        head_dim <= 0 || head_dim % 2 != 0)
         return TC_ERR_INVALID_ARG;
+    const size_t x_bytes = (size_t)batch * heads * seq * head_dim * sizeof(uint16_t);
+    const size_t table_bytes = (size_t)seq * (head_dim / 2) * sizeof(float);
+    tc_status_t s = tc_buffer_validate(ctx, X, x_bytes);
+    if (s != TC_OK) return s;
+    s = tc_buffer_validate(ctx, cos_t, table_bytes);
+    if (s != TC_OK) return s;
+    s = tc_buffer_validate(ctx, sin_t, table_bytes);
+    if (s != TC_OK) return s;
     tc_status_t err = TC_OK;
     id<MTLComputePipelineState> pso = pso_for(ctx, @"tc_rope_forward", &err);
     if (!pso) return err;
@@ -201,6 +210,47 @@ extern "C" tc_status_t tc_rope_forward(tc_context* ctx,
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
         [enc setComputePipelineState:pso];
         [enc setBuffer:X->mtl     offset:0 atIndex:0];
+        [enc setBuffer:cos_t->mtl offset:0 atIndex:1];
+        [enc setBuffer:sin_t->mtl offset:0 atIndex:2];
+        [enc setBytes:&B length:sizeof(B) atIndex:3];
+        [enc setBytes:&H length:sizeof(H) atIndex:4];
+        [enc setBytes:&S length:sizeof(S) atIndex:5];
+        [enc setBytes:&D length:sizeof(D) atIndex:6];
+        [enc dispatchThreads:MTLSizeMake(D / 2, S * H, B)
+          threadsPerThreadgroup:MTLSizeMake(32, 4, 1)];
+        [enc endEncoding];
+        [cmd commit];
+        [cmd waitUntilCompleted];
+        if (cmd.error) return TC_ERR_DISPATCH;
+    }
+    return TC_OK;
+}
+
+extern "C" tc_status_t tc_rope_backward(tc_context* ctx,
+                                        tc_buffer* dX,
+                                        const tc_buffer* cos_t, const tc_buffer* sin_t,
+                                        int batch, int heads, int seq, int head_dim) {
+    if (!ctx || !dX || !cos_t || !sin_t || batch <= 0 || heads <= 0 || seq <= 0 ||
+        head_dim <= 0 || head_dim % 2 != 0)
+        return TC_ERR_INVALID_ARG;
+    const size_t x_bytes = (size_t)batch * heads * seq * head_dim * sizeof(uint16_t);
+    const size_t table_bytes = (size_t)seq * (head_dim / 2) * sizeof(float);
+    tc_status_t s = tc_buffer_validate(ctx, dX, x_bytes);
+    if (s != TC_OK) return s;
+    s = tc_buffer_validate(ctx, cos_t, table_bytes);
+    if (s != TC_OK) return s;
+    s = tc_buffer_validate(ctx, sin_t, table_bytes);
+    if (s != TC_OK) return s;
+    tc_status_t err = TC_OK;
+    id<MTLComputePipelineState> pso = pso_for(ctx, @"tc_rope_backward", &err);
+    if (!pso) return err;
+    const uint32_t B = (uint32_t)batch, H = (uint32_t)heads,
+                   S = (uint32_t)seq,   D = (uint32_t)head_dim;
+    @autoreleasepool {
+        id<MTLCommandBuffer> cmd = [ctx->queue commandBuffer];
+        id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+        [enc setComputePipelineState:pso];
+        [enc setBuffer:dX->mtl    offset:0 atIndex:0];
         [enc setBuffer:cos_t->mtl offset:0 atIndex:1];
         [enc setBuffer:sin_t->mtl offset:0 atIndex:2];
         [enc setBytes:&B length:sizeof(B) atIndex:3];

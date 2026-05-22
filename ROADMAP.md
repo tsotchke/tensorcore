@@ -117,8 +117,8 @@ some still queued.
       OpenMP outer + 1024+ shape scaling pending.
 - [x] **DiLoCo cross-continent training API** — `include/tensorcore/diloco.h`
       + runtime in `lib/distributed/diloco.cpp`. Outer/inner optimizer split,
-      local single-rank steps, and dense multi-rank outer steps over portable
-      CPU `TC_DIST_GLOO` are wired. NONE / FP16-intent / TOPK masks,
+      local single-rank steps, and dense multi-rank outer steps over
+      `TC_DIST_GLOO` are wired. NONE / FP16-intent / TOPK masks,
       Nesterov / SGD / Adam outer optimizers, and async overlap are present;
       TOPK over GLOO uses sparse packed transport. Dropout-tolerant WAN
       recovery remains queued.
@@ -143,16 +143,16 @@ some still queued.
       via `TC_USE_NEON_GEMM=1`; CBLAS remains default pending broader
       throughput data.
 - [ ] **Multi-thread + 1024+ scaling of the AVX2 GEMM kernel**. Phase 2.
-- [x] **`TC_DIST_GLOO` backend** for portable CPU collectives over TCP:
+- [x] **`TC_DIST_GLOO` backend** for Apple and portable CPU collectives over TCP:
       fp32/fp16 all-reduce, min/max, broadcast, allgather, barrier, sparse
       packed exchange, and DiLoCo dense outer steps. Real WAN soak remains.
-- [x] **Sparse top-k compressed all-reduce** in DiLoCo — portable CPU GLOO
+- [x] **Sparse top-k compressed all-reduce** in DiLoCo — GLOO
       now ships TOPK deltas as sparse `(idx, fp16)` payloads and validates
       the bandwidth cut with a forked localhost smoke. Real WAN soak remains.
 
 ### v0.1 — Foundation (shipped this checkpoint)
 - [x] CMake + metallib precompile + cross-family runtime detect
-- [x] Public C ABI (`include/tensorcore/`) — 16 headers, 105 exported symbols
+- [x] Public C ABI (`include/tensorcore/`) — 16 headers, 106 exported symbols
 - [x] Device init / pipeline cache / power-of-2 buffer pool, autotune sweep + JSON cache
 - [x] **`simdgroup_matrix` GEMM** — fp16/fp32 (64×64 tile, BK=32, vec4 loads,
       f32-accum) — **17.88 TFLOPS @ 4096³ on M2 Ultra, fp32 bit-exact vs Accelerate**
@@ -175,7 +175,7 @@ some still queued.
       `LoadedModel`, `QuantizedMatrix`), NumPy interop
 - [x] Distributed primitives — single-host ring all-reduce / broadcast / allgather
       / barrier, both threads-with-shared-mem and fork-with-socketpair transports,
-      plus portable CPU `TC_DIST_GLOO` TCP collectives
+      plus Apple and portable CPU `TC_DIST_GLOO` TCP collectives
 - [x] M5 TensorOps GEMM + FlashAttention kernels (`tensorops_*.metal`),
       SDK 26.0+ gated, runtime selector
 - [x] MPS + Accelerate fallback paths

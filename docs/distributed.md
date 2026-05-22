@@ -1,10 +1,10 @@
 # Distributed
 
 `distributed.h` is the NCCL-equivalent surface for multi-Mac training. v0.1
-ships the single-host implementation and a portable CPU GLOO TCP baseline
-for Ethernet smoke coverage; the high-throughput TB5 ring backend lands in
-v0.5 once the JACCL substrate is in macOS 26.2 and we can validate against
-MLX's reference.
+ships the single-host implementation and a GLOO TCP baseline for default
+Apple and portable CPU Ethernet smoke coverage; the high-throughput TB5
+ring backend lands in v0.5 once the JACCL substrate is in macOS 26.2 and we
+can validate against MLX's reference.
 
 ## Surface
 
@@ -12,7 +12,7 @@ MLX's reference.
 typedef enum {
     TC_DIST_SINGLE = 0,    /* one-process emulation (no-op all-reduce)        */
     TC_DIST_RING   = 1,    /* TB5 ring across Macs (v0.5)                     */
-    TC_DIST_GLOO   = 2,    /* portable CPU TCP fallback over Ethernet         */
+    TC_DIST_GLOO   = 2,    /* TCP fallback over Ethernet                      */
 } tc_dist_backend_t;
 
 typedef enum {
@@ -76,13 +76,14 @@ runtime yet).
 
 ### `TC_DIST_GLOO`
 
-CPU-backed all-reduce over Ethernet for the portable CPU backend. Slower
-than ring but works between any two networked hosts. The current in-tree
-transport is a rank-0 brokered TCP implementation with
+CPU-backed all-reduce over Ethernet for default Apple and portable CPU
+builds. Slower than ring but works between any two networked hosts. The
+current in-tree transport is a rank-0 brokered TCP implementation with
 `gloo+tcp://host:port` rendezvous. It supports fp32 SUM/AVG/MIN/MAX
 all-reduce, fp16 SUM/AVG all-reduce, byte-level broadcast from any root,
-allgather, and barrier. bf16/int8 reductions, sparse packed wire format,
-and GPU/Metal builds still return explicit unsupported statuses.
+allgather, barrier, and the internal sparse TOPK DiLoCo wire path.
+bf16/int8 reductions and public generic sparse packed wire-format APIs
+still return explicit unsupported statuses.
 
 ## All-reduce algorithm
 
@@ -120,8 +121,9 @@ substrate:
   bridge IP, others connect.
 - `"gloo+tcp://host0:port"` or `"tcp://host0:port"` — GLOO TCP rendezvous.
 
-`single://` is always functional. `gloo+tcp://` is functional in the
-portable CPU build when all ranks can reach rank 0's host and port.
+`single://` is always functional. `gloo+tcp://` is functional in default
+Apple and portable CPU builds when all ranks can reach rank 0's host and
+port.
 
 ## ZeRO-1 / ZeRO-2 / ZeRO-3 (v0.5 plan)
 
@@ -169,12 +171,12 @@ loop now means v0.5 will be a backend swap, not a code change.
 - `tests/test_distributed_ring_fork.c`: fork + socketpair; same scenario,
   same result. **This is the real topology** — the only thing that changes
   for multi-Mac is the socket type.
-- `tests/test_gloo_fork.c`: portable CPU localhost smoke with two forked
+- `tests/test_gloo_fork.c`: localhost smoke with two forked
   ranks over `gloo+tcp://127.0.0.1:port`, covering fp32/fp16 allreduce,
   any-root broadcast, allgather, and barrier.
 
-The ring tests run in the default Apple suite. The GLOO TCP smoke runs in
-the portable CPU suite and finishes in well under a second.
+The ring and GLOO TCP fork smokes run in the default Apple suite. The same
+GLOO smokes also run in the portable CPU suite.
 
 ## What's silicon-bound vs software-bound
 

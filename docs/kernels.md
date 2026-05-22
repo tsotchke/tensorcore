@@ -208,7 +208,7 @@ Helpers:
 Kernels in this file (forward + backward where they exist):
 - `tc_rmsnorm_forward`, `tc_rmsnorm_backward`
 - `tc_layernorm_forward`, `tc_layernorm_backward`
-- `tc_rope_forward` (in-place on X = [B, H, S, D])
+- `tc_rope_forward` / `tc_rope_backward` (in-place on X/dX = [B, H, S, D])
 - `tc_swiglu_forward`, `tc_swiglu_backward`
 - `tc_softmax_forward`, `tc_softmax_backward`
 - `tc_adamw_step` (fused; fp32 master params, fp16 or fp32 grads)

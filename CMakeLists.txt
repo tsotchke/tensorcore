@@ -305,6 +305,7 @@ if(TC_ENABLE_METAL)
         lib/ops/conv.mm
         lib/distributed/distributed.mm
         lib/distributed/ring_local.mm
+        lib/distributed/gloo_tcp.cpp
         lib/ops/quantized.mm
         lib/fallback/mps_gemm.mm
         lib/fallback/accelerate_gemm.c

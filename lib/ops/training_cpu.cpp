@@ -337,11 +337,17 @@ extern "C" tc_status_t tc_rope_forward(tc_context* ctx,
     if (!ctx) return TC_ERR_NOT_INITIALIZED;
     if (!X || !cos_t || !sin_t || batch <= 0 || heads <= 0 || seq <= 0 || head_dim <= 0
         || head_dim % 2 != 0) return TC_ERR_INVALID_ARG;
+    const size_t x_bytes = (size_t)batch * heads * seq * head_dim * sizeof(uint16_t);
+    const size_t table_bytes = (size_t)seq * (head_dim / 2) * sizeof(float);
+    tc_status_t s;
+    if ((s = validate_pointwise_buf(ctx, X, x_bytes)) != TC_OK) return s;
+    if ((s = validate_pointwise_buf(ctx, cos_t, table_bytes)) != TC_OK) return s;
+    if ((s = validate_pointwise_buf(ctx, sin_t, table_bytes)) != TC_OK) return s;
 
-    void *Xp, *cp, *sp;
-    tc_buffer_map(X, &Xp);
-    tc_buffer_map((tc_buffer*)cos_t, &cp);
-    tc_buffer_map((tc_buffer*)sin_t, &sp);
+    void *Xp = nullptr, *cp = nullptr, *sp = nullptr;
+    if ((s = tc_buffer_map(X, &Xp)) != TC_OK) return s;
+    if ((s = tc_buffer_map((tc_buffer*)cos_t, &cp)) != TC_OK) return s;
+    if ((s = tc_buffer_map((tc_buffer*)sin_t, &sp)) != TC_OK) return s;
 
     uint16_t* x_data = (uint16_t*)Xp;
     const float* cos_data = (const float*)cp;
@@ -363,6 +369,51 @@ extern "C" tc_status_t tc_rope_forward(tc_context* ctx,
             const float c = crow[k], si = srow[k];
             xr[k]        = tc_cpu_f32_to_f16(x0 * c - x1 * si);
             xr[k + half] = tc_cpu_f32_to_f16(x0 * si + x1 * c);
+        }
+    }
+    return TC_OK;
+}
+
+extern "C" tc_status_t tc_rope_backward(tc_context* ctx,
+                                         tc_buffer* dX,
+                                         const tc_buffer* cos_t,
+                                         const tc_buffer* sin_t,
+                                         int batch, int heads, int seq, int head_dim) {
+    if (!ctx) return TC_ERR_NOT_INITIALIZED;
+    if (!dX || !cos_t || !sin_t || batch <= 0 || heads <= 0 || seq <= 0 || head_dim <= 0
+        || head_dim % 2 != 0) return TC_ERR_INVALID_ARG;
+    const size_t x_bytes = (size_t)batch * heads * seq * head_dim * sizeof(uint16_t);
+    const size_t table_bytes = (size_t)seq * (head_dim / 2) * sizeof(float);
+    tc_status_t s;
+    if ((s = validate_pointwise_buf(ctx, dX, x_bytes)) != TC_OK) return s;
+    if ((s = validate_pointwise_buf(ctx, cos_t, table_bytes)) != TC_OK) return s;
+    if ((s = validate_pointwise_buf(ctx, sin_t, table_bytes)) != TC_OK) return s;
+
+    void *dXp = nullptr, *cp = nullptr, *sp = nullptr;
+    if ((s = tc_buffer_map(dX, &dXp)) != TC_OK) return s;
+    if ((s = tc_buffer_map((tc_buffer*)cos_t, &cp)) != TC_OK) return s;
+    if ((s = tc_buffer_map((tc_buffer*)sin_t, &sp)) != TC_OK) return s;
+
+    uint16_t* dx_data = (uint16_t*)dXp;
+    const float* cos_data = (const float*)cp;
+    const float* sin_data = (const float*)sp;
+    const int half = head_dim / 2;
+
+    const long total = (long)batch * heads * seq;
+#if defined(_OPENMP)
+    #pragma omp parallel for schedule(static) if (total > 1)
+#endif
+    for (long bhs = 0; bhs < total; ++bhs) {
+        const int s_idx = (int)(bhs % seq);
+        uint16_t* dxr = dx_data + (size_t)bhs * head_dim;
+        const float* crow = cos_data + (size_t)s_idx * half;
+        const float* srow = sin_data + (size_t)s_idx * half;
+        for (int k = 0; k < half; ++k) {
+            const float dy0 = tc_cpu_f16_to_f32(dxr[k]);
+            const float dy1 = tc_cpu_f16_to_f32(dxr[k + half]);
+            const float c = crow[k], si = srow[k];
+            dxr[k]        = tc_cpu_f32_to_f16(dy0 * c + dy1 * si);
+            dxr[k + half] = tc_cpu_f32_to_f16(-dy0 * si + dy1 * c);
         }
     }
     return TC_OK;

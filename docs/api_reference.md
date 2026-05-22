@@ -397,6 +397,12 @@ tc_status_t tc_rope_forward(tc_context* ctx,
                             const tc_buffer* cos_t,       /* [S, D/2] fp32          */
                             const tc_buffer* sin_t,       /* [S, D/2] fp32          */
                             int batch, int heads, int seq, int head_dim);
+
+tc_status_t tc_rope_backward(tc_context* ctx,
+                             tc_buffer*       dX,         /* [B, H, S, D] in-place */
+                             const tc_buffer* cos_t,      /* [S, D/2] fp32          */
+                             const tc_buffer* sin_t,      /* [S, D/2] fp32          */
+                             int batch, int heads, int seq, int head_dim);
 ```
 
 ### SwiGLU
@@ -673,7 +679,7 @@ See [gguf.md](gguf.md) for the loading patterns and skip semantics.
 typedef enum {
     TC_DIST_SINGLE = 0,    /* no-op all-reduce; world_size=1 always succeeds */
     TC_DIST_RING   = 1,    /* TB5 ring (v0.5)                                */
-    TC_DIST_GLOO   = 2,    /* portable CPU TCP baseline                      */
+    TC_DIST_GLOO   = 2,    /* TCP baseline for Apple/portable CPU builds     */
 } tc_dist_backend_t;
 
 typedef enum {
@@ -722,13 +728,13 @@ tc_status_t tc_barrier  (tc_dist_ctx* d);
 ```
 
 See [distributed.md](distributed.md) for the single-host ring tests,
-portable CPU GLOO TCP baseline, and the v0.5 TB5 transport plan.
+GLOO TCP baseline, and the v0.5 TB5 transport plan.
 
 ## DiLoCo — `diloco.h`
 
 DiLoCo is layered above an existing `tc_dist_ctx`. The current runtime
 implements local single-rank outer steps plus dense and sparse TOPK
-multi-rank outer steps over portable CPU `TC_DIST_GLOO`. Sparse TOPK
+multi-rank outer steps over `TC_DIST_GLOO`. Sparse TOPK
 uses `(idx, fp16)` payloads through the internal GLOO sparse all-reduce
 hook. Dropout-tolerant WAN recovery and non-shipped compression modes
 still return explicit unsupported statuses.

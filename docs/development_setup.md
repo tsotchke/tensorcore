@@ -95,18 +95,19 @@ What works on the portable CPU build:
 - `tc_stream_create` / `tc_stream_sync` / `tc_stream_destroy`
 - `tc_gemm` (all dtypes, transpose flags, batched, async)
 - `tc_attention_forward` / `tc_attention_backward`
-- `tc_rmsnorm_*`, `tc_layernorm_*`, `tc_rope_forward`, `tc_swiglu_*`,
+- `tc_rmsnorm_*`, `tc_layernorm_*`, `tc_rope_*`, `tc_swiglu_*`,
   `tc_softmax_*`, `tc_adamw_step`, `tc_fused_rmsnorm_gemv`
 - `tc_conv2d_forward`, `tc_conv2d_backward_input`,
   `tc_conv2d_backward_weight`
 - `tc_quantize_weights` / `tc_gemv_quantized` (Q4_0, Q8_0)
 - `tc_gguf_*` (full reader surface)
 - `tc_dist_*` with `TC_DIST_SINGLE` backend (`world_size=1` no-ops)
-- `tc_dist_*` with `TC_DIST_GLOO` on portable CPU builds: TCP rendezvous,
+- `tc_dist_*` with `TC_DIST_GLOO` on default Apple and portable CPU builds:
+  TCP rendezvous,
   fp32 SUM/AVG/MIN/MAX all-reduce, fp16 SUM/AVG all-reduce, byte-level
   broadcast, allgather, and barrier
 - DiLoCo single-rank, dense multi-rank, and sparse TOPK multi-rank outer
-  steps over portable CPU `TC_DIST_GLOO`
+  steps over `TC_DIST_GLOO`
 - opt-in CPU GEMM variants via `TC_USE_AVX2_GEMM=1`,
   `TC_USE_NEON_GEMM=1`, and `TC_USE_AMX_GEMM=1`; the portable CI script
   smokes these in isolated Python subprocesses

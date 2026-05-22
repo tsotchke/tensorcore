@@ -135,7 +135,8 @@ Start with narrow replacements:
 - small-batch inference projection GEMVs: `tc_quantize_weights` +
   `tc_gemv_quantized`
 - LLM elementwise/fusion callsites: `tc_rmsnorm_forward`,
-  `tc_rope_forward`, `tc_swiglu_forward`, and `tc_fused_rmsnorm_gemv`
+  `tc_rope_forward`, `tc_rope_backward`, `tc_swiglu_forward`, and
+  `tc_fused_rmsnorm_gemv`
 - GGUF tensor loading: `tc_gguf_open` + `tc_gguf_load_supported_tensors`
 - attention experiments: `tc_attention_forward`
 
@@ -317,12 +318,12 @@ Best for projects that want a Llama-class training loop on Apple Silicon
 and don't already have one.
 
 - Use `tc_gemm`, `tc_attention_forward[/_backward]`, `tc_rmsnorm_*`,
-  `tc_rope_forward`, `tc_swiglu_*`, `tc_softmax_*`, `tc_adamw_step` for
+  `tc_rope_*`, `tc_swiglu_*`, `tc_softmax_*`, `tc_adamw_step` for
   the per-step graph.
 - Use `tc_dist_init(TC_DIST_SINGLE, ...)` and `tc_allreduce` for a
-  one-process loop. Portable CPU builds can switch that same call site to
-  `TC_DIST_GLOO` for TCP collectives today; the multi-Mac TB5 upgrade in
-  v0.5 is another backend swap.
+  one-process loop. Default Apple and portable CPU builds can switch that
+  same call site to `TC_DIST_GLOO` for TCP collectives today; the
+  multi-Mac TB5 upgrade in v0.5 is another backend swap.
 - Keep your data loader, your scheduler, your checkpoint format.
 
 `tests/test_transformer_block.c` and `tests/test_e2e_training.c` are

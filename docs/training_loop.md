@@ -79,7 +79,7 @@ Every primitive in that block has a tensorcore call.
 | `dx_attn = dx` (from residual) | — |
 | `dO = W_o^T @ dx_attn` | `tc_gemm` with `transpose_a=true` |
 | `dQ, dK, dV = FlashAttention_backward(Q, K, V, O, LSE, dO)` | `tc_attention_backward(ctx, &adesc, Q, K, V, O, dO, LSE, dQ, dK, dV)` |
-| `dQ, dK = RoPE_backward(dQ, dK)` | v0.2 — for v0.1 you bake RoPE into the saved Q/K; the test harness does this |
+| `dQ, dK = RoPE_backward(dQ, dK)` | `tc_rope_backward(ctx, dX, cos_t, sin_t, B, H, S, head_dim)` |
 | `dx_norm = (W_q^T @ dQ) + (W_k^T @ dK) + (W_v^T @ dV)` | `tc_gemm × 3` with `transpose_a=true`, accumulating |
 | `dx, dγ_attn = RMSnorm_backward(...)` | `tc_rmsnorm_backward` |
 | Weight gradients: `dW_q = dQ @ x_norm^T`, etc. | `tc_gemm` with `transpose_b=true` per param |
@@ -167,9 +167,9 @@ tc_adamw_step(...);
 ```
 
 For one process, `TC_DIST_SINGLE` with `world_size=1` makes the
-`tc_allreduce` a no-op. Portable CPU builds also support `TC_DIST_GLOO`
-over `gloo+tcp://host:port` for multi-rank TCP collectives today. The
-multi-Mac TB5/JACCL ring remains the v0.5 backend swap.
+`tc_allreduce` a no-op. Default Apple and portable CPU builds also support
+`TC_DIST_GLOO` over `gloo+tcp://host:port` for multi-rank TCP collectives
+today. The multi-Mac TB5/JACCL ring remains the v0.5 backend swap.
 
 See [distributed.md](distributed.md) for the ZeRO-1/2/3 plan.
 
@@ -177,9 +177,6 @@ See [distributed.md](distributed.md) for the ZeRO-1/2/3 plan.
 
 Honest list:
 
-- **RoPE backward.** v0.2 item; today, train without RoPE on the gradient
-  path (the forward applies RoPE in-place, but the backward through it is
-  a v0.2 kernel).
 - **Activation checkpointing.** Save inputs only, recompute everything
   else. v0.6 ships the integrated kernel-level support.
 - **FlashAttention backward at D=128.** v0.2 (the D=64 backward ships in v0.1).

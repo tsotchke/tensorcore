@@ -74,8 +74,8 @@ are the entry points; everything below goes deeper.
 - **[gguf.md](gguf.md)** — the GGUF v3 reader, metadata helpers, bulk
   tensor loading, matrix descriptors.
 - **[distributed.md](distributed.md)** — distributed primitives, single /
-  ring / GLOO backends, the world_size=1 path, portable CPU TCP baseline,
-  and fork tests.
+  ring / GLOO backends, the world_size=1 path, TCP baseline, and fork
+  tests.
 - **[diloco.md](diloco.md)** — low-communication outer-loop training for
   cross-site meshes, plus current implementation status.
 - **[python.md](python.md)** — the `tensorcore` Python binding, ctypes

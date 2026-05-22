@@ -528,6 +528,8 @@ if _lib is not None:
     _lib.tc_layernorm_backward.restype = c_int
     _lib.tc_rope_forward.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int, c_int, c_int]
     _lib.tc_rope_forward.restype = c_int
+    _lib.tc_rope_backward.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int, c_int, c_int]
+    _lib.tc_rope_backward.restype = c_int
     _lib.tc_swiglu_forward.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_int]
     _lib.tc_swiglu_forward.restype = c_int
     _lib.tc_swiglu_backward.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_int]
@@ -1594,6 +1596,14 @@ def rope_forward(ctx, X, cos_t, sin_t, batch, heads, seq, head_dim):
     ))
 
 
+def rope_backward(ctx, dX, cos_t, sin_t, batch, heads, seq, head_dim):
+    """Apply the inverse RoPE rotation in-place to fp16 dX gradients."""
+    _check(_lib.tc_rope_backward(
+        _as_handle(ctx), _as_handle(dX), _as_handle(cos_t), _as_handle(sin_t),
+        int(batch), int(heads), int(seq), int(head_dim)
+    ))
+
+
 def swiglu_forward(ctx, gate, up, out, n):
     """Compute fp16 out = silu(gate) * up."""
     _check(_lib.tc_swiglu_forward(_as_handle(ctx), _as_handle(gate),
@@ -1932,6 +1942,9 @@ class Context:
 
     def rope_forward(self, X, cos_t, sin_t, batch, heads, seq, head_dim):
         return rope_forward(self, X, cos_t, sin_t, batch, heads, seq, head_dim)
+
+    def rope_backward(self, dX, cos_t, sin_t, batch, heads, seq, head_dim):
+        return rope_backward(self, dX, cos_t, sin_t, batch, heads, seq, head_dim)
 
     def swiglu_forward(self, gate, up, out, n):
         return swiglu_forward(self, gate, up, out, n)

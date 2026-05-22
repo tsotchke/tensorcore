@@ -91,6 +91,7 @@ _tc_quantize_weights
 _tc_quantized_size
 _tc_rmsnorm_backward
 _tc_rmsnorm_forward
+_tc_rope_backward
 _tc_rope_forward
 _tc_shutdown
 _tc_softmax_backward

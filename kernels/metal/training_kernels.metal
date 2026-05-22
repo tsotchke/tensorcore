@@ -258,6 +258,33 @@ kernel void tc_rope_forward(
     X[base + d2 + D / 2] = (half)(x * si + y * c);
 }
 
+kernel void tc_rope_backward(
+    device       half*  dX       [[buffer(0)]],   /* in-place: [B,H,S,D]    */
+    device const float* cos_t    [[buffer(1)]],   /* [S, D/2]               */
+    device const float* sin_t    [[buffer(2)]],   /* [S, D/2]               */
+    constant uint& batch         [[buffer(3)]],
+    constant uint& heads         [[buffer(4)]],
+    constant uint& seq           [[buffer(5)]],
+    constant uint& D             [[buffer(6)]],
+    uint3 gid                    [[thread_position_in_grid]])
+{
+    const uint d2 = gid.x;            /* 0..D/2-1 */
+    const uint sh = gid.y;            /* seq + head packed */
+    const uint b  = gid.z;
+    const uint s  = sh / heads;
+    const uint h  = sh % heads;
+    if (b >= batch || h >= heads || s >= seq || d2 >= D / 2) return;
+
+    const float c = cos_t[s * (D / 2) + d2];
+    const float si = sin_t[s * (D / 2) + d2];
+
+    const uint base = ((b * heads + h) * seq + s) * D;
+    const float dy0 = (float)dX[base + d2];
+    const float dy1 = (float)dX[base + d2 + D / 2];
+    dX[base + d2]         = (half)(dy0 * c + dy1 * si);
+    dX[base + d2 + D / 2] = (half)(-dy0 * si + dy1 * c);
+}
+
 /* ====================================================================== *
  *  SwiGLU activation                                                      *
  *  y = silu(x_gate) * x_up  where silu(z) = z * sigmoid(z)                *

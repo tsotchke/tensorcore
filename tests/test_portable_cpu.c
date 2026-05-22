@@ -340,9 +340,9 @@ static int run_distributed(tc_context* ctx) {
 }
 
 static int run_training_ops(tc_context* ctx) {
-    tc_buffer *X = NULL, *gamma = NULL, *Y = NULL, *rstd = NULL;
+    tc_buffer *X = NULL, *gamma = NULL, *Y = NULL, *rstd = NULL, *cos_t = NULL, *sin_t = NULL;
     uint16_t *Xp = NULL, *gp = NULL, *Yp = NULL;
-    float* rp = NULL;
+    float *rp = NULL, *cp = NULL, *sp = NULL;
     int rc = 0;
     const int N = 2, D = 4;
     const float x_vals[8] = {1.0f, -2.0f, 0.5f, 4.0f, -1.0f, 2.0f, -3.0f, 0.25f};
@@ -386,6 +386,46 @@ static int run_training_ops(tc_context* ctx) {
         if (fabsf(got - want) > 1e-3f) rc = 1;
     }
 
+    tc_buffer_alloc(ctx, N * (D / 2) * sizeof(float), &cos_t);
+    tc_buffer_alloc(ctx, N * (D / 2) * sizeof(float), &sin_t);
+    tc_buffer_map(cos_t, (void**)&cp);
+    tc_buffer_map(sin_t, (void**)&sp);
+    for (int i = 0; i < N * D; ++i) {
+        Xp[i] = f32_to_f16(x_vals[i]);
+        Yp[i] = f32_to_f16(x_vals[i]);
+    }
+    for (int s = 0; s < N; ++s) {
+        for (int k = 0; k < D / 2; ++k) {
+            const float th = 0.125f * (float)(s + 1) * (float)(k + 1);
+            cp[s * (D / 2) + k] = cosf(th);
+            sp[s * (D / 2) + k] = sinf(th);
+        }
+    }
+    rc |= expect_status("rope forward", tc_rope_forward(ctx, X, cos_t, sin_t, 1, 1, N, D), TC_OK);
+    rc |= expect_status("rope backward", tc_rope_backward(ctx, Y, cos_t, sin_t, 1, 1, N, D), TC_OK);
+    for (int s = 0; s < N; ++s) {
+        for (int k = 0; k < D / 2; ++k) {
+            const float x0 = x_vals[s * D + k], x1 = x_vals[s * D + k + D / 2];
+            const float c = cp[s * (D / 2) + k], si = sp[s * (D / 2) + k];
+            const float want_f0 = f16_to_f32(f32_to_f16(x0 * c - x1 * si));
+            const float want_f1 = f16_to_f32(f32_to_f16(x0 * si + x1 * c));
+            const float want_b0 = f16_to_f32(f32_to_f16(x0 * c + x1 * si));
+            const float want_b1 = f16_to_f32(f32_to_f16(-x0 * si + x1 * c));
+            if (fabsf(f16_to_f32(Xp[s * D + k]) - want_f0) > 2e-3f) rc = 1;
+            if (fabsf(f16_to_f32(Xp[s * D + k + D / 2]) - want_f1) > 2e-3f) rc = 1;
+            if (fabsf(f16_to_f32(Yp[s * D + k]) - want_b0) > 2e-3f) rc = 1;
+            if (fabsf(f16_to_f32(Yp[s * D + k + D / 2]) - want_b1) > 2e-3f) rc = 1;
+        }
+    }
+    rc |= expect_status("rope forward tiny buffer rejects",
+                        tc_rope_forward(ctx, gamma, cos_t, sin_t, 1, 1, N, D),
+                        TC_ERR_INVALID_SHAPE);
+    rc |= expect_status("rope backward tiny buffer rejects",
+                        tc_rope_backward(ctx, gamma, cos_t, sin_t, 1, 1, N, D),
+                        TC_ERR_INVALID_SHAPE);
+
+    tc_buffer_free(ctx, sin_t);
+    tc_buffer_free(ctx, cos_t);
     tc_buffer_free(ctx, rstd);
     tc_buffer_free(ctx, Y);
     tc_buffer_free(ctx, gamma);

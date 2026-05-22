@@ -17,7 +17,7 @@ activation-checkpointing API, and memory-tier hints.
   supported, OpenMP per-(B, H) parallelism. fp16 IO, fp32 accumulator.
 - `Add CPU training kernels`: `lib/ops/training_cpu.cpp` implements
   `tc_rmsnorm_forward/backward`, `tc_layernorm_forward/backward`,
-  `tc_rope_forward`, `tc_swiglu_forward/backward`,
+  `tc_rope_forward/backward`, `tc_swiglu_forward/backward`,
   `tc_softmax_forward/backward`, `tc_adamw_step` (fp16 and fp32 grad
   paths), `tc_fused_rmsnorm_gemv`. All OpenMP-parallel.
 - `Add CPU Conv2D forward + backward`: `lib/ops/conv2d_cpu.cpp` via
@@ -53,7 +53,7 @@ activation-checkpointing API, and memory-tier hints.
 - `Add DiLoCo public ABI and local runtime`: `include/tensorcore/diloco.h`,
   `lib/distributed/diloco.cpp`, and `docs/diloco.md`. The single-rank path
   is implemented and covered in portable CPU tests; dense multi-rank outer
-  steps over portable `TC_DIST_GLOO` are covered by a forked localhost
+  steps over `TC_DIST_GLOO` are covered by a forked localhost
   smoke. Sparse TOPK outer steps now use GLOO sparse packed all-reduce and
   have a separate forked localhost smoke; dropout-tolerant WAN recovery
   remains staged.
@@ -72,6 +72,11 @@ activation-checkpointing API, and memory-tier hints.
   fp32 SUM/AVG/MIN/MAX all-reduce, fp16 SUM/AVG all-reduce, byte-level
   broadcast, allgather, and barrier. The localhost fork smoke validates
   the public path end-to-end.
+- `Wire Apple GLOO TCP collectives`: default Metal-enabled builds now route
+  `TC_DIST_GLOO` through the same TCP transport as the portable CPU backend.
+  The default CTest suite registers the GLOO, DiLoCo-over-GLOO, and sparse
+  TOPK-over-GLOO fork smokes so Darwin distributed behavior is exercised
+  before release.
 - `Add memory-tier public ABI`: `include/tensorcore/memory_tier.h` and
   `lib/core/memory_tier_stub.cpp` expose buffer tier hints, async
   promote/demote entry points, and usage accounting. The shipped baseline

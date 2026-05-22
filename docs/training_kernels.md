@@ -63,16 +63,19 @@ inverse standard deviation saved for backward.
 
 ```c
 tc_status_t tc_rope_forward(ctx, X, cos_t, sin_t, batch, heads, seq, head_dim);
+tc_status_t tc_rope_backward(ctx, dX, cos_t, sin_t, batch, heads, seq, head_dim);
 ```
 
 | Buffer | Shape | dtype | Notes |
 |---|---|---|---|
-| `X` | `[B, H, S, D]` | fp16 | **in-place** |
+| `X` / `dX` | `[B, H, S, D]` | fp16 | **in-place** |
 | `cos_t` | `[S, D/2]` | fp32 | precomputed by host |
 | `sin_t` | `[S, D/2]` | fp32 | precomputed by host |
 
 For each `(b, h, s, k)` where `k < D/2`, the kernel rotates the pair
 `(X[b, h, s, k], X[b, h, s, k + D/2])` by `(cos_t[s, k], sin_t[s, k])`.
+The backward pass applies the inverse rotation to `dX`:
+`dx0 = dy0 * cos + dy1 * sin`, `dx1 = -dy0 * sin + dy1 * cos`.
 This matches Llama / Mistral's RoPE convention (half-rotation grouping,
 not the interleaved variant some PyTorch implementations use).
 
@@ -91,9 +94,6 @@ for (int s = 0; s < S; ++s) {
 
 `tc_gguf_get_llama_config` returns `rope_freq_base` and `rope_freq_scale`
 in case you're loading a model whose RoPE was scaled.
-
-v0.1 ships forward only. RoPE backward is a v0.2 item; it's structurally
-identical (rotate by `(cos_t, -sin_t)`).
 
 ## SwiGLU
 
@@ -268,7 +268,6 @@ for shape and buffer lifecycle.
 
 ## v0.2 closes
 
-- RoPE backward
 - Fused-adamw for fp16 grads + bf16 master weight option
 - LayerNorm fused-with-projection variant
 - Bias-add fused into `tc_gemm` for FFN

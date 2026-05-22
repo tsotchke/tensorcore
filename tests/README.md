@@ -39,7 +39,7 @@ variants.
 | 5 | `test_gemm_i8.c` | int8 GEMM; native on Apple10+, fp32-widen fallback on Apple7..9; bit-exact for K ≤ 2^16 |
 | 6 | `test_attention_correctness.c` | FlashAttention forward: causal, GQA (3 cases), sliding window, ALiBi |
 | 7 | `test_attention_backward.c` | FlashAttention backward at D=64 vs numerical-differences reference |
-| 8 | `test_training_kernels.c` | RMSnorm fwd+bwd, LayerNorm fwd+bwd, RoPE, SwiGLU fwd+bwd, softmax fwd+bwd, AdamW |
+| 8 | `test_training_kernels.c` | RMSnorm fwd+bwd, LayerNorm fwd+bwd, RoPE fwd+bwd, SwiGLU fwd+bwd, softmax fwd+bwd, AdamW |
 | 9 | `test_transformer_block.c` | Full forward + backward of one Llama-style block at small shapes |
 | 10 | `test_e2e_training.c` | A few iterations of forward + backward + AdamW; checks parameter convergence |
 | 11 | `test_conv2d.c` | Conv2D forward + dInput + dWeight (multi-batch validated) |

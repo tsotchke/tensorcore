@@ -640,6 +640,8 @@ def _run_training_wrapper_checks(ctx):
         B, H, S, D = 1, 2, 4, 32
         rope_x = np.random.randn(B, H, S, D).astype(np.float16)
         rope_ref = rope_x.astype(np.float32).copy()
+        rope_d = np.random.randn(B, H, S, D).astype(np.float16)
+        rope_d_ref = rope_d.astype(np.float32).copy()
         cos_t = np.zeros((S, D // 2), dtype=np.float32)
         sin_t = np.zeros((S, D // 2), dtype=np.float32)
         for p in range(S):
@@ -654,13 +656,22 @@ def _run_training_wrapper_checks(ctx):
                     x1 = rope_ref[b_i, h_i, p, D // 2:].copy()
                     rope_ref[b_i, h_i, p, :D // 2] = x0 * cos_t[p] - x1 * sin_t[p]
                     rope_ref[b_i, h_i, p, D // 2:] = x0 * sin_t[p] + x1 * cos_t[p]
+                    dy0 = rope_d_ref[b_i, h_i, p, :D // 2].copy()
+                    dy1 = rope_d_ref[b_i, h_i, p, D // 2:].copy()
+                    rope_d_ref[b_i, h_i, p, :D // 2] = dy0 * cos_t[p] + dy1 * sin_t[p]
+                    rope_d_ref[b_i, h_i, p, D // 2:] = -dy0 * sin_t[p] + dy1 * cos_t[p]
         ropeb = make(rope_x)
+        ropedb = make(rope_d)
         cosb = make(cos_t)
         sinb = make(sin_t)
         tc.rope_forward(ctx, ropeb, cosb, sinb, B, H, S, D)
+        tc.rope_backward(ctx, ropedb, cosb, sinb, B, H, S, D)
         rope_out = np.zeros_like(rope_x)
+        rope_d_out = np.zeros_like(rope_d)
         tc.buffer_read(ropeb, rope_out)
+        tc.buffer_read(ropedb, rope_d_out)
         rope_err = _scaled_rms(rope_out, rope_ref)
+        rope_bw_err = _scaled_rms(rope_d_out, rope_d_ref)
 
         sm_rows, sm_dim = 2, 64
         sm_x = (np.random.randn(sm_rows, sm_dim) * 3.0).astype(np.float16)
@@ -717,6 +728,7 @@ def _run_training_wrapper_checks(ctx):
             "layer": layer_err,
             "swiglu": swiglu_err,
             "rope": rope_err,
+            "rope_backward": rope_bw_err,
             "softmax": softmax_err,
             "fused": fused_err,
             "adamw": adam_err,
@@ -726,6 +738,7 @@ def _run_training_wrapper_checks(ctx):
             layer_err < 5e-3 and
             swiglu_err < 5e-3 and
             rope_err < 5e-3 and
+            rope_bw_err < 5e-3 and
             softmax_err < 5e-3 and
             fused_err < 1e-2 and
             adam_err < 1e-5
