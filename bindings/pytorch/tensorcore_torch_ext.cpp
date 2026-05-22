@@ -1,0 +1,152 @@
+/* tensorcore_torch_ext.cpp — minimal PyTorch ↔ tensorcore bridge.
+ *
+ * Exposes one function: `tc_matmul(A, B)` returning A @ B via tc_gemm.
+ *
+ * v0.1 scope:
+ *   - fp32 only (matches the AMX backend's session-1.5 support).
+ *   - 2-D inputs, no batching, no transpose (caller transposes upstream).
+ *   - CPU tensors only — Apple unified memory means tensorcore's CPU
+ *     backend reads from the same physical RAM PyTorch is using; the
+ *     bridge `memcpy`s in/out to avoid lifetime entanglement with
+ *     PyTorch's allocator, which is the simplest correct path.
+ *
+ * Backend selection is honored via the same env vars as the rest of
+ * tensorcore: `TC_USE_AMX_GEMM=1` picks the reverse-engineered AMX
+ * matrix-coprocessor backend, `TC_USE_NEON_GEMM=1` picks the OpenMP+NEON
+ * BLIS-style backend, default falls through to CBLAS (Accelerate on
+ * macOS, OpenBLAS/MKL on Linux).
+ *
+ * Build via setup.py; consumes the tensorcore static library + headers
+ * from $TENSORCORE_ROOT (defaults to ../..).
+ */
+
+#include <torch/extension.h>
+
+extern "C" {
+#include "tensorcore/tensorcore.h"
+}
+
+#include <atomic>
+#include <cstring>
+#include <stdexcept>
+#include <string>
+
+namespace {
+
+/* Process-wide tensorcore context, lazily constructed. The C API's
+ * `tc_context*` is reusable across many GEMMs; we don't want to pay
+ * `tc_init` cost per matmul. */
+tc_context* g_ctx = nullptr;
+
+void ensure_ctx() {
+    static std::atomic<bool> initialized{false};
+    if (initialized.load(std::memory_order_acquire)) return;
+    /* Race tolerant: tc_init is idempotent against a global only because
+     * we serialize first-call via the static `initialized` flag below. */
+    static std::atomic_flag init_lock = ATOMIC_FLAG_INIT;
+    while (init_lock.test_and_set(std::memory_order_acquire)) {}
+    if (!initialized.load(std::memory_order_relaxed)) {
+        const auto rc = tc_init(&g_ctx);
+        if (rc != TC_OK || g_ctx == nullptr) {
+            init_lock.clear(std::memory_order_release);
+            throw std::runtime_error(
+                std::string("tc_init failed: ") +
+                std::to_string(static_cast<int>(rc)));
+        }
+        initialized.store(true, std::memory_order_release);
+    }
+    init_lock.clear(std::memory_order_release);
+}
+
+}  // namespace
+
+at::Tensor tc_matmul_fp32(const at::Tensor& A, const at::Tensor& B) {
+    TORCH_CHECK(A.dtype() == torch::kFloat32, "tc_matmul requires fp32 A");
+    TORCH_CHECK(B.dtype() == torch::kFloat32, "tc_matmul requires fp32 B");
+    TORCH_CHECK(A.dim() == 2, "tc_matmul requires 2-D A; got dim=", A.dim());
+    TORCH_CHECK(B.dim() == 2, "tc_matmul requires 2-D B; got dim=", B.dim());
+    TORCH_CHECK(A.size(1) == B.size(0),
+                "shape mismatch: A is ", A.sizes(), " B is ", B.sizes());
+    TORCH_CHECK(A.device().is_cpu() && B.device().is_cpu(),
+                "tc_matmul currently CPU only (unified memory on Apple)");
+
+    /* Contiguous, row-major inputs are required by the wire format. */
+    const auto A_c = A.contiguous();
+    const auto B_c = B.contiguous();
+
+    const int M = static_cast<int>(A_c.size(0));
+    const int K = static_cast<int>(A_c.size(1));
+    const int N = static_cast<int>(B_c.size(1));
+
+    ensure_ctx();
+
+    /* Allocate three tc_buffers and copy data in. tc_buffer_map on Apple
+     * returns a pointer into unified memory; memcpy is fast. */
+    tc_buffer *bA = nullptr, *bB = nullptr, *bC = nullptr;
+    auto cleanup = [&]() {
+        if (bA) tc_buffer_free(g_ctx, bA);
+        if (bB) tc_buffer_free(g_ctx, bB);
+        if (bC) tc_buffer_free(g_ctx, bC);
+    };
+
+    const size_t bytes_a = static_cast<size_t>(M) * K * sizeof(float);
+    const size_t bytes_b = static_cast<size_t>(K) * N * sizeof(float);
+    const size_t bytes_c = static_cast<size_t>(M) * N * sizeof(float);
+
+    if (tc_buffer_alloc(g_ctx, bytes_a, &bA) != TC_OK ||
+        tc_buffer_alloc(g_ctx, bytes_b, &bB) != TC_OK ||
+        tc_buffer_alloc(g_ctx, bytes_c, &bC) != TC_OK) {
+        cleanup();
+        throw std::runtime_error("tc_buffer_alloc failed");
+    }
+
+    void *pA = nullptr, *pB = nullptr, *pC = nullptr;
+    if (tc_buffer_map(bA, &pA) != TC_OK ||
+        tc_buffer_map(bB, &pB) != TC_OK ||
+        tc_buffer_map(bC, &pC) != TC_OK) {
+        cleanup();
+        throw std::runtime_error("tc_buffer_map failed");
+    }
+
+    std::memcpy(pA, A_c.data_ptr<float>(), bytes_a);
+    std::memcpy(pB, B_c.data_ptr<float>(), bytes_b);
+
+    tc_gemm_desc desc{};
+    desc.M = M; desc.N = N; desc.K = K;
+    desc.a_dtype = TC_DTYPE_F32;
+    desc.b_dtype = TC_DTYPE_F32;
+    desc.c_dtype = TC_DTYPE_F32;
+    desc.accum_dtype = TC_DTYPE_F32;
+    desc.alpha = 1.0f;
+    desc.beta  = 0.0f;
+    desc.transpose_a = false;
+    desc.transpose_b = false;
+    desc.lda = K;
+    desc.ldb = N;
+    desc.ldc = N;
+
+    const auto rc = tc_gemm(g_ctx, &desc, bA, bB, bC);
+    if (rc != TC_OK) {
+        cleanup();
+        throw std::runtime_error(
+            std::string("tc_gemm failed: ") +
+            std::to_string(static_cast<int>(rc)));
+    }
+
+    auto out = torch::empty({M, N}, A_c.options());
+    std::memcpy(out.data_ptr<float>(), pC, bytes_c);
+
+    cleanup();
+    return out;
+}
+
+const char* tc_last_backend_name() {
+    return tc_backend_name(tc_last_backend());
+}
+
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+    m.def("matmul", &tc_matmul_fp32,
+          "tc_matmul(A: Tensor[fp32, MxK], B: Tensor[fp32, KxN]) -> Tensor[fp32, MxN]");
+    m.def("last_backend_name", &tc_last_backend_name,
+          "Return the tensorcore backend name that served the last GEMM");
+}
