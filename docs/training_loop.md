@@ -148,9 +148,9 @@ Read those if you want the smallest-shape concrete example of any
 specific piece. They're ~150-300 lines each, pure C, link only against
 `libtensorcore.dylib`.
 
-## Distributed training (v0.5)
+## Distributed training
 
-When you have multiple Macs, the additions are:
+The training loop should treat distribution as a backend choice:
 
 ```c
 tc_dist_ctx* d = NULL;
@@ -166,9 +166,10 @@ tc_allreduce(d, grad_buffer, n_elements, TC_DTYPE_F16, TC_REDUCE_AVG);
 tc_adamw_step(...);
 ```
 
-For v0.1, `TC_DIST_SINGLE` with `world_size=1` makes the `tc_allreduce`
-a no-op — you write your training code now, the backend swap in v0.5
-turns it into a real ring.
+For one process, `TC_DIST_SINGLE` with `world_size=1` makes the
+`tc_allreduce` a no-op. Portable CPU builds also support `TC_DIST_GLOO`
+over `gloo+tcp://host:port` for multi-rank TCP collectives today. The
+multi-Mac TB5/JACCL ring remains the v0.5 backend swap.
 
 See [distributed.md](distributed.md) for the ZeRO-1/2/3 plan.
 

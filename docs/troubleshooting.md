@@ -228,10 +228,19 @@ the kernel takes `N, K`. Don't transpose manually — use
 
 ### `tc_dist_init(TC_DIST_RING, world_size=4, ...)` returns `TC_ERR_UNSUPPORTED_FAMILY`
 
-The multi-Mac ring backend isn't implemented in v0.1. Only `TC_DIST_SINGLE`
-with `world_size=1` is functional. The ring algorithm itself is validated
-(see `tests/test_distributed_ring_fork.c`); the transport for multi-Mac
-lands in v0.5.
+The multi-Mac ring backend isn't implemented in v0.1. `TC_DIST_SINGLE`
+with `world_size=1` is functional in every build, and portable CPU builds
+also support `TC_DIST_GLOO` over TCP. The ring algorithm itself is
+validated (see `tests/test_distributed_ring_fork.c`); the transport for
+multi-Mac lands in v0.5.
+
+### `tc_dist_init(TC_DIST_GLOO, ...)` fails or hangs
+
+Use a rendezvous URL like `gloo+tcp://127.0.0.1:29500` for local tests or
+`gloo+tcp://host0:port` across hosts, start every rank with the same URL,
+and make sure the port is reachable. `TC_DIST_GLOO` is currently wired in
+portable CPU builds; Apple/Metal builds still reserve `TC_DIST_GLOO` as an
+unsupported backend.
 
 ### Forked-rank test hangs
 

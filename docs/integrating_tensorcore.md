@@ -319,8 +319,10 @@ and don't already have one.
 - Use `tc_gemm`, `tc_attention_forward[/_backward]`, `tc_rmsnorm_*`,
   `tc_rope_forward`, `tc_swiglu_*`, `tc_softmax_*`, `tc_adamw_step` for
   the per-step graph.
-- Use `tc_dist_init(TC_DIST_SINGLE, ...)` and `tc_allreduce` so the
-  multi-Mac upgrade in v0.5 is a backend swap.
+- Use `tc_dist_init(TC_DIST_SINGLE, ...)` and `tc_allreduce` for a
+  one-process loop. Portable CPU builds can switch that same call site to
+  `TC_DIST_GLOO` for TCP collectives today; the multi-Mac TB5 upgrade in
+  v0.5 is another backend swap.
 - Keep your data loader, your scheduler, your checkpoint format.
 
 `tests/test_transformer_block.c` and `tests/test_e2e_training.c` are

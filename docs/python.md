@@ -252,6 +252,10 @@ with ctx.dist(backend=tc.TC_DIST_SINGLE, world_size=1, rank=0) as d:
     d.barrier()
 ```
 
+Portable CPU builds also expose `backend="gloo"` / `TC_DIST_GLOO` with
+`gloo+tcp://host:port` rendezvous URLs for TCP all-reduce, broadcast,
+allgather, barrier, and dense DiLoCo outer steps.
+
 ### `DiLoCoContext`
 
 ```python
@@ -265,13 +269,15 @@ with ctx.dist("single", 1, 0, "single://diloco") as dist:
         print(d.outer_steps_completed, d.last_outer_bytes_sent)
 ```
 
-The portable runtime covers local/single-rank DiLoCo outer steps. Multi-rank
-WAN transport and advanced compression modes raise `TensorcoreError` with
-explicit unsupported status codes until those backends land.
+The portable runtime covers local/single-rank DiLoCo outer steps and dense
+multi-rank outer steps over portable CPU `TC_DIST_GLOO`. Sparse packed
+all-reduce, dropout-tolerant WAN recovery, and advanced compression modes
+raise `TensorcoreError` with explicit unsupported status codes until those
+paths land.
 
 Methods: `world_size`, `rank`, `allreduce(buf, n, dtype, op)`,
 `broadcast(buf, n, dtype, root)`, `allgather(src, dst, n_per_rank, dtype)`,
-`barrier()`, `close()`. The multi-Mac transport is the v0.5 work — see
+`barrier()`, `close()`. The multi-Mac TB5 transport is the v0.5 work — see
 [distributed.md](distributed.md).
 
 ### `GgufFile`
@@ -337,7 +343,7 @@ with ctx.stream() as s:
 - Q4_0 sync + async
 - Q8_0 GPU quantize + GEMV
 - GGUF round-trip and bulk load
-- distributed (single-host) primitives
+- distributed single-host primitives plus portable CPU GLOO smoke coverage
 - LoadedModel / LoadedTensor / QuantizedMatrix wrappers
 
 Registered as the CTest target `python_basic` when Python + NumPy are

@@ -41,8 +41,11 @@ activation-checkpointing API, and memory-tier hints.
   throughput data is collected.
 - `Add opt-in Apple AMX fp32 GEMM prototype`: `lib/ops/gemm_cpu_amx.cpp`.
   Apple-Silicon-only 16×16 fp32 tile path, gated by `TC_USE_AMX_GEMM=1`
-  and falling through to NEON/CBLAS for unsupported shapes. A 16³ opt-in
-  smoke validates bit-exact output locally; CBLAS remains the default path.
+  and falling through to NEON/CBLAS for unsupported shapes. A pthread
+  affinity-tag multi-cluster prototype was tested and left out because it
+  regressed throughput on M2 Ultra; the committed AMX path remains
+  single-threaded and opt-in. Local smokes validate 32³ and 256³ output;
+  CBLAS remains the default path.
 
 ### Heterogeneous-mesh substrate
 

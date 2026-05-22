@@ -19,7 +19,7 @@ Runs in ~5-15s on M2 Ultra.
 
 With `TC_ENABLE_METAL=OFF`, `test_portable_cpu.c` covers the portable
 buffer/device path plus padded f32/f16 GEMM, batched GEMM, i8 GEMM,
-quantized GEMV, distributed-single collectives, memory-tier and
+quantized GEMV, `TC_DIST_SINGLE` collectives, memory-tier and
 checkpoint baseline APIs, HIP inactive diagnostics, local DiLoCo, and
 the localhost GLOO TCP collective and DiLoCo-over-GLOO smokes. The
 portable build also runs Conv2D, DiLoCo, sparse-compression, GLOO TCP,

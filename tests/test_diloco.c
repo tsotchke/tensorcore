@@ -8,13 +8,11 @@
  *   - inner-step counter triggers outer-step boundary
  *   - apply_outer with no compression converges the model to itself
  *     (single rank, Δθ averaged with itself = identity transform)
- *   - apply_outer with FP16 compression preserves the same property
- *     within fp16 rounding
- *   - async overlap path returns immediately and eventually completes
+ *   - apply_outer with no compression performs the local outer update
  *
- * Multi-rank cross-site behavior is covered by a separate fork-based
- * test that won't run on every CI runner (needs paired processes); this
- * test is the runtime-level smoke that runs on every checkout.
+ * Multi-rank dense behavior is covered by test_diloco_gloo_fork in the
+ * portable CPU suite; this test is the single-process runtime smoke that
+ * runs in the default tree.
  */
 
 #include "tensorcore/tensorcore.h"

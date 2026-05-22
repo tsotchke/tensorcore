@@ -257,7 +257,8 @@ on the same chip.
 - We don't beat H100 on per-chip raw fp16 TFLOPS. Won't happen this year
   no matter what we ship.
 - We don't have a "head-to-head training benchmark" against an H100
-  cluster yet — v0.5 distributed first.
+  cluster yet; the local GLOO substrate is in place, but the TB5/JACCL
+  distributed path is v0.5 work.
 - The Q4_0 decode numbers are *synthetic* (random weights, no real model
   semantics); they measure the GEMV throughput, not end-to-end generation
   quality. End-to-end inference adds attention, softmax, RoPE, and RMSnorm

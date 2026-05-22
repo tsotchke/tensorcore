@@ -177,8 +177,9 @@ output position's receptive field into a column. tensorcore's
 
 Apple's collective comms library (analogue of NCCL) introduced in macOS
 26.2 alongside Thunderbolt-5 networking. tensorcore's `TC_DIST_RING`
-backend will sit on JACCL once it ships; today only the single-host
-ring (`tc_distributed_ring`) is functional.
+backend will sit on JACCL once it ships; today the single-host ring
+(`tc_distributed_ring`) and portable CPU `TC_DIST_GLOO` TCP backend are
+functional.
 
 ### LSE
 

@@ -64,7 +64,11 @@ TENSORCORE_LIB="$shared_lib" \
 "$PYTHON_BIN" - <<'PY'
 import ctypes
 import math
+import os
+import signal
+import socket
 import struct
+import sys
 import tensorcore as tc
 
 
@@ -74,6 +78,128 @@ def f16(value):
 
 def f16_to_f32(bits):
     return struct.unpack("<e", struct.pack("<H", int(bits)))[0]
+
+
+def _reserve_loopback_port():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+    finally:
+        sock.close()
+
+
+def _run_python_gloo_rank(rank, url):
+    ctx = tc.init()
+    dist = None
+    bufs = []
+    try:
+        dist = tc.dist_init(ctx, "gloo", 2, rank, url)
+        if tc.dist_world_size(dist) != 2 or tc.dist_rank(dist) != rank:
+            raise RuntimeError("GLOO metadata mismatch")
+
+        vals = (ctypes.c_float * 4)(1.0, 2.0, 3.0, 4.0)
+        if rank == 1:
+            vals = (ctypes.c_float * 4)(10.0, 20.0, 30.0, 40.0)
+        buf = tc.buffer_alloc(ctx, ctypes.sizeof(vals))
+        bufs.append(buf)
+        ctypes.memmove(tc.buffer_map(buf), vals, ctypes.sizeof(vals))
+        view = (ctypes.c_float * 4).from_address(tc.buffer_map(buf).value)
+
+        tc.allreduce(dist, buf, 4, "f32", "sum")
+        if any(math.fabs(view[i] - (11.0 * (i + 1))) > 1e-6 for i in range(4)):
+            raise RuntimeError(f"GLOO allreduce mismatch on rank {rank}: {list(view)}")
+
+        for i in range(4):
+            view[i] = (70.0 + i) if rank == 1 else -1.0
+        tc.broadcast(dist, buf, 4, "f32", root=1)
+        if any(math.fabs(view[i] - (70.0 + i)) > 1e-6 for i in range(4)):
+            raise RuntimeError(f"GLOO broadcast mismatch on rank {rank}: {list(view)}")
+
+        for i in range(4):
+            view[i] = rank * 100.0 + i
+        gathered = tc.buffer_alloc(ctx, 8 * ctypes.sizeof(ctypes.c_float))
+        bufs.append(gathered)
+        tc.allgather(dist, buf, gathered, 4, "f32")
+        gout = (ctypes.c_float * 8).from_address(tc.buffer_map(gathered).value)
+        want = [0.0, 1.0, 2.0, 3.0, 100.0, 101.0, 102.0, 103.0]
+        if any(math.fabs(gout[i] - want[i]) > 1e-6 for i in range(8)):
+            raise RuntimeError(f"GLOO allgather mismatch on rank {rank}: {list(gout)}")
+
+        theta_vals = (ctypes.c_float * 4)(1.0, 1.0, 1.0, 1.0)
+        theta_buf = tc.buffer_alloc(ctx, ctypes.sizeof(theta_vals))
+        bufs.append(theta_buf)
+        ctypes.memmove(tc.buffer_map(theta_buf), theta_vals, ctypes.sizeof(theta_vals))
+        theta = (ctypes.c_float * 4).from_address(tc.buffer_map(theta_buf).value)
+        with tc.DiLoCoContext(dist, inner_steps=2, outer_lr=1.0,
+                              outer_optimizer="sgd", compress="none") as diloco:
+            diloco.add_parameter("theta", theta_buf, 4, "f32")
+            delta = 0.25 if rank == 0 else 0.75
+            for step in range(2):
+                for i in range(4):
+                    theta[i] += delta
+                pending = diloco.step()
+                if step == 0 and pending:
+                    raise RuntimeError("DiLoCo outer step became pending too early")
+                if step == 1 and not pending:
+                    raise RuntimeError("DiLoCo outer step did not become pending")
+            diloco.apply_outer()
+            if (diloco.inner_steps_completed != 2 or
+                    diloco.outer_steps_completed != 1 or
+                    diloco.last_outer_bytes_sent <= 0.0):
+                raise RuntimeError("DiLoCo GLOO counters mismatch")
+        if any(math.fabs(theta[i] - 2.0) > 1e-6 for i in range(4)):
+            raise RuntimeError(f"DiLoCo GLOO theta mismatch on rank {rank}: {list(theta)}")
+
+        tc.barrier(dist)
+        return 0
+    finally:
+        for buf in reversed(bufs):
+            tc.buffer_free(ctx, buf)
+        if dist is not None:
+            tc.dist_finalize(dist)
+        tc.shutdown(ctx)
+
+
+def _run_python_gloo_fork_smoke():
+    if not hasattr(os, "fork"):
+        print("python GLOO/DiLoCo fork smoke SKIP: no fork")
+        return
+    try:
+        port = _reserve_loopback_port()
+    except OSError:
+        print("python GLOO/DiLoCo fork smoke SKIP: no loopback port")
+        return
+    url = f"gloo+tcp://127.0.0.1:{port}"
+    child = os.fork()
+    if child == 0:
+        try:
+            signal.alarm(30)
+            rc = _run_python_gloo_rank(1, url)
+        except BaseException as exc:
+            print(f"[rank 1] python GLOO/DiLoCo fork smoke FAIL: {exc}", file=sys.stderr)
+            rc = 1
+        os._exit(0 if rc == 0 else 1)
+    parent_rc = 1
+    parent_exc = None
+    status = 0
+    try:
+        signal.alarm(30)
+        try:
+            parent_rc = _run_python_gloo_rank(0, url)
+        except BaseException as exc:
+            print(f"[rank 0] python GLOO/DiLoCo fork smoke FAIL: {exc}", file=sys.stderr)
+            parent_exc = exc
+        _, status = os.waitpid(child, 0)
+    finally:
+        signal.alarm(0)
+    child_ok = os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
+    if parent_exc is not None or parent_rc != 0 or not child_ok:
+        raise SystemExit("python GLOO/DiLoCo fork smoke failed")
+    print("python GLOO/DiLoCo fork smoke OK")
+
+
+_run_python_gloo_fork_smoke()
 
 ctx = tc.init()
 bufs = []

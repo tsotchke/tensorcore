@@ -116,11 +116,11 @@ some still queued.
       — opt-in via `TC_USE_AVX2_GEMM=1`. Self-contained; no BLAS dep.
       OpenMP outer + 1024+ shape scaling pending.
 - [x] **DiLoCo cross-continent training API** — `include/tensorcore/diloco.h`
-      + single-rank runtime in `lib/distributed/diloco.cpp`. Outer/inner
-      optimizer split, 4 compression schemes wired (NONE, FP16,
-      TOPK_1PCT, TOPK_01PCT) + Nesterov / SGD / Adam outer optimizers +
-      async overlap + dropout tolerance. Multi-rank cross-site transport
-      lands once `TC_DIST_GLOO` ships.
+      + runtime in `lib/distributed/diloco.cpp`. Outer/inner optimizer split,
+      local single-rank steps, and dense multi-rank outer steps over portable
+      CPU `TC_DIST_GLOO` are wired. NONE / FP16-intent / TOPK masks,
+      Nesterov / SGD / Adam outer optimizers, and async overlap are present;
+      sparse packed transport and dropout-tolerant WAN recovery remain queued.
 - [x] **HIP/chipStar backend scaffold** — `include/tensorcore/hip.h` +
       `lib/hip/hip_stub.cpp` + `lib/hip/README.md`. Public ABI frozen;
       runtime implementation lands after chipStar runtime is validated
@@ -138,14 +138,15 @@ some still queued.
       via `TC_USE_NEON_GEMM=1`; CBLAS remains default pending broader
       throughput data.
 - [ ] **Multi-thread + 1024+ scaling of the AVX2 GEMM kernel**. Phase 2.
-- [ ] **`TC_DIST_GLOO` backend** for actual cross-machine collectives over
-      TCP. Phase 3.
+- [x] **`TC_DIST_GLOO` backend** for portable CPU collectives over TCP:
+      fp32/fp16 all-reduce, min/max, broadcast, allgather, barrier, sparse
+      packed exchange, and DiLoCo dense outer steps. Real WAN soak remains.
 - [ ] **Sparse top-k compressed all-reduce** in DiLoCo (today's top-k
       sparsifies but still sends a dense fp32 vector). Phase 4.
 
 ### v0.1 — Foundation (shipped this checkpoint)
 - [x] CMake + metallib precompile + cross-family runtime detect
-- [x] Public C ABI (`include/tensorcore/`) — 11 headers, 71 exported symbols
+- [x] Public C ABI (`include/tensorcore/`) — 15 headers, 100 exported symbols
 - [x] Device init / pipeline cache / power-of-2 buffer pool, autotune sweep + JSON cache
 - [x] **`simdgroup_matrix` GEMM** — fp16/fp32 (64×64 tile, BK=32, vec4 loads,
       f32-accum) — **17.88 TFLOPS @ 4096³ on M2 Ultra, fp32 bit-exact vs Accelerate**
@@ -163,17 +164,17 @@ some still queued.
       matrix descriptors
 - [x] RMSNorm, LayerNorm, RoPE, SwiGLU, softmax, AdamW, and fused
       RMSNorm+GEMV kernels (fwd + bwd where applicable)
-- [x] Python binding — full ABI parity (71 exports / 71 wrappers), owned object
+- [x] Python binding — full ABI parity (100 exports / 100 wrappers), owned object
       wrappers (`Context`, `Buffer`, `Stream`, `DistContext`, `GgufFile`,
       `LoadedModel`, `QuantizedMatrix`), NumPy interop
 - [x] Distributed primitives — single-host ring all-reduce / broadcast / allgather
-      / barrier, both threads-with-shared-mem and fork-with-socketpair transports
-      (the latter is the v0.5 multi-Mac transport pattern, bit-exact validated)
+      / barrier, both threads-with-shared-mem and fork-with-socketpair transports,
+      plus portable CPU `TC_DIST_GLOO` TCP collectives
 - [x] M5 TensorOps GEMM + FlashAttention kernels (`tensorops_*.metal`),
       SDK 26.0+ gated, runtime selector
 - [x] MPS + Accelerate fallback paths
-- [x] Correctness tests vs `cblas_sgemm` + fp64 reference — **20/20 pass** on M2 Ultra
-      (+ 2 example-as-test entries → 22/22 total ctest)
+- [x] Correctness tests vs `cblas_sgemm` + fp64 reference — **24/24 pass** on M2 Ultra
+      in the default tree, plus 6/6 portable CPU backend tests
 - [x] TFLOPS bench harness (GEMM sweep, attention sweep, 7B Q4_0 inference)
 - [x] Eshkol binding skeleton + bridge file dropped into both `eshkol/` and
       `eshkol-platform/`, opt-in via `ESHKOL_ENABLE_TENSORCORE=1`
@@ -282,8 +283,9 @@ becomes the smarter purchase** once tensorcore matures.
 - **v0.4 — coordination.** Software-only, but consolidating across three
   sibling projects. See [docs/eshkol_integration.md](docs/eshkol_integration.md).
 - **v0.5 — substrate-bound.** Needs macOS 26.2's JACCL surface and a
-  Thunderbolt-5 ring to validate against. The single-host path is in v0.1
-  so the work is transport-swap + scheduler, not algorithm.
+  Thunderbolt-5 ring to validate against. The single-host ring and portable
+  GLOO baseline are in v0.1, so the work is transport-swap + scheduler,
+  not algorithm.
 - **v0.6+ — silicon-bound.** Honest about what's software-only vs what
   needs Apple to ship.
 

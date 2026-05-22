@@ -17,18 +17,24 @@
  * throughput should still prefer Accelerate's cblas_sgemm, which Apple
  * keeps in sync with new silicon.
  *
- * Scope of this file (v0.1 - session 1):
- *   - Single-threaded fp32 only.
+ * Scope of this file (v0.2 - session 1.5):
+ *   - fp32 only, single-thread, single-cluster.
+ *   - K-tiled mega-pack inside the (i, j) loop with KC=256 -> ~0.37 TFLOPS
+ *     at 4096^3 on M2 Ultra (vs 0.08 TFLOPS for the single-thread NEON kernel).
  *   - alpha = 1, beta = 0 only (other alpha/beta combos fall through to NEON/CBLAS).
  *   - Non-transposed A, B only (transposed falls through).
  *   - M and N must be multiples of 16 (the AMX tile size for fp32 outer
  *     product); other sizes fall through.
  *   - Apple Silicon only (__APPLE__ && __aarch64__).
  *
- * Roadmap for sessions 2-3:
- *   - **Multi-cluster awareness.** M2 Ultra has two AMX units (one per
- *     P-core cluster). Parallelizing across both requires pinning threads
- *     to specific clusters via macOS thread_affinity_policy_data.
+ * Roadmap for sessions 2+:
+ *   - **Multi-cluster scheduling that actually works.** A naive pthread +
+ *     thread_affinity_policy_data split regressed perf (workers either
+ *     co-located on one cluster and serialized on its AMX unit, or split
+ *     across clusters but paid heavy UltraFusion-fabric reads for the
+ *     shared mega-pack). Needs a different primitive: GCD dispatch_apply
+ *     with explicit QOS, per-worker cluster-local packing, or
+ *     IORegistry-driven topology discovery.
  *   - **fp16 / bf16 paths** via the corresponding AMX opcodes (FMA16,
  *     MAC16 with the proper accumulator-precision flags).
  *   - **Edge tiles** for M, N not divisible by 16 - pack with zero
@@ -271,6 +277,54 @@ inline float* aligned_alloc_fp32(size_t n_floats) {
     return static_cast<float*>(p);
 }
 
+/* ----------------------------------------------------------------------------
+ * Per-thread tile processor.
+ *
+ * Walks output tiles [i_start, i_end) × [0, N), reading from the shared
+ * mega-packed A and B buffers. AMX state is per-thread (thread_local
+ * `amx_armed` ensures AMX_SET runs once on entry to each thread); C tile
+ * scratch is on the stack so each thread has its own.
+ *
+ * Z accumulator is live for the duration of a single (i, j) tile and walks
+ * K in KC chunks. */
+static void amx_process_tile_strip(int i_start, int i_end,
+                                   int N, int K, int ldc,
+                                   const float* A_pack_mega,
+                                   const float* B_pack_mega,
+                                   float* C) {
+    /* AMX must be armed once per thread. Workers come in fresh, so they
+     * always need to arm; the main thread may have armed in a prior call. */
+    static thread_local bool amx_armed = false;
+    if (!amx_armed) {
+        AMX_SET();
+        amx_armed = true;
+    }
+
+    alignas(64) float C_tile[16 * 16];
+    constexpr int KC = 256;
+
+    for (int i = i_start; i < i_end; i += 16) {
+        const float* A_panel = A_pack_mega + (size_t)(i / 16) * K * 16;
+        for (int j = 0; j < N; j += 16) {
+            const float* B_panel = B_pack_mega + (size_t)(j / 16) * K * 16;
+
+            amx_zero_z_fp32();
+            for (int kp = 0; kp < K; kp += KC) {
+                const int kc = (kp + KC <= K) ? KC : (K - kp);
+                amx_fma32_accumulate(kc, A_panel + (size_t)kp * 16,
+                                          B_panel + (size_t)kp * 16);
+            }
+            amx_store_z_fp32(C_tile, 16);
+
+            for (int mm = 0; mm < 16; ++mm) {
+                std::memcpy(C + (size_t)(i + mm) * ldc + j,
+                            C_tile + (size_t)mm * 16,
+                            16 * sizeof(float));
+            }
+        }
+    }
+}
+
 }  // namespace
 
 /* ----------------------------------------------------------------------------
@@ -306,7 +360,6 @@ extern "C" TC_INTERNAL_SYMBOL int tc_amx_gemm_f32(int M, int N, int K,
     static thread_local size_t tls_A_pack_cap = 0;
     static thread_local float* tls_B_pack = nullptr;
     static thread_local size_t tls_B_pack_cap = 0;
-    alignas(64) float C_tile[16 * 16];
 
     const size_t A_pack_needed = (size_t)M * K;
     const size_t B_pack_needed = (size_t)K * N;
@@ -322,65 +375,26 @@ extern "C" TC_INTERNAL_SYMBOL int tc_amx_gemm_f32(int M, int N, int K,
     }
     if (!tls_A_pack || !tls_B_pack) return -1;
 
-    /* One-shot AMX arming. We do NOT pair this with AMX_CLR on exit:
-     * empirically on macOS 15.1 / M2 Ultra, an AMX_SET -> work -> AMX_CLR ->
-     * AMX_SET sequence reliably SIGILLs on the second SET (likely due to
-     * a thread-state mismatch tracked by xnu between the CLR and the next
-     * SET, possibly across a scheduler quantum).
-     *
-     * Holding the AMX unit "armed" for the lifetime of the thread sidesteps
-     * the trap. The first call to this function arms; subsequent calls
-     * become no-ops because the unit is already armed. macOS cleans up the
-     * thread's AMX state on exit. */
-    static thread_local bool amx_armed = false;
-    if (!amx_armed) {
-        AMX_SET();
-        amx_armed = true;
-    }
-
     /* Pack the entire A and B matrices into mega buffers once. After this
      * the inner loops touch only contiguous slices of these buffers. */
     pack_A_mega(A, lda, M, K, tls_A_pack);
     pack_B_mega(B, ldb, K, N, tls_B_pack);
 
-    /* KC = K block size for cache-resident FMA loops. KC x 16 fp32 each
-     * for A and B panel = 2 x KC x 64 bytes. At KC=384 that's 48 KB total -
-     * comfortably inside Apple Silicon L1d (192 KB per P-core) with room
-     * for the 1 KB Z register state and the C tile.
-     *
-     * Empirical sweep at 4096^3 on M2 Ultra (single-thread AMX):
-     *   KC=64  -> 0.30 TFLOPS (K-loop dispatch overhead)
-     *   KC=128 -> 0.35
-     *   KC=256 -> 0.36
-     *   KC=384 -> 0.37  <- optimum
-     *   KC=512 -> 0.34  (panels start spilling L1)
-     *   KC=768 -> 0.30 */
-    constexpr int KC = 256;
+    /* Single-thread execution. A previous attempt at 2-worker pthread
+     * multi-cluster threading via thread_affinity_policy_data hints
+     * actively regressed throughput on macOS 15.1 / M2 Ultra (0.37 -> 0.31
+     * TFLOPS at 4096^3, getting worse as M grew). Two likely causes:
+     *   (1) macOS does not honor advisory affinity hints strongly enough
+     *       to keep workers on distinct AMX clusters — they often co-locate
+     *       and serialize on the one cluster's AMX unit.
+     *   (2) When workers do land on different clusters, the shared mega-pack
+     *       sits in one cluster's L2; the remote worker reads it across the
+     *       UltraFusion fabric, dwarfing any compute parallelism.
+     * Multi-cluster AMX is left for a future session that uses a different
+     * primitive (GCD dispatch_apply, or explicit topology probing). */
+    amx_process_tile_strip(0, M, N, K, ldc, tls_A_pack, tls_B_pack, C);
 
-    /* For each output tile (i, j), zero Z, run the K dimension in KC chunks
-     * (Z accumulates across chunks within the same tile), then store to C. */
-    for (int i = 0; i < M; i += 16) {
-        const float* A_panel = tls_A_pack + (size_t)(i / 16) * K * 16;
-        for (int j = 0; j < N; j += 16) {
-            const float* B_panel = tls_B_pack + (size_t)(j / 16) * K * 16;
-
-            amx_zero_z_fp32();
-            for (int kp = 0; kp < K; kp += KC) {
-                const int kc = (kp + KC <= K) ? KC : (K - kp);
-                amx_fma32_accumulate(kc, A_panel + (size_t)kp * 16,
-                                          B_panel + (size_t)kp * 16);
-            }
-            amx_store_z_fp32(C_tile, 16);
-
-            for (int mm = 0; mm < 16; ++mm) {
-                std::memcpy(C + (size_t)(i + mm) * ldc + j,
-                            C_tile + (size_t)mm * 16,
-                            16 * sizeof(float));
-            }
-        }
-    }
-
-    /* Do not AMX_CLR - see comment above the AMX_SET. */
+    /* Do not AMX_CLR - see comment in amx_process_tile_strip. */
     return 0;
 }
 

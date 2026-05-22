@@ -63,9 +63,9 @@ equivalent, see **[docs/cuda_comparison.md](docs/cuda_comparison.md)**.
 | Conv2D fwd + backward (im2col + GEMM) | scaled-RMS ≤ 1e-3 | multi-batch validated |
 | GGUF reader | v3 metadata, tensors, bulk copy, Q4/Q8 descriptors | synthetic + Q4 GEMV end-to-end |
 | Python ctypes binding | full ABI surface, NumPy interop | covered by CTest `python_basic` |
-| Distributed (single-host ring) | bit-exact 4 ranks fp32 | thread + fork transports |
+| Distributed (single-host ring + portable GLOO TCP) | bit-exact local ranks | thread, fork, and TCP transports |
 | MPS + Accelerate fallback | wired, exercised by dispatch | — |
-| **Portable CPU backend** | builds on Linux / Intel-Mac with `TC_ENABLE_METAL=OFF`; covers buffers, streams, GEMM, attention/training/conv, GGUF, distributed-single, DiLoCo, and sparse compression. | for non-Apple mesh workers |
+| **Portable CPU backend** | builds on Linux / Intel-Mac with `TC_ENABLE_METAL=OFF`; covers buffers, streams, GEMM, attention/training/conv, GGUF, `TC_DIST_SINGLE`, GLOO TCP, DiLoCo, and sparse compression. | for non-Apple mesh workers |
 | CTest suite | 24/24 pass on M2 Ultra (22 library/package tests + 2 example smokes) | `ctest --test-dir build` |
 | CMake / pkg-config / Python install | `tensorcore::tensorcore[_shared]`, `tensorcore.pc` | tested out-of-tree |
 

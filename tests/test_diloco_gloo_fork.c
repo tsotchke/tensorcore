@@ -8,6 +8,8 @@
  */
 
 #include "tensorcore/tensorcore.h"
+#include "tensorcore/diloco.h"
+#include "tensorcore/distributed.h"
 
 #if defined(_WIN32)
 int main(void) { return 77; }
