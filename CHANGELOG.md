@@ -28,6 +28,9 @@ v0.1.22:
   + batched + async), `tc_quantize_weights`, `tc_gemv_quantized`,
   `tc_gguf_*`, `tc_dist_*` (single-host), diagnostic API
   (`tc_status_string`, `tc_dtype_name`, `tc_backend_name`).
+- The portable CPU GEMM path now delegates fp32 GEMM and fp16-through-fp32
+  GEMM to CBLAS when available (Accelerate on macOS, system BLAS on
+  Linux), with the triple-loop implementation retained as the fallback.
 - Uncovered ops return `TC_ERR_UNSUPPORTED_FAMILY` cleanly so downstream
   FFI imports can bind the full ABI surface without requiring Metal
   symbols.
@@ -162,6 +165,10 @@ v0.1.22:
 - `Publish native SDK release artifact` — the release workflow now
   produces a tarball of headers, libraries, and the metallib that
   downstream consumers can vendor without rebuilding.
+- Added `examples/native_sdk_consumer/`, a standalone CMake consumer
+  fixture for installed SDKs. Release smoke and native SDK archive
+  verification now build the same shared/static C and C++ consumers that
+  downstream projects can copy directly.
 - `Verify native SDK archive consumers`, `Check static SDK archive
   consumer`, `Check C++ SDK archive consumer` — CI compiles a tiny
   consumer against the archived static and shared libraries on every

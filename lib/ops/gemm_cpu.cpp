@@ -12,6 +12,15 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <vector>
+
+#if defined(TC_HAS_CBLAS)
+#  if defined(__APPLE__)
+#    include <Accelerate/Accelerate.h>
+#  else
+#    include <cblas.h>
+#  endif
+#endif
 
 namespace {
 
@@ -159,8 +168,105 @@ float load_b_f16(const uint16_t* B, const tc_gemm_desc* d, int k, int n) {
     return f16_to_f32(v);
 }
 
+#if defined(TC_HAS_CBLAS)
+void tc_cblas_sgemm(CBLAS_TRANSPOSE ta, CBLAS_TRANSPOSE tb,
+                    int32_t m, int32_t n, int32_t k,
+                    float alpha,
+                    const float* A, int32_t lda,
+                    const float* B, int32_t ldb,
+                    float beta,
+                    float* C, int32_t ldc) {
+#  if defined(__APPLE__) && defined(__clang__)
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#  endif
+    cblas_sgemm(CblasRowMajor, ta, tb, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);
+#  if defined(__APPLE__) && defined(__clang__)
+#    pragma clang diagnostic pop
+#  endif
+}
+
+/* Dequantize an fp16 [rows x cols] matrix into an fp32 buffer.
+ * Respects the leading dimension; the dst is packed (ld = cols). */
+void dequant_fp16_to_fp32(const uint16_t* src, int32_t rows, int32_t cols,
+                          int32_t ld, float* dst) {
+    for (int32_t r = 0; r < rows; ++r) {
+        const uint16_t* row = src + (size_t)r * ld;
+        float* dst_row = dst + (size_t)r * cols;
+        for (int32_t c = 0; c < cols; ++c) dst_row[c] = f16_to_f32(row[c]);
+    }
+}
+
+/* Quantize an fp32 [rows x cols] packed buffer back into an fp16 matrix with
+ * the given leading dimension. */
+void quantize_fp32_to_fp16(const float* src, int32_t rows, int32_t cols,
+                           int32_t ld, uint16_t* dst) {
+    for (int32_t r = 0; r < rows; ++r) {
+        uint16_t* dst_row = dst + (size_t)r * ld;
+        const float* src_row = src + (size_t)r * cols;
+        for (int32_t c = 0; c < cols; ++c) dst_row[c] = f32_to_f16(src_row[c]);
+    }
+}
+
+tc_status_t gemm_compute_cblas_f32(const tc_gemm_desc* d,
+                                   const float* A, const float* B, float* C) {
+    /* tensorcore's descriptor is row-major; cblas with CblasRowMajor honors
+     * that directly. transpose_a/b map to CblasTrans / CblasNoTrans. */
+    const CBLAS_TRANSPOSE ta = d->transpose_a ? CblasTrans : CblasNoTrans;
+    const CBLAS_TRANSPOSE tb = d->transpose_b ? CblasTrans : CblasNoTrans;
+    tc_cblas_sgemm(ta, tb, d->M, d->N, d->K, d->alpha,
+                   A, effective_lda(d), B, effective_ldb(d),
+                   d->beta, C, effective_ldc(d));
+    return TC_OK;
+}
+
+tc_status_t gemm_compute_cblas_f16(const tc_gemm_desc* d,
+                                   const uint16_t* A, const uint16_t* B,
+                                   uint16_t* C) {
+    /* fp16 inputs: dequant A and B to fp32 packed buffers, sgemm, requant.
+     * The dequant + sgemm + requant is still much faster than the naive
+     * triple-loop on any multithreaded CBLAS. */
+    const int32_t a_rows = d->transpose_a ? d->K : d->M;
+    const int32_t a_cols = d->transpose_a ? d->M : d->K;
+    const int32_t b_rows = d->transpose_b ? d->N : d->K;
+    const int32_t b_cols = d->transpose_b ? d->K : d->N;
+
+    std::vector<float> Af((size_t)a_rows * a_cols);
+    std::vector<float> Bf((size_t)b_rows * b_cols);
+    std::vector<float> Cf((size_t)d->M * d->N);
+    dequant_fp16_to_fp32(A, a_rows, a_cols, effective_lda(d), Af.data());
+    dequant_fp16_to_fp32(B, b_rows, b_cols, effective_ldb(d), Bf.data());
+    if (d->beta != 0.0f) {
+        dequant_fp16_to_fp32(C, d->M, d->N, effective_ldc(d), Cf.data());
+    }
+
+    const CBLAS_TRANSPOSE ta = d->transpose_a ? CblasTrans : CblasNoTrans;
+    const CBLAS_TRANSPOSE tb = d->transpose_b ? CblasTrans : CblasNoTrans;
+    tc_cblas_sgemm(ta, tb, d->M, d->N, d->K, d->alpha,
+                   Af.data(), a_cols, Bf.data(), b_cols,
+                   d->beta, Cf.data(), d->N);
+    quantize_fp32_to_fp16(Cf.data(), d->M, d->N, effective_ldc(d), C);
+    return TC_OK;
+}
+#endif  /* TC_HAS_CBLAS */
+
 tc_status_t gemm_compute(const tc_gemm_desc* d, const void* A, const void* B, void* C) {
     const int32_t ldc = effective_ldc(d);
+
+#if defined(TC_HAS_CBLAS)
+    /* Fast path: delegate fp32 and fp16 GEMM to CBLAS (Accelerate / OpenBLAS /
+     * MKL). Two orders of magnitude faster than the triple-loop reference. */
+    if (d->c_dtype == TC_DTYPE_F32 &&
+        d->a_dtype == TC_DTYPE_F32 && d->b_dtype == TC_DTYPE_F32) {
+        return gemm_compute_cblas_f32(d, (const float*)A, (const float*)B, (float*)C);
+    }
+    if (d->c_dtype == TC_DTYPE_F16 &&
+        d->a_dtype == TC_DTYPE_F16 && d->b_dtype == TC_DTYPE_F16) {
+        return gemm_compute_cblas_f16(d, (const uint16_t*)A, (const uint16_t*)B, (uint16_t*)C);
+    }
+    /* I32 (int8 inputs) falls through to the integer reference below. */
+#endif
+
     if (d->c_dtype == TC_DTYPE_I32) {
         const int32_t lda = effective_lda(d);
         const int32_t ldb = effective_ldb(d);

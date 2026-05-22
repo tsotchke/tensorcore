@@ -190,6 +190,8 @@ python3 -c 'import tensorcore as tc; print(tc.version())'
 ```
 
 Complete integration guide: **[docs/integrating_tensorcore.md](docs/integrating_tensorcore.md)**.
+For a copyable out-of-tree project, see
+**[examples/native_sdk_consumer](examples/native_sdk_consumer)**.
 
 ## Layout
 
@@ -247,8 +249,8 @@ silicon-bound vs software-bound axes are all in
 - **[examples/README.md](examples/README.md)** — what each compilable
   example (`hello_gemm`, `gguf_inspect`, `decode_step`, `training_step`)
   demonstrates.
-- **[tests/README.md](tests/README.md)** — what each of the 20
-  correctness tests covers and the tolerance it enforces.
+- **[tests/README.md](tests/README.md)** — what each default and
+  portable-CPU correctness test covers and the tolerance it enforces.
 - **[bench/README.md](bench/README.md)** — what each bench measures
   (GEMM TFLOPS sweep, FlashAttention TFLOPS, 7B Q4_0 decode latency).
 

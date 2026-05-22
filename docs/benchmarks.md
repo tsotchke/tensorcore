@@ -42,13 +42,12 @@ TC_BENCH_DTYPES=f32 TC_BENCH_SIZES=256,512 TC_BENCH_WARMUP=1 TC_BENCH_ITERS=3 \
 
 The full default GEMM sweep includes 2048³ and 4096³ shapes and is meant
 for the GPU path. Keep CPU sweeps bounded unless you are deliberately
-measuring the triple-loop reference implementation. The CPU build reports
-`family=Apple0` (= `TC_FAMILY_UNKNOWN`) and `device=portable-cpu`; this
-is documented behavior, not a misfire. See [family_gating.md](family_gating.md).
-
-The v0.2 polish path is to delegate GEMM to `cblas_sgemm` on macOS or
-system BLAS on Linux for a much faster host fallback. Today the reference
-implementation is intentionally simple.
+measuring host BLAS or the triple-loop fallback. When CBLAS is available,
+the CPU backend delegates fp32 GEMM and fp16-through-fp32 GEMM to
+`cblas_sgemm`; otherwise it falls back to the simple reference loop. The
+CPU build reports `family=Apple0` (= `TC_FAMILY_UNKNOWN`) and
+`device=portable-cpu`; this is documented behavior, not a misfire. See
+[family_gating.md](family_gating.md).
 
 Reference points:
 - MLX on M3 Max: ~13.3 TFLOPS fp16 (philipturner/metal-benchmarks).

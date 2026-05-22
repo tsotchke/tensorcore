@@ -1,6 +1,8 @@
 # tests/
 
-20 correctness tests covering every public ABI surface. Each test is a
+20 default correctness tests cover every public ABI surface, with two
+executable example smokes registered in the Metal build. The portable
+CPU-only build registers `test_portable_cpu.c` instead. Each test is a
 single `.c` file (or `.mm` for the buffer pool, which needs ObjC++).
 All tests compare against an fp64 CPU reference or a bit-exact CPU oracle
 and pass the tolerances documented in [../docs/numerics.md](../docs/numerics.md).
@@ -10,6 +12,10 @@ ctest --test-dir build --output-on-failure   # 20 correctness tests + example sm
 ```
 
 Runs in ~3s on M2 Ultra.
+
+With `TC_ENABLE_METAL=OFF`, `test_portable_cpu.c` covers the portable
+buffer/device path plus padded f32/f16 GEMM, batched GEMM, i8 GEMM,
+quantized GEMV, and distributed-single collectives.
 
 ## Test inventory
 

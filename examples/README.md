@@ -17,6 +17,7 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
 | `gguf_inspect.c` | Open a GGUF file, walk tensors, dump metadata, optionally copy a tensor into a `tc_buffer` | <1s |
 | `decode_step.c` | One full synthetic Llama decode step end-to-end (RMSnorm + Q4_0 GEMVs + RoPE + FlashAttention + SwiGLU + residual) | ~30ms / 2 layers |
 | `training_step.c` | One full training iteration: RMSnorm + Linear + softmax forward, backward through softmax+CE / Linear / RMSnorm, AdamW on weights + gamma | ~10ms / step |
+| `native_sdk_consumer/` | Standalone C and C++ consumers for an installed native SDK, shared/static CMake targets, and pkg-config smoke source | build-only |
 
 ## `hello_gemm.c` (60 lines)
 
@@ -100,12 +101,22 @@ step 15  loss=0.2549
 
 Loss decreases monotonically — the assembly is numerically correct.
 
+## `native_sdk_consumer/`
+
+Out-of-tree consumer fixture for release artifacts and downstream
+projects. It uses `find_package(tensorcore CONFIG REQUIRED)` against an
+installed prefix, builds shared/static C consumers plus a C++ consumer,
+and verifies public ABI helpers without requiring a real GPU. Set
+`TC_CONSUMER_RUN_INIT=1` to additionally prove runtime initialization on
+the current host.
+
 ## Reading order for a new contributor
 
 1. `hello_gemm.c` — proves your environment works.
 2. `gguf_inspect.c` — touches the GGUF reader.
 3. `decode_step.c` — inference assembly.
 4. `training_step.c` — training assembly.
+5. `native_sdk_consumer/` — proves an installed SDK works out of tree.
 
 Each example assumes you've read the corresponding doc:
 

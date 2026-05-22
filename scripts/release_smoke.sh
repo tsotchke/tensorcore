@@ -70,6 +70,7 @@ INSTALLED_WHEEL_SMOKE_MODE="not_run"
 CMAKE_CONSUMER_STATUS="not_run"
 CMAKE_SHARED_CONSUMER_STATUS="not_run"
 CMAKE_STATIC_CONSUMER_STATUS="not_run"
+CMAKE_CXX_CONSUMER_STATUS="not_run"
 PKG_CONFIG_CONSUMER_STATUS="not_run"
 PUBLIC_HEADERS_STATUS="not_run"
 PYTHON_FFI_SURFACE_STATUS="not_run"
@@ -121,6 +122,7 @@ write_runtime_evidence() {
     export GPU_OK TESTS_STATUS TESTS_MODE WHEEL_PATH WHEEL_TAG_STATUS WHEEL_PLATFORM_TAG
     export INSTALLED_WHEEL_SMOKE_STATUS INSTALLED_WHEEL_SMOKE_MODE
     export CMAKE_CONSUMER_STATUS CMAKE_SHARED_CONSUMER_STATUS CMAKE_STATIC_CONSUMER_STATUS
+    export CMAKE_CXX_CONSUMER_STATUS
     export PKG_CONFIG_CONSUMER_STATUS PUBLIC_HEADERS_STATUS PYTHON_FFI_SURFACE_STATUS
     export PYTHON_CONSTANTS_STATUS PYTHON_ABI_LAYOUT_STATUS AUTOTUNE_STATUS
     export GEMM_128_TILE_STATUS GEMM_ASYNC_STATUS
@@ -262,6 +264,7 @@ checks = {
             "passed": passed(env("CMAKE_CONSUMER_STATUS")),
             "shared_consumer_status": env("CMAKE_SHARED_CONSUMER_STATUS"),
             "static_consumer_status": env("CMAKE_STATIC_CONSUMER_STATUS"),
+            "cxx_consumer_status": env("CMAKE_CXX_CONSUMER_STATUS"),
         },
         "pkg_config": {
             "status": env("PKG_CONFIG_CONSUMER_STATUS"),
@@ -1217,73 +1220,29 @@ fi
 echo "[tensorcore] out-of-tree CMake consumer"
 RELEASE_SMOKE_PHASE="cmake_consumer"
 CONSUMER_DIR="$(mktemp -d /private/tmp/tensorcore-consumer.XXXXXX)"
-cat > "$CONSUMER_DIR/CMakeLists.txt" <<'CMAKE'
-cmake_minimum_required(VERSION 3.20)
-project(tensorcore_consumer LANGUAGES C)
-
-find_package(tensorcore CONFIG REQUIRED)
-
-add_executable(consumer main.c)
-target_link_libraries(consumer PRIVATE tensorcore::tensorcore_shared)
-
-add_executable(static_consumer static_main.c)
-target_link_libraries(static_consumer PRIVATE tensorcore::tensorcore)
-tensorcore_copy_metallib(static_consumer)
-CMAKE
-cat > "$CONSUMER_DIR/main.c" <<'C'
-#include <stdio.h>
-#include <string.h>
-#include "tensorcore/tensorcore.h"
-
-int main(void) {
-    if (tc_dtype_size(TC_DTYPE_F16) != 2 ||
-        strcmp(tc_dtype_name(TC_DTYPE_F32), "f32") != 0) {
-        return 1;
-    }
-
-    tc_gguf_tensor_info t = {0};
-    t.n_dims = 2;
-    t.dims[0] = 32;
-    t.dims[1] = 1;
-    t.type = TC_GGUF_TYPE_Q4_0;
-    t.n_bytes = tc_quantized_size(TC_QUANT_Q4_0, 1, 32);
-
-    tc_gguf_quantized_matrix_info q = {0};
-    tc_status_t s = tc_gguf_tensor_quantized_matrix_info(&t, &q);
-    if (s != TC_OK || q.N != 1 || q.K != 32 || q.quant_type != TC_QUANT_Q4_0) {
-        return 1;
-    }
-
-    printf("%s\n", tc_version());
-    return 0;
-}
-C
-cat > "$CONSUMER_DIR/static_main.c" <<'C'
-#include <stdio.h>
-#include "tensorcore/tensorcore.h"
-
-int main(void) {
-    tc_context* ctx = NULL;
-    tc_status_t s = tc_init(&ctx);
-    if (s != TC_OK && s != TC_ERR_ALREADY_INITIALIZED) {
-        fprintf(stderr, "tc_init: %s\n", tc_status_string(s));
-        return 1;
-    }
-    tc_shutdown(ctx);
-    printf("%s\n", tc_version());
-    return 0;
-}
-C
-cmake -S "$CONSUMER_DIR" -B "$CONSUMER_DIR/build" \
+CONSUMER_SRC="$ROOT/examples/native_sdk_consumer"
+cmake -S "$CONSUMER_SRC" -B "$CONSUMER_DIR/build" \
     -DCMAKE_PREFIX_PATH="$PREFIX"
 cmake --build "$CONSUMER_DIR/build"
-"$CONSUMER_DIR/build/consumer"
+if [ ! -f "$CONSUMER_DIR/build/tensorcore.metallib" ]; then
+    echo "tensorcore_copy_metallib did not copy tensorcore.metallib" >&2
+    exit 1
+fi
+DYLD_LIBRARY_PATH="$PREFIX/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
+LD_LIBRARY_PATH="$PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+    "$CONSUMER_DIR/build/consumer_shared"
 CMAKE_SHARED_CONSUMER_STATUS="passed"
+DYLD_LIBRARY_PATH="$PREFIX/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
+LD_LIBRARY_PATH="$PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+    "$CONSUMER_DIR/build/consumer_cxx"
+CMAKE_CXX_CONSUMER_STATUS="passed"
 if [ "$GPU_OK" = "1" ]; then
     AUTOTUNE_HOME="$CONSUMER_DIR/autotune-home"
     mkdir -p "$AUTOTUNE_HOME"
-    TC_AUTOTUNE=1 HOME="$AUTOTUNE_HOME" "$CONSUMER_DIR/build/static_consumer"
-    TC_AUTOTUNE=1 HOME="$AUTOTUNE_HOME" "$CONSUMER_DIR/build/static_consumer"
+    TC_CONSUMER_RUN_INIT=1 TC_AUTOTUNE=1 HOME="$AUTOTUNE_HOME" \
+        "$CONSUMER_DIR/build/consumer_static"
+    TC_CONSUMER_RUN_INIT=1 TC_AUTOTUNE=1 HOME="$AUTOTUNE_HOME" \
+        "$CONSUMER_DIR/build/consumer_static"
     CMAKE_STATIC_CONSUMER_STATUS="passed"
     AUTOTUNE_STATUS="passed"
 else
@@ -1297,7 +1256,7 @@ RELEASE_SMOKE_PHASE="pkg_config_consumer"
 if command -v pkg-config >/dev/null 2>&1; then
     CC_BIN="${CC:-cc}"
     PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" \
-        "$CC_BIN" "$CONSUMER_DIR/main.c" \
+        "$CC_BIN" "$CONSUMER_SRC/main.c" \
         $(PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" pkg-config --cflags --libs tensorcore) \
         -o "$CONSUMER_DIR/pkg-consumer"
     "$CONSUMER_DIR/pkg-consumer"

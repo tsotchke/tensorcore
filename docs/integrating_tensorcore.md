@@ -48,6 +48,20 @@ If tensorcore is installed somewhere non-standard:
 cmake -B build -DCMAKE_PREFIX_PATH=/opt/tensorcore
 ```
 
+The repository ships the same out-of-tree fixture used by release CI:
+
+```sh
+cmake -S examples/native_sdk_consumer -B /tmp/tc-consumer \
+  -DCMAKE_PREFIX_PATH=/opt/tensorcore
+cmake --build /tmp/tc-consumer
+DYLD_LIBRARY_PATH=/opt/tensorcore/lib /tmp/tc-consumer/consumer_shared
+/tmp/tc-consumer/consumer_static
+DYLD_LIBRARY_PATH=/opt/tensorcore/lib /tmp/tc-consumer/consumer_cxx
+```
+
+Set `TC_CONSUMER_RUN_INIT=1` on `consumer_shared` or `consumer_static`
+when you also want to prove runtime initialization on the current host.
+
 ## C API starting point
 
 ```c

@@ -131,6 +131,73 @@ cleanup:
     return rc;
 }
 
+static int run_padded_f16_gemm(tc_context* ctx) {
+    const int M = 4, N = 3, K = 5;
+    const int lda = M + 1, ldb = K + 2, ldc = N + 1;
+    const size_t a_elems = (size_t)(K - 1) * lda + M;
+    const size_t b_elems = (size_t)(N - 1) * ldb + K;
+    tc_buffer *A = NULL, *B = NULL, *C = NULL;
+    uint16_t *Ap = NULL, *Bp = NULL, *Cp = NULL;
+    int rc = 0;
+
+    if (tc_buffer_alloc(ctx, a_elems * sizeof(uint16_t), &A) != TC_OK ||
+        tc_buffer_alloc(ctx, b_elems * sizeof(uint16_t), &B) != TC_OK ||
+        tc_buffer_alloc(ctx, (size_t)M * ldc * sizeof(uint16_t), &C) != TC_OK) {
+        rc = 1;
+        goto cleanup;
+    }
+    tc_buffer_map(A, (void**)&Ap);
+    tc_buffer_map(B, (void**)&Bp);
+    tc_buffer_map(C, (void**)&Cp);
+    for (size_t i = 0; i < a_elems; ++i) Ap[i] = f32_to_f16(-37.0f);
+    for (size_t i = 0; i < b_elems; ++i) Bp[i] = f32_to_f16(19.0f);
+    for (int m = 0; m < M; ++m)
+        for (int n = 0; n < ldc; ++n)
+            Cp[(size_t)m * ldc + n] = f32_to_f16(-11.0f);
+    for (int k = 0; k < K; ++k)
+        for (int m = 0; m < M; ++m)
+            Ap[(size_t)k * lda + m] = f32_to_f16(0.025f * (float)(1 + k * M + m));
+    for (int n = 0; n < N; ++n)
+        for (int k = 0; k < K; ++k)
+            Bp[(size_t)n * ldb + k] = f32_to_f16(-0.02f * (float)(1 + n * K + k));
+    for (int m = 0; m < M; ++m)
+        for (int n = 0; n < N; ++n)
+            Cp[(size_t)m * ldc + n] = f32_to_f16(0.05f * (float)(m + n + 1));
+
+    tc_gemm_desc d = {0};
+    d.M = M; d.N = N; d.K = K;
+    d.a_dtype = TC_DTYPE_F16; d.b_dtype = TC_DTYPE_F16;
+    d.c_dtype = TC_DTYPE_F16; d.accum_dtype = TC_DTYPE_F32;
+    d.transpose_a = true; d.transpose_b = true;
+    d.alpha = 0.75f; d.beta = -0.25f;
+    d.lda = lda; d.ldb = ldb; d.ldc = ldc;
+    rc |= expect_status("padded f16 gemm", tc_gemm(ctx, &d, A, B, C), TC_OK);
+    if (tc_last_backend() != TC_BACKEND_PORTABLE_CPU) rc = 1;
+
+    for (int m = 0; m < M; ++m) {
+        for (int n = 0; n < N; ++n) {
+            float acc = 0.0f;
+            for (int k = 0; k < K; ++k) {
+                acc += f16_to_f32(Ap[(size_t)k * lda + m]) *
+                       f16_to_f32(Bp[(size_t)n * ldb + k]);
+            }
+            const float c0 = f16_to_f32(f32_to_f16(0.05f * (float)(m + n + 1)));
+            const float want = f16_to_f32(f32_to_f16(0.75f * acc - 0.25f * c0));
+            const float got = f16_to_f32(Cp[(size_t)m * ldc + n]);
+            if (fabsf(got - want) > 3e-3f) rc = 1;
+        }
+        for (int n = N; n < ldc; ++n) {
+            if (Cp[(size_t)m * ldc + n] != f32_to_f16(-11.0f)) rc = 1;
+        }
+    }
+
+cleanup:
+    if (C) tc_buffer_free(ctx, C);
+    if (B) tc_buffer_free(ctx, B);
+    if (A) tc_buffer_free(ctx, A);
+    return rc;
+}
+
 static int run_batched_f32_gemm(tc_context* ctx) {
     const int batch = 2, M = 3, N = 3, K = 2;
     const int64_t sa = M * K + 1, sb = K * N + 2, sc = M * N + 1;
@@ -278,6 +345,7 @@ int main(void) {
     if (strcmp(tc_backend_name(TC_BACKEND_PORTABLE_CPU), "portable_cpu") != 0) rc = 1;
 
     rc |= run_padded_f32_gemm(ctx);
+    rc |= run_padded_f16_gemm(ctx);
     rc |= run_batched_f32_gemm(ctx);
     rc |= run_i8_gemm(ctx);
     rc |= run_quantized(ctx);

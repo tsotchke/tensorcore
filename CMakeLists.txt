@@ -106,6 +106,56 @@ elseif(TC_CXX_RUNTIME_LIB)
 endif()
 
 # ----------------------------------------------------------------------------
+# CBLAS detection for the portable CPU GEMM backend.
+#
+# When CBLAS is available, lib/ops/gemm_cpu.cpp delegates fp32 / fp16 GEMM to
+# cblas_sgemm. Accelerate already ships cblas on macOS; on Linux/elsewhere we
+# pick up OpenBLAS / MKL / Netlib via find_package(BLAS). This keeps the
+# CPU-only backend correctness-first while avoiding the impractically slow
+# triple-loop path for common fp32/fp16 GEMM calls.
+# ----------------------------------------------------------------------------
+set(TC_CBLAS_LIBRARIES "")
+set(TC_CBLAS_PC_PRIVATE_LIBS "")
+set(TC_HAS_CBLAS 0)
+if(APPLE)
+    if(NOT ACCELERATE_FRAMEWORK)
+        find_library(ACCELERATE_FRAMEWORK Accelerate)
+    endif()
+    if(ACCELERATE_FRAMEWORK)
+        if(NOT TC_ENABLE_METAL)
+            set(TC_CBLAS_LIBRARIES "-framework Accelerate")
+            set(TC_CBLAS_PC_PRIVATE_LIBS "-framework Accelerate")
+        endif()
+        set(TC_HAS_CBLAS 1)
+        message(STATUS "tensorcore: CBLAS via Accelerate")
+    endif()
+else()
+    find_package(BLAS QUIET)
+    if(BLAS_FOUND)
+        # Make sure the cblas_* symbols are visible. OpenBLAS exposes them by
+        # default but a Netlib-style BLAS install may need cblas separately.
+        find_path(CBLAS_INCLUDE_DIR cblas.h
+            PATHS /usr/include /usr/local/include /opt/homebrew/include
+                  /usr/include/x86_64-linux-gnu /usr/include/openblas
+        )
+        if(CBLAS_INCLUDE_DIR)
+            set(TC_CBLAS_LIBRARIES ${BLAS_LIBRARIES})
+            set(TC_CBLAS_INCLUDE_DIRS ${CBLAS_INCLUDE_DIR})
+            string(REPLACE ";" " " TC_CBLAS_PC_PRIVATE_LIBS "${BLAS_LIBRARIES}")
+            set(TC_HAS_CBLAS 1)
+            message(STATUS "tensorcore: CBLAS via system BLAS (${BLAS_LIBRARIES})")
+        else()
+            message(STATUS "tensorcore: BLAS found but cblas.h not located; CPU GEMM stays on the reference")
+        endif()
+    else()
+        message(STATUS "tensorcore: no CBLAS found; CPU GEMM uses the triple-loop reference (<=1 GFLOPS)")
+    endif()
+endif()
+if(TC_CBLAS_PC_PRIVATE_LIBS)
+    string(APPEND TC_PC_PRIVATE_LIBS " ${TC_CBLAS_PC_PRIVATE_LIBS}")
+endif()
+
+# ----------------------------------------------------------------------------
 # Metal kernel compilation
 # ----------------------------------------------------------------------------
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -265,8 +315,15 @@ if(TC_ENABLE_METAL)
         TC_METALLIB_PATH="${TC_METALLIB_PATH}"
     )
 endif()
+if(TC_HAS_CBLAS)
+    target_compile_definitions(tensorcore_shared PRIVATE TC_HAS_CBLAS=1)
+    if(TC_CBLAS_INCLUDE_DIRS)
+        target_include_directories(tensorcore_shared PRIVATE ${TC_CBLAS_INCLUDE_DIRS})
+    endif()
+endif()
 target_link_libraries(tensorcore_shared PUBLIC
     ${TC_APPLE_FRAMEWORK_LINKS}
+    ${TC_CBLAS_LIBRARIES}
 )
 if(TC_ENABLE_METAL)
     target_link_options(tensorcore_shared PRIVATE
@@ -291,9 +348,16 @@ if(TC_ENABLE_METAL)
         TC_METALLIB_PATH="${TC_METALLIB_PATH}"
     )
 endif()
+if(TC_HAS_CBLAS)
+    target_compile_definitions(tensorcore PRIVATE TC_HAS_CBLAS=1)
+    if(TC_CBLAS_INCLUDE_DIRS)
+        target_include_directories(tensorcore PRIVATE ${TC_CBLAS_INCLUDE_DIRS})
+    endif()
+endif()
 
 target_link_libraries(tensorcore PUBLIC
     ${TC_APPLE_FRAMEWORK_LINKS}
+    ${TC_CBLAS_LIBRARIES}
     ${TC_STATIC_RUNTIME_LINKS}
 )
 
