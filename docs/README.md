@@ -75,6 +75,8 @@ are the entry points; everything below goes deeper.
   tensor loading, matrix descriptors.
 - **[distributed.md](distributed.md)** — distributed primitives, single /
   ring / Gloo backends, the world_size=1 path, fork test.
+- **[diloco.md](diloco.md)** — low-communication outer-loop training for
+  cross-site meshes, plus current implementation status.
 - **[python.md](python.md)** — the `tensorcore` Python binding, ctypes
   layout, numpy interop.
 
@@ -133,8 +135,9 @@ are the entry points; everything below goes deeper.
 
 - **[../examples/README.md](../examples/README.md)** — what each
   compilable example demonstrates and how to read them.
-- **[../tests/README.md](../tests/README.md)** — what each of the 20
-  correctness tests covers, including tolerances and skip semantics.
+- **[../tests/README.md](../tests/README.md)** — what each default and
+  portable-CPU correctness test covers, including tolerances and skip
+  semantics.
 - **[../bench/README.md](../bench/README.md)** — what each TFLOPS /
   tok/s harness measures and how to interpret its output.
 

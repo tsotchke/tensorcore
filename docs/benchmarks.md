@@ -28,24 +28,51 @@ the numbers reproduce inside ±5%.
 
 ## Portable CPU backend
 
-The portable CPU backend is a correctness-first reference path. Its job
-is to keep the public C ABI usable on non-Metal hosts and mesh workers,
-not to compete with the `simdgroup_matrix` kernels. Build it explicitly
-with Metal disabled:
+The portable CPU backend delegates fp32 and fp16 GEMM to CBLAS when
+available (Accelerate on macOS, OpenBLAS / MKL / Netlib on Linux). With
+CBLAS, throughput is competitive with native BLAS code; without it,
+the triple-loop reference still runs (correctness-first, ~1 GFLOPS).
+Detected at CMake time:
+
+```
+-- tensorcore: CBLAS via Accelerate                 (on macOS)
+-- tensorcore: CBLAS via system BLAS (OpenBLAS ...)  (on Linux with OpenBLAS)
+-- tensorcore: no CBLAS found; CPU GEMM uses the triple-loop reference
+```
+
+Build:
 
 ```sh
 cmake -B build-cpu -DTC_ENABLE_METAL=OFF -DTC_BUILD_BENCH=ON
 cmake --build build-cpu -j
-TC_BENCH_DTYPES=f32 TC_BENCH_SIZES=256,512 TC_BENCH_WARMUP=1 TC_BENCH_ITERS=3 \
-  ./build-cpu/bench/bench_gemm
+OPENBLAS_NUM_THREADS=44 TC_BENCH_DTYPES=f32 TC_BENCH_SIZES=1024,2048,4096 \
+  TC_BENCH_WARMUP=1 TC_BENCH_ITERS=3 ./build-cpu/bench/bench_gemm
 ```
 
-The full default GEMM sweep includes 2048³ and 4096³ shapes and is meant
-for the GPU path. Keep CPU sweeps bounded unless you are deliberately
-measuring host BLAS or the triple-loop fallback. When CBLAS is available,
-the CPU backend delegates fp32 GEMM and fp16-through-fp32 GEMM to
-`cblas_sgemm`; otherwise it falls back to the simple reference loop. The
-CPU build reports `family=Apple0` (= `TC_FAMILY_UNKNOWN`) and
+### Measured: old-donkey (88-core Xeon E5-2699 v4, OpenBLAS)
+
+| Shape | dtype | Threads | Time | Throughput | vs reference |
+|---|---|---:|---:|---:|---:|
+| 1024³ | F32 | 1 (OpenBLAS) | 28.5 ms | **80 GFLOPS** | 120× |
+| 1024³ | F32 | 44 (1 socket) | 2.23 ms | **0.96 TFLOPS** | **1455×** |
+| 2048³ | F32 | 44 (1 socket) | 14.26 ms | **1.20 TFLOPS** | — |
+| 4096³ | F32 | 44 (1 socket) | 102.75 ms | **1.34 TFLOPS** | — |
+
+For reference, M2 Ultra GPU fp32 at 4096³ is 2.46 TFLOPS. **old-donkey
+through tensorcore is now ~55% of M2 Ultra's fp32 throughput** — a
+legitimately useful CPU compute peer, not just a memory tier.
+
+NUMA pinning matters: 44 threads = one socket is the sweet spot on
+dual-socket old-donkey. 88 threads (both sockets) tanks due to cross-
+socket cache traffic. Use `OPENBLAS_NUM_THREADS=44` or
+`numactl --cpunodebind=0 --membind=0` for strict pinning.
+
+fp16 GEMM currently goes through a dequant -> sgemm -> requant path.
+The dequant/requant passes use thread-local fp32 scratch and OpenMP when
+available, but the path is still bounded by conversion bandwidth rather
+than the host BLAS peak.
+
+The CPU build reports `family=Apple0` (= `TC_FAMILY_UNKNOWN`) and
 `device=portable-cpu`; this is documented behavior, not a misfire. See
 [family_gating.md](family_gating.md).
 

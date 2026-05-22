@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+Heterogeneous compute substrate work: CPU-side attention/training kernels,
+BLAS delegation (Accelerate/MKL/OpenBLAS), an opt-in AVX2 GEMM kernel,
+HIP/chipStar public stubs for non-Apple GPU work, and a DiLoCo surface
+with a tested single-rank outer-step path.
+
+### CPU compute stack expanded
+
+- `Add CPU FlashAttention forward + backward`:
+  `lib/ops/attention_cpu.cpp`. Memory-efficient online-softmax algorithm
+  (Br=Bc=32 tiles), GQA + causal + sliding window + ALiBi all
+  supported, OpenMP per-(B, H) parallelism. fp16 IO, fp32 accumulator.
+- `Add CPU training kernels`: `lib/ops/training_cpu.cpp` implements
+  `tc_rmsnorm_forward/backward`, `tc_layernorm_forward/backward`,
+  `tc_rope_forward`, `tc_swiglu_forward/backward`,
+  `tc_softmax_forward/backward`, `tc_adamw_step` (fp16 and fp32 grad
+  paths), `tc_fused_rmsnorm_gemv`. All OpenMP-parallel.
+- `Add CPU Conv2D forward`: `lib/ops/conv2d_cpu.cpp` via im2col+GEMM,
+  inheriting the BLAS-delegate fast path. Backward (`tc_conv2d_backward_*`)
+  still returns `TC_ERR_UNSUPPORTED_FAMILY`.
+- `Wire BLAS-delegate (Accelerate / MKL / OpenBLAS) into CPU GEMM`:
+  `lib/ops/gemm_cpu.cpp` detects CBLAS at CMake time and delegates fp32 /
+  fp16-through-fp32 GEMM. Measured on old-donkey (Xeon E5-2699 v4 x 2
+  sockets):
+  - reference triple-loop: **0.66 GFLOPS** at 1024³
+  - OpenBLAS 44-thread: **1.34 TFLOPS** at 4096³
+  - Intel MKL 44-thread: **2.10 TFLOPS** at 4096³
+- `Add hand-tuned AVX2 fp32 GEMM micro-kernel`: `lib/ops/gemm_cpu_avx2.cpp`.
+  6×16 BLIS-style inner kernel, 12 ymm accumulators, FMA inner loop,
+  thread-local pack buffers. Opt-in via `TC_USE_AVX2_GEMM=1`. Self-contained
+  and hidden from the public export surface. Multi-thread outer + large-shape
+  scaling remain pending.
+
+### Heterogeneous-mesh substrate
+
+- `Add DiLoCo public ABI and local runtime`: `include/tensorcore/diloco.h`,
+  `lib/distributed/diloco.cpp`, and `docs/diloco.md`. The single-rank path
+  is implemented and covered in portable CPU tests; multi-rank WAN
+  transport/compressed all-reduce returns an explicit unsupported status
+  until the Gloo/chipStar substrate lands.
+- `Add HIP/chipStar backend scaffolding`: `include/tensorcore/hip.h`,
+  `lib/hip/hip_stub.cpp`, and `lib/hip/README.md`. The public API exports
+  deterministic unsupported stubs today and documents the porting plan for
+  Intel Level Zero plus NVIDIA/AMD/ARM OpenCL through chipStar.
+- `Document cross-continent training topology`: `docs/diloco.md` explains
+  the DiLoCo algorithm, compression choices, and the two-site bandwidth
+  budgeting model.
+
+### Original v0.1.22 changes (preserved below)
+
 Portable CPU backend for non-Apple workers, documentation overhaul,
 executable examples for the inference + training assembly, hardened shell
 scripts, expanded CI breadth, and a packaged native SDK artifact on top of
@@ -25,15 +74,24 @@ v0.1.22:
   dispatch ladder collapses to one entry (`portable_cpu`).
 - Covered ops on the CPU build: `tc_init`/`shutdown`,
   `tc_buffer_*`, `tc_stream_*`, `tc_gemm` (all dtypes + transpose
-  + batched + async), `tc_quantize_weights`, `tc_gemv_quantized`,
-  `tc_gguf_*`, `tc_dist_*` (single-host), diagnostic API
-  (`tc_status_string`, `tc_dtype_name`, `tc_backend_name`).
+  + batched + async), attention forward/backward, training kernels,
+  `tc_conv2d_forward`, `tc_quantize_weights`, `tc_gemv_quantized`,
+  `tc_gguf_*`, `tc_dist_*` (single-host), DiLoCo single-rank outer steps,
+  and diagnostic API (`tc_status_string`, `tc_dtype_name`,
+  `tc_backend_name`).
 - The portable CPU GEMM path now delegates fp32 GEMM and fp16-through-fp32
   GEMM to CBLAS when available (Accelerate on macOS, system BLAS on
   Linux), with the triple-loop implementation retained as the fallback.
-- Uncovered ops return `TC_ERR_UNSUPPORTED_FAMILY` cleanly so downstream
-  FFI imports can bind the full ABI surface without requiring Metal
-  symbols.
+- Portable CPU CI now builds the same installed-SDK shared/static/C++
+  consumer fixture used by release artifacts, compiles a pkg-config
+  consumer, and runs a Python smoke against the installed shared library
+  (`.dylib` on macOS, `.so` on Linux).
+- The Python binding and wheel packaging can load/package a Linux
+  `libtensorcore.so` for portable CPU builds while preserving the macOS
+  dylib + metallib release contract.
+- Uncovered backend paths (Conv2D backward, HIP execution, multi-rank
+  DiLoCo transport) return explicit unsupported statuses so downstream FFI
+  imports can bind the full ABI surface without requiring Metal symbols.
 
 ### Test surface
 

@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 
 from setuptools import setup
 from setuptools.errors import SetupError
@@ -12,7 +13,8 @@ from wheel.macosx_libfile import extract_macosx_min_system_version
 
 
 ROOT = Path(__file__).resolve().parent
-NATIVE_ARTIFACTS = ("libtensorcore.dylib", "tensorcore.metallib")
+NATIVE_LIBRARY_NAMES = ("libtensorcore.dylib", "libtensorcore.so", "tensorcore.dll")
+NATIVE_OPTIONAL_ARTIFACTS = ("tensorcore.metallib",)
 MACOS_ARCH_TAGS = {
     "arm64": {"arm64"},
     "x86_64": {"x86_64"},
@@ -44,9 +46,26 @@ def _artifact_dirs():
     yield from add(ROOT / "build" / "lib")
 
 
+def _platform_library_name():
+    if sys.platform == "darwin":
+        return "libtensorcore.dylib"
+    if sys.platform.startswith("linux"):
+        return "libtensorcore.so"
+    if sys.platform.startswith("win"):
+        return "tensorcore.dll"
+    return None
+
+
+def _metallib_required():
+    value = os.environ.get("TENSORCORE_REQUIRE_METALLIB")
+    if value is not None:
+        return value not in ("0", "false", "False", "no", "NO")
+    return sys.platform == "darwin"
+
+
 def _find_native_artifacts():
     found = {}
-    for name in NATIVE_ARTIFACTS:
+    for name in (*NATIVE_LIBRARY_NAMES, *NATIVE_OPTIONAL_ARTIFACTS):
         for directory in _artifact_dirs():
             candidate = directory / name
             if candidate.exists():
@@ -157,14 +176,26 @@ class bdist_wheel_with_native_artifacts(bdist_wheel):
 
     def run(self):
         found = _find_native_artifacts()
-        missing = [name for name in NATIVE_ARTIFACTS if name not in found]
+        required = []
+        platform_lib = _platform_library_name()
+        if platform_lib:
+            required.append(platform_lib)
+        elif not any(name in found for name in NATIVE_LIBRARY_NAMES):
+            required.extend(NATIVE_LIBRARY_NAMES)
+        if _metallib_required():
+            required.extend(NATIVE_OPTIONAL_ARTIFACTS)
+
+        missing = [name for name in required if name not in found]
         if missing:
             searched = ", ".join(str(p) for p in _artifact_dirs())
+            lib_hint = platform_lib or "one of " + ", ".join(NATIVE_LIBRARY_NAMES)
             raise SetupError(
                 "cannot build tensorcore-apple wheel without native artifacts: "
                 f"missing {', '.join(missing)}. Build/install tensorcore first "
                 "or set TENSORCORE_NATIVE_DIR to a directory containing "
-                f"{' and '.join(NATIVE_ARTIFACTS)}. Searched: {searched}"
+                f"{lib_hint}"
+                f"{' and tensorcore.metallib' if _metallib_required() else ''}. "
+                f"Searched: {searched}"
             )
         super().run()
 

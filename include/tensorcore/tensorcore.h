@@ -11,6 +11,8 @@
 #include "tensorcore/training.h"
 #include "tensorcore/conv.h"
 #include "tensorcore/distributed.h"
+#include "tensorcore/diloco.h"
+#include "tensorcore/hip.h"
 #include "tensorcore/quantized.h"
 #include "tensorcore/gguf.h"
 

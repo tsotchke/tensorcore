@@ -29,7 +29,7 @@ const char* tc_tensorops_gemm_kernel_name(const tc_gemm_desc* desc,
     return 0;
 }
 
-bool tc_tensorops_gemm_shape_supported(const tc_gemm_desc* desc) {
+TC_INTERNAL_SYMBOL bool tc_tensorops_gemm_shape_supported(const tc_gemm_desc* desc) {
     if (!desc) return false;
 
     /* The SDK26 TensorOps kernel currently writes 64x32 output tiles and uses

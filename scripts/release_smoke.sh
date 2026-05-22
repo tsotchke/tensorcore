@@ -1000,7 +1000,7 @@ try:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    if missing.returncode == 0 or "package-local libtensorcore.dylib not found" not in missing.stderr:
+    if missing.returncode == 0 or "package-local tensorcore native library not found" not in missing.stderr:
         raise SystemExit("installed-package import did not reject missing native dylib")
 
     env["TENSORCORE_LIB"] = str(dylib)

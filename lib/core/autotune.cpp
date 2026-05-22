@@ -19,6 +19,12 @@
 #include <cstring>
 #include <sys/stat.h>
 
+#if defined(_WIN32)
+#define TC_INTERNAL_SYMBOL
+#else
+#define TC_INTERNAL_SYMBOL __attribute__((visibility("hidden")))
+#endif
+
 extern "C" {
 
 struct tc_gemm_tile {
@@ -41,7 +47,7 @@ struct tc_gemm_tile {
  * Apple7-Apple10 due to register pressure (16 acc fragments/sg). Opt in
  * via env TC_USE_128_TILE=1 to bench.
  */
-tc_gemm_tile tc_autotune_gemm_tile_for_family(tc_family_t fam) {
+TC_INTERNAL_SYMBOL tc_gemm_tile tc_autotune_gemm_tile_for_family(tc_family_t fam) {
     /* Default = the proven Apple7/8/9/10 config. */
     tc_gemm_tile def = { 64, 64, 32, 2, 2, 4, 4, 128 };
 
@@ -78,8 +84,8 @@ static const char* tc_autotune_cache_dir(void) {
     return path;
 }
 
-tc_status_t tc_autotune_load_cache(const char* device_name, char* config_json,
-                                    size_t json_capacity) {
+TC_INTERNAL_SYMBOL tc_status_t tc_autotune_load_cache(const char* device_name, char* config_json,
+                                                      size_t json_capacity) {
     if (!device_name || !config_json || json_capacity == 0) return TC_ERR_INVALID_ARG;
     char path[1280];
     /* Sanitize device name (drop spaces). */
@@ -102,7 +108,7 @@ tc_status_t tc_autotune_load_cache(const char* device_name, char* config_json,
 /* Run a tiny GEMM sweep at init: 1024^3 fp16 with two candidate configs,
  * report which one was faster.  v0.1 of bench-driven tune is just a record
  * of empirical baseline (since we currently only ship one tile config). */
-tc_status_t tc_autotune_run_sweep(tc_context* ctx, char* out_json, size_t cap) {
+TC_INTERNAL_SYMBOL tc_status_t tc_autotune_run_sweep(tc_context* ctx, char* out_json, size_t cap) {
     (void)ctx; (void)cap;
     if (!out_json) return TC_ERR_INVALID_ARG;
     /* Just record the default config — the proper sweep lands in v0.2 once
@@ -115,7 +121,8 @@ tc_status_t tc_autotune_run_sweep(tc_context* ctx, char* out_json, size_t cap) {
     return TC_OK;
 }
 
-tc_status_t tc_autotune_save_cache(const char* device_name, const char* config_json) {
+TC_INTERNAL_SYMBOL tc_status_t tc_autotune_save_cache(const char* device_name,
+                                                      const char* config_json) {
     if (!device_name || !config_json) return TC_ERR_INVALID_ARG;
     char path[1280];
     char dn[128] = {0};
@@ -141,7 +148,8 @@ struct tc_attention_tile {
     uint32_t threads_per_tg;
 };
 
-tc_attention_tile tc_autotune_attention_tile_for_family(tc_family_t fam, uint32_t head_dim) {
+TC_INTERNAL_SYMBOL tc_attention_tile tc_autotune_attention_tile_for_family(tc_family_t fam,
+                                                                          uint32_t head_dim) {
     /* D=64: Br=Bc=32 fits comfortably on all M-series. */
     if (head_dim == 64) {
         return { 32, 32, 2, 2, 128 };

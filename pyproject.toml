@@ -68,4 +68,4 @@ include = ["tensorcore*"]
 exclude = ["tests*"]
 
 [tool.setuptools.package-data]
-tensorcore = ["libtensorcore.dylib", "tensorcore.metallib"]
+tensorcore = ["libtensorcore.dylib", "libtensorcore.so", "tensorcore.dll", "tensorcore.metallib"]

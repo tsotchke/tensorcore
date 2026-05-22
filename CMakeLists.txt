@@ -106,6 +106,18 @@ elseif(TC_CXX_RUNTIME_LIB)
 endif()
 
 # ----------------------------------------------------------------------------
+# OpenMP — used to parallelize the CPU dequant/requant passes in the BLAS
+# bridge. Optional; missing OpenMP just leaves the loops serial.
+# ----------------------------------------------------------------------------
+find_package(OpenMP COMPONENTS C CXX QUIET)
+if(OpenMP_FOUND)
+    set(TC_HAS_OPENMP 1)
+    message(STATUS "tensorcore: OpenMP available (${OpenMP_CXX_VERSION})")
+else()
+    set(TC_HAS_OPENMP 0)
+endif()
+
+# ----------------------------------------------------------------------------
 # CBLAS detection for the portable CPU GEMM backend.
 #
 # When CBLAS is available, lib/ops/gemm_cpu.cpp delegates fp32 / fp16 GEMM to
@@ -130,25 +142,41 @@ if(APPLE)
         message(STATUS "tensorcore: CBLAS via Accelerate")
     endif()
 else()
-    find_package(BLAS QUIET)
-    if(BLAS_FOUND)
-        # Make sure the cblas_* symbols are visible. OpenBLAS exposes them by
-        # default but a Netlib-style BLAS install may need cblas separately.
-        find_path(CBLAS_INCLUDE_DIR cblas.h
-            PATHS /usr/include /usr/local/include /opt/homebrew/include
-                  /usr/include/x86_64-linux-gnu /usr/include/openblas
-        )
-        if(CBLAS_INCLUDE_DIR)
-            set(TC_CBLAS_LIBRARIES ${BLAS_LIBRARIES})
-            set(TC_CBLAS_INCLUDE_DIRS ${CBLAS_INCLUDE_DIR})
-            string(REPLACE ";" " " TC_CBLAS_PC_PRIVATE_LIBS "${BLAS_LIBRARIES}")
-            set(TC_HAS_CBLAS 1)
-            message(STATUS "tensorcore: CBLAS via system BLAS (${BLAS_LIBRARIES})")
-        else()
-            message(STATUS "tensorcore: BLAS found but cblas.h not located; CPU GEMM stays on the reference")
-        endif()
+    # Try Intel MKL first if installed (best perf on Intel + works on AMD).
+    # Then OpenBLAS / Netlib via find_package(BLAS).
+    find_path(MKL_INCLUDE_DIR mkl_cblas.h
+        PATHS /usr/include /usr/include/mkl /opt/intel/oneapi/mkl/latest/include
+              /opt/intel/mkl/include
+    )
+    find_library(MKL_RT_LIB NAMES mkl_rt
+        PATHS /usr/lib/x86_64-linux-gnu /opt/intel/oneapi/mkl/latest/lib/intel64
+              /opt/intel/mkl/lib/intel64
+    )
+    if(MKL_INCLUDE_DIR AND MKL_RT_LIB)
+        set(TC_CBLAS_LIBRARIES "${MKL_RT_LIB}" pthread m dl)
+        set(TC_CBLAS_INCLUDE_DIRS ${MKL_INCLUDE_DIR})
+        set(TC_CBLAS_PC_PRIVATE_LIBS "-lmkl_rt -lpthread -lm -ldl")
+        set(TC_HAS_CBLAS 1)
+        message(STATUS "tensorcore: CBLAS via Intel MKL (${MKL_RT_LIB})")
     else()
-        message(STATUS "tensorcore: no CBLAS found; CPU GEMM uses the triple-loop reference (<=1 GFLOPS)")
+        find_package(BLAS QUIET)
+        if(BLAS_FOUND)
+            find_path(CBLAS_INCLUDE_DIR cblas.h
+                PATHS /usr/include /usr/local/include /opt/homebrew/include
+                      /usr/include/x86_64-linux-gnu /usr/include/openblas
+            )
+            if(CBLAS_INCLUDE_DIR)
+                set(TC_CBLAS_LIBRARIES ${BLAS_LIBRARIES})
+                set(TC_CBLAS_INCLUDE_DIRS ${CBLAS_INCLUDE_DIR})
+                string(REPLACE ";" " " TC_CBLAS_PC_PRIVATE_LIBS "${BLAS_LIBRARIES}")
+                set(TC_HAS_CBLAS 1)
+                message(STATUS "tensorcore: CBLAS via system BLAS (${BLAS_LIBRARIES})")
+            else()
+                message(STATUS "tensorcore: BLAS found but cblas.h not located; CPU GEMM stays on the reference")
+            endif()
+        else()
+            message(STATUS "tensorcore: no CBLAS found; CPU GEMM uses the triple-loop reference (<=1 GFLOPS)")
+        endif()
     endif()
 endif()
 if(TC_CBLAS_PC_PRIVATE_LIBS)
@@ -255,6 +283,8 @@ set(TC_COMMON_SOURCES
     lib/core/autotune.cpp
     lib/io/gguf.c
     lib/tensorops/tensorops_select.c
+    lib/distributed/diloco.cpp
+    lib/hip/hip_stub.cpp
 )
 
 if(TC_ENABLE_METAL)
@@ -279,11 +309,31 @@ else()
         ${TC_COMMON_SOURCES}
         lib/core/device_cpu.cpp
         lib/ops/gemm_cpu.cpp
+        lib/ops/gemm_cpu_avx2.cpp
+        lib/ops/training_cpu.cpp
+        lib/ops/attention_cpu.cpp
+        lib/ops/conv2d_cpu.cpp
         lib/ops/quantized_cpu.cpp
         lib/ops/unsupported_cpu.cpp
         lib/distributed/distributed_cpu.cpp
         lib/c_api/c_api_cpu.c
     )
+endif()
+
+# AVX2 micro-kernel needs explicit -mavx2 -mfma flags on x86 so the source
+# compiles even when the default arch is older than Haswell. On non-x86
+# platforms the file builds a tiny stub and must not receive x86-only flags.
+if(NOT TC_ENABLE_METAL)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|i[3-6]86)$")
+        include(CheckCXXCompilerFlag)
+        check_cxx_compiler_flag("-mavx2" TC_COMPILER_SUPPORTS_MAVX2)
+        check_cxx_compiler_flag("-mfma" TC_COMPILER_SUPPORTS_MFMA)
+        if(TC_COMPILER_SUPPORTS_MAVX2 AND TC_COMPILER_SUPPORTS_MFMA)
+            set_source_files_properties(lib/ops/gemm_cpu_avx2.cpp PROPERTIES
+                COMPILE_OPTIONS "$<$<COMPILE_LANGUAGE:CXX>:-mavx2;-mfma>"
+            )
+        endif()
+    endif()
 endif()
 
 if(TC_HAVE_METAL4)
@@ -321,6 +371,9 @@ if(TC_HAS_CBLAS)
         target_include_directories(tensorcore_shared PRIVATE ${TC_CBLAS_INCLUDE_DIRS})
     endif()
 endif()
+if(OpenMP_FOUND)
+    target_link_libraries(tensorcore_shared PRIVATE OpenMP::OpenMP_CXX)
+endif()
 target_link_libraries(tensorcore_shared PUBLIC
     ${TC_APPLE_FRAMEWORK_LINKS}
     ${TC_CBLAS_LIBRARIES}
@@ -353,6 +406,9 @@ if(TC_HAS_CBLAS)
     if(TC_CBLAS_INCLUDE_DIRS)
         target_include_directories(tensorcore PRIVATE ${TC_CBLAS_INCLUDE_DIRS})
     endif()
+endif()
+if(OpenMP_FOUND)
+    target_link_libraries(tensorcore PRIVATE OpenMP::OpenMP_CXX)
 endif()
 
 target_link_libraries(tensorcore PUBLIC

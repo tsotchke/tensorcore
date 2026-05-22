@@ -32,6 +32,7 @@ For perf-critical loops, use the async variants and tc.stream_sync().
 import ctypes
 import math
 import os
+import sys
 import weakref
 from ctypes import (
     c_int, c_uint, c_int32, c_int64, c_uint32, c_uint64, c_size_t,
@@ -42,14 +43,25 @@ from ctypes import (
 # Library loading
 # ---------------------------------------------------------------------------
 
+def _library_names():
+    if sys.platform == "darwin":
+        return ("libtensorcore.dylib", "libtensorcore.so")
+    if sys.platform.startswith("linux"):
+        return ("libtensorcore.so", "libtensorcore.dylib")
+    if sys.platform.startswith("win"):
+        return ("tensorcore.dll",)
+    return ("libtensorcore.so", "libtensorcore.dylib")
+
+
 def _find_lib():
     env = os.environ.get("TENSORCORE_LIB")
     if env:
         return env
     here = os.path.dirname(os.path.abspath(__file__))
-    package_local = os.path.join(here, "libtensorcore.dylib")
-    if os.path.exists(package_local):
-        return package_local
+    for name in _library_names():
+        package_local = os.path.join(here, name)
+        if os.path.exists(package_local):
+            return package_local
 
     source_root = os.path.abspath(os.path.join(here, "..", ".."))
     is_source_checkout = (
@@ -58,20 +70,24 @@ def _find_lib():
     )
     if not is_source_checkout:
         raise RuntimeError(
-            "package-local libtensorcore.dylib not found. Reinstall the "
+            "package-local tensorcore native library not found. Reinstall the "
             "tensorcore-apple wheel or set TENSORCORE_LIB explicitly."
         )
 
-    candidates = [
-        os.path.join(source_root, "build", "libtensorcore.dylib"),
-        "/opt/tensorcore/lib/libtensorcore.dylib",
-        "/usr/local/lib/libtensorcore.dylib",
+    candidate_dirs = [
+        os.path.join(source_root, "build"),
+        os.path.join(source_root, "build", "lib"),
+        os.path.join(source_root, "build-portable-cpu"),
+        "/opt/tensorcore/lib",
+        "/usr/local/lib",
     ]
-    for p in candidates:
-        if os.path.exists(p) and p.endswith(".dylib"):
-            return p
+    for directory in candidate_dirs:
+        for name in _library_names():
+            p = os.path.join(directory, name)
+            if os.path.exists(p):
+                return p
     raise RuntimeError(
-        "libtensorcore.dylib not found. Set TENSORCORE_LIB env var or "
+        "tensorcore native library not found. Set TENSORCORE_LIB env var or "
         "build tensorcore as a shared library."
     )
 
@@ -293,6 +309,38 @@ class TCGGufQuantizedMatrixInfo(Structure):
     ]
 
 
+class TCHipDeviceInfo(Structure):
+    _fields_ = [
+        ("vendor", c_int),
+        ("device_name", ctypes.c_char * 128),
+        ("driver_version", ctypes.c_char * 64),
+        ("opencl_version", ctypes.c_char * 64),
+        ("global_memory_bytes", c_uint64),
+        ("local_memory_bytes", c_uint64),
+        ("compute_units", c_uint32),
+        ("max_workgroup_size", c_uint32),
+        ("preferred_subgroup_size", c_uint32),
+        ("supports_fp16", c_bool),
+        ("supports_fp64", c_bool),
+        ("supports_int8_dot", c_bool),
+        ("unified_memory", c_bool),
+    ]
+
+
+class TCDiLoCoConfig(Structure):
+    _fields_ = [
+        ("inner_steps", c_int),
+        ("outer_lr", c_float),
+        ("outer_momentum", c_float),
+        ("outer_beta2", c_float),
+        ("outer_eps", c_float),
+        ("outer_optimizer", c_int),
+        ("compress", c_int),
+        ("async_overlap", c_bool),
+        ("tolerate_dropouts", c_bool),
+    ]
+
+
 if _lib is not None:
     _lib.tc_init.argtypes = [POINTER(c_void_p)];          _lib.tc_init.restype = c_int
     _lib.tc_shutdown.argtypes = [c_void_p];               _lib.tc_shutdown.restype = c_int
@@ -443,6 +491,36 @@ if _lib is not None:
     _lib.tc_allgather.restype = c_int
     _lib.tc_barrier.argtypes = [c_void_p]
     _lib.tc_barrier.restype = c_int
+    _lib.tc_hip_init.argtypes = [c_void_p]
+    _lib.tc_hip_init.restype = c_int
+    _lib.tc_hip_device_info_get.argtypes = [c_void_p, POINTER(TCHipDeviceInfo)]
+    _lib.tc_hip_device_info_get.restype = c_int
+    _lib.tc_hip_device_count.argtypes = []
+    _lib.tc_hip_device_count.restype = c_int
+    _lib.tc_hip_device_at.argtypes = [c_int, POINTER(TCHipDeviceInfo)]
+    _lib.tc_hip_device_at.restype = c_int
+    _lib.tc_hip_select_device.argtypes = [c_void_p, c_int]
+    _lib.tc_hip_select_device.restype = c_int
+    _lib.tc_hip_last_kernel_name.argtypes = []
+    _lib.tc_hip_last_kernel_name.restype = c_char_p
+    _lib.tc_diloco_init.argtypes = [c_void_p, POINTER(TCDiLoCoConfig), POINTER(c_void_p)]
+    _lib.tc_diloco_init.restype = c_int
+    _lib.tc_diloco_finalize.argtypes = [c_void_p]
+    _lib.tc_diloco_finalize.restype = c_int
+    _lib.tc_diloco_add_parameter.argtypes = [c_void_p, c_char_p, c_void_p, c_size_t, c_int]
+    _lib.tc_diloco_add_parameter.restype = c_int
+    _lib.tc_diloco_step.argtypes = [c_void_p, POINTER(c_bool)]
+    _lib.tc_diloco_step.restype = c_int
+    _lib.tc_diloco_apply_outer.argtypes = [c_void_p]
+    _lib.tc_diloco_apply_outer.restype = c_int
+    _lib.tc_diloco_outer_steps_completed.argtypes = [c_void_p]
+    _lib.tc_diloco_outer_steps_completed.restype = c_uint64
+    _lib.tc_diloco_inner_steps_completed.argtypes = [c_void_p]
+    _lib.tc_diloco_inner_steps_completed.restype = c_uint64
+    _lib.tc_diloco_last_outer_step_seconds.argtypes = [c_void_p]
+    _lib.tc_diloco_last_outer_step_seconds.restype = c_double
+    _lib.tc_diloco_last_outer_bytes_sent.argtypes = [c_void_p]
+    _lib.tc_diloco_last_outer_bytes_sent.restype = c_double
     _lib.tc_status_string.argtypes = [c_int]; _lib.tc_status_string.restype = c_char_p
     _lib.tc_version.argtypes = []; _lib.tc_version.restype = c_char_p
 

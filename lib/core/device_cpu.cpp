@@ -7,6 +7,7 @@
  */
 
 #include "tensorcore/tensorcore.h"
+#include "internal.h"
 
 #include <atomic>
 #include <cstdint>
@@ -41,7 +42,7 @@ static tc_context* g_ctx = nullptr;
 static std::mutex  g_ctx_mutex;
 static thread_local tc_backend_t t_last_backend = TC_BACKEND_NONE;
 
-extern "C" void tc_set_last_backend(tc_backend_t b) { t_last_backend = b; }
+extern "C" TC_INTERNAL_SYMBOL void tc_set_last_backend(tc_backend_t b) { t_last_backend = b; }
 extern "C" tc_backend_t tc_last_backend(void) { return t_last_backend; }
 
 extern "C" const char* tc_backend_name(tc_backend_t b) {
@@ -151,9 +152,9 @@ extern "C" tc_status_t tc_buffer_alloc(tc_context* ctx, size_t bytes, tc_buffer*
     return TC_OK;
 }
 
-extern "C" tc_status_t tc_buffer_validate(tc_context* ctx,
-                                          const tc_buffer* buf,
-                                          size_t min_bytes) {
+extern "C" TC_INTERNAL_SYMBOL tc_status_t tc_buffer_validate(tc_context* ctx,
+                                                             const tc_buffer* buf,
+                                                             size_t min_bytes) {
     if (!ctx || !buf || !buf->ptr) return TC_ERR_INVALID_ARG;
     if (buf->owner != ctx) return TC_ERR_INVALID_ARG;
     if (min_bytes > buf->bytes) return TC_ERR_INVALID_SHAPE;

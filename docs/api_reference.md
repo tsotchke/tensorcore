@@ -660,6 +660,109 @@ tc_status_t tc_barrier  (tc_dist_ctx* d);
 See [distributed.md](distributed.md) for the single-host ring (threads
 and fork transports) and the v0.5 TB5/Gloo plan.
 
+## DiLoCo — `diloco.h`
+
+DiLoCo is layered above an existing `tc_dist_ctx`. The current runtime
+implements the single-rank/local outer-step path; multi-rank WAN
+transport and compressed sparse all-reduce return explicit unsupported
+statuses until the distributed substrate lands.
+
+```c
+typedef struct tc_diloco_ctx tc_diloco_ctx;
+
+typedef enum {
+    TC_DILOCO_COMPRESS_NONE = 0,
+    TC_DILOCO_COMPRESS_FP16 = 1,
+    TC_DILOCO_COMPRESS_FP8 = 2,
+    TC_DILOCO_COMPRESS_TOPK_1PCT = 3,
+    TC_DILOCO_COMPRESS_TOPK_01PCT = 4,
+    TC_DILOCO_COMPRESS_LOWRANK = 5,
+    TC_DILOCO_COMPRESS_SIGNSGD = 6,
+} tc_diloco_compress_t;
+
+typedef enum {
+    TC_DILOCO_OUTER_SGD = 0,
+    TC_DILOCO_OUTER_NESTEROV = 1,
+    TC_DILOCO_OUTER_ADAM = 2,
+} tc_diloco_outer_optimizer_t;
+
+typedef struct {
+    int inner_steps;
+    float outer_lr;
+    float outer_momentum;
+    float outer_beta2;
+    float outer_eps;
+    tc_diloco_outer_optimizer_t outer_optimizer;
+    tc_diloco_compress_t compress;
+    bool async_overlap;
+    bool tolerate_dropouts;
+} tc_diloco_config;
+
+tc_status_t tc_diloco_init(tc_dist_ctx* dist_ctx,
+                           const tc_diloco_config* cfg,
+                           tc_diloco_ctx** out);
+tc_status_t tc_diloco_finalize(tc_diloco_ctx* d);
+tc_status_t tc_diloco_add_parameter(tc_diloco_ctx* d,
+                                    const char* name,
+                                    tc_buffer* theta_local,
+                                    size_t num_elements,
+                                    tc_dtype_t dtype);
+tc_status_t tc_diloco_step(tc_diloco_ctx* d,
+                           bool* out_outer_step_pending);
+tc_status_t tc_diloco_apply_outer(tc_diloco_ctx* d);
+
+uint64_t tc_diloco_outer_steps_completed(const tc_diloco_ctx* d);
+uint64_t tc_diloco_inner_steps_completed(const tc_diloco_ctx* d);
+double tc_diloco_last_outer_step_seconds(const tc_diloco_ctx* d);
+double tc_diloco_last_outer_bytes_sent(const tc_diloco_ctx* d);
+```
+
+See [diloco.md](diloco.md) for the algorithm, topology model, and staged
+transport work.
+
+## HIP — `hip.h`
+
+HIP/chipStar is the staged non-Apple GPU backend. The public symbols are
+exported today as deterministic unsupported stubs so SDK consumers and FFI
+generators can bind the future surface.
+
+```c
+typedef enum {
+    TC_HIP_VENDOR_UNKNOWN = 0,
+    TC_HIP_VENDOR_INTEL = 1,
+    TC_HIP_VENDOR_NVIDIA = 2,
+    TC_HIP_VENDOR_AMD = 3,
+    TC_HIP_VENDOR_ARM_MALI = 4,
+} tc_hip_vendor_t;
+
+typedef struct {
+    tc_hip_vendor_t vendor;
+    char device_name[128];
+    char driver_version[64];
+    char opencl_version[64];
+    uint64_t global_memory_bytes;
+    uint64_t local_memory_bytes;
+    uint32_t compute_units;
+    uint32_t max_workgroup_size;
+    uint32_t preferred_subgroup_size;
+    bool supports_fp16;
+    bool supports_fp64;
+    bool supports_int8_dot;
+    bool unified_memory;
+} tc_hip_device_info;
+
+tc_status_t tc_hip_init(tc_context* ctx);
+tc_status_t tc_hip_device_info_get(tc_context* ctx,
+                                   tc_hip_device_info* out_info);
+int tc_hip_device_count(void);
+tc_status_t tc_hip_device_at(int index, tc_hip_device_info* out_info);
+tc_status_t tc_hip_select_device(tc_context* ctx, int index);
+const char* tc_hip_last_kernel_name(void);
+```
+
+See [../lib/hip/README.md](../lib/hip/README.md) for the chipStar porting
+plan.
+
 ## Notes for ABI consumers
 
 - All entry points are `extern "C"`. C++ headers reverse-include cleanly.
