@@ -84,9 +84,9 @@ lib/ops/gemm.mm::tc_gemm
 ├── lib/ops/gemm.mm::resolve_pipeline     ← pipeline-cache lookup
 ├── lib/ops/gemm.mm::validate
 ├── lib/ops/gemm.mm::validate_gemm_buffers
-├── lib/core/device.mm::tc_set_last_backend
+├── lib/core/trace.cpp::tc_record_dispatch
 ├── lib/tensorops/tensorops_m5.mm::tc_tensorops_gemm_attempt
-│   └── lib/core/device.mm::tc_set_last_backend
+│   └── lib/core/trace.cpp::tc_record_dispatch
 └── lib/fallback/mps_gemm.mm::tc_mps_gemm
     ├── lib/fallback/mps_gemm.mm::bf16_via_fp32  ← Apple7..8 bf16 fallback
     ├── lib/fallback/mps_gemm.mm::i8_via_fp32    ← Apple7..9 int8 fallback
@@ -97,18 +97,19 @@ This confirms the [architecture.md](architecture.md) fallback-ladder
 description: simdgroup_matrix → TensorOps M5 → MPS (which itself contains
 the bf16/int8 software fallbacks).
 
-## `tc_set_last_backend` call sites
+## Dispatch recording call sites
 
-Found with `grep -rn`, cross-checked with `icc trace-callers`:
+Found with `rg tc_record_dispatch`, cross-checked with `icc trace-callers`:
 
-- `lib/ops/gemm.mm` — 5 sites (SIMDGROUP, MPS, NONE for failure)
-- `lib/ops/attention.mm` — 3 sites (all SIMDGROUP)
-- `lib/tensorops/tensorops_m5.mm` — 2 sites (TENSOROPS_M5)
+- `lib/ops/gemm.mm` / `lib/ops/gemm_cpu.cpp` — GEMM sync/async/batched
+- `lib/ops/attention.mm` / `lib/ops/attention_cpu.cpp` — attention forward/backward
+- `lib/ops/training.mm` / `lib/ops/training_cpu.cpp` — norm/RoPE/SwiGLU/softmax/AdamW/fused GEMV
+- `lib/ops/conv.mm` / `lib/ops/conv2d_cpu.cpp` — Conv2D forward/backward
+- `lib/ops/quantized.mm` / `lib/ops/quantized_cpu.cpp` — quantize/GEMV
+- `lib/tensorops/tensorops_m5.mm` — TensorOps M5 attempts
 
-The training, conv, and quantized ops do **not** update
-`tc_last_backend`. This is a v0.2 polish item — and the reason
-`tc_last_backend()` is documented as "last-GEMM-like" rather than
-"last-call." See [api_reference.md § GEMM](api_reference.md#gemm-gemmh).
+These sites back both `tc_last_backend()` and the `TC_TRACE=1`
+op/status/backend trace.
 
 ## Dead-code candidates
 
@@ -130,7 +131,7 @@ Excerpts:
 
 - `tc_family_t`: `APPLE7..APPLE11` (M1 → M5)
 - `tc_dtype_t`: 10 dtypes; first-class F16/BF16/F32/I8/I32; emulated F64/SF64/DF64/FP24/FP53
-- `tc_backend_t`: NONE, SIMDGROUP_MATRIX, TENSOROPS_M5, MPS, ACCELERATE_CPU, SF64_EMULATED, OZAKI_II, PORTABLE_CPU
+- `tc_backend_t`: NONE, SIMDGROUP_MATRIX, TENSOROPS_M5, MPS, ACCELERATE_CPU, SF64_EMULATED, OZAKI_II, PORTABLE_CPU, METAL_COMPUTE
 - `tc_status_t`: TC_OK plus 11 error codes
 - `tc_dist_backend_t`: SINGLE, RING, GLOO
 - `tc_reduce_op_t`: SUM, AVG, MAX, MIN
@@ -149,7 +150,7 @@ The "doc overhaul" pass that produced this directory was grounded in:
 - the headers (read in full),
 - the ICC architecture-summary + cheatsheet,
 - `icc trace-callees tc_gemm`,
-- `icc trace-callers tc_set_last_backend`,
+- `icc trace-callers tc_record_dispatch`,
 - `icc find-clusters` on the larger files,
 - targeted grep verification when ICC's tree-sitter resolution lost edges.
 

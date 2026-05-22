@@ -116,7 +116,7 @@ extern "C" tc_status_t tc_rmsnorm_forward(tc_context* ctx,
             yr[d] = tc_cpu_f32_to_f16(xv * rstd * gv);
         }
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_rmsnorm_forward", TC_BACKEND_PORTABLE_CPU, TC_OK);
 }
 
 /* ----------------------------------------------------------------------- *
@@ -200,7 +200,7 @@ extern "C" tc_status_t tc_rmsnorm_backward(tc_context* ctx,
         const float* row = dg_partials.data() + (size_t)t * D;
         for (int d = 0; d < D; ++d) dg_data[d] += row[d];
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_rmsnorm_backward", TC_BACKEND_PORTABLE_CPU, TC_OK);
 }
 
 /* ----------------------------------------------------------------------- *
@@ -260,7 +260,7 @@ extern "C" tc_status_t tc_layernorm_forward(tc_context* ctx,
             yr[d] = tc_cpu_f32_to_f16((xv - mean) * rstd * gv + bv);
         }
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_layernorm_forward", TC_BACKEND_PORTABLE_CPU, TC_OK);
 }
 
 extern "C" tc_status_t tc_layernorm_backward(tc_context* ctx,
@@ -315,7 +315,7 @@ extern "C" tc_status_t tc_layernorm_backward(tc_context* ctx,
             dxr[d] = tc_cpu_f32_to_f16(rs * (dyp - (float)s1 * inv_d - xhat * (float)s2 * inv_d));
         }
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_layernorm_backward", TC_BACKEND_PORTABLE_CPU, TC_OK);
 }
 
 /* ----------------------------------------------------------------------- *
@@ -371,7 +371,7 @@ extern "C" tc_status_t tc_rope_forward(tc_context* ctx,
             xr[k + half] = tc_cpu_f32_to_f16(x0 * si + x1 * c);
         }
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_rope_forward", TC_BACKEND_PORTABLE_CPU, TC_OK);
 }
 
 extern "C" tc_status_t tc_rope_backward(tc_context* ctx,
@@ -416,7 +416,7 @@ extern "C" tc_status_t tc_rope_backward(tc_context* ctx,
             dxr[k + half] = tc_cpu_f32_to_f16(-dy0 * si + dy1 * c);
         }
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_rope_backward", TC_BACKEND_PORTABLE_CPU, TC_OK);
 }
 
 /* ----------------------------------------------------------------------- *
@@ -445,7 +445,7 @@ extern "C" tc_status_t tc_swiglu_forward(tc_context* ctx,
         const float uv = tc_cpu_f16_to_f32(ud[i]);
         od[i] = tc_cpu_f32_to_f16(silu_scalar(gv) * uv);
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_swiglu_forward", TC_BACKEND_PORTABLE_CPU, TC_OK);
 }
 
 extern "C" tc_status_t tc_swiglu_backward(tc_context* ctx,
@@ -478,7 +478,7 @@ extern "C" tc_status_t tc_swiglu_backward(tc_context* ctx,
         dgd[i] = tc_cpu_f32_to_f16(dv * uv * dsilu_scalar(gv));
         dud[i] = tc_cpu_f32_to_f16(dv * silu_scalar(gv));
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_swiglu_backward", TC_BACKEND_PORTABLE_CPU, TC_OK);
 }
 
 /* ----------------------------------------------------------------------- *
@@ -516,7 +516,7 @@ extern "C" tc_status_t tc_softmax_forward(tc_context* ctx,
         const float inv = 1.0f / (float)s;
         for (int d = 0; d < D; ++d) yr[d] = tc_cpu_f32_to_f16(tmp[d] * inv);
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_softmax_forward", TC_BACKEND_PORTABLE_CPU, TC_OK);
 }
 
 extern "C" tc_status_t tc_softmax_backward(tc_context* ctx,
@@ -553,7 +553,7 @@ extern "C" tc_status_t tc_softmax_backward(tc_context* ctx,
             dxr[d] = tc_cpu_f32_to_f16(yv * (dv - (float)s));
         }
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_softmax_backward", TC_BACKEND_PORTABLE_CPU, TC_OK);
 }
 
 /* ----------------------------------------------------------------------- *
@@ -614,7 +614,7 @@ extern "C" tc_status_t tc_adamw_step(tc_context* ctx,
     } else {
         return TC_ERR_UNSUPPORTED_DTYPE;
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_adamw_step", TC_BACKEND_PORTABLE_CPU, TC_OK);
 }
 
 /* ----------------------------------------------------------------------- *
@@ -680,7 +680,7 @@ extern "C" tc_status_t tc_fused_rmsnorm_gemv(tc_context* ctx,
     std::memcpy(xn_buf_p, xn, (size_t)M * K * sizeof(uint16_t));
     tc_status_t s = tc_gemm(ctx, &d, xn_buf, W, Y);
     tc_buffer_free(ctx, xn_buf);
-    return s;
+    return tc_record_dispatch("tc_fused_rmsnorm_gemv", TC_BACKEND_PORTABLE_CPU, s);
 }
 
 extern "C" tc_status_t tc_fused_layernorm_gemv(tc_context* ctx,
@@ -759,5 +759,5 @@ extern "C" tc_status_t tc_fused_layernorm_gemv(tc_context* ctx,
     d.alpha = 1.0f; d.beta = 0.0f;
     s = tc_gemm(ctx, &d, xn_buf, W, Y);
     tc_buffer_free(ctx, xn_buf);
-    return s;
+    return tc_record_dispatch("tc_fused_layernorm_gemv", TC_BACKEND_PORTABLE_CPU, s);
 }

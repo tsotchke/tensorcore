@@ -84,6 +84,12 @@ typedef enum {
 /* Sets the diagnostic per-thread `tc_last_backend`. */
 TC_INTERNAL_SYMBOL void tc_set_last_backend(tc_backend_t b);
 
+/* Records a completed public dispatch, updates `tc_last_backend` on success,
+ * and emits a one-line stderr trace when TC_TRACE=1 is set. */
+TC_INTERNAL_SYMBOL tc_status_t tc_record_dispatch(const char* op,
+                                                  tc_backend_t backend,
+                                                  tc_status_t status);
+
 /* Validates that a public buffer handle belongs to ctx and has at least
  * min_bytes requested bytes available. */
 TC_INTERNAL_SYMBOL tc_status_t tc_buffer_validate(struct tc_context* ctx,

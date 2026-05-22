@@ -9,6 +9,16 @@ work, a DiLoCo runtime with tested single-rank, dense GLOO, and sparse TOPK GLOO
 outer-step paths for cross-continent bandwidth efficiency, an
 activation-checkpointing API, and memory-tier hints.
 
+### Observability
+
+- `Widen backend diagnostics beyond GEMM`: `tc_last_backend()` now records
+  served training, Conv2D, quantized, attention, GEMM, TensorOps, and
+  portable CPU dispatches. Generic Metal kernels report
+  `TC_BACKEND_METAL_COMPUTE = 8` / `"metal_compute"`.
+- `Add TC_TRACE=1 dispatch logs`: served compute dispatches can emit
+  `op/status/backend` lines to stderr, with portable CPU smoke coverage
+  checking GEMM and softmax traces.
+
 ### CPU compute stack expanded
 
 - `Add CPU FlashAttention forward + backward`:

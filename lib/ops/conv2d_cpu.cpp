@@ -326,7 +326,7 @@ extern "C" tc_status_t tc_conv2d_forward(tc_context* ctx,
             }
         }
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_conv2d_forward", TC_BACKEND_PORTABLE_CPU, TC_OK);
 }
 
 /* ----------------------------------------------------------------------- *
@@ -479,7 +479,7 @@ extern "C" tc_status_t tc_conv2d_backward_input(tc_context* ctx,
             dX_b[i] = tc_cpu_f32_to_f16(dX_acc_data[i]);
         }
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_conv2d_backward_input", TC_BACKEND_PORTABLE_CPU, TC_OK);
 }
 
 extern "C" tc_status_t tc_conv2d_backward_weight(tc_context* ctx,
@@ -569,5 +569,5 @@ extern "C" tc_status_t tc_conv2d_backward_weight(tc_context* ctx,
     for (size_t i = 0; i < (size_t)out_channels * K; ++i) {
         dWd[i] = tc_cpu_f32_to_f16(dW_acc[i]);
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_conv2d_backward_weight", TC_BACKEND_PORTABLE_CPU, TC_OK);
 }

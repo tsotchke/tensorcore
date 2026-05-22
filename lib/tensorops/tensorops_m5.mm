@@ -142,8 +142,7 @@ extern "C" tc_status_t tc_tensorops_gemm_attempt(tc_context* ctx,
             return TC_ERR_DISPATCH;
         }
     }
-    tc_set_last_backend(TC_BACKEND_TENSOROPS_M5);
-    return TC_OK;
+    return tc_record_dispatch("tc_tensorops_gemm_attempt", TC_BACKEND_TENSOROPS_M5, TC_OK);
 }
 
 /* Attention via the Metal 4 tensor_ops FlashAttention kernel. */
@@ -210,6 +209,5 @@ extern "C" tc_status_t tc_tensorops_attention_attempt(tc_context* ctx,
         [cmd waitUntilCompleted];
         if (cmd.error) return TC_ERR_DISPATCH;
     }
-    tc_set_last_backend(TC_BACKEND_TENSOROPS_M5);
-    return TC_OK;
+    return tc_record_dispatch("tc_tensorops_attention_attempt", TC_BACKEND_TENSOROPS_M5, TC_OK);
 }

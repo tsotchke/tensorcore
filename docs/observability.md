@@ -8,7 +8,8 @@ right now?" without `printf`-debugging into a Metal kernel.
 | Question | How |
 |---|---|
 | What chip am I on? | `tc_device_info_get(ctx, &info)` → `info.name`, `info.family`, capability flags |
-| Which dispatch path served my last call? | `tc_backend_name(tc_last_backend())` (only for GEMM / attention / tensorops; see scope note below) |
+| Which dispatch path served my last compute call? | `tc_backend_name(tc_last_backend())` |
+| What dispatches are happening live? | `TC_TRACE=1` prints served compute dispatches to stderr |
 | Which tile shape is autotune using? | `~/.cache/tensorcore/autotune.json` (or the equivalent on the host) |
 | Did the M5 TensorOps path actually engage? | `tc_device_info.supports_tensorops_m5` + `tc_last_backend() == TC_BACKEND_TENSOROPS_M5` |
 | Did a release pass on this hardware? | `build/release_smoke_runtime_evidence.json` after `scripts/release_smoke.sh` |
@@ -41,7 +42,7 @@ quote in bug reports.
 ## Backend tracing
 
 `tc_last_backend()` reports which dispatch path served the most recent
-**GEMM or attention** call on this thread. The return value is the
+public compute dispatch on this thread. The return value is the
 `tc_backend_t` enum:
 
 ```c
@@ -54,16 +55,16 @@ typedef enum {
     TC_BACKEND_SF64_EMULATED    = 5,
     TC_BACKEND_OZAKI_II         = 6,
     TC_BACKEND_PORTABLE_CPU     = 7,
+    TC_BACKEND_METAL_COMPUTE    = 8,
 } tc_backend_t;
 
 const char* tc_backend_name(tc_backend_t b);  /* "simdgroup_matrix", ... */
 ```
 
-**Scope:** `tc_set_last_backend` is currently called only from GEMM
-(`lib/ops/gemm.mm`), attention (`lib/ops/attention.mm`), and TensorOps
-(`lib/tensorops/tensorops_m5.mm`). Training / conv / quantized kernels
-don't currently update it; the diagnostic shows the last GEMM-or-
-attention path. Widening to every dispatch is a v0.2 polish item.
+**Scope:** compute ops update this diagnostic when a dispatch completes:
+GEMM, attention, training kernels, Conv2D, quantized GEMV/quantization,
+and the portable CPU equivalents. Metadata, memory-tier, checkpoint, and
+distributed-control calls do not change it.
 
 Typical use: instrument bench harnesses to print the backend per call:
 
@@ -75,6 +76,21 @@ if (s == TC_OK) {
            tflops);
 }
 ```
+
+For a low-friction live log, set `TC_TRACE=1` before process start:
+
+```sh
+TC_TRACE=1 ./build/bench/bench_gemm
+```
+
+Trace lines go to stderr and include the public op, status, and backend:
+
+```text
+[tensorcore] trace op=tc_gemm status=ok backend=simdgroup_matrix
+[tensorcore] trace op=tc_softmax_forward status=ok backend=metal_compute
+```
+
+The portable CPU backend reports `backend=portable_cpu`.
 
 ## The autotune cache
 
@@ -270,13 +286,11 @@ output can reference the same target by either name.
 - **Per-call profile counters.** `MTLCounters` API access for kernel
   duration / occupancy / memory traffic. Useful for "this kernel is
   slow; why?" investigation.
-- **Trace dumps.** A `TC_TRACE=1` env that prints every dispatch to
-  stderr with timing.
+- **Timed trace dumps.** `TC_TRACE=1` reports dispatch identity today;
+  duration / occupancy / memory-traffic counters still need platform
+  counter integration.
 - **Per-context backend statistics.** `tc_context_stats(ctx, &out)`
   returning {dispatches_by_backend, total_kernel_time_us, ...}.
-
-These land in v0.2 alongside the kernel-coverage `tc_last_backend`
-widening.
 
 ## See also
 

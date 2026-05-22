@@ -263,23 +263,19 @@ typedef enum {
     TC_BACKEND_SF64_EMULATED    = 5,
     TC_BACKEND_OZAKI_II         = 6,
     TC_BACKEND_PORTABLE_CPU     = 7,   /* portable C CPU backend (TC_ENABLE_METAL=OFF) */
+    TC_BACKEND_METAL_COMPUTE    = 8,   /* generic Metal compute kernels */
 } tc_backend_t;
 
 tc_backend_t tc_last_backend(void);            /* thread-local                */
 const char*  tc_backend_name(tc_backend_t b);  /* "simdgroup_matrix", ...     */
 ```
 
-Use `tc_last_backend()` immediately after a GEMM or attention call to learn
-which path served it. Useful both for debugging "why is this slow?" and for
-adapting policy in higher-level code.
-
-**Scope:** `tc_set_last_backend` is currently written from
-`lib/ops/gemm.mm`, `lib/ops/attention.mm`, and `lib/tensorops/tensorops_m5.mm`.
-Calls into training, conv, and quantized kernels do **not** update the
-diagnostic; the value reflects whichever GEMM/attention/tensorops path
-ran most recently on the calling thread. Treat the symbol as "last-GEMM-like"
-rather than "last-call." (Widening this to every dispatch is a v0.2 polish
-item.)
+Use `tc_last_backend()` immediately after a compute call to learn which
+path served it. GEMM, attention, training kernels, Conv2D, quantized
+GEMV/quantization, and portable CPU implementations update the value.
+Metadata, memory-tier, checkpoint, and distributed-control calls do not.
+Set `TC_TRACE=1` before process start to print served dispatches to
+stderr as `op/status/backend` lines.
 
 See [gemm.md](gemm.md) for kernel choices, tile sizes, and env flags.
 

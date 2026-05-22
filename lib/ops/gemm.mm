@@ -289,7 +289,7 @@ extern "C" tc_status_t tc_gemm(tc_context* ctx,
         !desc->transpose_a && !desc->transpose_b &&
         gemm_uses_default_layout(desc)) {
         s = tc_tensorops_gemm_attempt(ctx, desc, A, B, C);
-        if (s == TC_OK) return TC_OK;
+        if (s == TC_OK) return tc_record_dispatch("tc_gemm", TC_BACKEND_TENSOROPS_M5, TC_OK);
         /* Anything else: fall through to the simdgroup_matrix path. */
     }
 #endif
@@ -297,8 +297,8 @@ extern "C" tc_status_t tc_gemm(tc_context* ctx,
     tc_status_t err = TC_OK;
     TileChoice tile = kernel_for(desc, ctx->info.family, ctx, &err);
     if (!tile.kernel_name) {
-        tc_set_last_backend(TC_BACKEND_MPS);
-        return tc_mps_gemm(ctx, desc, A, B, C);
+        return tc_record_dispatch("tc_gemm", TC_BACKEND_MPS,
+                                  tc_mps_gemm(ctx, desc, A, B, C));
     }
 
     id<MTLComputePipelineState> pso = resolve_pipeline(ctx, tile.kernel_name,
@@ -306,8 +306,8 @@ extern "C" tc_status_t tc_gemm(tc_context* ctx,
                                                         desc->transpose_b,
                                                         &err);
     if (!pso) {
-        tc_set_last_backend(TC_BACKEND_MPS);
-        return tc_mps_gemm(ctx, desc, A, B, C);
+        return tc_record_dispatch("tc_gemm", TC_BACKEND_MPS,
+                                  tc_mps_gemm(ctx, desc, A, B, C));
     }
 
     const uint32_t M = (uint32_t)desc->M;
@@ -347,12 +347,11 @@ extern "C" tc_status_t tc_gemm(tc_context* ctx,
             fprintf(stderr, "[tensorcore] gemm dispatch error: %s\n",
                     [[cmd.error localizedDescription] UTF8String]);
             tc_set_last_backend(TC_BACKEND_NONE);
-            return TC_ERR_DISPATCH;
+            return tc_record_dispatch("tc_gemm", TC_BACKEND_NONE, TC_ERR_DISPATCH);
         }
     }
 
-    tc_set_last_backend(TC_BACKEND_SIMDGROUP_MATRIX);
-    return TC_OK;
+    return tc_record_dispatch("tc_gemm", TC_BACKEND_SIMDGROUP_MATRIX, TC_OK);
 }
 
 extern "C" tc_status_t tc_gemm_async(tc_context* ctx,
@@ -372,9 +371,10 @@ extern "C" tc_status_t tc_gemm_async(tc_context* ctx,
     auto fallback_gemm = [&]() -> tc_status_t {
         if (stream) {
             tc_status_t ss = tc_stream_sync(stream);
-            if (ss != TC_OK) return ss;
+            if (ss != TC_OK) return tc_record_dispatch("tc_gemm_async", TC_BACKEND_MPS, ss);
         }
-        return tc_mps_gemm(ctx, desc, A, B, C);
+        return tc_record_dispatch("tc_gemm_async", TC_BACKEND_MPS,
+                                  tc_mps_gemm(ctx, desc, A, B, C));
     };
     TileChoice tile = kernel_for(desc, ctx->info.family, ctx, &err);
     if (!tile.kernel_name) return fallback_gemm();
@@ -419,8 +419,7 @@ extern "C" tc_status_t tc_gemm_async(tc_context* ctx,
         [enc endEncoding];
         if (!stream) [cmd commit];
     }
-    tc_set_last_backend(TC_BACKEND_SIMDGROUP_MATRIX);
-    return TC_OK;
+    return tc_record_dispatch("tc_gemm_async", TC_BACKEND_SIMDGROUP_MATRIX, TC_OK);
 }
 
 extern "C" tc_status_t tc_gemm_batched(tc_context* ctx,
@@ -520,6 +519,5 @@ extern "C" tc_status_t tc_gemm_batched(tc_context* ctx,
         [cmd waitUntilCompleted];
         if (cmd.error) return TC_ERR_DISPATCH;
     }
-    tc_set_last_backend(TC_BACKEND_SIMDGROUP_MATRIX);
-    return TC_OK;
+    return tc_record_dispatch("tc_gemm_batched", TC_BACKEND_SIMDGROUP_MATRIX, TC_OK);
 }

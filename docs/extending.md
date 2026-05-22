@@ -152,8 +152,9 @@ tc_status_t tc_gelu_forward(tc_context* ctx,
 
 For an op with a backend choice (multiple kernel paths), wrap the choice
 in a small selector function (see `lib/ops/gemm.mm::kernel_for` as the
-canonical pattern) and call `tc_set_last_backend(...)` from each branch
-so `tc_last_backend()` reports the path that ran.
+canonical pattern) and return through `tc_record_dispatch(...)` from each
+served branch so `tc_last_backend()` and `TC_TRACE=1` report the path
+that ran.
 
 ### 5. The test
 
@@ -301,8 +302,8 @@ dispatch path the dispatch layer chooses among (`SIMDGROUP_MATRIX`,
    name (lowercase string, matching the convention).
 3. Implement your dispatch in a new file under `lib/ops/` or
    `lib/<area>/`.
-4. Call `tc_set_last_backend(TC_BACKEND_YOURS)` from your dispatch site
-   before commit / stream handoff.
+4. Return through `tc_record_dispatch(..., TC_BACKEND_YOURS, status)`
+   from your dispatch site before commit / stream handoff.
 5. Wire it into the selector function (`kernel_for` in `lib/ops/gemm.mm`,
    or the equivalent for whatever op family).
 

@@ -119,7 +119,7 @@ extern "C" tc_status_t tc_quantize_weights(tc_context* ctx,
         [cmd waitUntilCompleted];
         if (cmd.error) return TC_ERR_DISPATCH;
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_quantize_weights", TC_BACKEND_METAL_COMPUTE, TC_OK);
 }
 
 /* Internal helper used by both sync and async variants. */
@@ -190,7 +190,7 @@ extern "C" tc_status_t tc_gemv_quantized_async(tc_context* ctx,
         s = gemv_quant_encode(ctx, cmd, X, W_quant, Y, fmt, M, N, K);
         if (s != TC_OK) return s;
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_gemv_quantized_async", TC_BACKEND_METAL_COMPUTE, TC_OK);
 }
 
 extern "C" tc_status_t tc_gemv_quantized(tc_context* ctx,
@@ -216,5 +216,5 @@ extern "C" tc_status_t tc_gemv_quantized(tc_context* ctx,
             return TC_ERR_DISPATCH;
         }
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_gemv_quantized", TC_BACKEND_METAL_COMPUTE, TC_OK);
 }

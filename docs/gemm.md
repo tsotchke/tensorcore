@@ -189,7 +189,7 @@ Walkthrough in [CONTRIBUTING.md](../CONTRIBUTING.md). Short version:
    for matmul-shaped work; function constants for static switches.
 2. Add to `TC_METAL_SOURCES` in `CMakeLists.txt` (mind the SDK gates).
 3. Encode the dispatch in `lib/ops/gemm.mm`. Pick a unique pipeline-cache
-   key and `tc_set_last_backend(TC_BACKEND_...)`.
+   key and `tc_record_dispatch(..., TC_BACKEND_..., status)`.
 4. Write a correctness test (`tests/test_gemm_*.c`) against an fp64
    reference. Use `rms_scaled` for fp16/bf16, bit-exact for fp32 and int8.
 5. Bench it (`bench/bench_gemm.c` — add the shape if needed).

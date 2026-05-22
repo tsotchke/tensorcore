@@ -326,6 +326,7 @@ set(TC_COMMON_SOURCES
     lib/core/status.c
     lib/core/dtype.c
     lib/core/autotune.cpp
+    lib/core/trace.cpp
     lib/io/gguf.c
     lib/tensorops/tensorops_select.c
     lib/distributed/diloco.cpp

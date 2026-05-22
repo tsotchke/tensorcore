@@ -270,8 +270,53 @@ def _run_gemm_variant_smokes():
                             require=os.environ.get("REQUIRE_AMX_GEMM") == "1")
 
 
+def _run_trace_smoke():
+    code = r'''
+import ctypes
+import tensorcore as tc
+
+ctx = tc.init()
+bufs = []
+try:
+    vals = (ctypes.c_float * 4)(1.0, 2.0, 3.0, 4.0)
+    A = tc.buffer_alloc(ctx, ctypes.sizeof(vals))
+    B = tc.buffer_alloc(ctx, ctypes.sizeof(vals))
+    C = tc.buffer_alloc(ctx, ctypes.sizeof(vals))
+    bufs.extend([A, B, C])
+    ctypes.memmove(tc.buffer_map(A), vals, ctypes.sizeof(vals))
+    ctypes.memmove(tc.buffer_map(B), vals, ctypes.sizeof(vals))
+    tc.gemm(ctx, A, B, C, 2, 2, 2, dtype="f32")
+
+    x_vals = (ctypes.c_uint16 * 4)(0, 15360, 48128, 16384)
+    y_vals = (ctypes.c_uint16 * 4)(0, 0, 0, 0)
+    X = tc.buffer_alloc(ctx, ctypes.sizeof(x_vals))
+    Y = tc.buffer_alloc(ctx, ctypes.sizeof(y_vals))
+    bufs.extend([X, Y])
+    ctypes.memmove(tc.buffer_map(X), x_vals, ctypes.sizeof(x_vals))
+    tc.softmax_forward(ctx, X, Y, 1, 4)
+finally:
+    for buf in reversed(bufs):
+        tc.buffer_free(ctx, buf)
+    tc.shutdown(ctx)
+'''
+    env = os.environ.copy()
+    env["TC_TRACE"] = "1"
+    proc = subprocess.run([sys.executable, "-c", code],
+                          env=env, text=True, capture_output=True)
+    if proc.returncode != 0:
+        print(proc.stdout, end="")
+        print(proc.stderr, end="", file=sys.stderr)
+        raise SystemExit(f"TC_TRACE smoke failed: exit {proc.returncode}")
+    if ("op=tc_gemm status=ok backend=portable_cpu" not in proc.stderr or
+            "op=tc_softmax_forward status=ok backend=portable_cpu" not in proc.stderr):
+        print(proc.stderr, end="", file=sys.stderr)
+        raise SystemExit("TC_TRACE smoke missing expected dispatch lines")
+    print("TC_TRACE portable CPU smoke OK")
+
+
 _run_python_gloo_fork_smoke()
 _run_gemm_variant_smokes()
+_run_trace_smoke()
 
 ctx = tc.init()
 bufs = []
@@ -391,6 +436,8 @@ try:
     ctypes.memmove(tc.buffer_map(X16), X16_vals, ctypes.sizeof(X16_vals))
     ctypes.memmove(tc.buffer_map(Y16), Y16_vals, ctypes.sizeof(Y16_vals))
     tc.softmax_forward(ctx, X16, Y16, 1, 4)
+    if tc.last_backend_name() != "portable_cpu":
+        raise SystemExit(f"unexpected softmax backend: {tc.last_backend_name()}")
     sm = (ctypes.c_uint16 * 4).from_address(tc.buffer_map(Y16).value)
     got = [f16_to_f32(sm[i]) for i in range(4)]
     denom = sum(math.exp(v) for v in (0.0, 1.0, -1.0, 2.0))
@@ -419,6 +466,8 @@ try:
     ctypes.memmove(tc.buffer_map(Bln), Bln_vals, ctypes.sizeof(Bln_vals))
     ctypes.memmove(tc.buffer_map(Wln), Wln_vals, ctypes.sizeof(Wln_vals))
     tc.fused_layernorm_gemv(ctx, Xln, Gln, Bln, Wln, Yln, 1, 2, 4, 1e-5)
+    if tc.last_backend_name() != "portable_cpu":
+        raise SystemExit(f"unexpected fused LayerNorm+GEMV backend: {tc.last_backend_name()}")
     yln = (ctypes.c_uint16 * 2).from_address(tc.buffer_map(Yln).value)
     got = [f16_to_f32(yln[i]) for i in range(2)]
     xs = [1.0, 2.0, 3.0, 4.0]

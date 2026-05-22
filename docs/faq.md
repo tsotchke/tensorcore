@@ -37,12 +37,11 @@ pulls ~15ms/token, async pulls ~5ms/token. See
 
 ## "Why does `tc_last_backend()` not change after my training kernel call?"
 
-Because at the v0.1.x checkpoint, only GEMM, attention, and TensorOps
-dispatch sites update the diagnostic. Training, conv, and quantized
-kernels don't. So `tc_last_backend()` shows the most-recent
-GEMM-or-attention backend, not the most-recent *anything*. This is
-documented in [api_reference.md](api_reference.md#gemm-gemmh); widening
-to every op is a v0.2 polish item.
+It should change after served training, Conv2D, quantized, attention, and
+GEMM dispatches. If it does not, confirm you are loading the current
+native library and that the call actually reached a dispatch path rather
+than returning an argument/shape/dtype error. Set `TC_TRACE=1` before
+process start to print each served dispatch to stderr.
 
 ## "Why is my 128×128 GEMM tile *slower* than 64×64?"
 

@@ -37,6 +37,14 @@ static float f16_to_f32(uint16_t h) {
     return v.f;
 }
 
+static int backend_is_compute(const char* op) {
+    const tc_backend_t b = tc_last_backend();
+    if (b == TC_BACKEND_METAL_COMPUTE || b == TC_BACKEND_PORTABLE_CPU) return 1;
+    fprintf(stderr, "%s backend was %s, expected metal_compute or portable_cpu\n",
+            op, tc_backend_name(b));
+    return 0;
+}
+
 /* CPU dequant + GEMV reference using the EXACT same Q4_0 blocks the kernel
  * produced (so we're testing kernel-to-kernel consistency, not the quantization
  * algorithm itself). */
@@ -119,9 +127,11 @@ static int run_q4_case(tc_context* ctx, int M, int N, int K) {
 
     s = tc_quantize_weights(ctx, Wfp16, Wq, TC_QUANT_Q4_0, N, K);
     if (s != TC_OK) { fprintf(stderr, "quantize: %s\n", tc_status_string(s)); rc = 2; goto cleanup; }
+    if (!backend_is_compute("quantize q4_0")) { rc = 2; goto cleanup; }
 
     s = tc_gemv_quantized(ctx, Xb, Wq, Yb, TC_QUANT_Q4_0, M, N, K);
     if (s != TC_OK) { fprintf(stderr, "gemv: %s\n", tc_status_string(s)); rc = 3; goto cleanup; }
+    if (!backend_is_compute("gemv q4_0")) { rc = 3; goto cleanup; }
 
     Yref = malloc(M*N*sizeof(float));
     if (!Yref) { fprintf(stderr, "malloc failed\n"); rc = 2; goto cleanup; }
@@ -151,6 +161,7 @@ static int run_q4_case(tc_context* ctx, int M, int N, int K) {
     s = tc_gemv_quantized_async(ctx, Xb, Wq, Yb, TC_QUANT_Q4_0, M, N, K, st);
     if (s == TC_OK) s = tc_stream_sync(st);
     if (s != TC_OK) { fprintf(stderr, "async gemv: %s\n", tc_status_string(s)); rc = 4; goto cleanup; }
+    if (!backend_is_compute("async gemv q4_0")) { rc = 4; goto cleanup; }
 
     double ase = 0, asr = 0, amax_abs = 0;
     for (int i = 0; i < M*N; ++i) {
@@ -211,9 +222,11 @@ static int run_q8_case(tc_context* ctx, int M, int N, int K) {
 
     s = tc_quantize_weights(ctx, Wfp16, Wq, TC_QUANT_Q8_0, N, K);
     if (s != TC_OK) { fprintf(stderr, "quantize q8_0: %s\n", tc_status_string(s)); rc = 2; goto cleanup; }
+    if (!backend_is_compute("quantize q8_0")) { rc = 2; goto cleanup; }
 
     s = tc_gemv_quantized(ctx, Xb, Wq, Yb, TC_QUANT_Q8_0, M, N, K);
     if (s != TC_OK) { fprintf(stderr, "gemv q8_0: %s\n", tc_status_string(s)); rc = 3; goto cleanup; }
+    if (!backend_is_compute("gemv q8_0")) { rc = 3; goto cleanup; }
 
     ref_q8_0_gemv(M, N, K, Xp, Wqp, Yref);
 

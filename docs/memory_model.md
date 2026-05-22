@@ -161,7 +161,7 @@ inter-stream events; v0.2 will.
 | `tc_context*` | shared safely; the pipeline cache and buffer pool are guarded |
 | `tc_buffer*` | **caller must serialize** access to the same buffer; different buffers are independent |
 | `tc_stream*` | **single-threaded only** — one thread owns the stream's pending CB |
-| `tc_last_backend()` | **thread-local** — reports the calling thread's last GEMM/attention dispatch |
+| `tc_last_backend()` | **thread-local** — reports the calling thread's last compute dispatch |
 | `tc_dist_ctx*` | single-threaded; the distributed surface assumes one caller per rank |
 
 The C ABI is reentrant per-context. Two threads can dispatch concurrently

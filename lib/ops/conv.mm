@@ -249,7 +249,7 @@ extern "C" tc_status_t tc_conv2d_backward_input(tc_context* ctx,
         [cmd waitUntilCompleted];
         if (cmd.error) return TC_ERR_DISPATCH;
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_conv2d_backward_input", TC_BACKEND_METAL_COMPUTE, TC_OK);
 }
 
 extern "C" tc_status_t tc_conv2d_backward_weight(tc_context* ctx,
@@ -382,7 +382,7 @@ extern "C" tc_status_t tc_conv2d_backward_weight(tc_context* ctx,
             return TC_ERR_DISPATCH;
         }
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_conv2d_backward_weight", TC_BACKEND_METAL_COMPUTE, TC_OK);
 }
 
 extern "C" tc_status_t tc_conv2d_forward(tc_context* ctx,
@@ -541,5 +541,5 @@ extern "C" tc_status_t tc_conv2d_forward(tc_context* ctx,
             if (cmd.error) return TC_ERR_DISPATCH;
         }
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_conv2d_forward", TC_BACKEND_METAL_COMPUTE, TC_OK);
 }

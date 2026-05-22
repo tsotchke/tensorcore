@@ -37,7 +37,7 @@ and shape semantics, see [api_reference.md](api_reference.md).
 | `tc_gemm(ctx, &desc, A, B, C)` | `C = α A·B + β C`. Sync; serves fp16/bf16/fp32/int8. |
 | `tc_gemm_async(ctx, &desc, A, B, C, stream)` | Same, encoded into a stream. |
 | `tc_gemm_batched(ctx, &batch_desc, A, B, C)` | Per-batch GEMM with element strides. |
-| `tc_last_backend()` | Thread-local: which backend served the last GEMM/attention/tensorops call. |
+| `tc_last_backend()` | Thread-local: which backend served the last compute dispatch. |
 | `tc_backend_name(b)` | Render the enum as a lowercase string. |
 | `tc_tensorops_gemm_kernel_name(&desc, out_err)` | Diagnostic selector for the Metal 4 TensorOps GEMM kernel name. |
 
@@ -159,7 +159,8 @@ and shape semantics, see [api_reference.md](api_reference.md).
 
 ### `tc_backend_t`
 `TC_BACKEND_NONE`, `_SIMDGROUP_MATRIX`, `_TENSOROPS_M5`, `_MPS`,
-`_ACCELERATE_CPU`, `_SF64_EMULATED`, `_OZAKI_II`, `_PORTABLE_CPU`.
+`_ACCELERATE_CPU`, `_SF64_EMULATED`, `_OZAKI_II`, `_PORTABLE_CPU`,
+`_METAL_COMPUTE`.
 
 ### `tc_quant_t`
 `TC_QUANT_Q4_0`, `TC_QUANT_Q8_0`.

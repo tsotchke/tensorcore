@@ -40,7 +40,7 @@ Every public entry point lives in `lib/ops/<group>.mm`. Every entry point
 in `lib/ops/*.mm` ends in either:
 1. an `[encoder dispatchThreadgroups:...]` call against a precompiled
    `MTLComputePipelineState`, or
-2. a `tc_set_last_backend(...)` + call into a fallback in `lib/fallback/`.
+2. a `tc_record_dispatch(...)` or fallback call in `lib/fallback/`.
 
 That's it. There is no graph, no IR, no scheduler. The library is a
 collection of opinionated kernels with a tiny dispatch layer in front.
@@ -83,7 +83,7 @@ lib/core/
                       tc_pipeline_get, function-constant variants
   buffer_pool.mm    ← power-of-2 LIFO MTLBuffer pool keyed on size class
   autotune.cpp      ← (M, N, K, dtype) → best-tile heuristic
-  internal.h        ← tc_kernel_kind_t, tc_set_last_backend, pool helpers
+  internal.h        ← tc_kernel_kind_t, tc_record_dispatch, pool helpers
 
 lib/ops/
   gemm.mm           ← simdgroup_matrix dispatch, fallback ladder, batched/async
@@ -208,7 +208,7 @@ parts).
 4. Encode buffers, dispatch threadgroups.
 5. Commit and wait (sync) or hand the command buffer to the stream's
    pending buffer (async).
-6. `tc_set_last_backend(...)` so the caller can introspect.
+6. `tc_record_dispatch(...)` so the caller can introspect and optionally trace.
 
 The same pattern applies to attention, training, conv, and quantized
 ops — the kernel lookup and fallback ladder differ, but the structure is
@@ -296,8 +296,8 @@ mps                ←  MPSMatrix on the GPU
 accelerate_cpu     ←  cblas_sgemm; always works; slowest
 ```
 
-`tc_last_backend()` reports which path served the most recent GEMM or
-attention call on this thread (see scope note below). This is how you
+`tc_last_backend()` reports which path served the most recent compute
+dispatch on this thread. This is how you
 diagnose "why is this slow?": if you see `TC_BACKEND_MPS` or
 `TC_BACKEND_ACCELERATE_CPU` on a path you expected
 `TC_BACKEND_SIMDGROUP_MATRIX`, you found a kernel-coverage gap.
@@ -306,11 +306,10 @@ For attention on Metal builds, only the SIMDGROUP path exists today;
 unsupported D values return `TC_ERR_UNSUPPORTED_DTYPE` rather than
 falling back. CPU-only builds use the portable attention implementation.
 
-**Scope of `tc_last_backend`:** at the v0.1.x checkpoint, the diagnostic
-is updated from `lib/ops/gemm.mm` (5 sites), `lib/ops/attention.mm` (3
-sites), and `lib/tensorops/tensorops_m5.mm` (2 sites). Training, conv, and
-quantized kernels do not currently touch it. Widening to every dispatch
-is a v0.2 polish item.
+Training, Conv2D, quantized kernels, attention, GEMM, TensorOps, and the
+portable CPU implementations all record their serving backend. Metadata,
+memory-tier, checkpoint, and distributed-control calls intentionally do
+not change it.
 
 ## Streams
 

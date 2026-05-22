@@ -64,6 +64,14 @@ static double rms_scaled_f32(const float* got, const float* ref, int n) {
     return sqrt(se / n) / (sqrt(sr / n) + 1e-9);
 }
 
+static int backend_is_compute(const char* op) {
+    const tc_backend_t b = tc_last_backend();
+    if (b == TC_BACKEND_METAL_COMPUTE || b == TC_BACKEND_PORTABLE_CPU) return 1;
+    fprintf(stderr, "%s backend was %s, expected metal_compute or portable_cpu\n",
+            op, tc_backend_name(b));
+    return 0;
+}
+
 static int test_rmsnorm(tc_context* ctx) {
     const int N = 8, D = 128;
     const float eps = 1e-5f;
@@ -396,13 +404,14 @@ static int test_adamw(tc_context* ctx) {
     }
     tc_status_t s = tc_adamw_step(ctx, pb, mb, vb, gb, TC_DTYPE_F32, n,
                                   lr, b1, b2, eps, wd, bc1, bc2);
+    const int backend_ok = (s == TC_OK) && backend_is_compute("adamw_step");
     const double err = rms_scaled_f32(pp, p_ref, n);
     printf("  adamw_step        n=%d         rms_scaled=%.3e  %s\n",
            n, err, (s==TC_OK && err<1e-5) ? "OK" : "FAIL");
     free(p_ref); free(m_ref); free(v_ref);
     tc_buffer_free(ctx, pb); tc_buffer_free(ctx, mb);
     tc_buffer_free(ctx, vb); tc_buffer_free(ctx, gb);
-    return (s == TC_OK && err < 1e-5) ? 0 : 1;
+    return (s == TC_OK && backend_ok && err < 1e-5) ? 0 : 1;
 }
 
 int main(void) {

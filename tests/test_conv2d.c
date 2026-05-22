@@ -38,6 +38,14 @@ static float f16_to_f32(uint16_t h) {
     return v.f;
 }
 
+static int backend_is_compute(const char* op) {
+    const tc_backend_t b = tc_last_backend();
+    if (b == TC_BACKEND_METAL_COMPUTE || b == TC_BACKEND_PORTABLE_CPU) return 1;
+    fprintf(stderr, "%s backend was %s, expected metal_compute or portable_cpu\n",
+            op, tc_backend_name(b));
+    return 0;
+}
+
 /* CPU reference conv2d forward. */
 static void ref_conv2d_fwd(int N, int IC, int OC, int H, int W_in, int kH, int kW,
                            int pad, int stride, int oH, int oW,
@@ -120,6 +128,7 @@ int main(void) {
     if (s != TC_OK) {
         fprintf(stderr, "tc_conv2d_forward: %s\n", tc_status_string(s)); return 2;
     }
+    const int fwd_backend_ok = backend_is_compute("conv2d_forward");
     const double fwd_err = rms_scaled(Yp, Yref, N*OC*oH*oW);
     printf("  conv2d_forward         IC=%d OC=%d H=%d W=%d kH=%d kW=%d pad=%d stride=%d\n"
            "                         out=(%d,%d)  rms_scaled=%.3e  %s\n",
@@ -142,6 +151,7 @@ int main(void) {
                                  N, IC, OC, H, W_in, kH, kW,
                                  pad, pad, stride, stride, oH, oW);
     const int bw_in_ok = (s == TC_OK);
+    const int bw_in_backend_ok = bw_in_ok && backend_is_compute("conv2d_backward_input");
     int nz_in = 0;
     for (int i = 0; i < N*IC*H*W_in; ++i) if (f16_to_f32(dXp[i]) != 0.0f) ++nz_in;
     printf("  conv2d_backward_input  dispatched=%s  nonzero/total=%d/%d  %s\n",
@@ -152,6 +162,7 @@ int main(void) {
                                   N, IC, OC, H, W_in, kH, kW,
                                   pad, pad, stride, stride, oH, oW);
     const int bw_w_ok = (s == TC_OK);
+    const int bw_w_backend_ok = bw_w_ok && backend_is_compute("conv2d_backward_weight");
     int nz_w = 0;
     for (int i = 0; i < OC*IC*kH*kW; ++i) if (f16_to_f32(dWp[i]) != 0.0f) ++nz_w;
     printf("  conv2d_backward_weight dispatched=%s  nonzero/total=%d/%d  %s\n",
@@ -185,7 +196,7 @@ int main(void) {
     tc_buffer_free(ctx, small);
     tc_shutdown(ctx);
 
-    return (fwd_err < 2e-2 &&
-            bw_in_ok && nz_in > 0 && bw_w_ok && nz_w > 0 &&
+    return (fwd_backend_ok && fwd_err < 2e-2 &&
+            bw_in_backend_ok && nz_in > 0 && bw_w_backend_ok && nz_w > 0 &&
             bw_in_small_rejected && bw_w_small_rejected && bad_out_shape_rejected) ? 0 : 5;
 }

@@ -228,6 +228,7 @@ static int run_batched_f32_gemm(tc_context* ctx) {
     bd.base.alpha = 1.0f; bd.base.beta = 0.0f;
     bd.batch = batch; bd.stride_a = sa; bd.stride_b = sb; bd.stride_c = sc;
     rc |= expect_status("batched f32 gemm", tc_gemm_batched(ctx, &bd, A, B, C), TC_OK);
+    if (tc_last_backend() != TC_BACKEND_PORTABLE_CPU) rc = 1;
     for (int b = 0; b < batch; ++b) {
         for (int m = 0; m < M; ++m) {
             for (int n = 0; n < N; ++n) {
@@ -297,7 +298,9 @@ static int run_quantized(tc_context* ctx) {
     for (int i = 0; i < M * K; ++i) Xp[i] = f32_to_f16(0.01f * (float)(i - 15));
     for (int i = 0; i < N * K; ++i) Wp[i] = f32_to_f16(0.02f * (float)((i % 17) - 8));
     rc |= expect_status("quantize q4", tc_quantize_weights(ctx, W, Wq, TC_QUANT_Q4_0, N, K), TC_OK);
+    if (tc_last_backend() != TC_BACKEND_PORTABLE_CPU) rc = 1;
     rc |= expect_status("gemv q4", tc_gemv_quantized(ctx, X, Wq, Y, TC_QUANT_Q4_0, M, N, K), TC_OK);
+    if (tc_last_backend() != TC_BACKEND_PORTABLE_CPU) rc = 1;
     for (int n = 0; n < N; ++n) {
         const uint8_t* block = Wqp + (size_t)n * 18u;
         const float scale = f16_to_f32(((const uint16_t*)block)[0]);
@@ -359,6 +362,7 @@ static int run_training_ops(tc_context* ctx) {
     for (int i = 0; i < N * D; ++i) Xp[i] = f32_to_f16(x_vals[i]);
     for (int i = 0; i < D; ++i) gp[i] = f32_to_f16(g_vals[i]);
     rc |= expect_status("rmsnorm forward", tc_rmsnorm_forward(ctx, X, gamma, Y, rstd, N, D, 1e-5f), TC_OK);
+    if (tc_last_backend() != TC_BACKEND_PORTABLE_CPU) rc = 1;
     for (int n = 0; n < N; ++n) {
         float ss = 0.0f;
         for (int d = 0; d < D; ++d) {
@@ -378,6 +382,7 @@ static int run_training_ops(tc_context* ctx) {
     const float soft_in[4] = {0.0f, 1.0f, -1.0f, 2.0f};
     for (int i = 0; i < 4; ++i) Xp[i] = f32_to_f16(soft_in[i]);
     rc |= expect_status("softmax forward", tc_softmax_forward(ctx, X, Y, 1, 4), TC_OK);
+    if (tc_last_backend() != TC_BACKEND_PORTABLE_CPU) rc = 1;
     float denom = 0.0f;
     for (int i = 0; i < 4; ++i) denom += expf(soft_in[i]);
     for (int i = 0; i < 4; ++i) {
@@ -402,7 +407,9 @@ static int run_training_ops(tc_context* ctx) {
         }
     }
     rc |= expect_status("rope forward", tc_rope_forward(ctx, X, cos_t, sin_t, 1, 1, N, D), TC_OK);
+    if (tc_last_backend() != TC_BACKEND_PORTABLE_CPU) rc = 1;
     rc |= expect_status("rope backward", tc_rope_backward(ctx, Y, cos_t, sin_t, 1, 1, N, D), TC_OK);
+    if (tc_last_backend() != TC_BACKEND_PORTABLE_CPU) rc = 1;
     for (int s = 0; s < N; ++s) {
         for (int k = 0; k < D / 2; ++k) {
             const float x0 = x_vals[s * D + k], x1 = x_vals[s * D + k + D / 2];
@@ -471,6 +478,7 @@ static int run_attention_forward(tc_context* ctx) {
     desc.return_lse = true;
     desc.kv_heads = 0; /* exercise documented default: kv_heads == heads */
     rc |= expect_status("attention forward", tc_attention_forward(ctx, &desc, Q, K, V, O, LSE), TC_OK);
+    if (tc_last_backend() != TC_BACKEND_PORTABLE_CPU) rc = 1;
 
     for (int q = 0; q < Sq; ++q) {
         float scores[3];
@@ -528,6 +536,7 @@ static int run_conv2d_forward(tc_context* ctx) {
                                           1, 1, 1, H, W_in, kH, kW,
                                           0, 0, 1, 1, out_H, out_W),
                         TC_OK);
+    if (tc_last_backend() != TC_BACKEND_PORTABLE_CPU) rc = 1;
     for (int oh = 0; oh < out_H; ++oh) {
         for (int ow = 0; ow < out_W; ++ow) {
             float want = 0.25f;
@@ -689,6 +698,7 @@ int main(void) {
     rc |= expect_status("device info", tc_device_info_get(ctx, &info), TC_OK);
     if (strcmp(info.name, "portable-cpu") != 0) rc = 1;
     if (strcmp(tc_backend_name(TC_BACKEND_PORTABLE_CPU), "portable_cpu") != 0) rc = 1;
+    if (strcmp(tc_backend_name(TC_BACKEND_METAL_COMPUTE), "metal_compute") != 0) rc = 1;
 
     rc |= run_padded_f32_gemm(ctx);
     rc |= run_padded_f16_gemm(ctx);

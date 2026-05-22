@@ -81,6 +81,7 @@ Python package editable, and runs an inline smoke script that asserts:
 - `tc.status_string(tc.TC_OK) == "ok"`
 - `tc.dtype_name("fp53") == "fp53"`
 - `tc.backend_name(tc.TC_BACKEND_TENSOROPS_M5) == "tensorops_m5"`
+- `tc.backend_name(tc.TC_BACKEND_METAL_COMPUTE) == "metal_compute"`
 - `tc.last_backend_name() == "none"` (before any kernel runs)
 - `tc.tensorops_gemm_kernel_name("f16") == "tc4_gemm_f16"`
 - `tc.tensorops_gemm_kernel_name("i8", "i32") is None`

@@ -506,8 +506,7 @@ extern "C" tc_status_t tc_gemm(tc_context* ctx,
     if (s != TC_OK) return s;
 
     s = gemm_compute(desc, Ap, Bp, Cp);
-    if (s == TC_OK) tc_set_last_backend(TC_BACKEND_PORTABLE_CPU);
-    return s;
+    return tc_record_dispatch("tc_gemm", TC_BACKEND_PORTABLE_CPU, s);
 }
 
 extern "C" tc_status_t tc_gemm_async(tc_context* ctx,
@@ -582,6 +581,5 @@ extern "C" tc_status_t tc_gemm_batched(tc_context* ctx,
                          Cp + (size_t)b * stride_c * c_elem);
         if (s != TC_OK) return s;
     }
-    tc_set_last_backend(TC_BACKEND_PORTABLE_CPU);
-    return TC_OK;
+    return tc_record_dispatch("tc_gemm_batched", TC_BACKEND_PORTABLE_CPU, TC_OK);
 }

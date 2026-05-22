@@ -58,7 +58,7 @@ extern "C" tc_status_t tc_rmsnorm_forward(tc_context* ctx,
         [cmd waitUntilCompleted];
         if (cmd.error) return TC_ERR_DISPATCH;
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_rmsnorm_forward", TC_BACKEND_METAL_COMPUTE, TC_OK);
 }
 
 extern "C" tc_status_t tc_rmsnorm_backward(tc_context* ctx,
@@ -113,7 +113,7 @@ extern "C" tc_status_t tc_rmsnorm_backward(tc_context* ctx,
         [cmd waitUntilCompleted];
         if (cmd.error) return TC_ERR_DISPATCH;
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_rmsnorm_backward", TC_BACKEND_METAL_COMPUTE, TC_OK);
 }
 
 extern "C" tc_status_t tc_layernorm_forward(tc_context* ctx,
@@ -148,7 +148,7 @@ extern "C" tc_status_t tc_layernorm_forward(tc_context* ctx,
         [cmd waitUntilCompleted];
         if (cmd.error) return TC_ERR_DISPATCH;
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_layernorm_forward", TC_BACKEND_METAL_COMPUTE, TC_OK);
 }
 
 extern "C" tc_status_t tc_layernorm_backward(tc_context* ctx,
@@ -182,7 +182,7 @@ extern "C" tc_status_t tc_layernorm_backward(tc_context* ctx,
         [cmd waitUntilCompleted];
         if (cmd.error) return TC_ERR_DISPATCH;
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_layernorm_backward", TC_BACKEND_METAL_COMPUTE, TC_OK);
 }
 
 extern "C" tc_status_t tc_rope_forward(tc_context* ctx,
@@ -223,7 +223,7 @@ extern "C" tc_status_t tc_rope_forward(tc_context* ctx,
         [cmd waitUntilCompleted];
         if (cmd.error) return TC_ERR_DISPATCH;
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_rope_forward", TC_BACKEND_METAL_COMPUTE, TC_OK);
 }
 
 extern "C" tc_status_t tc_rope_backward(tc_context* ctx,
@@ -264,7 +264,7 @@ extern "C" tc_status_t tc_rope_backward(tc_context* ctx,
         [cmd waitUntilCompleted];
         if (cmd.error) return TC_ERR_DISPATCH;
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_rope_backward", TC_BACKEND_METAL_COMPUTE, TC_OK);
 }
 
 extern "C" tc_status_t tc_swiglu_forward(tc_context* ctx,
@@ -290,7 +290,7 @@ extern "C" tc_status_t tc_swiglu_forward(tc_context* ctx,
         [cmd waitUntilCompleted];
         if (cmd.error) return TC_ERR_DISPATCH;
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_swiglu_forward", TC_BACKEND_METAL_COMPUTE, TC_OK);
 }
 
 extern "C" tc_status_t tc_swiglu_backward(tc_context* ctx,
@@ -320,7 +320,7 @@ extern "C" tc_status_t tc_swiglu_backward(tc_context* ctx,
         [cmd waitUntilCompleted];
         if (cmd.error) return TC_ERR_DISPATCH;
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_swiglu_backward", TC_BACKEND_METAL_COMPUTE, TC_OK);
 }
 
 extern "C" tc_status_t tc_softmax_forward(tc_context* ctx,
@@ -346,7 +346,7 @@ extern "C" tc_status_t tc_softmax_forward(tc_context* ctx,
         [cmd waitUntilCompleted];
         if (cmd.error) return TC_ERR_DISPATCH;
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_softmax_forward", TC_BACKEND_METAL_COMPUTE, TC_OK);
 }
 
 extern "C" tc_status_t tc_softmax_backward(tc_context* ctx,
@@ -373,7 +373,7 @@ extern "C" tc_status_t tc_softmax_backward(tc_context* ctx,
         [cmd waitUntilCompleted];
         if (cmd.error) return TC_ERR_DISPATCH;
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_softmax_backward", TC_BACKEND_METAL_COMPUTE, TC_OK);
 }
 
 extern "C" tc_status_t tc_fused_rmsnorm_gemv(tc_context* ctx,
@@ -409,7 +409,7 @@ extern "C" tc_status_t tc_fused_rmsnorm_gemv(tc_context* ctx,
         [cmd waitUntilCompleted];
         if (cmd.error) return TC_ERR_DISPATCH;
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_fused_rmsnorm_gemv", TC_BACKEND_METAL_COMPUTE, TC_OK);
 }
 
 extern "C" tc_status_t tc_fused_layernorm_gemv(tc_context* ctx,
@@ -447,7 +447,7 @@ extern "C" tc_status_t tc_fused_layernorm_gemv(tc_context* ctx,
         [cmd waitUntilCompleted];
         if (cmd.error) return TC_ERR_DISPATCH;
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_fused_layernorm_gemv", TC_BACKEND_METAL_COMPUTE, TC_OK);
 }
 
 extern "C" tc_status_t tc_adamw_step(tc_context* ctx,
@@ -494,5 +494,5 @@ extern "C" tc_status_t tc_adamw_step(tc_context* ctx,
         [cmd waitUntilCompleted];
         if (cmd.error) return TC_ERR_DISPATCH;
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_adamw_step", TC_BACKEND_METAL_COMPUTE, TC_OK);
 }

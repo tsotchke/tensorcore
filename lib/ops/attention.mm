@@ -302,7 +302,9 @@ extern "C" tc_status_t tc_attention_forward(tc_context* ctx,
 #ifdef TC_HAVE_METAL4_SDK
     if (ctx->info.supports_tensorops_m5 && !plan.use_window && !plan.use_alibi) {
         tc_status_t ts = tc_tensorops_attention_attempt(ctx, desc, Q, K, V, O, LSE);
-        if (ts == TC_OK) return TC_OK;
+        if (ts == TC_OK) {
+            return tc_record_dispatch("tc_attention_forward", TC_BACKEND_TENSOROPS_M5, TC_OK);
+        }
     }
 #endif
 
@@ -327,8 +329,7 @@ extern "C" tc_status_t tc_attention_forward(tc_context* ctx,
             return TC_ERR_DISPATCH;
         }
     }
-    tc_set_last_backend(TC_BACKEND_SIMDGROUP_MATRIX);
-    return TC_OK;
+    return tc_record_dispatch("tc_attention_forward", TC_BACKEND_SIMDGROUP_MATRIX, TC_OK);
 }
 
 extern "C" tc_status_t tc_attention_backward(tc_context* ctx,
@@ -454,8 +455,7 @@ extern "C" tc_status_t tc_attention_backward(tc_context* ctx,
             return TC_ERR_DISPATCH;
         }
     }
-    tc_set_last_backend(TC_BACKEND_SIMDGROUP_MATRIX);
-    return TC_OK;
+    return tc_record_dispatch("tc_attention_backward", TC_BACKEND_SIMDGROUP_MATRIX, TC_OK);
 }
 
 extern "C" tc_status_t tc_attention_forward_async(tc_context* ctx,
@@ -496,6 +496,5 @@ extern "C" tc_status_t tc_attention_forward_async(tc_context* ctx,
         [enc endEncoding];
         if (!stream) [cmd commit];
     }
-    tc_set_last_backend(TC_BACKEND_SIMDGROUP_MATRIX);
-    return TC_OK;
+    return tc_record_dispatch("tc_attention_forward_async", TC_BACKEND_SIMDGROUP_MATRIX, TC_OK);
 }

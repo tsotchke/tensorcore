@@ -274,7 +274,7 @@ extern "C" tc_status_t tc_attention_forward(tc_context* ctx,
             }
         }
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_attention_forward", TC_BACKEND_PORTABLE_CPU, TC_OK);
 }
 
 extern "C" tc_status_t tc_attention_forward_async(tc_context* ctx,
@@ -475,5 +475,5 @@ extern "C" tc_status_t tc_attention_backward(tc_context* ctx,
     const size_t total_q = (size_t)B * Hq * Sq * D;
     for (size_t i = 0; i < total_q; ++i) dQd[i] = tc_cpu_f32_to_f16(dQ_fp32[i]);
 
-    return TC_OK;
+    return tc_record_dispatch("tc_attention_backward", TC_BACKEND_PORTABLE_CPU, TC_OK);
 }
