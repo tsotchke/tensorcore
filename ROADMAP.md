@@ -1,8 +1,26 @@
 # tensorcore — Roadmap
 
-**Goal:** make Apple Silicon a first-class training and inference platform for
-AI workloads, **competitive with — and on specific axes beyond — NVIDIA**, all
-the way from on-device to frontier-scale model training.
+**Goal:** become **the vendor-neutral compute substrate** for AI training and
+inference, HPC scientific computing, graphics, and any workload that needs a
+lot of optimized compute — runnable on Apple, NVIDIA, AMD, Intel, ARM, and
+heterogeneous meshes of all of them. CUDA is welcome where it makes sense; no
+piece of the stack should *require* it.
+
+The narrower v0.1 goal — "make Apple Silicon a first-class training and
+inference platform" — is the foundation, not the destination. v0.2 through
+v0.6 extend the same C ABI to:
+
+- **chipStar HIP** backend: Intel (Level Zero), NVIDIA (OpenCL), AMD
+  (OpenCL), ARM Mali — one HIP source compiled to SPIR-V via chipStar runs
+  on all of them.
+- **CPU SIMD** backends: AVX2 (with FMA + F16C) and NEON, owned by tensorcore
+  so cheap big-RAM Linux boxes can contribute real compute.
+- **Cross-continent distributed** via DiLoCo: K=100-1000 inner SGD steps
+  between outer-step parameter syncs makes per-step gradient sync over
+  100-200 ms RTT links viable.
+- **Memory tiering** with `tc_buffer_promote_async` / `_demote_async` across
+  L0 (device RAM) → L1 (host RAM) → L2 (remote RAM) → L3 (NVMe) so a 70B
+  model can train on a mesh with no single node holding the whole thing.
 
 This roadmap is honest about where we are, where the silicon wins, where
 Apple has to ship hardware, and what software work closes the gap.
@@ -77,6 +95,53 @@ to consume it on day one.**
 ---
 
 ## Phasing
+
+### Heterogeneous-substrate sprint (in flight, unreleased)
+
+The work below extends v0.1's Apple-only ABI to a vendor-neutral compute
+substrate. Status is honest: some shipped already, some scaffolded,
+some still queued.
+
+- [x] **Portable CPU backend feature-complete on CPU side** — full
+      transformer training stack (RMSnorm/LayerNorm/RoPE/SwiGLU/softmax/
+      AdamW), FlashAttention forward + backward, Conv2D forward, plus
+      BLAS-delegate GEMM (Accelerate / Intel MKL / OpenBLAS auto-detected).
+- [x] **Measured: 2.10 TFLOPS fp32 GEMM on old-donkey (88-core Xeon
+      E5-2699 v4) via MKL** — 70% of compute peak, vs 0.66 GFLOPS for the
+      original reference triple-loop (~3200× speedup).
+- [x] **CPU FlashAttention with AVX2+F16C-vectorized dot product** —
+      2× speedup over scalar inner loop; 19.7 GFLOPS for B=1 H=32 S=512
+      D=64 on old-donkey.
+- [x] **Hand-tuned AVX2 6×16 fp32 GEMM micro-kernel** (`lib/ops/gemm_cpu_avx2.cpp`)
+      — opt-in via `TC_USE_AVX2_GEMM=1`. Self-contained; no BLAS dep.
+      OpenMP outer + 1024+ shape scaling pending.
+- [x] **DiLoCo cross-continent training API** — `include/tensorcore/diloco.h`
+      + single-rank runtime in `lib/distributed/diloco.cpp`. Outer/inner
+      optimizer split, 4 compression schemes wired (NONE, FP16,
+      TOPK_1PCT, TOPK_01PCT) + Nesterov / SGD / Adam outer optimizers +
+      async overlap + dropout tolerance. Multi-rank cross-site transport
+      lands once `TC_DIST_GLOO` ships.
+- [x] **HIP/chipStar backend scaffold** — `include/tensorcore/hip.h` +
+      `lib/hip/hip_stub.cpp` + `lib/hip/README.md`. Public ABI frozen;
+      runtime implementation lands after chipStar runtime is validated
+      on cosbox (NVIDIA driver fix pending).
+- [x] **chipStar 1.1 built on cosbox (RTX 3090 host)** — hipcc + libCHIP.so
+      verified; HIP source compiles. Runtime test blocked on NVIDIA driver
+      mismatch; restart-pending.
+- [x] **Memory-tier API** — `include/tensorcore/memory_tier.h` with
+      `tc_buffer_set_tier_hint`, `tc_buffer_promote_async`, etc. L0 (device)
+      stub baseline shipping today; L1-L4 tiers (host RAM, RDMA-remote,
+      NVMe) materialize as the runtime grows.
+- [ ] **HIP/chipStar runtime body** — `lib/hip/device.cpp`, `lib/hip/gemm.cpp`
+      via chipStar's hipBLAS port. Phase 1.
+- [x] **NEON GEMM kernel** for aarch64 (xavier, Apple CPU side) — opt-in
+      via `TC_USE_NEON_GEMM=1`; CBLAS remains default pending broader
+      throughput data.
+- [ ] **Multi-thread + 1024+ scaling of the AVX2 GEMM kernel**. Phase 2.
+- [ ] **`TC_DIST_GLOO` backend** for actual cross-machine collectives over
+      TCP. Phase 3.
+- [ ] **Sparse top-k compressed all-reduce** in DiLoCo (today's top-k
+      sparsifies but still sends a dense fp32 vector). Phase 4.
 
 ### v0.1 — Foundation (shipped this checkpoint)
 - [x] CMake + metallib precompile + cross-family runtime detect

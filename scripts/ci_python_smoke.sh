@@ -50,5 +50,21 @@ if tc.TC_DIST_SINGLE != 0 or tc.TC_DIST_RING != 1 or tc.TC_DIST_GLOO != 2:
     raise SystemExit("distributed backend constants mismatch")
 if tc.TC_REDUCE_SUM != 0 or tc.TC_REDUCE_AVG != 1:
     raise SystemExit("distributed reduce constants mismatch")
+if tc.TC_TIER_L0_DEVICE != 0 or tc.TC_TIER_L4_REMOTE_NVME != 4:
+    raise SystemExit("memory tier constants mismatch")
+if tc.TC_TIER_HINT_HOT != 0 or tc.TC_TIER_HINT_ICE != 3:
+    raise SystemExit("memory tier hint constants mismatch")
+if tc.TC_HIP_VENDOR_UNKNOWN != 0 or tc.TC_HIP_VENDOR_NVIDIA != 2:
+    raise SystemExit("HIP vendor constants mismatch")
+if tc.TC_DILOCO_COMPRESS_NONE != 0 or tc.TC_DILOCO_COMPRESS_TOPK_01PCT != 4:
+    raise SystemExit("DiLoCo compression constants mismatch")
+if tc.TC_DILOCO_OUTER_SGD != 0 or tc.TC_DILOCO_OUTER_NESTEROV != 1:
+    raise SystemExit("DiLoCo optimizer constants mismatch")
+if tc.hip_device_count() != 0 or tc.hip_last_kernel_name() != "none":
+    raise SystemExit("HIP inactive diagnostics mismatch")
+if (tc.checkpoint_count_resident() != 0 or
+        tc.checkpoint_count_discarded() != 0 or
+        tc.checkpoint_total_bytes_discarded() != 0):
+    raise SystemExit("checkpoint baseline counters mismatch")
 print(actual)
 PY

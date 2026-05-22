@@ -1,13 +1,13 @@
 # Python binding
 
 `python/tensorcore/__init__.py` is a pure-Python `ctypes` wrapper around the
-C ABI. No build step beyond installing the package — the heavy lifting is
-the `libtensorcore.dylib` you built with CMake.
+C ABI. No build step beyond installing the package -- the heavy lifting is
+the native `libtensorcore.dylib` / `libtensorcore.so` you built with CMake.
 
 The binding mirrors the C surface almost line-for-line and adds owned
-object wrappers (`Context`, `Buffer`, `Stream`, `DistContext`, `GgufFile`,
-`LoadedModel`, `LoadedTensor`, `QuantizedMatrix`) for ergonomic
-context-manager usage.
+object wrappers (`Context`, `Buffer`, `Stream`, `DistContext`,
+`DiLoCoContext`, `GgufFile`, `LoadedModel`, `LoadedTensor`,
+`QuantizedMatrix`) for ergonomic context-manager usage.
 
 ## Install
 
@@ -29,9 +29,10 @@ export TC_METALLIB=/opt/tensorcore/lib/tensorcore.metallib
 The binding finds the dylib via:
 
 1. `TENSORCORE_LIB` environment variable (if set).
-2. `libtensorcore.dylib` next to the loaded Python file (this is how the
-   release wheel works — `v0.1.8+` ships the dylib + metallib inside the
-   package).
+2. A package-local native library next to the loaded Python file
+   (`libtensorcore.dylib` on macOS, `libtensorcore.so` on Linux,
+   `tensorcore.dll` on Windows). The macOS release wheel also ships the
+   metallib inside the package.
 3. A few standard `/opt`, `/usr/local`, and CMake install prefixes.
 4. The build tree (`build/libtensorcore.dylib`) — for editable installs
    without `cmake --install`.
@@ -62,9 +63,9 @@ The binding has three layers:
 2. **Structures** — `TCDeviceInfo`, `TCGemmDesc`, `TCAttentionDesc`,
    `TCGGufLlamaConfig`, ... — mirror the C structs exactly.
 3. **Owned object wrappers** — `Context`, `Buffer`, `Stream`,
-   `DistContext`, `GgufFile`, `LoadedModel`, `LoadedTensor`,
-   `QuantizedMatrix` — context-manager-friendly wrappers that own the
-   underlying handle and release it on `close()` / scope exit.
+   `DistContext`, `DiLoCoContext`, `GgufFile`, `LoadedModel`,
+   `LoadedTensor`, `QuantizedMatrix` -- context-manager-friendly wrappers
+   that own the underlying handle and release it on `close()` / scope exit.
 
 All three styles are exposed. The object wrappers are the ergonomic path;
 the raw functions match the C ABI 1:1 when you need it.
@@ -111,6 +112,26 @@ Function names follow the C ABI with `tc_` dropped. Status codes raise
 `version`, `status_string`, `dtype_name`, `backend_name`, `last_backend`,
 `last_backend_name`, `tensorops_gemm_kernel_name`.
 
+### Memory tiering
+`buffer_set_tier_hint`, `buffer_get_tier`, `buffer_promote_async`,
+`buffer_demote_async`, `buffer_tier_sync`, `memory_tier_usage`.
+The current runtime exposes the L0-only stub baseline; L1-L4 hosting lands
+with the heterogeneous mesh runtime.
+
+### Activation checkpointing
+`checkpoint_register`, `checkpoint_discard`, `checkpoint_realize`,
+`checkpoint_is_resident`, `checkpoint_unregister`,
+`checkpoint_total_bytes_discarded`, `checkpoint_count_resident`,
+`checkpoint_count_discarded`. The current runtime keeps buffers resident and
+uses the calls for lifecycle validation plus counters until real discard /
+reallocate support lands.
+
+### HIP
+`hip_init`, `hip_device_info_get`, `hip_device_count`, `hip_device_at`,
+`hip_select_device`, `hip_last_kernel_name`. The in-tree HIP/chipStar
+backend currently exposes deterministic unsupported diagnostics when no
+runtime is built in.
+
 ### GEMM
 `gemm`, `gemm_async`, `gemm_batched`.
 
@@ -146,6 +167,13 @@ helpers `conv2d_output_shape`, `conv2d_scratch_bytes`,
 `gguf_loaded_skipped_tensor_count`, `gguf_loaded_tensor_at`,
 `gguf_loaded_get_tensor`.
 
+### DiLoCo
+`diloco_config`, `diloco_init`, `diloco_finalize`,
+`diloco_add_parameter`, `diloco_step`, `diloco_apply_outer`,
+`diloco_outer_steps_completed`, `diloco_inner_steps_completed`,
+`diloco_last_outer_step_seconds`, `diloco_last_outer_bytes_sent`.
+`DiLoCoContext` wraps these functions for owned lifetime management.
+
 ## Object wrappers
 
 ### `Context`
@@ -163,8 +191,10 @@ Methods (excerpt):
 |---|---|
 | `buffer(nbytes)` | Allocate a raw `Buffer` of `nbytes` |
 | `buffer_from_array(arr)` | Allocate + `write(arr)` in one call |
+| `memory_tier_usage(tier)` | Return `(resident_bytes, capacity_bytes)` for a tier |
 | `stream()` | Create a `Stream` |
 | `dist(backend, world_size, rank, rendezvous_url=...)` | Create a `DistContext` |
+| `hip_init()`, `hip_device_info()`, `hip_select_device(index)` | HIP/chipStar diagnostics and device selection |
 | `gemm(A, B, C, M, N, K, **kwargs)` | sync GEMM (dtype/accum/transpose flags via kwargs) |
 | `gemm_async(A, B, C, M, N, K, stream, **kwargs)` | async GEMM |
 | `gemm_batched(A, B, C, batch, M, N, K, **kwargs)` | batched GEMM |
@@ -194,8 +224,10 @@ A.write(np.array([3.0, 4.0], dtype=np.float32))
 A.read(arr)                     # in-place read into existing array
 ```
 
-Methods: `map()` (raw pointer), `size()`, `nbytes()`, `write(arr)`,
-`read(arr)`, `to_numpy(shape, dtype)`, `close()`.
+Methods: `map()` (raw pointer), `size()`, `nbytes`, `write(arr)`,
+`read(arr)`, `to_numpy(shape, dtype)`, `set_tier_hint(hint)`,
+`get_tier()`, `promote_async(target_tier, stream=None)`,
+`demote_async(target_tier, stream=None)`, `tier_sync()`, `close()`.
 
 ### `Stream`
 
@@ -214,13 +246,30 @@ Methods: `sync()`, `close()`. This is the path that yields the
 
 ```python
 with ctx.dist(backend=tc.TC_DIST_SINGLE, world_size=1, rank=0) as d:
-    print(d.world_size(), d.rank())          # 1, 0
+    print(d.world_size, d.rank)              # 1, 0
     d.allreduce(grad_buffer, num_elements=n, dtype="f32",
                 op=tc.TC_REDUCE_SUM)         # no-op at world_size=1
     d.barrier()
 ```
 
-Methods: `world_size()`, `rank()`, `allreduce(buf, n, dtype, op)`,
+### `DiLoCoContext`
+
+```python
+with ctx.dist("single", 1, 0, "single://diloco") as dist:
+    with dist.diloco(inner_steps=100, outer_lr=1.0,
+                     outer_optimizer="nesterov", compress="none") as d:
+        d.add_parameter("tok_embeddings.weight", weight_buffer,
+                        num_elements=weight_count, dtype="f32")
+        if d.step():
+            d.apply_outer()
+        print(d.outer_steps_completed, d.last_outer_bytes_sent)
+```
+
+The portable runtime covers local/single-rank DiLoCo outer steps. Multi-rank
+WAN transport and advanced compression modes raise `TensorcoreError` with
+explicit unsupported status codes until those backends land.
+
+Methods: `world_size`, `rank`, `allreduce(buf, n, dtype, op)`,
 `broadcast(buf, n, dtype, root)`, `allgather(src, dst, n_per_rank, dtype)`,
 `barrier()`, `close()`. The multi-Mac transport is the v0.5 work — see
 [distributed.md](distributed.md).

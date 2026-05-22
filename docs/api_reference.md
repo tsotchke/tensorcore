@@ -140,6 +140,70 @@ tc_status_t tc_stream_sync   (tc_stream*  s);
 
 NULL stream means "use the default stream" — sync-commit on every call.
 
+## Memory Tiering — `memory_tier.h`
+
+The memory-tier ABI lets higher-level runtimes hint which buffers should
+stay hot and which can eventually move to slower storage. The current
+runtime ships an L0-only stub baseline: hints are accepted, queried buffers
+report `TC_TIER_L0_DEVICE`, and L1-L4 hosting lands with the heterogeneous
+mesh runtime.
+
+```c
+typedef enum {
+    TC_TIER_L0_DEVICE      = 0,
+    TC_TIER_L1_HOST_RAM    = 1,
+    TC_TIER_L2_REMOTE_RAM  = 2,
+    TC_TIER_L3_LOCAL_NVME  = 3,
+    TC_TIER_L4_REMOTE_NVME = 4,
+} tc_memory_tier_t;
+
+typedef enum {
+    TC_TIER_HINT_HOT  = 0,
+    TC_TIER_HINT_WARM = 1,
+    TC_TIER_HINT_COLD = 2,
+    TC_TIER_HINT_ICE  = 3,
+} tc_tier_hint_t;
+
+tc_status_t tc_buffer_set_tier_hint(tc_buffer* b, tc_tier_hint_t hint);
+tc_status_t tc_buffer_get_tier(const tc_buffer* b,
+                               tc_memory_tier_t* out_tier);
+tc_status_t tc_buffer_promote_async(tc_buffer* b,
+                                    tc_memory_tier_t target_tier,
+                                    tc_stream* stream);
+tc_status_t tc_buffer_demote_async(tc_buffer* b,
+                                   tc_memory_tier_t target_tier,
+                                   tc_stream* stream);
+tc_status_t tc_buffer_tier_sync(tc_buffer* b);
+tc_status_t tc_memory_tier_usage(tc_context* ctx,
+                                 tc_memory_tier_t tier,
+                                 uint64_t* out_bytes_resident,
+                                 uint64_t* out_bytes_capacity);
+```
+
+## Activation Checkpointing — `checkpoint.h`
+
+The checkpoint ABI provides buffer-level hooks for frameworks that trade
+activation memory for recompute. The current runtime ships resident-only
+weak stubs: `discard` updates observability counters, and `realize` invokes
+the registered recompute callback without freeing/reallocating the buffer.
+
+```c
+typedef uint64_t tc_checkpoint_id;
+typedef tc_status_t(*tc_checkpoint_recompute_fn)(void* user_data);
+
+tc_status_t tc_checkpoint_register(tc_buffer* buf,
+                                   tc_checkpoint_recompute_fn recompute_fn,
+                                   void* user_data,
+                                   tc_checkpoint_id* out_id);
+tc_status_t tc_checkpoint_discard(tc_checkpoint_id id);
+tc_status_t tc_checkpoint_realize(tc_checkpoint_id id);
+int tc_checkpoint_is_resident(tc_checkpoint_id id);
+tc_status_t tc_checkpoint_unregister(tc_checkpoint_id id);
+uint64_t tc_checkpoint_total_bytes_discarded(void);
+uint64_t tc_checkpoint_count_resident(void);
+uint64_t tc_checkpoint_count_discarded(void);
+```
+
 ## GEMM — `gemm.h`
 
 ### Descriptor

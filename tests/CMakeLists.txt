@@ -9,6 +9,27 @@ if(NOT TC_ENABLE_METAL)
     target_include_directories(test_portable_cpu PRIVATE ${CMAKE_SOURCE_DIR}/include)
     add_test(NAME test_portable_cpu COMMAND test_portable_cpu)
     set_tests_properties(test_portable_cpu PROPERTIES TIMEOUT 120)
+
+    add_executable(test_conv2d test_conv2d.c)
+    target_link_libraries(test_conv2d PRIVATE tensorcore)
+    target_include_directories(test_conv2d PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    add_test(NAME test_conv2d COMMAND test_conv2d)
+    set_tests_properties(test_conv2d PROPERTIES TIMEOUT 120)
+
+    # DiLoCo single-rank runtime smoke; runs everywhere since the runtime
+    # is platform-independent (lives in lib/distributed/diloco.cpp).
+    add_executable(test_diloco test_diloco.c)
+    target_link_libraries(test_diloco PRIVATE tensorcore)
+    target_include_directories(test_diloco PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    add_test(NAME test_diloco COMMAND test_diloco)
+    set_tests_properties(test_diloco PROPERTIES TIMEOUT 60)
+
+    # Sparse top-k compression round-trip — exercises lib/distributed/sparse_compress.cpp.
+    add_executable(test_sparse_compress test_sparse_compress.c)
+    target_link_libraries(test_sparse_compress PRIVATE tensorcore)
+    target_include_directories(test_sparse_compress PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    add_test(NAME test_sparse_compress COMMAND test_sparse_compress)
+    set_tests_properties(test_sparse_compress PROPERTIES TIMEOUT 30)
     return()
 endif()
 
@@ -43,6 +64,21 @@ foreach(t IN LISTS TC_TESTS)
         ENVIRONMENT "TC_METALLIB=${TC_METALLIB_PATH}"
     )
 endforeach()
+
+# DiLoCo single-rank runtime smoke — same source as the CPU build's test,
+# runs on Apple too because the runtime is platform-independent.
+add_executable(test_diloco test_diloco.c)
+target_link_libraries(test_diloco PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
+target_include_directories(test_diloco PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME test_diloco COMMAND test_diloco)
+set_tests_properties(test_diloco PROPERTIES TIMEOUT 60)
+
+# Sparse top-k compression round-trip — exercises lib/distributed/sparse_compress.cpp.
+add_executable(test_sparse_compress test_sparse_compress.c)
+target_link_libraries(test_sparse_compress PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
+target_include_directories(test_sparse_compress PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME test_sparse_compress COMMAND test_sparse_compress)
+set_tests_properties(test_sparse_compress PROPERTIES TIMEOUT 30)
 
 add_executable(test_buffer_pool test_buffer_pool.mm)
 target_link_libraries(test_buffer_pool PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})

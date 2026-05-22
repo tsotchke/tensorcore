@@ -284,7 +284,10 @@ set(TC_COMMON_SOURCES
     lib/io/gguf.c
     lib/tensorops/tensorops_select.c
     lib/distributed/diloco.cpp
+    lib/distributed/sparse_compress.cpp
     lib/hip/hip_stub.cpp
+    lib/core/memory_tier_stub.cpp
+    lib/core/checkpoint_stub.cpp
 )
 
 if(TC_ENABLE_METAL)
@@ -310,6 +313,7 @@ else()
         lib/core/device_cpu.cpp
         lib/ops/gemm_cpu.cpp
         lib/ops/gemm_cpu_avx2.cpp
+        lib/ops/gemm_cpu_neon.cpp
         lib/ops/training_cpu.cpp
         lib/ops/attention_cpu.cpp
         lib/ops/conv2d_cpu.cpp
@@ -331,6 +335,24 @@ if(NOT TC_ENABLE_METAL)
         if(TC_COMPILER_SUPPORTS_MAVX2 AND TC_COMPILER_SUPPORTS_MFMA)
             set_source_files_properties(lib/ops/gemm_cpu_avx2.cpp PROPERTIES
                 COMPILE_OPTIONS "$<$<COMPILE_LANGUAGE:CXX>:-mavx2;-mfma>"
+            )
+        endif()
+    endif()
+
+    # NEON micro-kernel: Apple Clang on arm64 defines __ARM_NEON by default,
+    # so no extra flag is needed on Apple Silicon. On Linux ARM (Cortex-A78
+    # class, Jetson Xavier / Orin), older GCC may need -march=armv8-a+simd.
+    # On non-aarch64 the source file is a tiny stub and must not receive
+    # arm-only flags.
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+        include(CheckCXXCompilerFlag)
+        check_cxx_compiler_flag("-march=armv8-a+simd" TC_COMPILER_SUPPORTS_MARCH_NEON)
+        if(TC_COMPILER_SUPPORTS_MARCH_NEON AND NOT APPLE)
+            # Apple Clang already enables NEON for arm64 targets; on Linux ARM
+            # this gate forces the SIMD extension to be on even when the host
+            # default is older.
+            set_source_files_properties(lib/ops/gemm_cpu_neon.cpp PROPERTIES
+                COMPILE_OPTIONS "$<$<COMPILE_LANGUAGE:CXX>:-march=armv8-a+simd>"
             )
         endif()
     endif()
@@ -372,6 +394,9 @@ if(TC_HAS_CBLAS)
     endif()
 endif()
 if(OpenMP_FOUND)
+    # Keep OpenMP internal to the shared library. The static install target
+    # remains dependency-light so downstream consumers do not need to discover
+    # libomp just to use tensorcore's CMake package.
     target_link_libraries(tensorcore_shared PRIVATE OpenMP::OpenMP_CXX)
 endif()
 target_link_libraries(tensorcore_shared PUBLIC
@@ -407,10 +432,6 @@ if(TC_HAS_CBLAS)
         target_include_directories(tensorcore PRIVATE ${TC_CBLAS_INCLUDE_DIRS})
     endif()
 endif()
-if(OpenMP_FOUND)
-    target_link_libraries(tensorcore PRIVATE OpenMP::OpenMP_CXX)
-endif()
-
 target_link_libraries(tensorcore PUBLIC
     ${TC_APPLE_FRAMEWORK_LINKS}
     ${TC_CBLAS_LIBRARIES}

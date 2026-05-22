@@ -33,6 +33,10 @@ with a tested single-rank outer-step path.
   thread-local pack buffers. Opt-in via `TC_USE_AVX2_GEMM=1`. Self-contained
   and hidden from the public export surface. Multi-thread outer + large-shape
   scaling remain pending.
+- `Add hand-tuned NEON fp32 GEMM micro-kernel`: `lib/ops/gemm_cpu_neon.cpp`.
+  8×8 aarch64 SIMD kernel for Apple/ARM CPU builds, opt-in via
+  `TC_USE_NEON_GEMM=1`, with CBLAS remaining the default until broader
+  throughput data is collected.
 
 ### Heterogeneous-mesh substrate
 
@@ -45,9 +49,28 @@ with a tested single-rank outer-step path.
   `lib/hip/hip_stub.cpp`, and `lib/hip/README.md`. The public API exports
   deterministic unsupported stubs today and documents the porting plan for
   Intel Level Zero plus NVIDIA/AMD/ARM OpenCL through chipStar.
+- `Add memory-tier public ABI`: `include/tensorcore/memory_tier.h` and
+  `lib/core/memory_tier_stub.cpp` expose buffer tier hints, async
+  promote/demote entry points, and usage accounting. The shipped baseline
+  is intentionally L0-only until L1-L4 hosting lands.
+- `Add activation-checkpointing ABI stubs`: `include/tensorcore/checkpoint.h`
+  and `lib/core/checkpoint_stub.cpp` expose register/discard/realize
+  lifecycle calls plus resident/discarded counters for future recompute-based
+  activation memory savings.
 - `Document cross-continent training topology`: `docs/diloco.md` explains
   the DiLoCo algorithm, compression choices, and the two-site bandwidth
   budgeting model.
+- `Expose HIP and DiLoCo through Python`: the binding now has public
+  `hip_*` wrappers, `diloco_*` wrappers, `DiLoCoContext`, enum constants,
+  ABI-layout checks for the new structs, and portable-CPU smoke coverage
+  for HIP inactive diagnostics plus single-rank DiLoCo outer steps.
+- `Expose memory-tier controls through Python`: `buffer_set_tier_hint`,
+  `buffer_get_tier`, `buffer_promote_async`, `buffer_demote_async`,
+  `buffer_tier_sync`, and `memory_tier_usage` are bound and covered by the
+  portable-CPU smoke.
+- `Expose activation-checkpointing controls through Python`: the binding now
+  covers `checkpoint_*` lifecycle and counter functions, with portable C and
+  Python smoke coverage.
 
 ### Original v0.1.22 changes (preserved below)
 

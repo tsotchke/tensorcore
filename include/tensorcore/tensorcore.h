@@ -13,6 +13,8 @@
 #include "tensorcore/distributed.h"
 #include "tensorcore/diloco.h"
 #include "tensorcore/hip.h"
+#include "tensorcore/checkpoint.h"
+#include "tensorcore/memory_tier.h"
 #include "tensorcore/quantized.h"
 #include "tensorcore/gguf.h"
 

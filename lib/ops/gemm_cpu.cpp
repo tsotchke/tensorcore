@@ -41,6 +41,21 @@ extern "C" TC_INTERNAL_SYMBOL int tc_avx2_gemm_f32(int M, int N, int K,
                                                    float* C, int ldc);
 extern "C" TC_INTERNAL_SYMBOL int tc_avx2_gemm_f32_available(void);
 
+/* Forward decl for the NEON micro-kernel in gemm_cpu_neon.cpp. Same contract
+ * as the AVX2 path: returns 0 on success, non-zero on internal failure. Built
+ * on aarch64 with __ARM_NEON; everywhere else it stubs to -1 / 0.
+ *
+ * NEON's signature additionally takes transpose flags for A and B because the
+ * pack functions handle transposed source layouts natively (no on-the-fly
+ * matrix transposition needed). */
+extern "C" TC_INTERNAL_SYMBOL int tc_neon_gemm_f32(int M, int N, int K,
+                                                   float alpha,
+                                                   const float* A, int lda, int transpose_a,
+                                                   const float* B, int ldb, int transpose_b,
+                                                   float beta,
+                                                   float* C, int ldc);
+extern "C" TC_INTERNAL_SYMBOL int tc_neon_gemm_f32_available(void);
+
 namespace {
 
 bool validate_desc(const tc_gemm_desc* d) {
@@ -297,9 +312,14 @@ tc_status_t gemm_compute(const tc_gemm_desc* d, const void* A, const void* B, vo
      *   2. CBLAS (MKL > OpenBLAS) (~1.5-2 TFLOPS on Haswell-EP dual-socket)
      *   3. Reference triple-loop  (~1 GFLOPS — correctness only)
      *
-     * For now the AVX2 path is opt-in via TC_USE_AVX2_GEMM=1 so we can A/B
-     * against the BLAS-delegate. Once the AVX2 kernel has its OpenMP outer
-     * loop wired (Phase 1.x), the default flips. */
+     * Path priority for fp32 GEMM on aarch64:
+     *   1. NEON in-tree kernel    (self-contained, no BLAS dep, ~50 GFLOPS/core)
+     *   2. CBLAS (Accelerate on Apple, OpenBLAS on Linux ARM)
+     *   3. Reference triple-loop
+     *
+     * For now both in-tree kernels are opt-in via TC_USE_AVX2_GEMM / TC_USE_NEON_GEMM
+     * so we can A/B against the BLAS delegate. Once the OpenMP outer loops are
+     * wired (Phase 1.x), the defaults flip. */
     const char* prefer_avx2 = std::getenv("TC_USE_AVX2_GEMM");
     if (prefer_avx2 && prefer_avx2[0] == '1' && tc_avx2_gemm_f32_available() &&
         d->c_dtype == TC_DTYPE_F32 && d->a_dtype == TC_DTYPE_F32 && d->b_dtype == TC_DTYPE_F32) {
@@ -312,6 +332,22 @@ tc_status_t gemm_compute(const tc_gemm_desc* d, const void* A, const void* B, vo
             return TC_OK;
         }
         /* Fall through to CBLAS / reference on AVX2 internal failure. */
+    }
+
+    const char* prefer_neon = std::getenv("TC_USE_NEON_GEMM");
+    if (prefer_neon && prefer_neon[0] == '1' && tc_neon_gemm_f32_available() &&
+        d->c_dtype == TC_DTYPE_F32 && d->a_dtype == TC_DTYPE_F32 && d->b_dtype == TC_DTYPE_F32) {
+        /* The NEON pack functions handle transposed A and B natively, so no
+         * dispatch guard is needed beyond the dtype check. */
+        if (tc_neon_gemm_f32(d->M, d->N, d->K,
+                             d->alpha,
+                             (const float*)A, effective_lda(d), d->transpose_a ? 1 : 0,
+                             (const float*)B, effective_ldb(d), d->transpose_b ? 1 : 0,
+                             d->beta,
+                             (float*)C, ldc) == 0) {
+            return TC_OK;
+        }
+        /* Fall through to CBLAS / reference on NEON internal failure. */
     }
 
 #if defined(TC_HAS_CBLAS)

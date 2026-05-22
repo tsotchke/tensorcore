@@ -73,6 +73,32 @@ int main(void) {
     FIELD(tc_attention_desc, window_size);
     FIELD(tc_attention_desc, alibi_slopes);
 
+    SIZE(tc_hip_device_info);
+    FIELD(tc_hip_device_info, vendor);
+    FIELD(tc_hip_device_info, device_name);
+    FIELD(tc_hip_device_info, driver_version);
+    FIELD(tc_hip_device_info, opencl_version);
+    FIELD(tc_hip_device_info, global_memory_bytes);
+    FIELD(tc_hip_device_info, local_memory_bytes);
+    FIELD(tc_hip_device_info, compute_units);
+    FIELD(tc_hip_device_info, max_workgroup_size);
+    FIELD(tc_hip_device_info, preferred_subgroup_size);
+    FIELD(tc_hip_device_info, supports_fp16);
+    FIELD(tc_hip_device_info, supports_fp64);
+    FIELD(tc_hip_device_info, supports_int8_dot);
+    FIELD(tc_hip_device_info, unified_memory);
+
+    SIZE(tc_diloco_config);
+    FIELD(tc_diloco_config, inner_steps);
+    FIELD(tc_diloco_config, outer_lr);
+    FIELD(tc_diloco_config, outer_momentum);
+    FIELD(tc_diloco_config, outer_beta2);
+    FIELD(tc_diloco_config, outer_eps);
+    FIELD(tc_diloco_config, outer_optimizer);
+    FIELD(tc_diloco_config, compress);
+    FIELD(tc_diloco_config, async_overlap);
+    FIELD(tc_diloco_config, tolerate_dropouts);
+
     SIZE(tc_gguf_tensor_info);
     FIELD(tc_gguf_tensor_info, name);
     FIELD(tc_gguf_tensor_info, n_dims);
@@ -161,6 +187,17 @@ def python_layout() -> dict[str, int]:
             "batch", "heads", "seq_q", "seq_kv", "head_dim", "io_dtype",
             "accum_dtype", "softmax_scale", "causal", "return_lse",
             "kv_heads", "window_size", "alibi_slopes",
+        ]),
+        "tc_hip_device_info": (tc.TCHipDeviceInfo, [
+            "vendor", "device_name", "driver_version", "opencl_version",
+            "global_memory_bytes", "local_memory_bytes", "compute_units",
+            "max_workgroup_size", "preferred_subgroup_size", "supports_fp16",
+            "supports_fp64", "supports_int8_dot", "unified_memory",
+        ]),
+        "tc_diloco_config": (tc.TCDiLoCoConfig, [
+            "inner_steps", "outer_lr", "outer_momentum", "outer_beta2",
+            "outer_eps", "outer_optimizer", "compress", "async_overlap",
+            "tolerate_dropouts",
         ]),
         "tc_gguf_tensor_info": (tc.TCGGufTensorInfo, [
             "name", "n_dims", "dims", "type", "offset", "n_bytes", "data",

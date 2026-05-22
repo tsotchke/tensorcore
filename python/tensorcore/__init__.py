@@ -1,7 +1,7 @@
 """tensorcore — Python bindings.
 
-Thin ctypes wrapper around the tensorcore C ABI. Loads libtensorcore.dylib
-from a configured location and exposes the public surface.
+Thin ctypes wrapper around the tensorcore C ABI. Loads the tensorcore native
+library from a configured location and exposes the public surface.
 
 Quick start:
 
@@ -37,6 +37,7 @@ import weakref
 from ctypes import (
     c_int, c_uint, c_int32, c_int64, c_uint32, c_uint64, c_size_t,
     c_float, c_double, c_char_p, c_void_p, c_bool, POINTER, Structure, byref,
+    CFUNCTYPE,
 )
 
 # ---------------------------------------------------------------------------
@@ -139,9 +140,38 @@ TC_BACKEND_SF64_EMULATED = 5
 TC_BACKEND_OZAKI_II = 6
 TC_BACKEND_PORTABLE_CPU = 7
 
+TC_TIER_L0_DEVICE = 0
+TC_TIER_L1_HOST_RAM = 1
+TC_TIER_L2_REMOTE_RAM = 2
+TC_TIER_L3_LOCAL_NVME = 3
+TC_TIER_L4_REMOTE_NVME = 4
+
+TC_TIER_HINT_HOT = 0
+TC_TIER_HINT_WARM = 1
+TC_TIER_HINT_COLD = 2
+TC_TIER_HINT_ICE = 3
+
 TC_DIST_SINGLE = 0
 TC_DIST_RING = 1
 TC_DIST_GLOO = 2
+
+TC_HIP_VENDOR_UNKNOWN = 0
+TC_HIP_VENDOR_INTEL = 1
+TC_HIP_VENDOR_NVIDIA = 2
+TC_HIP_VENDOR_AMD = 3
+TC_HIP_VENDOR_ARM_MALI = 4
+
+TC_DILOCO_COMPRESS_NONE = 0
+TC_DILOCO_COMPRESS_FP16 = 1
+TC_DILOCO_COMPRESS_FP8 = 2
+TC_DILOCO_COMPRESS_TOPK_1PCT = 3
+TC_DILOCO_COMPRESS_TOPK_01PCT = 4
+TC_DILOCO_COMPRESS_LOWRANK = 5
+TC_DILOCO_COMPRESS_SIGNSGD = 6
+
+TC_DILOCO_OUTER_SGD = 0
+TC_DILOCO_OUTER_NESTEROV = 1
+TC_DILOCO_OUTER_ADAM = 2
 
 TC_REDUCE_SUM = 0
 TC_REDUCE_AVG = 1
@@ -185,6 +215,44 @@ _REDUCE_OP_MAP = {
     "mean": TC_REDUCE_AVG,
     "max": TC_REDUCE_MAX,
     "min": TC_REDUCE_MIN,
+}
+
+_MEMORY_TIER_MAP = {
+    "l0": TC_TIER_L0_DEVICE,
+    "device": TC_TIER_L0_DEVICE,
+    "l1": TC_TIER_L1_HOST_RAM,
+    "host": TC_TIER_L1_HOST_RAM,
+    "host_ram": TC_TIER_L1_HOST_RAM,
+    "l2": TC_TIER_L2_REMOTE_RAM,
+    "remote_ram": TC_TIER_L2_REMOTE_RAM,
+    "l3": TC_TIER_L3_LOCAL_NVME,
+    "local_nvme": TC_TIER_L3_LOCAL_NVME,
+    "l4": TC_TIER_L4_REMOTE_NVME,
+    "remote_nvme": TC_TIER_L4_REMOTE_NVME,
+}
+
+_TIER_HINT_MAP = {
+    "hot": TC_TIER_HINT_HOT,
+    "warm": TC_TIER_HINT_WARM,
+    "cold": TC_TIER_HINT_COLD,
+    "ice": TC_TIER_HINT_ICE,
+}
+
+_DILOCO_COMPRESS_MAP = {
+    "none": TC_DILOCO_COMPRESS_NONE,
+    "fp16": TC_DILOCO_COMPRESS_FP16,
+    "fp8": TC_DILOCO_COMPRESS_FP8,
+    "topk_1pct": TC_DILOCO_COMPRESS_TOPK_1PCT,
+    "topk_01pct": TC_DILOCO_COMPRESS_TOPK_01PCT,
+    "topk_0_1pct": TC_DILOCO_COMPRESS_TOPK_01PCT,
+    "lowrank": TC_DILOCO_COMPRESS_LOWRANK,
+    "signsgd": TC_DILOCO_COMPRESS_SIGNSGD,
+}
+
+_DILOCO_OUTER_OPTIMIZER_MAP = {
+    "sgd": TC_DILOCO_OUTER_SGD,
+    "nesterov": TC_DILOCO_OUTER_NESTEROV,
+    "adam": TC_DILOCO_OUTER_ADAM,
 }
 
 _QUANT_MAP = {
@@ -341,6 +409,10 @@ class TCDiLoCoConfig(Structure):
     ]
 
 
+TCCheckpointRecomputeFn = CFUNCTYPE(c_int, c_void_p)
+_CHECKPOINT_CALLBACKS = {}
+
+
 if _lib is not None:
     _lib.tc_init.argtypes = [POINTER(c_void_p)];          _lib.tc_init.restype = c_int
     _lib.tc_shutdown.argtypes = [c_void_p];               _lib.tc_shutdown.restype = c_int
@@ -349,6 +421,34 @@ if _lib is not None:
     _lib.tc_buffer_free.argtypes  = [c_void_p, c_void_p]; _lib.tc_buffer_free.restype  = c_int
     _lib.tc_buffer_map.argtypes   = [c_void_p, POINTER(c_void_p)]; _lib.tc_buffer_map.restype = c_int
     _lib.tc_buffer_size.argtypes  = [c_void_p];           _lib.tc_buffer_size.restype  = c_size_t
+    _lib.tc_buffer_set_tier_hint.argtypes = [c_void_p, c_int]
+    _lib.tc_buffer_set_tier_hint.restype = c_int
+    _lib.tc_buffer_get_tier.argtypes = [c_void_p, POINTER(c_int)]
+    _lib.tc_buffer_get_tier.restype = c_int
+    _lib.tc_buffer_promote_async.argtypes = [c_void_p, c_int, c_void_p]
+    _lib.tc_buffer_promote_async.restype = c_int
+    _lib.tc_buffer_demote_async.argtypes = [c_void_p, c_int, c_void_p]
+    _lib.tc_buffer_demote_async.restype = c_int
+    _lib.tc_buffer_tier_sync.argtypes = [c_void_p]
+    _lib.tc_buffer_tier_sync.restype = c_int
+    _lib.tc_memory_tier_usage.argtypes = [c_void_p, c_int, POINTER(c_uint64), POINTER(c_uint64)]
+    _lib.tc_memory_tier_usage.restype = c_int
+    _lib.tc_checkpoint_register.argtypes = [c_void_p, TCCheckpointRecomputeFn, c_void_p, POINTER(c_uint64)]
+    _lib.tc_checkpoint_register.restype = c_int
+    _lib.tc_checkpoint_discard.argtypes = [c_uint64]
+    _lib.tc_checkpoint_discard.restype = c_int
+    _lib.tc_checkpoint_realize.argtypes = [c_uint64]
+    _lib.tc_checkpoint_realize.restype = c_int
+    _lib.tc_checkpoint_is_resident.argtypes = [c_uint64]
+    _lib.tc_checkpoint_is_resident.restype = c_int
+    _lib.tc_checkpoint_unregister.argtypes = [c_uint64]
+    _lib.tc_checkpoint_unregister.restype = c_int
+    _lib.tc_checkpoint_total_bytes_discarded.argtypes = []
+    _lib.tc_checkpoint_total_bytes_discarded.restype = c_uint64
+    _lib.tc_checkpoint_count_resident.argtypes = []
+    _lib.tc_checkpoint_count_resident.restype = c_uint64
+    _lib.tc_checkpoint_count_discarded.argtypes = []
+    _lib.tc_checkpoint_count_discarded.restype = c_uint64
     _lib.tc_stream_create.argtypes = [c_void_p, POINTER(c_void_p)]; _lib.tc_stream_create.restype = c_int
     _lib.tc_stream_destroy.argtypes = [c_void_p, c_void_p]; _lib.tc_stream_destroy.restype = c_int
     _lib.tc_stream_sync.argtypes = [c_void_p]; _lib.tc_stream_sync.restype = c_int
@@ -619,8 +719,66 @@ def _reduce_op(op):
     return _REDUCE_OP_MAP[key]
 
 
+def _memory_tier(tier):
+    if isinstance(tier, int):
+        return tier
+    key = str(tier).lower()
+    if key not in _MEMORY_TIER_MAP:
+        raise ValueError(f"unknown memory tier: {tier}")
+    return _MEMORY_TIER_MAP[key]
+
+
+def _tier_hint(hint):
+    if isinstance(hint, int):
+        return hint
+    key = str(hint).lower()
+    if key not in _TIER_HINT_MAP:
+        raise ValueError(f"unknown tier hint: {hint}")
+    return _TIER_HINT_MAP[key]
+
+
+def _diloco_compress(compress):
+    if isinstance(compress, int):
+        return compress
+    key = str(compress).lower()
+    if key not in _DILOCO_COMPRESS_MAP:
+        raise ValueError(f"unknown DiLoCo compression: {compress}")
+    return _DILOCO_COMPRESS_MAP[key]
+
+
+def _diloco_outer_optimizer(optimizer):
+    if isinstance(optimizer, int):
+        return optimizer
+    key = str(optimizer).lower()
+    if key not in _DILOCO_OUTER_OPTIMIZER_MAP:
+        raise ValueError(f"unknown DiLoCo outer optimizer: {optimizer}")
+    return _DILOCO_OUTER_OPTIMIZER_MAP[key]
+
+
 def _decode_cstr(value):
     return value.decode("utf-8") if value else None
+
+
+def _decode_fixed_cstr(value):
+    return bytes(value).split(b"\0", 1)[0].decode("utf-8", "replace")
+
+
+def _hip_info_dict(info):
+    return {
+        "vendor": int(info.vendor),
+        "device_name": _decode_fixed_cstr(info.device_name),
+        "driver_version": _decode_fixed_cstr(info.driver_version),
+        "opencl_version": _decode_fixed_cstr(info.opencl_version),
+        "global_memory_bytes": int(info.global_memory_bytes),
+        "local_memory_bytes": int(info.local_memory_bytes),
+        "compute_units": int(info.compute_units),
+        "max_workgroup_size": int(info.max_workgroup_size),
+        "preferred_subgroup_size": int(info.preferred_subgroup_size),
+        "supports_fp16": bool(info.supports_fp16),
+        "supports_fp64": bool(info.supports_fp64),
+        "supports_int8_dot": bool(info.supports_int8_dot),
+        "unified_memory": bool(info.unified_memory),
+    }
 
 
 def status_string(status):
@@ -773,6 +931,98 @@ def buffer_size(buf):
     return _lib.tc_buffer_size(_as_handle(buf))
 
 
+def buffer_set_tier_hint(buf, hint):
+    """Set an advisory memory-tier usage hint on a buffer."""
+    _check(_lib.tc_buffer_set_tier_hint(_as_handle(buf), _tier_hint(hint)))
+
+
+def buffer_get_tier(buf):
+    """Return the current physical memory tier for a buffer."""
+    tier = c_int(0)
+    _check(_lib.tc_buffer_get_tier(_as_handle(buf), byref(tier)))
+    return int(tier.value)
+
+
+def buffer_promote_async(buf, target_tier=TC_TIER_L0_DEVICE, stream=None):
+    """Promote a buffer toward a faster memory tier."""
+    _check(_lib.tc_buffer_promote_async(
+        _as_handle(buf), _memory_tier(target_tier), _as_handle(stream),
+    ))
+
+
+def buffer_demote_async(buf, target_tier=TC_TIER_L0_DEVICE, stream=None):
+    """Demote a buffer toward a slower memory tier when the runtime supports it."""
+    _check(_lib.tc_buffer_demote_async(
+        _as_handle(buf), _memory_tier(target_tier), _as_handle(stream),
+    ))
+
+
+def buffer_tier_sync(buf):
+    """Fence outstanding tier transitions for a buffer."""
+    _check(_lib.tc_buffer_tier_sync(_as_handle(buf)))
+
+
+def memory_tier_usage(ctx, tier=TC_TIER_L0_DEVICE):
+    """Return (resident_bytes, capacity_bytes) for a memory tier."""
+    resident = c_uint64(0)
+    capacity = c_uint64(0)
+    _check(_lib.tc_memory_tier_usage(
+        _as_handle(ctx), _memory_tier(tier), byref(resident), byref(capacity),
+    ))
+    return int(resident.value), int(capacity.value)
+
+
+def checkpoint_register(buf, recompute_fn, user_data=None):
+    """Register a buffer-level activation checkpoint and return its id."""
+    if recompute_fn is None:
+        raise ValueError("recompute_fn is required")
+
+    def _callback(raw_user_data):
+        try:
+            result = recompute_fn(raw_user_data)
+            return TC_OK if result is None else int(result)
+        except Exception:
+            return TC_ERR_INTERNAL
+
+    callback = TCCheckpointRecomputeFn(_callback)
+    checkpoint_id = c_uint64(0)
+    _check(_lib.tc_checkpoint_register(
+        _as_handle(buf), callback, _as_handle(user_data), byref(checkpoint_id),
+    ))
+    _CHECKPOINT_CALLBACKS[int(checkpoint_id.value)] = callback
+    return int(checkpoint_id.value)
+
+
+def checkpoint_discard(checkpoint_id):
+    _check(_lib.tc_checkpoint_discard(c_uint64(int(checkpoint_id))))
+
+
+def checkpoint_realize(checkpoint_id):
+    _check(_lib.tc_checkpoint_realize(c_uint64(int(checkpoint_id))))
+
+
+def checkpoint_is_resident(checkpoint_id):
+    return bool(_lib.tc_checkpoint_is_resident(c_uint64(int(checkpoint_id))))
+
+
+def checkpoint_unregister(checkpoint_id):
+    checkpoint_id = int(checkpoint_id)
+    _check(_lib.tc_checkpoint_unregister(c_uint64(checkpoint_id)))
+    _CHECKPOINT_CALLBACKS.pop(checkpoint_id, None)
+
+
+def checkpoint_total_bytes_discarded():
+    return int(_lib.tc_checkpoint_total_bytes_discarded())
+
+
+def checkpoint_count_resident():
+    return int(_lib.tc_checkpoint_count_resident())
+
+
+def checkpoint_count_discarded():
+    return int(_lib.tc_checkpoint_count_discarded())
+
+
 def stream_create(ctx):
     stream = c_void_p()
     _check(_lib.tc_stream_create(_as_handle(ctx), byref(stream)))
@@ -870,6 +1120,107 @@ def allgather(dist, src, dst, num_elements_per_rank, dtype="f32"):
 
 def barrier(dist):
     _check(_lib.tc_barrier(_as_handle(dist)))
+
+
+def hip_init(ctx):
+    """Initialize the HIP/chipStar backend, if available on this host."""
+    _check(_lib.tc_hip_init(_as_handle(ctx)))
+
+
+def hip_device_info_get(ctx):
+    """Return HIP/chipStar device metadata for an initialized HIP backend."""
+    info = TCHipDeviceInfo()
+    _check(_lib.tc_hip_device_info_get(_as_handle(ctx), byref(info)))
+    return _hip_info_dict(info)
+
+
+def hip_device_count():
+    """Return the number of HIP/chipStar devices visible to tensorcore."""
+    return int(_lib.tc_hip_device_count())
+
+
+def hip_device_at(index):
+    """Return HIP/chipStar metadata for a device index."""
+    info = TCHipDeviceInfo()
+    _check(_lib.tc_hip_device_at(int(index), byref(info)))
+    return _hip_info_dict(info)
+
+
+def hip_select_device(ctx, index):
+    """Select the HIP/chipStar device used by the current tensorcore context."""
+    _check(_lib.tc_hip_select_device(_as_handle(ctx), int(index)))
+
+
+def hip_last_kernel_name():
+    """Return the diagnostic HIP kernel name from the last HIP-dispatched call."""
+    return _decode_cstr(_lib.tc_hip_last_kernel_name()) or "none"
+
+
+def diloco_config(inner_steps=100, outer_lr=1.0, outer_momentum=0.9,
+                  outer_beta2=0.999, outer_eps=1e-8,
+                  outer_optimizer=TC_DILOCO_OUTER_NESTEROV,
+                  compress=TC_DILOCO_COMPRESS_NONE,
+                  async_overlap=False, tolerate_dropouts=False):
+    """Build a TCDiLoCoConfig from Python values and enum aliases."""
+    return TCDiLoCoConfig(
+        inner_steps=int(inner_steps),
+        outer_lr=float(outer_lr),
+        outer_momentum=float(outer_momentum),
+        outer_beta2=float(outer_beta2),
+        outer_eps=float(outer_eps),
+        outer_optimizer=_diloco_outer_optimizer(outer_optimizer),
+        compress=_diloco_compress(compress),
+        async_overlap=bool(async_overlap),
+        tolerate_dropouts=bool(tolerate_dropouts),
+    )
+
+
+def diloco_init(dist, config=None, **kwargs):
+    """Create a DiLoCo context layered on an existing distributed context."""
+    cfg = config if config is not None else diloco_config(**kwargs)
+    handle = c_void_p()
+    _check(_lib.tc_diloco_init(_as_handle(dist), byref(cfg), byref(handle)))
+    return handle
+
+
+def diloco_finalize(diloco):
+    _check(_lib.tc_diloco_finalize(_as_handle(diloco)))
+
+
+def diloco_add_parameter(diloco, name, theta_local, num_elements, dtype="f32"):
+    """Register one parameter buffer with a DiLoCo context."""
+    _check(_lib.tc_diloco_add_parameter(
+        _as_handle(diloco), _bytes(name), _as_handle(theta_local),
+        c_size_t(num_elements), _dtype(dtype),
+    ))
+
+
+def diloco_step(diloco):
+    """Record one inner step and return whether an outer step is pending."""
+    pending = c_bool(False)
+    _check(_lib.tc_diloco_step(_as_handle(diloco), byref(pending)))
+    return bool(pending.value)
+
+
+def diloco_apply_outer(diloco):
+    """Run the DiLoCo outer optimizer step."""
+    _check(_lib.tc_diloco_apply_outer(_as_handle(diloco)))
+
+
+def diloco_outer_steps_completed(diloco):
+    return int(_lib.tc_diloco_outer_steps_completed(_as_handle(diloco)))
+
+
+def diloco_inner_steps_completed(diloco):
+    return int(_lib.tc_diloco_inner_steps_completed(_as_handle(diloco)))
+
+
+def diloco_last_outer_step_seconds(diloco):
+    return float(_lib.tc_diloco_last_outer_step_seconds(_as_handle(diloco)))
+
+
+def diloco_last_outer_bytes_sent(diloco):
+    return float(_lib.tc_diloco_last_outer_bytes_sent(_as_handle(diloco)))
 
 
 def gemm(ctx, A, B, C, M, N, K, dtype="f16", accum="f32",
@@ -1411,6 +1762,9 @@ class Context:
     def device_info(self):
         return device_info(self)
 
+    def memory_tier_usage(self, tier=TC_TIER_L0_DEVICE):
+        return memory_tier_usage(self, tier)
+
     def last_backend(self):
         return last_backend()
 
@@ -1428,6 +1782,15 @@ class Context:
 
     def dist(self, backend=TC_DIST_SINGLE, world_size=1, rank=0, rendezvous_url=None):
         return DistContext(self, backend, world_size, rank, rendezvous_url)
+
+    def hip_init(self):
+        return hip_init(self)
+
+    def hip_device_info(self):
+        return hip_device_info_get(self)
+
+    def hip_select_device(self, index):
+        return hip_select_device(self, index)
 
     def gemm(self, A, B, C, M, N, K, **kwargs):
         return gemm(self, A, B, C, M, N, K, **kwargs)
@@ -1564,6 +1927,25 @@ class Buffer:
     def nbytes(self):
         return self.size()
 
+    def set_tier_hint(self, hint):
+        buffer_set_tier_hint(self, hint)
+        return self
+
+    def get_tier(self):
+        return buffer_get_tier(self)
+
+    def promote_async(self, target_tier=TC_TIER_L0_DEVICE, stream=None):
+        buffer_promote_async(self, target_tier, stream)
+        return self
+
+    def demote_async(self, target_tier=TC_TIER_L0_DEVICE, stream=None):
+        buffer_demote_async(self, target_tier, stream)
+        return self
+
+    def tier_sync(self):
+        buffer_tier_sync(self)
+        return self
+
     def write(self, arr):
         buffer_write(self, arr)
         return self
@@ -1622,6 +2004,7 @@ class DistContext:
                  rendezvous_url=None):
         self.ctx = ctx
         self.handle = dist_init(ctx, backend, world_size, rank, rendezvous_url)
+        self._diloco_contexts = weakref.WeakSet()
         if hasattr(ctx, "_remember_dist_context"):
             ctx._remember_dist_context(self)
 
@@ -1664,12 +2047,85 @@ class DistContext:
     def barrier(self):
         barrier(self)
 
+    def _remember_diloco(self, diloco):
+        self._diloco_contexts.add(diloco)
+
+    def _forget_diloco(self, diloco):
+        self._diloco_contexts.discard(diloco)
+
+    def diloco(self, config=None, **kwargs):
+        return DiLoCoContext(self, config=config, **kwargs)
+
     def close(self):
         if self.handle is not None:
+            for diloco in list(self._diloco_contexts):
+                diloco.close()
             dist_finalize(self)
             self.handle = None
         if hasattr(self.ctx, "_forget_dist_context"):
             self.ctx._forget_dist_context(self)
+
+
+class DiLoCoContext:
+    """Owned tc_diloco_ctx wrapper layered on a DistContext."""
+
+    def __init__(self, dist, config=None, **kwargs):
+        self.dist = dist
+        self.handle = diloco_init(dist, config=config, **kwargs)
+        self._closed = False
+        if hasattr(dist, "_remember_diloco"):
+            dist._remember_diloco(self)
+
+    def __bool__(self):
+        return self.handle is not None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def add_parameter(self, name, theta_local, num_elements, dtype="f32"):
+        diloco_add_parameter(self, name, theta_local, num_elements, dtype)
+        return self
+
+    def step(self):
+        return diloco_step(self)
+
+    def apply_outer(self):
+        diloco_apply_outer(self)
+        return self
+
+    @property
+    def outer_steps_completed(self):
+        return diloco_outer_steps_completed(self)
+
+    @property
+    def inner_steps_completed(self):
+        return diloco_inner_steps_completed(self)
+
+    @property
+    def last_outer_step_seconds(self):
+        return diloco_last_outer_step_seconds(self)
+
+    @property
+    def last_outer_bytes_sent(self):
+        return diloco_last_outer_bytes_sent(self)
+
+    def close(self):
+        if not self._closed and self.handle is not None:
+            diloco_finalize(self)
+            self.handle = None
+            self._closed = True
+        if hasattr(self.dist, "_forget_diloco"):
+            self.dist._forget_diloco(self)
 
 
 class GgufFile:

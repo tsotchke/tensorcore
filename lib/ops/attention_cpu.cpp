@@ -44,19 +44,73 @@
 #include <omp.h>
 #endif
 
+/* Runtime-gated x86 fp16->fp32 dot product. Keep the generic CPU backend
+ * portable: only the helper below is compiled for AVX2/F16C/FMA, and it is
+ * called only when the host CPU reports those features. */
+#if (defined(__x86_64__) || defined(_M_X64)) && (defined(__GNUC__) || defined(__clang__))
+#  define TC_ATTN_CAN_BUILD_X86_DOT 1
+#  include <immintrin.h>
+#endif
+
 namespace {
 
 constexpr int kBr = 32;   /* query rows per tile */
 constexpr int kBc = 32;   /* key   cols per tile */
 
-inline float dot_fp16(const uint16_t* a, const uint16_t* b, int n) {
-    /* fp16-input dot product, fp32 accumulator. Plain scalar; AVX2-vectorized
-     * variant would replace this — see Phase 2 follow-up. */
+#if defined(TC_ATTN_CAN_BUILD_X86_DOT)
+__attribute__((target("avx2,f16c,fma")))
+float dot_fp16_x86_avx2(const uint16_t* a, const uint16_t* b, int n) {
+    int i = 0;
+    __m256 acc = _mm256_setzero_ps();
+    for (; i + 7 < n; i += 8) {
+        const __m128i ah = _mm_loadu_si128((const __m128i*)(a + i));
+        const __m128i bh = _mm_loadu_si128((const __m128i*)(b + i));
+        const __m256 af = _mm256_cvtph_ps(ah);
+        const __m256 bf = _mm256_cvtph_ps(bh);
+        acc = _mm256_fmadd_ps(af, bf, acc);
+    }
+    /* Horizontal sum of the 8 lanes. */
+    __m128 lo = _mm256_castps256_ps128(acc);
+    __m128 hi = _mm256_extractf128_ps(acc, 1);
+    __m128 s4 = _mm_add_ps(lo, hi);
+    __m128 s2 = _mm_add_ps(s4, _mm_movehl_ps(s4, s4));
+    __m128 s1 = _mm_add_ss(s2, _mm_shuffle_ps(s2, s2, 1));
+    float result = _mm_cvtss_f32(s1);
+    for (; i < n; ++i) {
+        result += tc_cpu_f16_to_f32(a[i]) * tc_cpu_f16_to_f32(b[i]);
+    }
+    return result;
+}
+
+bool x86_supports_avx2_dot(void) {
+    static int cached = -1;
+    if (cached < 0) {
+#  if defined(__GNUC__) && !defined(__clang__)
+        __builtin_cpu_init();
+#  endif
+        cached = (__builtin_cpu_supports("avx2") &&
+                  __builtin_cpu_supports("f16c") &&
+                  __builtin_cpu_supports("fma")) ? 1 : 0;
+    }
+    return cached != 0;
+}
+#endif
+
+inline float dot_fp16_scalar(const uint16_t* a, const uint16_t* b, int n) {
     float acc = 0.0f;
     for (int i = 0; i < n; ++i) {
         acc += tc_cpu_f16_to_f32(a[i]) * tc_cpu_f16_to_f32(b[i]);
     }
     return acc;
+}
+
+inline float dot_fp16(const uint16_t* a, const uint16_t* b, int n) {
+#if defined(TC_ATTN_CAN_BUILD_X86_DOT)
+    if (x86_supports_avx2_dot()) {
+        return dot_fp16_x86_avx2(a, b, n);
+    }
+#endif
+    return dot_fp16_scalar(a, b, n);
 }
 
 /* Tile of attention output accumulator. Online-softmax state:

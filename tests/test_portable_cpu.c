@@ -65,6 +65,12 @@ static int expect_status(const char* name, tc_status_t got, tc_status_t want) {
     return 1;
 }
 
+static tc_status_t checkpoint_recompute(void* user_data) {
+    int* calls = (int*)user_data;
+    if (calls) *calls += 1;
+    return TC_OK;
+}
+
 static int run_padded_f32_gemm(tc_context* ctx) {
     const int M = 5, N = 4, K = 3;
     const int lda = M + 2, ldb = K + 3, ldc = N + 2;
@@ -502,6 +508,75 @@ static int run_conv2d_forward(tc_context* ctx) {
     return rc;
 }
 
+static int run_memory_tier_stubs(tc_context* ctx) {
+    int rc = 0;
+    tc_buffer* b = NULL;
+    tc_memory_tier_t tier = TC_TIER_L4_REMOTE_NVME;
+    uint64_t resident = 123, capacity = 456;
+
+    rc |= expect_status("memory tier alloc", tc_buffer_alloc(ctx, 64, &b), TC_OK);
+    if (!b) return 1;
+
+    rc |= expect_status("tier hint warm", tc_buffer_set_tier_hint(b, TC_TIER_HINT_WARM), TC_OK);
+    rc |= expect_status("tier get", tc_buffer_get_tier(b, &tier), TC_OK);
+    if (tier != TC_TIER_L0_DEVICE) rc = 1;
+    rc |= expect_status("tier promote l0",
+                        tc_buffer_promote_async(b, TC_TIER_L0_DEVICE, NULL), TC_OK);
+    rc |= expect_status("tier demote l0",
+                        tc_buffer_demote_async(b, TC_TIER_L0_DEVICE, NULL), TC_OK);
+    rc |= expect_status("tier sync", tc_buffer_tier_sync(b), TC_OK);
+    rc |= expect_status("tier usage",
+                        tc_memory_tier_usage(ctx, TC_TIER_L0_DEVICE, &resident, &capacity),
+                        TC_OK);
+    if (resident != 0 || capacity != 0) rc = 1;
+
+    rc |= expect_status("tier get NULL rejects",
+                        tc_buffer_get_tier(b, NULL), TC_ERR_INVALID_ARG);
+    rc |= expect_status("tier sync NULL rejects",
+                        tc_buffer_tier_sync(NULL), TC_ERR_INVALID_ARG);
+    rc |= expect_status("tier usage NULL ctx rejects",
+                        tc_memory_tier_usage(NULL, TC_TIER_L0_DEVICE, &resident, &capacity),
+                        TC_ERR_NOT_INITIALIZED);
+
+    tc_buffer_free(ctx, b);
+    return rc;
+}
+
+static int run_checkpoint_stubs(tc_context* ctx) {
+    int rc = 0;
+    int calls = 0;
+    tc_checkpoint_id id = 0;
+    tc_buffer* b = NULL;
+
+    rc |= expect_status("checkpoint alloc", tc_buffer_alloc(ctx, 64, &b), TC_OK);
+    if (!b) return 1;
+    rc |= expect_status("checkpoint register",
+                        tc_checkpoint_register(b, checkpoint_recompute, &calls, &id),
+                        TC_OK);
+    if (id == 0 || !tc_checkpoint_is_resident(id)) rc = 1;
+    rc |= expect_status("checkpoint discard", tc_checkpoint_discard(id), TC_OK);
+    if (tc_checkpoint_is_resident(id) ||
+        tc_checkpoint_count_discarded() == 0 ||
+        tc_checkpoint_total_bytes_discarded() < 64) {
+        rc = 1;
+    }
+    rc |= expect_status("checkpoint realize", tc_checkpoint_realize(id), TC_OK);
+    if (!tc_checkpoint_is_resident(id) || calls != 1 ||
+        tc_checkpoint_count_resident() == 0 ||
+        tc_checkpoint_total_bytes_discarded() != 0) {
+        rc = 1;
+    }
+    rc |= expect_status("checkpoint unregister", tc_checkpoint_unregister(id), TC_OK);
+    rc |= expect_status("checkpoint unregister rejects unknown",
+                        tc_checkpoint_unregister(id), TC_ERR_INVALID_ARG);
+    rc |= expect_status("checkpoint register rejects NULL",
+                        tc_checkpoint_register(NULL, checkpoint_recompute, &calls, &id),
+                        TC_ERR_INVALID_ARG);
+
+    tc_buffer_free(ctx, b);
+    return rc;
+}
+
 static int run_future_backend_stubs(tc_context* ctx) {
     int rc = 0;
     tc_dist_ctx* dist = NULL;
@@ -576,6 +651,8 @@ int main(void) {
     rc |= run_training_ops(ctx);
     rc |= run_attention_forward(ctx);
     rc |= run_conv2d_forward(ctx);
+    rc |= run_memory_tier_stubs(ctx);
+    rc |= run_checkpoint_stubs(ctx);
     rc |= run_future_backend_stubs(ctx);
     rc |= expect_status("attention NULL desc rejects",
                         tc_attention_forward(ctx, NULL, NULL, NULL, NULL, NULL, NULL),
