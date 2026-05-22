@@ -174,12 +174,11 @@ with causal / window / GQA.
 forward must have been called with `return_lse = true` (or LSE recomputed
 equivalently — same row-max-shifted convention).
 
-v0.1 covers head_dim = 64 only. head_dim = 128 backward lands in v0.2 once
-the threadgroup memory budget is dealt with the same way as the forward.
+The Metal path covers head_dim = 64 and head_dim = 128. The D=128 kernels
+use smaller attention tiles to stay within threadgroup-memory limits.
 
 Tested by `tests/test_attention_backward.c` against a numerical-differences
-reference at small shapes (B=1, H=2, S=64, D=64), validating dQ/dK/dV to
-~3e-3 RMS-scaled error.
+reference at small shapes, validating dQ/dK/dV to ~3e-3 RMS-scaled error.
 
 ## Performance
 

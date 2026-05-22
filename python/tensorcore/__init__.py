@@ -542,6 +542,8 @@ if _lib is not None:
     _lib.tc_adamw_step.restype = c_int
     _lib.tc_fused_rmsnorm_gemv.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int, c_int, c_float]
     _lib.tc_fused_rmsnorm_gemv.restype = c_int
+    _lib.tc_fused_layernorm_gemv.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int, c_int, c_float]
+    _lib.tc_fused_layernorm_gemv.restype = c_int
     _lib.tc_gguf_open.argtypes = [c_char_p, POINTER(c_void_p)]
     _lib.tc_gguf_open.restype = c_int
     _lib.tc_gguf_close.argtypes = [c_void_p]
@@ -1649,6 +1651,15 @@ def fused_rmsnorm_gemv(ctx, X, gamma, W, Y, M, N, K, eps=1e-5):
     ))
 
 
+def fused_layernorm_gemv(ctx, X, gamma, beta, W, Y, M, N, K, eps=1e-5):
+    """Compute Y[M, N] = LayerNorm(X[M, K], gamma[K], beta[K]) @ W[K, N]."""
+    _check(_lib.tc_fused_layernorm_gemv(
+        _as_handle(ctx), _as_handle(X), _as_handle(gamma), _as_handle(beta),
+        _as_handle(W), _as_handle(Y), int(M), int(N), int(K),
+        c_float(float(eps))
+    ))
+
+
 def gguf_open(path):
     """Open a GGUF v3 file and return an opaque handle."""
     handle = c_void_p()
@@ -1967,6 +1978,9 @@ class Context:
 
     def fused_rmsnorm_gemv(self, X, gamma, W, Y, M, N, K, eps=1e-5):
         return fused_rmsnorm_gemv(self, X, gamma, W, Y, M, N, K, eps)
+
+    def fused_layernorm_gemv(self, X, gamma, beta, W, Y, M, N, K, eps=1e-5):
+        return fused_layernorm_gemv(self, X, gamma, beta, W, Y, M, N, K, eps)
 
     def open_gguf(self, path):
         return GgufFile(path)

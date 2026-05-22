@@ -149,7 +149,8 @@ Descriptor fields: `causal`, `return_lse`, `kv_heads`, `window_size`,
 ### Training kernels
 `rmsnorm_forward`, `rmsnorm_backward`, `layernorm_forward`,
 `layernorm_backward`, `rope_forward`, `rope_backward`, `swiglu_forward`, `swiglu_backward`,
-`softmax_forward`, `softmax_backward`, `adamw_step`, `fused_rmsnorm_gemv`.
+`softmax_forward`, `softmax_backward`, `adamw_step`, `fused_rmsnorm_gemv`,
+`fused_layernorm_gemv`.
 
 ### Conv2D
 `conv2d_forward`, `conv2d_backward_input`, `conv2d_backward_weight`, plus
@@ -208,7 +209,7 @@ Methods (excerpt):
 | `attention_backward(Q, K, V, O, dO, LSE, dQ, dK, dV, ...)` | backward |
 | `conv2d_forward(...)`, `conv2d_backward_input(...)`, `conv2d_backward_weight(...)` | conv2d |
 | `quantize_weights(...)`, `gemv_quantized(...)`, `gemv_quantized_async(...)` | quantized |
-| `rmsnorm_*`, `layernorm_*`, `rope_*`, `swiglu_*`, `softmax_*`, `adamw_step`, `fused_rmsnorm_gemv` | training kernels |
+| `rmsnorm_*`, `layernorm_*`, `rope_*`, `swiglu_*`, `softmax_*`, `adamw_step`, `fused_*norm_gemv` | training kernels |
 | `open_gguf(path)` | Open a GGUF file, return a `GgufFile` |
 | `load_supported_tensors(gguf)` | Bulk-load supported tensors, return a `LoadedModel` |
 | `last_backend()` / `last_backend_name()` | Read the diagnostic backend enum |

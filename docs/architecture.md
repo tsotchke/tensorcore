@@ -410,7 +410,8 @@ is required.
 - **Graph capture / scheduling.** That's the `tc_compile` story on the v0.7
   roadmap, not v0.1.
 - **Op fusion at the framework level.** We ship a few hand-fused kernels
-  (`tc_fused_rmsnorm_gemv`) and call it a day for v0.1-v0.3.
+  (`tc_fused_rmsnorm_gemv`, `tc_fused_layernorm_gemv`) and call it a day
+  for v0.1-v0.3.
 - **Multi-tenant scheduling.** One process, one context. If you want N
   processes, run N processes.
 - **An IR.** Eshkol has one; we don't.

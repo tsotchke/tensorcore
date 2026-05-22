@@ -213,18 +213,19 @@ Kernels in this file (forward + backward where they exist):
 - `tc_softmax_forward`, `tc_softmax_backward`
 - `tc_adamw_step` (fused; fp32 master params, fp16 or fp32 grads)
 
-### `fused_norm_gemv.metal` — fused RMSnorm + GEMV (inference)
+### `fused_norm_gemv.metal` — fused norm + GEMV (inference)
 
 Eliminates the round-trip of the normalized intermediate: instead of
-writing `RMSnorm(X) → memory → GEMV(memory, W) → Y`, the kernel computes
-`rstd(X)` inline and reapplies normalization during matmul accumulation.
+writing `Norm(X) → memory → GEMV(memory, W) → Y`, the kernels compute
+RMSNorm or LayerNorm statistics inline and reapply normalization during
+matmul accumulation.
 
 - **One threadgroup per (output column n, row m)**
 - **64 threads (2 simdgroups)**
-- **TG memory:** 1 fp32 for rstd; tiny scratch for the row reduction
+- **TG memory:** tiny scratch for the row reductions
 - **Design target:** M ≤ 4 (LLM inference). For training (M ≥ 32),
-  callers should use `tc_rmsnorm_forward + tc_gemm` separately — per-row
-  rstd recompute would dominate.
+  callers should use the separate norm-forward + `tc_gemm` path -- per-row
+  statistic recompute would dominate.
 
 The hot path inside a Llama decode step is exactly:
 ```

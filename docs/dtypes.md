@@ -122,7 +122,7 @@ for the precision-critical eigensolver paths in quantum compute.
 | `tc_swiglu_*` | ✓ | — | — | — | — | — |
 | `tc_softmax_*` | ✓ | — | — | — | — | — |
 | `tc_adamw_step` (grads) | ✓ | — | ✓ | — | — | — |
-| `tc_fused_rmsnorm_gemv` | ✓ | — | — | — | — | — |
+| `tc_fused_*norm_gemv` | ✓ | — | — | — | — | — |
 | `tc_conv2d_*` | ✓ | — | — | — | — | — |
 | `tc_gemv_quantized` (X) | ✓ | — | — | — | — | — |
 | `tc_quantize_weights` (in) | ✓ | — | — | — | — | — |

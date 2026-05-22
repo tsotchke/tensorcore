@@ -231,7 +231,7 @@ the chip doesn't support the path being tested:
 | `test_gemm_bf16` | Apple < 9 → skipped pre-v0.1.3; now runs (validates the fp32 fallback) |
 | `test_gemm_i8` | Apple < 10 → skipped pre-v0.1.3; now runs (validates the fp32 widen fallback) |
 | `test_attention_correctness` | always runs (fp16) |
-| `test_attention_backward` | always runs (fp16); D=64 only in v0.1 |
+| `test_attention_backward` | always runs (fp16); validates D=64 and D=128 |
 | `test_quantized` | always runs |
 | `test_fused_norm_gemv` | always runs |
 | `test_distributed_ring_fork` | always runs (uses fork + socketpair) |

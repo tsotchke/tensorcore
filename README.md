@@ -55,23 +55,23 @@ equivalent, see **[docs/cuda_comparison.md](docs/cuda_comparison.md)**.
 | `tc_gemm_*_128` 128×128 tile | env-flag opt-in | regresses v0.1; v0.2 retunes |
 | `tc_attention_forward` fp16 D=64, causal/GQA/window/ALiBi | scaled-RMS ≤ 1e-3 | 7.07 TFLOPS @ B=1, H=32, S=4096 |
 | `tc_attention_forward` fp16 D=128 | correctness verified | bench harness v0.2 |
-| `tc_attention_backward` fp16 D=64 | scaled-RMS ≤ 3e-3 | LSE-saved scheme |
+| `tc_attention_backward` fp16 D=64/D=128 | scaled-RMS ≤ 3e-3 | LSE-saved scheme |
 | Q4_0 / Q8_0 quantized GEMV plus GPU quantize | bit-exact vs dequant ref | 7B decode harness |
 | Q4_0 async-stream batched GEMV | ~79% of LPDDR5 peak bw | **186 tok/s, 632 GB/s @ synthetic 7B decode** |
 | RMSnorm / LayerNorm / RoPE / SwiGLU / softmax / AdamW | fused Metal kernels | C tests + Python smoke |
-| Fused RMSnorm+GEMV | inference projection primitive | correctness vs separate path |
+| Fused RMSnorm/LayerNorm+GEMV | inference projection primitives | correctness vs separate paths |
 | Conv2D fwd + backward (im2col + GEMM) | scaled-RMS ≤ 1e-3 | multi-batch validated |
 | GGUF reader | v3 metadata, tensors, bulk copy, Q4/Q8 descriptors | synthetic + Q4 GEMV end-to-end |
 | Python ctypes binding | full ABI surface, NumPy interop | covered by CTest `python_basic` |
 | Distributed (single-host ring + portable GLOO TCP) | bit-exact local ranks | thread, fork, and TCP transports |
 | MPS + Accelerate fallback | wired, exercised by dispatch | — |
 | **Portable CPU backend** | builds on Linux / Intel-Mac with `TC_ENABLE_METAL=OFF`; covers buffers, streams, GEMM, attention/training/conv, GGUF, `TC_DIST_SINGLE`, GLOO TCP, DiLoCo, and sparse compression. | for non-Apple mesh workers |
-| CTest suite | 24/24 pass on M2 Ultra (22 library/package tests + 2 example smokes) | `ctest --test-dir build` |
+| CTest suite | 27/27 pass on M2 Ultra (25 library/package tests + 2 example smokes) | `ctest --test-dir build` |
 | CMake / pkg-config / Python install | `tensorcore::tensorcore[_shared]`, `tensorcore.pc` | tested out-of-tree |
 
 ## Public C ABI — `include/tensorcore/*.h`
 
-A 1.3K-line C ABI you can read end-to-end in an afternoon. Fifteen public
+A 1.3K-line C ABI you can read end-to-end in an afternoon. Sixteen public
 headers including the umbrella. Grouped:
 
 - **Lifecycle:** `tc_init`, `tc_shutdown`, `tc_device_info_get`,
@@ -81,7 +81,8 @@ headers including the umbrella. Grouped:
 - **Attention:** `tc_attention_forward`/`_async`, `tc_attention_backward`.
   Causal, GQA, sliding window, ALiBi, LSE save — all via the same descriptor.
 - **Training kernels:** `tc_rmsnorm_*`, `tc_layernorm_*`, `tc_rope_forward`,
-  `tc_swiglu_*`, `tc_softmax_*`, `tc_adamw_step`, `tc_fused_rmsnorm_gemv`.
+  `tc_swiglu_*`, `tc_softmax_*`, `tc_adamw_step`,
+  `tc_fused_rmsnorm_gemv`, `tc_fused_layernorm_gemv`.
 - **Conv2D:** `tc_conv2d_forward`, `tc_conv2d_backward_input`,
   `tc_conv2d_backward_weight`.
 - **Quantized:** `tc_quantize_weights`, `tc_gemv_quantized`/`_async`,

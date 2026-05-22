@@ -152,7 +152,7 @@ because it skips the intermediate `x_norm` write/read.
 overwhelms the savings at training batch sizes. Plus you need `rstd_out`
 for the backward pass, which the fused kernel doesn't expose.
 
-See [training_kernels.md § Fused RMSnorm + GEMV](training_kernels.md#fused-rmsnorm-gemv).
+See [training_kernels.md § Fused Norm + GEMV](training_kernels.md#fused-norm-gemv).
 
 ## "Why are there separate `_async` versions of everything?"
 

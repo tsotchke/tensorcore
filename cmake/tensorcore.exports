@@ -47,6 +47,7 @@ _tc_diloco_last_outer_bytes_sent
 _tc_diloco_last_outer_step_seconds
 _tc_diloco_outer_steps_completed
 _tc_diloco_step
+_tc_fused_layernorm_gemv
 _tc_fused_rmsnorm_gemv
 _tc_gemm
 _tc_gemm_async

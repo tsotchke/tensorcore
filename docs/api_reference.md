@@ -452,7 +452,7 @@ tc_status_t tc_adamw_step(tc_context* ctx,
 
 `bc1`, `bc2` are bias corrections (`1 - beta^t`) precomputed on the host.
 
-### Fused RMSnorm + GEMV
+### Fused Norm + GEMV
 
 ```c
 tc_status_t tc_fused_rmsnorm_gemv(tc_context* ctx,
@@ -461,6 +461,14 @@ tc_status_t tc_fused_rmsnorm_gemv(tc_context* ctx,
                                   const tc_buffer* W,      /* [K, N] fp16 */
                                   tc_buffer*       Y,      /* [M, N] fp16 */
                                   int M, int N, int K, float eps);
+
+tc_status_t tc_fused_layernorm_gemv(tc_context* ctx,
+                                    const tc_buffer* X,      /* [M, K] fp16 */
+                                    const tc_buffer* gamma,  /* [K]    fp16 */
+                                    const tc_buffer* beta,   /* [K]    fp16 */
+                                    const tc_buffer* W,      /* [K, N] fp16 */
+                                    tc_buffer*       Y,      /* [M, N] fp16 */
+                                    int M, int N, int K, float eps);
 ```
 
 Inference primitive (M ≤ 4 is the design target). Eliminates the

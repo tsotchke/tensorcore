@@ -53,12 +53,12 @@ rms_scaled in `test_attention_correctness.c`.
 | `tc_gemm` bf16 (Apple9+ native or fp32 fallback) | fp64 reference | rms_scaled ≤ 3e-3 |
 | `tc_gemm` int8 → i32 (Apple10+ native or fp32 widen fallback) | i32 reference up to K=2^16 | **bit-exact** |
 | `tc_attention_forward` fp16 | fp64 reference | rms_scaled ≤ 1e-3 at S=4096 |
-| `tc_attention_backward` fp16 D=64 | numerical-differences reference | rms_scaled ≤ 3e-3 |
+| `tc_attention_backward` fp16 D=64/D=128 | numerical-differences reference | rms_scaled ≤ 3e-3 |
 | Q4_0 / Q8_0 GEMV | dequantized CPU reference | rms_scaled ≤ 2e-4 |
 | `tc_rmsnorm_*`, `tc_layernorm_*`, `tc_rope_*` | fp64 reference | rms_scaled ≤ 5e-3 |
 | `tc_swiglu_*`, `tc_softmax_*` | fp64 reference | rms_scaled ≤ 5e-3 |
 | `tc_adamw_step` | scalar fp64 update repeated per element | rms_scaled ≤ 1e-5 |
-| `tc_fused_rmsnorm_gemv` | separate `tc_rmsnorm_forward + tc_gemm` path | rms_scaled ≤ 5e-3 |
+| `tc_fused_*norm_gemv` | separate norm-forward + `tc_gemm` paths | rms_scaled ≤ 5e-3 |
 | `tc_conv2d_*` | fp64 reference | rms_scaled ≤ 1e-3 |
 | `tc_allreduce` / `tc_broadcast` | per-rank algorithm | **bit-exact** for the SINGLE backend and threads/fork ring backends |
 

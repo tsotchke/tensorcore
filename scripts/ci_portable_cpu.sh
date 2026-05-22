@@ -398,6 +398,41 @@ try:
     if max(abs(g - w) for g, w in zip(got, want)) > 1e-3:
         raise SystemExit(f"unexpected softmax result: {got}")
 
+    Xln_vals = (ctypes.c_uint16 * 4)(f16(1.0), f16(2.0), f16(3.0), f16(4.0))
+    Gln_vals = (ctypes.c_uint16 * 4)(f16(1.0), f16(0.5), f16(1.5), f16(1.0))
+    Bln_vals = (ctypes.c_uint16 * 4)(f16(0.1), f16(-0.2), f16(0.0), f16(0.3))
+    Wln_vals = (ctypes.c_uint16 * 8)(
+        f16(0.2), f16(-0.1),
+        f16(0.3), f16(0.4),
+        f16(-0.5), f16(0.25),
+        f16(0.1), f16(-0.2),
+    )
+    Yln_vals = (ctypes.c_uint16 * 2)(0, 0)
+    Xln = tc.buffer_alloc(ctx, ctypes.sizeof(Xln_vals))
+    Gln = tc.buffer_alloc(ctx, ctypes.sizeof(Gln_vals))
+    Bln = tc.buffer_alloc(ctx, ctypes.sizeof(Bln_vals))
+    Wln = tc.buffer_alloc(ctx, ctypes.sizeof(Wln_vals))
+    Yln = tc.buffer_alloc(ctx, ctypes.sizeof(Yln_vals))
+    bufs.extend([Xln, Gln, Bln, Wln, Yln])
+    ctypes.memmove(tc.buffer_map(Xln), Xln_vals, ctypes.sizeof(Xln_vals))
+    ctypes.memmove(tc.buffer_map(Gln), Gln_vals, ctypes.sizeof(Gln_vals))
+    ctypes.memmove(tc.buffer_map(Bln), Bln_vals, ctypes.sizeof(Bln_vals))
+    ctypes.memmove(tc.buffer_map(Wln), Wln_vals, ctypes.sizeof(Wln_vals))
+    tc.fused_layernorm_gemv(ctx, Xln, Gln, Bln, Wln, Yln, 1, 2, 4, 1e-5)
+    yln = (ctypes.c_uint16 * 2).from_address(tc.buffer_map(Yln).value)
+    got = [f16_to_f32(yln[i]) for i in range(2)]
+    xs = [1.0, 2.0, 3.0, 4.0]
+    gamma = [1.0, 0.5, 1.5, 1.0]
+    beta = [0.1, -0.2, 0.0, 0.3]
+    weight = [0.2, -0.1, 0.3, 0.4, -0.5, 0.25, 0.1, -0.2]
+    mean = sum(xs) / len(xs)
+    var = sum((x - mean) * (x - mean) for x in xs) / len(xs)
+    normed = [((xs[i] - mean) / math.sqrt(var + 1e-5)) * gamma[i] + beta[i]
+              for i in range(4)]
+    want = [sum(normed[k] * weight[k * 2 + n] for k in range(4)) for n in range(2)]
+    if max(abs(g - w) for g, w in zip(got, want)) > 1e-2:
+        raise SystemExit(f"unexpected fused LayerNorm+GEMV result: got={got} want={want}")
+
     print(f"{tc.version()} python portable CPU smoke OK")
 finally:
     for buf in reversed(bufs):

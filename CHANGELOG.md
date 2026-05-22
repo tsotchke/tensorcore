@@ -19,7 +19,12 @@ activation-checkpointing API, and memory-tier hints.
   `tc_rmsnorm_forward/backward`, `tc_layernorm_forward/backward`,
   `tc_rope_forward/backward`, `tc_swiglu_forward/backward`,
   `tc_softmax_forward/backward`, `tc_adamw_step` (fp16 and fp32 grad
-  paths), `tc_fused_rmsnorm_gemv`. All OpenMP-parallel.
+  paths), `tc_fused_rmsnorm_gemv`, and `tc_fused_layernorm_gemv`. All
+  OpenMP-parallel.
+- `Add fused LayerNorm+GEMV public primitive`: `tc_fused_layernorm_gemv`
+  mirrors the RMSNorm decode projection fast path for LayerNorm-based
+  models, with Metal, portable CPU, Python, export-surface, and separate
+  `tc_layernorm_forward + tc_gemm` correctness coverage.
 - `Add CPU Conv2D forward + backward`: `lib/ops/conv2d_cpu.cpp` via
   im2col/col2im + GEMM, inheriting the BLAS-delegate fast path and
   matching the Metal path's shape/buffer validation.

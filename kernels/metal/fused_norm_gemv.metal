@@ -60,7 +60,7 @@ kernel void tc_fused_rmsnorm_gemv_f16(
     if (n >= N || m >= M) return;
 
     /* Pass 1: compute rstd = rsqrt(mean(x^2) + eps). */
-    threadgroup float scratch[2];
+    threadgroup float scratch[8];
     float ss = 0.0f;
     for (uint k = tid; k < K; k += threads) {
         const float x = (float)X[m * K + k];
@@ -75,6 +75,55 @@ kernel void tc_fused_rmsnorm_gemv_f16(
     for (uint k = tid; k < K; k += threads) {
         const float x_norm = (float)X[m * K + k] * rstd * (float)gamma[k];
         const float w      = (float)W[k * N + n];
+        acc += x_norm * w;
+    }
+    const float total_y = tg_sum32(acc, scratch, tid, threads);
+
+    if (tid == 0) {
+        Y[m * N + n] = (half)total_y;
+    }
+}
+
+kernel void tc_fused_layernorm_gemv_f16(
+    device const half*  X       [[buffer(0)]],   /* [M, K]                  */
+    device const half*  gamma   [[buffer(1)]],   /* [K]                     */
+    device const half*  beta    [[buffer(2)]],   /* [K]                     */
+    device const half*  W       [[buffer(3)]],   /* [K, N]                  */
+    device       half*  Y       [[buffer(4)]],   /* [M, N]                  */
+    constant uint& M            [[buffer(5)]],
+    constant uint& N            [[buffer(6)]],
+    constant uint& K            [[buffer(7)]],
+    constant float& eps         [[buffer(8)]],
+    uint3 tgid                  [[threadgroup_position_in_grid]],
+    uint3 tid_v                 [[thread_position_in_threadgroup]],
+    uint3 tpg                   [[threads_per_threadgroup]])
+{
+    const uint n = tgid.x;
+    const uint m = tgid.y;
+    const uint tid = tid_v.x;
+    const uint threads = tpg.x;
+    if (n >= N || m >= M) return;
+
+    threadgroup float scratch[8];
+
+    float sum = 0.0f;
+    float ss = 0.0f;
+    for (uint k = tid; k < K; k += threads) {
+        const float x = (float)X[m * K + k];
+        sum += x;
+        ss += x * x;
+    }
+    const float total = tg_sum32(sum, scratch, tid, threads);
+    const float total_ss = tg_sum32(ss, scratch, tid, threads);
+    const float mean = total / (float)K;
+    const float var = max(total_ss / (float)K - mean * mean, 0.0f);
+    const float rstd = rsqrt(var + eps);
+
+    float acc = 0.0f;
+    for (uint k = tid; k < K; k += threads) {
+        const float x_norm = ((float)X[m * K + k] - mean) *
+                             rstd * (float)gamma[k] + (float)beta[k];
+        const float w = (float)W[k * N + n];
         acc += x_norm * w;
     }
     const float total_y = tg_sum32(acc, scratch, tid, threads);

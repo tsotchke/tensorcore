@@ -140,9 +140,9 @@ runs; the fp16 forward/backward is what makes it fast.
 |---|---|
 | `tests/test_transformer_block.c` | One full forward + backward of a single Llama-style block at small shapes |
 | `tests/test_e2e_training.c` | A few iterations of the full forward + backward + AdamW; checks parameter convergence |
-| `tests/test_attention_backward.c` | `tc_attention_backward` against a numerical-differences reference |
+| `tests/test_attention_backward.c` | `tc_attention_backward` at D=64 and D=128 against a numerical-differences reference |
 | `tests/test_training_kernels.c` | RMSnorm / LayerNorm / RoPE / SwiGLU / softmax / AdamW kernels |
-| `tests/test_fused_norm_gemv.c` | `tc_fused_rmsnorm_gemv` vs the separate norm+gemm path |
+| `tests/test_fused_norm_gemv.c` | fused RMSNorm/LayerNorm GEMV vs the separate norm+gemm paths |
 
 Read those if you want the smallest-shape concrete example of any
 specific piece. They're ~150-300 lines each, pure C, link only against
@@ -179,7 +179,6 @@ Honest list:
 
 - **Activation checkpointing.** Save inputs only, recompute everything
   else. v0.6 ships the integrated kernel-level support.
-- **FlashAttention backward at D=128.** v0.2 (the D=64 backward ships in v0.1).
 - **Sequence parallelism / tensor parallelism.** v0.6 — for now, data
   parallelism + ZeRO-2 is the path.
 - **bf16 native training kernels.** Today, training kernels are fp16 IO;

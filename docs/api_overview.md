@@ -72,6 +72,7 @@ and shape semantics, see [api_reference.md](api_reference.md).
 | `tc_softmax_backward(ctx, Y, dY, dX, N, D)` | softmax backward. |
 | `tc_adamw_step(ctx, p_fp32, m_fp32, v_fp32, grads, grad_dtype, n, lr, β1, β2, eps, wd, bc1, bc2)` | Fused AdamW step. |
 | `tc_fused_rmsnorm_gemv(ctx, X, gamma, W, Y, M, N, K, eps)` | Inference primitive: norm + GEMV in one kernel (M ≤ 4). |
+| `tc_fused_layernorm_gemv(ctx, X, gamma, beta, W, Y, M, N, K, eps)` | LayerNorm + GEMV in one kernel (M ≤ 4). |
 
 ## Conv2D
 
@@ -206,10 +207,10 @@ Python wrapper parity in `python/tensorcore/__init__.py`.
 | `tc_gemm` (bf16) | ✓ (Apple9+) | ✓ (M5 + SDK 26) | ✓ (fallback) | ✓ (cast) | ✓ |
 | `tc_gemm` (int8) | ✓ (Apple10+) | ✓ (M5 + SDK 26) | ✓ (fallback) | ✓ (widen) | ✓ |
 | `tc_attention_forward` | ✓ | (v0.2) | — | — | ✓ |
-| `tc_attention_backward` | ✓ (D=64) | — | — | — | ✓ |
+| `tc_attention_backward` | ✓ (D=64,D=128) | — | — | — | ✓ |
 | `tc_conv2d_*` | ✓ (im2col + gemm) | (inherits) | (inherits) | (inherits) | ✓ |
 | `tc_rmsnorm_*` / training kernels | ✓ | — | — | — | ✓ |
-| `tc_fused_rmsnorm_gemv` | ✓ | — | — | — | ✓ |
+| `tc_fused_*norm_gemv` | ✓ | — | — | — | ✓ |
 | `tc_gemv_quantized` | ✓ | — | — | — | ✓ |
 | `tc_quantize_weights` | ✓ | — | — | — | ✓ |
 | `tc_gguf_*` | ✓ | ✓ | ✓ | ✓ | ✓ |

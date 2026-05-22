@@ -143,6 +143,26 @@ tc_status_t tc_fused_rmsnorm_gemv(tc_context* ctx,
                                   tc_buffer*       Y,
                                   int M, int N, int K, float eps);
 
+/* Fused LayerNorm + GEMV for inference: Y = LayerNorm(X, gamma, beta) @ W.
+ *
+ *   X     : [M, K]  fp16     (typically M <= 4 for inference)
+ *   gamma : [K]     fp16
+ *   beta  : [K]     fp16
+ *   W     : [K, N]  fp16
+ *   Y     : [M, N]  fp16
+ *
+ * Like tc_fused_rmsnorm_gemv, this skips materializing the normalized
+ * intermediate. Use the separate tc_layernorm_forward + tc_gemm path when
+ * callers need saved mean/rstd for backward or large training batches.
+ */
+tc_status_t tc_fused_layernorm_gemv(tc_context* ctx,
+                                    const tc_buffer* X,
+                                    const tc_buffer* gamma,
+                                    const tc_buffer* beta,
+                                    const tc_buffer* W,
+                                    tc_buffer*       Y,
+                                    int M, int N, int K, float eps);
+
 #ifdef __cplusplus
 }
 #endif

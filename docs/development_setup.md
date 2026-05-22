@@ -96,7 +96,8 @@ What works on the portable CPU build:
 - `tc_gemm` (all dtypes, transpose flags, batched, async)
 - `tc_attention_forward` / `tc_attention_backward`
 - `tc_rmsnorm_*`, `tc_layernorm_*`, `tc_rope_*`, `tc_swiglu_*`,
-  `tc_softmax_*`, `tc_adamw_step`, `tc_fused_rmsnorm_gemv`
+  `tc_softmax_*`, `tc_adamw_step`, `tc_fused_rmsnorm_gemv`,
+  `tc_fused_layernorm_gemv`
 - `tc_conv2d_forward`, `tc_conv2d_backward_input`,
   `tc_conv2d_backward_weight`
 - `tc_quantize_weights` / `tc_gemv_quantized` (Q4_0, Q8_0)

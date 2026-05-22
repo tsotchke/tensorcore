@@ -136,7 +136,7 @@ Start with narrow replacements:
   `tc_gemv_quantized`
 - LLM elementwise/fusion callsites: `tc_rmsnorm_forward`,
   `tc_rope_forward`, `tc_rope_backward`, `tc_swiglu_forward`, and
-  `tc_fused_rmsnorm_gemv`
+  `tc_fused_rmsnorm_gemv` / `tc_fused_layernorm_gemv`
 - GGUF tensor loading: `tc_gguf_open` + `tc_gguf_load_supported_tensors`
 - attention experiments: `tc_attention_forward`
 

@@ -174,18 +174,20 @@ Two notes:
 
 One thread per element; pointwise.
 
-## Fused RMSnorm + GEMV
+## Fused Norm + GEMV
 
 ```c
 tc_status_t tc_fused_rmsnorm_gemv(ctx, X, gamma, W, Y, M, N, K, eps);
+tc_status_t tc_fused_layernorm_gemv(ctx, X, gamma, beta, W, Y, M, N, K, eps);
 ```
 
 | Buffer | Shape | dtype | Notes |
 |---|---|---|---|
 | `X` | `[M, K]` | fp16 | typically `M ≤ 4` (inference batch) |
-| `gamma` | `[K]` | fp16 | RMSnorm scale |
+| `gamma` | `[K]` | fp16 | norm scale |
+| `beta` | `[K]` | fp16 | LayerNorm shift; only used by `tc_fused_layernorm_gemv` |
 | `W` | `[K, N]` | fp16 | projection weight |
-| `Y` | `[M, N]` | fp16 | `Y = RMSnorm(X, γ) @ W` |
+| `Y` | `[M, N]` | fp16 | `Y = Norm(X, γ[, β]) @ W` |
 
 The hot path inside an LLM decode step is:
 
@@ -196,10 +198,11 @@ k      = x_norm @ Wk
 v      = x_norm @ Wv
 ```
 
-That `x_norm` write/read round trip is pure memory traffic — the normalized
+That `x_norm` write/read round trip is pure memory traffic -- the normalized
 vector is consumed three times immediately after being produced. The
-fused kernel computes `rstd` inline, applies the normalization in-register
-during the matmul accumulation, and skips the write-back entirely.
+fused kernels compute `rstd` inline, apply the normalization in-register
+during the matmul accumulation, and skip the write-back entirely. The
+LayerNorm variant also computes row mean and applies `beta[k]`.
 
 Two-pass intra-threadgroup design:
 - Pass 1: each simdgroup computes `sum(x_i²)` for a slice of `K`; warp-reduce
@@ -208,14 +211,21 @@ Two-pass intra-threadgroup design:
   gamma[k]` *while* accumulating against `W[k, :]` for the row of `Y` it
   owns.
 
-Caveats:
-- Tuned for M ≤ 4. For training (M ≥ 32), use `tc_rmsnorm_forward +
-  tc_gemm` — the per-row rstd recompute would dominate at larger M.
-- The fused kernel doesn't expose `rstd_out`. If you need it for backward
-  (you do), use the separate path. The fused path is inference-only.
+For `tc_fused_layernorm_gemv`, pass 1 computes `sum(x_i)` and
+`sum(x_i²)` so the kernel can derive `mean` and `variance`; pass 2 uses
+`((x[k] - mean) * rstd * gamma[k] + beta[k])` before multiplying by
+`W[k, :]`.
 
-Validated by `tests/test_fused_norm_gemv.c` against the separate-path
-result at rms_scaled ≤ 5e-3.
+Caveats:
+- Tuned for M ≤ 4. For training (M ≥ 32), use the separate norm-forward +
+  `tc_gemm` path -- the per-row statistic recompute would dominate at
+  larger M.
+- The fused kernels don't expose `rstd_out` or `mean_out`. If you need them
+  for backward, use the separate path. The fused path is inference-only.
+
+Validated by `tests/test_fused_norm_gemv.c` against the separate
+`tc_rmsnorm_forward + tc_gemm` and `tc_layernorm_forward + tc_gemm`
+paths at rms_scaled ≤ 5e-3.
 
 ## A typical training step
 
@@ -269,5 +279,4 @@ for shape and buffer lifecycle.
 ## v0.2 closes
 
 - Fused-adamw for fp16 grads + bf16 master weight option
-- LayerNorm fused-with-projection variant
 - Bias-add fused into `tc_gemm` for FFN

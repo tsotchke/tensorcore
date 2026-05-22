@@ -682,3 +682,82 @@ extern "C" tc_status_t tc_fused_rmsnorm_gemv(tc_context* ctx,
     tc_buffer_free(ctx, xn_buf);
     return s;
 }
+
+extern "C" tc_status_t tc_fused_layernorm_gemv(tc_context* ctx,
+                                                const tc_buffer* X,
+                                                const tc_buffer* gamma,
+                                                const tc_buffer* beta,
+                                                const tc_buffer* W,
+                                                tc_buffer* Y,
+                                                int M, int N, int K, float eps) {
+    if (!ctx) return TC_ERR_NOT_INITIALIZED;
+    if (!X || !gamma || !beta || !W || !Y || M <= 0 || N <= 0 || K <= 0)
+        return TC_ERR_INVALID_ARG;
+
+    tc_status_t s = validate_pointwise_buf(ctx, X, (size_t)M * K * sizeof(uint16_t));
+    if (s != TC_OK) return s;
+    s = validate_pointwise_buf(ctx, gamma, (size_t)K * sizeof(uint16_t));
+    if (s != TC_OK) return s;
+    s = validate_pointwise_buf(ctx, beta, (size_t)K * sizeof(uint16_t));
+    if (s != TC_OK) return s;
+    s = validate_pointwise_buf(ctx, W, (size_t)K * N * sizeof(uint16_t));
+    if (s != TC_OK) return s;
+    s = validate_pointwise_buf(ctx, Y, (size_t)M * N * sizeof(uint16_t));
+    if (s != TC_OK) return s;
+
+    static thread_local std::vector<uint16_t> tls_xnorm;
+    if ((int)tls_xnorm.size() < M * K) tls_xnorm.resize((size_t)M * K);
+
+    void *Xp = nullptr, *gp = nullptr, *bp = nullptr;
+    s = tc_buffer_map((tc_buffer*)X, &Xp);
+    if (s != TC_OK) return s;
+    s = tc_buffer_map((tc_buffer*)gamma, &gp);
+    if (s != TC_OK) return s;
+    s = tc_buffer_map((tc_buffer*)beta, &bp);
+    if (s != TC_OK) return s;
+
+    const uint16_t* x_data = (const uint16_t*)Xp;
+    const uint16_t* g_data = (const uint16_t*)gp;
+    const uint16_t* b_data = (const uint16_t*)bp;
+    uint16_t* xn = tls_xnorm.data();
+
+    for (int m = 0; m < M; ++m) {
+        const uint16_t* xr = x_data + (size_t)m * K;
+        uint16_t* nr = xn + (size_t)m * K;
+        double sum = 0.0;
+        for (int k = 0; k < K; ++k) sum += tc_cpu_f16_to_f32(xr[k]);
+        const float mean = (float)(sum / K);
+        double ss = 0.0;
+        for (int k = 0; k < K; ++k) {
+            const float c = tc_cpu_f16_to_f32(xr[k]) - mean;
+            ss += (double)c * c;
+        }
+        const float rstd = 1.0f / std::sqrt((float)(ss / K) + eps);
+        for (int k = 0; k < K; ++k) {
+            const float xv = tc_cpu_f16_to_f32(xr[k]);
+            const float gv = tc_cpu_f16_to_f32(g_data[k]);
+            const float bv = tc_cpu_f16_to_f32(b_data[k]);
+            nr[k] = tc_cpu_f32_to_f16((xv - mean) * rstd * gv + bv);
+        }
+    }
+
+    tc_buffer* xn_buf = nullptr;
+    s = tc_buffer_alloc(ctx, (size_t)M * K * sizeof(uint16_t), &xn_buf);
+    if (s != TC_OK) return s;
+    void* xn_buf_p = nullptr;
+    s = tc_buffer_map(xn_buf, &xn_buf_p);
+    if (s != TC_OK) {
+        tc_buffer_free(ctx, xn_buf);
+        return s;
+    }
+    std::memcpy(xn_buf_p, xn, (size_t)M * K * sizeof(uint16_t));
+
+    tc_gemm_desc d = {};
+    d.M = M; d.N = N; d.K = K;
+    d.a_dtype = TC_DTYPE_F16; d.b_dtype = TC_DTYPE_F16; d.c_dtype = TC_DTYPE_F16;
+    d.accum_dtype = TC_DTYPE_F32;
+    d.alpha = 1.0f; d.beta = 0.0f;
+    s = tc_gemm(ctx, &d, xn_buf, W, Y);
+    tc_buffer_free(ctx, xn_buf);
+    return s;
+}

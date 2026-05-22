@@ -688,18 +688,30 @@ def _run_training_wrapper_checks(ctx):
         fM, fN, fK = 1, 8, 64
         fx = np.random.randn(fM, fK).astype(np.float16)
         fg = (0.5 + np.random.rand(fK)).astype(np.float16)
+        fb = (np.random.randn(fK) * 0.1).astype(np.float16)
         fw = (np.random.randn(fK, fN) * 0.1).astype(np.float16)
         fy = np.zeros((fM, fN), dtype=np.float16)
+        fly = np.zeros((fM, fN), dtype=np.float16)
         fxb = make(fx)
         fgb = make(fg)
+        fbb = make(fb)
         fwb = make(fw)
         fyb = empty(fy)
+        flyb = empty(fly)
         tc.fused_rmsnorm_gemv(ctx, fxb, fgb, fwb, fyb, fM, fN, fK, eps)
         tc.buffer_read(fyb, fy)
         fxf = fx.astype(np.float32)
         fnorm = fxf * (1.0 / np.sqrt(np.mean(fxf * fxf, axis=1, keepdims=True) + eps)) * fg.astype(np.float32)
         fused_ref = fnorm @ fw.astype(np.float32)
         fused_err = _scaled_rms(fy, fused_ref)
+        tc.fused_layernorm_gemv(ctx, fxb, fgb, fbb, fwb, flyb, fM, fN, fK, eps)
+        tc.buffer_read(flyb, fly)
+        layer_mean = np.mean(fxf, axis=1, keepdims=True)
+        layer_var = np.mean((fxf - layer_mean) * (fxf - layer_mean), axis=1, keepdims=True)
+        flnorm = (fxf - layer_mean) / np.sqrt(layer_var + eps)
+        flnorm = flnorm * fg.astype(np.float32) + fb.astype(np.float32)
+        fused_layer_ref = flnorm @ fw.astype(np.float32)
+        fused_layer_err = _scaled_rms(fly, fused_layer_ref)
 
         opt_n = 64
         params = np.random.randn(opt_n).astype(np.float32)
@@ -731,6 +743,7 @@ def _run_training_wrapper_checks(ctx):
             "rope_backward": rope_bw_err,
             "softmax": softmax_err,
             "fused": fused_err,
+            "fused_layer": fused_layer_err,
             "adamw": adam_err,
         }
         ok = (
@@ -741,6 +754,7 @@ def _run_training_wrapper_checks(ctx):
             rope_bw_err < 5e-3 and
             softmax_err < 5e-3 and
             fused_err < 1e-2 and
+            fused_layer_err < 1e-2 and
             adam_err < 1e-5
         )
         return ok, errs

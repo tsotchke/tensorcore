@@ -38,14 +38,14 @@ variants.
 | 4 | `test_gemm_bf16.c` | bf16 GEMM; native on Apple9+, fp32-cast fallback on Apple7..8 |
 | 5 | `test_gemm_i8.c` | int8 GEMM; native on Apple10+, fp32-widen fallback on Apple7..9; bit-exact for K ≤ 2^16 |
 | 6 | `test_attention_correctness.c` | FlashAttention forward: causal, GQA (3 cases), sliding window, ALiBi |
-| 7 | `test_attention_backward.c` | FlashAttention backward at D=64 vs numerical-differences reference |
+| 7 | `test_attention_backward.c` | FlashAttention backward at D=64 and D=128 vs numerical-differences reference |
 | 8 | `test_training_kernels.c` | RMSnorm fwd+bwd, LayerNorm fwd+bwd, RoPE fwd+bwd, SwiGLU fwd+bwd, softmax fwd+bwd, AdamW |
 | 9 | `test_transformer_block.c` | Full forward + backward of one Llama-style block at small shapes |
 | 10 | `test_e2e_training.c` | A few iterations of forward + backward + AdamW; checks parameter convergence |
 | 11 | `test_conv2d.c` | Conv2D forward + dInput + dWeight (multi-batch validated) |
 | 12 | `test_distributed_ring.c` | Single-host ring all-reduce via threads — bit-exact across 4 ranks × 1024 fp32 |
 | 13 | `test_quantized.c` | Q4_0 sync + async, Q4_0 tail N, Q8_0 GPU quantize + GEMV, invalid-quant sizing |
-| 14 | `test_fused_norm_gemv.c` | `tc_fused_rmsnorm_gemv` against separate `tc_rmsnorm_forward + tc_gemm` |
+| 14 | `test_fused_norm_gemv.c` | fused RMSNorm/LayerNorm GEMV against separate norm-forward + `tc_gemm` paths |
 | 15 | `test_distributed_ring_fork.c` | Ring all-reduce via `fork()` + socketpairs — **same transport pattern** v0.5 TB5 will use |
 | 16 | `test_gguf.c` | Synthetic GGUF round-trip, metadata, bulk load, skip-unsupported count, Q4 GEMV from GGUF |
 | 17 | `test_tensorops_select.c` | M5 TensorOps dtype × accum selector (works without M5 hardware) |

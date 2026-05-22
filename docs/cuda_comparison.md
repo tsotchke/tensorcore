@@ -195,7 +195,8 @@ tc_stream_sync(s);
 ## Where the analogy breaks
 
 - **There's no `cudaGraph` equivalent yet.** Op fusion happens at the kernel
-  level (`tc_fused_rmsnorm_gemv`); graph capture is a v0.7 item.
+  level (`tc_fused_rmsnorm_gemv`, `tc_fused_layernorm_gemv`); graph capture
+  is a v0.7 item.
 - **There's no Triton on Metal.** The Eshkol toolchain plays that role in
   our ecosystem; targeting tensorcore from PyTorch / JAX / MLX directly is
   on the v0.7 roadmap.
