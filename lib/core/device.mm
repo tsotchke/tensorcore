@@ -348,6 +348,28 @@ extern "C" size_t tc_buffer_size(const tc_buffer* buf) {
     return buf ? buf->bytes : 0;
 }
 
+/* Activation-checkpointing storage primitives for the Metal build.
+ *
+ * The CPU backend can discard storage while keeping the tc_buffer handle
+ * alive. The current Metal buffer-pool API frees the handle together with
+ * its MTLBuffer, so a true Metal discard needs a handle-preserving detach
+ * path first. Until then, fail without mutating buf; callers can treat this
+ * as unsupported and keep the original buffer valid. */
+extern "C" TC_INTERNAL_SYMBOL tc_status_t tc_buffer_discard_storage(tc_buffer* buf) {
+    if (!buf || !buf->owner) return TC_ERR_INVALID_ARG;
+    return TC_ERR_UNSUPPORTED_FAMILY;
+}
+
+extern "C" TC_INTERNAL_SYMBOL tc_status_t tc_buffer_reallocate_storage(tc_buffer* buf) {
+    if (!buf || !buf->owner || buf->bytes == 0) return TC_ERR_INVALID_ARG;
+    if (buf->mtl) return TC_OK;
+    return TC_ERR_UNSUPPORTED_FAMILY;
+}
+
+extern "C" TC_INTERNAL_SYMBOL int tc_buffer_is_discarded(const tc_buffer* buf) {
+    return (buf && !buf->mtl && buf->bytes > 0) ? 1 : 0;
+}
+
 /* ----------------------------------------------------------------- */
 /* Streams                                                            */
 /* ----------------------------------------------------------------- */

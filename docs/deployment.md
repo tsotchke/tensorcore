@@ -237,10 +237,13 @@ selected with `TC_USE_CUDA_GEMM=1`, and HIP remains behind `tc_hip_init`.
 |---|---|---|---|
 | `TC_DIST_SINGLE` | World size 1, in-process tests | n/a | Single rank only |
 | `TC_DIST_RING` | Apple TB5 ring (future) | 80-120 Gbps | Reserved for v0.5 |
-| `TC_DIST_GLOO` | **All real multi-host setups today** | Link-limited | Ring fp32 SUM for 3+ ranks; broker fallback for the rest |
+| `TC_DIST_GLOO` | **All real multi-host setups today** | Link-limited | Broker default; opt-in ring fp32 SUM for 3+ ranks |
 
-Set `TC_GLOO_NO_RING=1` to force the rank-0 broker for debugging or when
-validating a link that rejects direct rank-to-rank sockets.
+The rank-0 broker is the default because it only requires peers to reach
+the rendezvous host. Set `TC_GLOO_RING=1` to enable direct rank-to-rank
+ring sockets for fp32 SUM on networks where every rank can reach its ring
+neighbors. `TC_GLOO_NO_RING=1` forces broker dispatch if you need to
+debug a ring-capable build.
 
 ## 6. DiLoCo configuration
 
@@ -318,7 +321,9 @@ network issue.
 - Auto-select backend in `tc_init` (`Metal>CUDA>HIP>CPU` priority)
 - Broader CUDA allocator policy for default no-copy GEMM without an env
   flag.
-- Activation checkpointing real impl (currently registry-stub)
+- Metal activation-checkpoint storage discard; the portable CPU
+  discard/realize path is implemented, while Metal still needs
+  handle-preserving `MTLBuffer` detach.
 - AVX2 GEMM multi-thread (single-thread 40 GFLOPS shipped; multi-thread
   needs BLIS-style 5-loop)
 - Thunderbolt 4 link validation between two Macs (cable-dependent)

@@ -242,9 +242,11 @@ extern "C" TC_INTERNAL_SYMBOL tc_status_t tc_buffer_validate(tc_context* ctx,
 }
 
 extern "C" tc_status_t tc_buffer_free(tc_context* ctx, tc_buffer* buf) {
-    tc_status_t s = tc_buffer_validate(ctx, buf, 0);
-    if (s != TC_OK) return s;
-    if (buf->owns_ptr) {
+    /* Free must succeed even for a discarded buffer (ptr=NULL but valid
+     * handle). Don't go through tc_buffer_validate because that requires
+     * ptr != NULL. */
+    if (!ctx || !buf || buf->owner != ctx) return TC_ERR_INVALID_ARG;
+    if (buf->owns_ptr && buf->ptr) {
 #if defined(TC_ENABLE_CUDA)
         if (buf->storage == TC_STORAGE_CUDA_MANAGED) {
             tc_cuda_managed_free(buf->ptr);
@@ -257,6 +259,55 @@ extern "C" tc_status_t tc_buffer_free(tc_context* ctx, tc_buffer* buf) {
     buf->ptr = nullptr;
     delete buf;
     return TC_OK;
+}
+
+/* Activation-checkpointing storage primitives.
+ *
+ * Discard frees the buffer's underlying memory while keeping the handle
+ * valid (size, owner, storage class remembered). Reallocate restores
+ * storage of the same size + class.
+ *
+ * Between discard and reallocate, tc_buffer_map and tc_buffer_validate
+ * fail — the buffer cannot back compute until realized. */
+extern "C" TC_INTERNAL_SYMBOL tc_status_t tc_buffer_discard_storage(tc_buffer* buf) {
+    if (!buf) return TC_ERR_INVALID_ARG;
+    if (!buf->owns_ptr) return TC_ERR_INVALID_ARG;  /* wrapped buffers untouched */
+    if (!buf->ptr) return TC_OK;                    /* already discarded — idempotent */
+#if defined(TC_ENABLE_CUDA)
+    if (buf->storage == TC_STORAGE_CUDA_MANAGED) {
+        tc_cuda_managed_free(buf->ptr);
+    } else
+#endif
+    {
+        std::free(buf->ptr);
+    }
+    buf->ptr = nullptr;
+    return TC_OK;
+}
+
+extern "C" TC_INTERNAL_SYMBOL tc_status_t tc_buffer_reallocate_storage(tc_buffer* buf) {
+    if (!buf || buf->bytes == 0) return TC_ERR_INVALID_ARG;
+    if (buf->ptr) return TC_OK;                     /* already resident — idempotent */
+#if defined(TC_ENABLE_CUDA)
+    /* Honor original storage class. CUDA-managed retries managed; if the
+     * device isn't available anymore (e.g. driver reload), fall back to
+     * host malloc — caller can still read/write, GEMM uses staged path. */
+    if (buf->storage == TC_STORAGE_CUDA_MANAGED) {
+        if (tc_cuda_managed_alloc(buf->bytes, &buf->ptr) != 0 || !buf->ptr) {
+            buf->ptr = std::malloc(buf->bytes);
+            if (!buf->ptr) return TC_ERR_ALLOC;
+            buf->storage = TC_STORAGE_HOST;
+        }
+        return TC_OK;
+    }
+#endif
+    buf->ptr = std::malloc(buf->bytes);
+    if (!buf->ptr) return TC_ERR_ALLOC;
+    return TC_OK;
+}
+
+extern "C" TC_INTERNAL_SYMBOL int tc_buffer_is_discarded(const tc_buffer* buf) {
+    return (buf && buf->ptr == nullptr && buf->bytes > 0) ? 1 : 0;
 }
 
 extern "C" tc_status_t tc_buffer_map(tc_buffer* buf, void** out_ptr) {

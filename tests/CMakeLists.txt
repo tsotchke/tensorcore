@@ -33,7 +33,7 @@ if(NOT TC_ENABLE_METAL)
 
     # GLOO multi-rank fork test: actual cross-process allreduce + broadcast
     # + barrier via TCP sockets on 127.0.0.1. Validates the public
-    # TC_DIST_GLOO dispatch end-to-end at world_size=2.
+    # TC_DIST_GLOO dispatch end-to-end at world_size=4.
     add_executable(test_gloo_fork test_gloo_fork.c)
     target_link_libraries(test_gloo_fork PRIVATE tensorcore)
     target_include_directories(test_gloo_fork PRIVATE ${CMAKE_SOURCE_DIR}/include)
@@ -65,6 +65,29 @@ if(NOT TC_ENABLE_METAL)
     set_tests_properties(test_diloco_sparse_fork PROPERTIES
         SKIP_RETURN_CODE 77
         TIMEOUT 60
+    )
+
+    # 4-rank ring all-reduce fork test. Exercises ring topology setup +
+    # reduce-scatter + all-gather over loopback (where Tailscale NAT
+    # issues don't apply).
+    add_executable(test_gloo_ring_fork test_gloo_ring_fork.c)
+    target_link_libraries(test_gloo_ring_fork PRIVATE tensorcore)
+    target_include_directories(test_gloo_ring_fork PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    add_test(NAME test_gloo_ring_fork COMMAND test_gloo_ring_fork)
+    set_tests_properties(test_gloo_ring_fork PROPERTIES
+        SKIP_RETURN_CODE 77
+        TIMEOUT 60
+    )
+
+    # Activation checkpointing real impl: discard frees buffer storage,
+    # realize re-allocs + invokes user callback to refill.
+    add_executable(test_checkpoint test_checkpoint.c)
+    target_link_libraries(test_checkpoint PRIVATE tensorcore)
+    target_include_directories(test_checkpoint PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    add_test(NAME test_checkpoint COMMAND test_checkpoint)
+    set_tests_properties(test_checkpoint PROPERTIES
+        SKIP_RETURN_CODE 77
+        TIMEOUT 30
     )
 
     # Split-binary remote distributed test for real multi-machine deployment.
@@ -169,6 +192,27 @@ add_test(NAME test_diloco_sparse_fork COMMAND test_diloco_sparse_fork)
 set_tests_properties(test_diloco_sparse_fork PROPERTIES
     SKIP_RETURN_CODE 77
     TIMEOUT 60
+)
+
+add_executable(test_gloo_ring_fork test_gloo_ring_fork.c)
+target_link_libraries(test_gloo_ring_fork PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
+target_include_directories(test_gloo_ring_fork PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME test_gloo_ring_fork COMMAND test_gloo_ring_fork)
+set_tests_properties(test_gloo_ring_fork PROPERTIES
+    SKIP_RETURN_CODE 77
+    TIMEOUT 60
+)
+
+# Activation checkpointing: discard frees storage, realize re-allocs +
+# invokes user callback. Metal build returns 77 (skip) since storage
+# discard requires buffer-pool refactor; CPU build runs the full cycle.
+add_executable(test_checkpoint test_checkpoint.c)
+target_link_libraries(test_checkpoint PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
+target_include_directories(test_checkpoint PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME test_checkpoint COMMAND test_checkpoint)
+set_tests_properties(test_checkpoint PROPERTIES
+    SKIP_RETURN_CODE 77
+    TIMEOUT 30
 )
 
 add_executable(test_buffer_pool test_buffer_pool.mm)

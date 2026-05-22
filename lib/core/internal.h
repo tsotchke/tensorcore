@@ -96,6 +96,23 @@ TC_INTERNAL_SYMBOL tc_status_t tc_buffer_validate(struct tc_context* ctx,
                                                   const struct tc_buffer* buf,
                                                   size_t min_bytes);
 
+/* Activation checkpointing storage primitives. tc_buffer_discard_storage
+ * frees the buffer's underlying memory but keeps the handle valid (size,
+ * owner, storage class are remembered). tc_buffer_reallocate_storage
+ * allocates fresh storage of the original size + class so the handle is
+ * usable again. Returns TC_OK iff successful.
+ *
+ * Between discard and realloc, tc_buffer_map returns TC_ERR_INVALID_ARG.
+ *
+ * For the Metal build (lib/core/buffer_pool.mm), these are wired in a
+ * follow-up; the CPU build implements them directly in device_cpu.cpp.
+ *
+ * Used by lib/core/checkpoint_stub.cpp to actually reclaim memory on
+ * tc_checkpoint_discard rather than just toggling a flag. */
+TC_INTERNAL_SYMBOL tc_status_t tc_buffer_discard_storage(struct tc_buffer* buf);
+TC_INTERNAL_SYMBOL tc_status_t tc_buffer_reallocate_storage(struct tc_buffer* buf);
+TC_INTERNAL_SYMBOL int tc_buffer_is_discarded(const struct tc_buffer* buf);
+
 #ifdef __OBJC__
 /* Returns a cached MTLComputePipelineState for `name`. NULL on failure. */
 id<MTLComputePipelineState> tc_pipeline_get(struct tc_context* ctx,

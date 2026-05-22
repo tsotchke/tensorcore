@@ -122,9 +122,10 @@ with the heterogeneous mesh runtime.
 `checkpoint_register`, `checkpoint_discard`, `checkpoint_realize`,
 `checkpoint_is_resident`, `checkpoint_unregister`,
 `checkpoint_total_bytes_discarded`, `checkpoint_count_resident`,
-`checkpoint_count_discarded`. The current runtime keeps buffers resident and
-uses the calls for lifecycle validation plus counters until real discard /
-reallocate support lands.
+`checkpoint_count_discarded`. On the portable CPU backend, `discard` frees
+owned buffer storage and `realize` reallocates before running the recompute
+callback. Metal reports unsupported for storage discard until its buffer
+pool supports handle-preserving detach.
 
 ### HIP
 `hip_init`, `hip_device_info_get`, `hip_device_count`, `hip_device_at`,

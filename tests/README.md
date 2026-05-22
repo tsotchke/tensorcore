@@ -1,18 +1,19 @@
 # tests/
 
-24 default CTest entries cover every public ABI surface: 22
-correctness/Python tests plus two executable example smokes in the Metal
-build. The portable
+29 default CTest entries cover every public ABI surface: 26 native
+correctness tests, the Python binding smoke, and two executable example
+smokes in the Metal build. The portable
 CPU-only build registers `test_portable_cpu.c`, `test_conv2d.c`,
 `test_diloco.c`, `test_sparse_compress.c`, `test_gloo_fork.c`, and
-`test_diloco_gloo_fork.c`, plus `test_diloco_sparse_fork.c`. Each native
-test is a single `.c` file (or `.mm` for the buffer pool, which needs ObjC++).
+`test_gloo_ring_fork.c`, plus `test_checkpoint.c` and the
+DiLoCo-over-GLOO fork tests. Each native test is a single `.c` file (or
+`.mm` for the buffer pool, which needs ObjC++).
 Numerical tests compare against an fp64 CPU reference or a bit-exact CPU
 oracle and pass the tolerances documented in
 [../docs/numerics.md](../docs/numerics.md).
 
 ```sh
-ctest --test-dir build --output-on-failure   # 24 default Apple tests
+ctest --test-dir build --output-on-failure   # 29 default Apple tests
 ```
 
 Runs in ~5-15s on M2 Ultra.
@@ -22,8 +23,9 @@ buffer/device path plus padded f32/f16 GEMM, batched GEMM, i8 GEMM,
 quantized GEMV, `TC_DIST_SINGLE` collectives, memory-tier and
 checkpoint baseline APIs, HIP/CUDA inactive diagnostics, local DiLoCo, and
 the localhost GLOO TCP collective and DiLoCo-over-GLOO smokes. The
-portable build also runs Conv2D, DiLoCo, sparse-compression, GLOO TCP,
-DiLoCo-over-GLOO, and sparse TOPK DiLoCo-over-GLOO tests.
+portable build also runs Conv2D, DiLoCo, sparse-compression, broker GLOO TCP,
+opt-in ring GLOO TCP, activation checkpointing, DiLoCo-over-GLOO, and sparse
+TOPK DiLoCo-over-GLOO tests.
 `scripts/ci_portable_cpu.sh` adds installed SDK consumer checks plus
 subprocess smokes for the opt-in AVX2, NEON, and AMX GEMM environment
 variants.
@@ -52,10 +54,15 @@ variants.
 | 18 | `test_tensorops_runtime.c` | TensorOps runtime path coverage (skips politely on non-M5) |
 | 19 | `test_diloco.c` | Local/single-rank DiLoCo outer steps, counters, and unsupported multi-rank guards |
 | 20 | `test_sparse_compress.c` | DiLoCo top-k sparse compression pack/unpack accuracy and merge behavior |
-| 21 | `test_buffer_pool.mm` | LIFO recycling, bucket size classes, concurrent allocate/free |
-| 22 | `python_basic` | The Python binding's `tests/test_basic.py` — full ABI surface exercised from ctypes |
-| 23 | `example_decode_step` | Native decode-step smoke using the installed C ABI |
-| 24 | `example_training_step` | Native training-step smoke using the installed C ABI |
+| 21 | `test_gloo_fork.c` | Four forked ranks over broker GLOO TCP; fp32/fp16 allreduce, broadcast, allgather, barrier |
+| 22 | `test_diloco_gloo_fork.c` | Multi-rank DiLoCo over GLOO with forked localhost ranks |
+| 23 | `test_diloco_sparse_fork.c` | TOPK sparse DiLoCo over GLOO; validates sparse wire-byte reduction |
+| 24 | `test_gloo_ring_fork.c` | Four forked ranks with `TC_GLOO_RING=1`; direct TCP ring fp32 SUM |
+| 25 | `test_checkpoint.c` | CPU discard/realize checkpoint lifecycle; skips on Metal until handle-preserving MTLBuffer discard lands |
+| 26 | `test_buffer_pool.mm` | LIFO recycling, bucket size classes, concurrent allocate/free |
+| 27 | `python_basic` | The Python binding's `tests/test_basic.py` — full ABI surface exercised from ctypes |
+| 28 | `example_decode_step` | Native decode-step smoke using the installed C ABI |
+| 29 | `example_training_step` | Native training-step smoke using the installed C ABI |
 
 ## Tolerances
 

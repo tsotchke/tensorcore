@@ -13,8 +13,9 @@
  *
  *   Collectives:
  *
- *     allreduce  = rank-0 brokered reduction + broadcast for <=2 ranks,
- *                  ring reduce-scatter + all-gather for fp32 SUM at >=3.
+ *     allreduce  = rank-0 brokered reduction + broadcast by default,
+ *                  opt-in ring reduce-scatter + all-gather for fp32 SUM
+ *                  at >=3 ranks when TC_GLOO_RING=1.
  *     broadcast  = rank-0 brokered bitwise replication from any root.
  *     allgather  = rank-0 brokered gather + broadcast.
  *     barrier    = rank-0 brokered byte exchange.
@@ -54,6 +55,7 @@
 #  include <netdb.h>
 #  include <netinet/in.h>
 #  include <netinet/tcp.h>
+#  include <sys/select.h>
 #  include <sys/socket.h>
 #  include <sys/types.h>
 #  include <unistd.h>
@@ -168,6 +170,25 @@ int tcp_connect(const std::string& host, uint16_t port) {
     }
     ::freeaddrinfo(res);
     return -1;
+}
+
+int accept_with_timeout(int listen_fd, int timeout_ms) {
+    timeval tv = {};
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+
+    int rc = -1;
+    do {
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(listen_fd, &rfds);
+        rc = ::select(listen_fd + 1, &rfds, nullptr, nullptr, &tv);
+    } while (rc < 0 && errno == EINTR);
+    if (rc <= 0) return -1;
+
+    sockaddr_in peer_addr = {};
+    socklen_t alen = sizeof(peer_addr);
+    return ::accept(listen_fd, (sockaddr*)&peer_addr, &alen);
 }
 
 float f16_to_f32_gloo(uint16_t h) {
@@ -324,6 +345,17 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
         return s;
     }
 
+    /* Ring topology setup is opt-in via TC_GLOO_RING=1 (default off until
+     * we have a NAT-transparent way to discover ring neighbors). When off,
+     * we leave next_fd/prev_fd = -1 and the allreduce dispatcher falls
+     * through to the broker path automatically. Once ring setup starts,
+     * failures are fatal for this context: a per-rank silent fallback can
+     * deadlock peers waiting in the topology exchange. */
+    const char* enable_ring = std::getenv("TC_GLOO_RING");
+    if (!(enable_ring && enable_ring[0] == '1')) {
+        return s;
+    }
+
     /* --- Phase A: every rank listens on a local ring port. --- */
     const uint16_t ring_port_base = (uint16_t)(port + 1);
     int my_ring_listen = -1;
@@ -409,9 +441,7 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
 
     s->next_fd = tcp_connect(resolve_host(next_rank), ports[next_rank]);
     if (s->next_fd < 0) return fail_ring_setup();
-    sockaddr_in peer_addr = {};
-    socklen_t alen = sizeof(peer_addr);
-    s->prev_fd = ::accept(my_ring_listen, (sockaddr*)&peer_addr, &alen);
+    s->prev_fd = accept_with_timeout(my_ring_listen, 5000);
     if (s->prev_fd < 0) return fail_ring_setup();
 
     int yes = 1;
@@ -500,11 +530,10 @@ extern "C" TC_GLOO_HIDDEN int tc_gloo_allreduce_f32_sum_ring(GlooState* s, int w
 
 /* All-reduce SUM over a host fp32 buffer. For world_size <= 2 uses the
  * rank-0-as-broker pattern (which is identical to ring at N=2). For
- * world_size >= 3 uses the ring algorithm via tc_gloo_allreduce_f32_sum_ring
- * which eliminates the rank-0 hot spot.
+ * world_size >= 3, explicit TC_GLOO_RING=1 uses the ring algorithm via
+ * tc_gloo_allreduce_f32_sum_ring, eliminating the rank-0 hot spot.
  *
- * Opt-out: set TC_GLOO_NO_RING=1 to force broker even at N >= 3 (useful
- * for debugging if the ring topology setup fails). */
+ * TC_GLOO_NO_RING=1 forces broker even if ring descriptors are present. */
 extern "C" TC_GLOO_HIDDEN int tc_gloo_allreduce_f32_sum(GlooState* s, int world_size, int rank,
                                                          float* data, size_t n) {
     if (world_size <= 1) return 0;

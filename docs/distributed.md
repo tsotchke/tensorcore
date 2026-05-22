@@ -79,8 +79,9 @@ runtime yet).
 CPU-backed all-reduce over Ethernet for default Apple and portable CPU
 builds. Slower than the future TB5/JACCL backend but works between any
 networked hosts. The current in-tree transport uses `gloo+tcp://host:port`
-rendezvous, direct ring neighbor sockets for `world_size >= 3` fp32 SUM,
-and rank-0 broker fallback for two-rank or non-SUM collectives. It
+rendezvous, rank-0 broker collectives by default, and optional direct ring
+neighbor sockets for `world_size >= 3` fp32 SUM when `TC_GLOO_RING=1` is
+set. It
 supports fp32 SUM/AVG/MIN/MAX all-reduce, fp16 SUM/AVG all-reduce,
 byte-level broadcast from any root, allgather, barrier, and the internal
 sparse TOPK DiLoCo wire path.
@@ -173,9 +174,12 @@ loop now means v0.5 will be a backend swap, not a code change.
 - `tests/test_distributed_ring_fork.c`: fork + socketpair; same scenario,
   same result. **This is the real topology** — the only thing that changes
   for multi-Mac is the socket type.
-- `tests/test_gloo_fork.c`: localhost smoke with two forked
-  ranks over `gloo+tcp://127.0.0.1:port`, covering fp32/fp16 allreduce,
+- `tests/test_gloo_fork.c`: localhost smoke with four forked ranks over
+  `gloo+tcp://127.0.0.1:port`, covering broker fp32/fp16 allreduce,
   any-root broadcast, allgather, and barrier.
+- `tests/test_gloo_ring_fork.c`: localhost smoke with four forked ranks
+  and `TC_GLOO_RING=1`, covering direct TCP ring reduce-scatter/all-gather
+  for fp32 SUM.
 
 The ring and GLOO TCP fork smokes run in the default Apple suite. The same
 GLOO smokes also run in the portable CPU suite.

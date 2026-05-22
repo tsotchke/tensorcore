@@ -20,9 +20,9 @@ every architectural primitive in code and tested:
   **32.28 TFLOPS fp16/fp32-accum**, and **60.42 TFLOPS fp16-accum**.
 - **chipStar HIP backend** scaffolding for Intel Level Zero, AMD OpenCL,
   ARM Mali — runs on every Khronos-standards GPU vendor.
-- GLOO TCP transport with full collective set: ring fp32 SUM/AVG for
-  3+ ranks, brokered SUM/AVG/MIN/MAX fallback, broadcast any-root,
-  allgather, sparse_allreduce.
+- GLOO TCP transport with full collective set: default brokered
+  SUM/AVG/MIN/MAX, opt-in ring fp32 SUM/AVG for 3+ ranks, broadcast
+  any-root, allgather, sparse_allreduce.
 - DiLoCo runtime with NONE/FP16/TOPK_1PCT/TOPK_01PCT compression,
   SGD/Nesterov/Adam outer optimizers, async overlap, sparse-on-the-wire
   cross-continent path.
@@ -30,12 +30,14 @@ every architectural primitive in code and tested:
 - Cross-process test infrastructure (`test_diloco_gloo_fork`,
   `test_diloco_sparse_fork`, `test_dist_remote`) for forked, multi-rank,
   and cross-machine validation.
+- Experimental PyTorch bridge with zero-copy fp32 CPU matmul and an opt-in
+  `torch.matmul` dispatcher hook.
 
 ### End-to-end validation matrix
 
 | Run | Hardware | Result |
 |---|---|---|
-| `test_gloo_fork` (forked) | Atlas M2 Ultra | ✓ — 4-rank TCP ring SUM |
+| `test_gloo_ring_fork` (forked) | Atlas M2 Ultra | ✓ — opt-in 4-rank TCP ring SUM |
 | `test_diloco_gloo_fork` (forked) | Atlas M2 Ultra | ✓ — 2 ranks converge |
 | `test_diloco_sparse_fork` (forked) | Atlas M2 Ultra | ✓ — **16× bandwidth reduction** |
 | Atlas ↔ Enki (Tailscale) | M2 Ultra + M4 | ✓ — cross-arch Apple |
@@ -139,11 +141,15 @@ every architectural primitive in code and tested:
   The default CTest suite registers the GLOO, DiLoCo-over-GLOO, and sparse
   TOPK-over-GLOO fork smokes so Darwin distributed behavior is exercised
   before release.
-- `Add GLOO TCP ring all-reduce`: `TC_DIST_GLOO` now builds direct ring
-  neighbor sockets for `world_size >= 3` and routes fp32 SUM through a
-  reduce-scatter/all-gather ring. `TC_GLOO_NO_RING=1` forces the broker
-  fallback for debugging. `test_gloo_fork` now runs four forked ranks so
-  the ring path is covered in default and portable CTest.
+- `Add GLOO TCP ring all-reduce`: `TC_DIST_GLOO` can build direct ring
+  neighbor sockets for `world_size >= 3` and route fp32 SUM through a
+  reduce-scatter/all-gather ring when `TC_GLOO_RING=1` is set. The broker
+  path remains the default for NAT-hostile multi-host deployments, while
+  `test_gloo_ring_fork` covers the ring path in default and portable CTest.
+- `Add opt-in PyTorch matmul dispatcher hook`: `bindings/pytorch` can now
+  route eligible fp32 CPU `torch.matmul` calls through tensorcore when
+  `tensorcore_torch.set_default_matmul(True)` is enabled, while unsupported
+  shapes and dtypes fall back to ATen.
 - `Add memory-tier public ABI`: `include/tensorcore/memory_tier.h` and
   `lib/core/memory_tier_stub.cpp` expose buffer tier hints, async
   promote/demote entry points, and usage accounting. The shipped baseline
@@ -151,10 +157,11 @@ every architectural primitive in code and tested:
 - `Finish zero-copy host-buffer wrapping`: `tc_buffer_from_ptr` is now in
   the exported ABI, bound in Python, documented, and covered by portable
   C/Python smokes.
-- `Add activation-checkpointing ABI stubs`: `include/tensorcore/checkpoint.h`
-  and `lib/core/checkpoint_stub.cpp` expose register/discard/realize
-  lifecycle calls plus resident/discarded counters for future recompute-based
-  activation memory savings.
+- `Implement portable CPU activation checkpointing`: `tc_checkpoint_discard`
+  now frees owned CPU buffer storage while preserving the handle,
+  `tc_checkpoint_realize` reallocates and invokes the registered recompute
+  callback, and `test_checkpoint` validates the lifecycle. Metal reports
+  unsupported until handle-preserving `MTLBuffer` discard lands.
 - `Document cross-continent training topology`: `docs/diloco.md` explains
   the DiLoCo algorithm, compression choices, and the two-site bandwidth
   budgeting model.

@@ -113,7 +113,8 @@ What works on the portable CPU build:
   `TC_USE_NEON_GEMM=1`, and `TC_USE_AMX_GEMM=1`; the portable CI script
   smokes these in isolated Python subprocesses
 - sparse top-k compression helpers
-- memory-tier and activation-checkpointing stub baselines
+- memory-tier stub baseline and portable CPU activation-checkpointing
+  discard/realize
 - HIP and CUDA backend diagnostics with deterministic unsupported stubs
 - `tc_status_string` / `tc_dtype_name` / `tc_backend_name`
 
@@ -234,8 +235,9 @@ See `make help` for the full menu.
 - **MLX.** Optional; tensorcore is independent. If you want to compare
   fp16 GEMM TFLOPS against MLX, install separately:
   `pip install mlx`.
-- **PyTorch / TensorFlow.** Tensorcore exposes a C ABI; framework
-  integration is downstream.
+- **PyTorch / TensorFlow.** Tensorcore's core build only needs the C ABI.
+  An experimental PyTorch bridge lives in `bindings/pytorch` for zero-copy
+  fp32 CPU matmul and opt-in `torch.matmul` dispatch experiments.
 - **CUDA.** Obviously.
 - **Real GGUF model.** The bench harness uses synthetic Q4_0 weights;
   full inference against a real GGUF is a v0.2 deliverable.

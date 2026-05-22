@@ -232,7 +232,8 @@ The multi-Mac ring backend isn't implemented in v0.1. `TC_DIST_SINGLE`
 with `world_size=1` is functional in every build, and default Apple plus
 portable CPU builds support `TC_DIST_GLOO` over TCP. The standalone
 single-host ring algorithm is validated in `tests/test_distributed_ring_fork.c`;
-`TC_DIST_GLOO` also uses TCP ring sockets for fp32 SUM at `world_size >= 3`.
+`TC_DIST_GLOO` also has an opt-in TCP ring path for fp32 SUM at
+`world_size >= 3` when `TC_GLOO_RING=1` is set.
 The TB5/JACCL multi-Mac `TC_DIST_RING` backend lands in v0.5.
 
 ### `tc_dist_init(TC_DIST_GLOO, ...)` fails or hangs

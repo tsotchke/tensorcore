@@ -1,26 +1,36 @@
 /*
- * tensorcore — activation-checkpointing weak stubs.
+ * tensorcore — activation-checkpointing runtime.
  *
- * The full implementation lives in lib/core/checkpoint.cpp (TBD) once the
- * tc_buffer free/realloc plumbing for "discard then re-create with the
- * same handle" lands. These weak stubs satisfy the public ABI so client
- * code can call the checkpoint API unconditionally; until the runtime
- * grows the discard/realize behavior, the stubs treat every realize as
- * a no-op (the buffer is always resident).
+ * Implements the tc_checkpoint_* public ABI on top of the internal
+ * tc_buffer_discard_storage / tc_buffer_reallocate_storage primitives
+ * in lib/core/device_cpu.cpp (CPU build). On Metal the buffer pool
+ * defers to the underlying MTLBuffer realloc story.
+ *
+ * Semantics:
+ *   register(buf, fn, ud) → returns an id, buffer is resident.
+ *   discard(id)           → buffer storage is freed; bytes accounted to
+ *                            discarded_bytes; user data + fn retained.
+ *   realize(id)           → storage is re-allocated to its original size,
+ *                            user's recompute_fn is invoked to refill it.
+ *   unregister(id)        → drop from registry (buffer is NOT freed here;
+ *                            caller still owns the handle).
+ *
+ * The realize path holds NO mutex during the user callback to avoid
+ * deadlock if the callback calls back into the checkpoint API.
  */
 
 #include "tensorcore/checkpoint.h"
+#include "internal.h"
 
 #include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <unordered_map>
 
-#ifdef __GNUC__
-#  define TC_WEAK __attribute__((weak))
-#else
-#  define TC_WEAK
-#endif
+/* This file is the real checkpoint ABI implementation. Keep the exported
+ * entry points strong; weak public functions can fail to resolve internal
+ * storage hooks under Darwin exported-symbols-list linking. */
+#define TC_CHECKPOINT_API
 
 namespace {
 
@@ -53,10 +63,10 @@ std::atomic<uint64_t>& discarded_bytes() {
 
 }  // namespace
 
-extern "C" TC_WEAK tc_status_t tc_checkpoint_register(tc_buffer* buf,
-                                                       tc_checkpoint_recompute_fn recompute_fn,
-                                                       void* user_data,
-                                                       tc_checkpoint_id* out_id) {
+extern "C" TC_CHECKPOINT_API tc_status_t tc_checkpoint_register(tc_buffer* buf,
+                                                                 tc_checkpoint_recompute_fn recompute_fn,
+                                                                 void* user_data,
+                                                                 tc_checkpoint_id* out_id) {
     if (!buf || !recompute_fn || !out_id) return TC_ERR_INVALID_ARG;
     std::lock_guard<std::mutex> lk(registry_mutex());
     for (const auto& kv : registry()) {
@@ -68,27 +78,39 @@ extern "C" TC_WEAK tc_status_t tc_checkpoint_register(tc_buffer* buf,
     return TC_OK;
 }
 
-extern "C" TC_WEAK tc_status_t tc_checkpoint_discard(tc_checkpoint_id id) {
-    std::lock_guard<std::mutex> lk(registry_mutex());
-    auto it = registry().find(id);
-    if (it == registry().end()) return TC_ERR_INVALID_ARG;
-    /* The runtime would free the buffer's underlying memory here. The
-     * stub just marks it as discarded for the observability counters. */
-    if (it->second.resident) {
+extern "C" TC_CHECKPOINT_API tc_status_t tc_checkpoint_discard(tc_checkpoint_id id) {
+    tc_buffer* buf = nullptr;
+    size_t bytes = 0;
+    {
+        std::lock_guard<std::mutex> lk(registry_mutex());
+        auto it = registry().find(id);
+        if (it == registry().end()) return TC_ERR_INVALID_ARG;
+        if (!it->second.resident) return TC_OK;
+        buf = it->second.buf;
+        bytes = tc_buffer_size(buf);
         it->second.resident = false;
-        const size_t bytes = tc_buffer_size(it->second.buf);
-        discarded_bytes().fetch_add(bytes);
     }
+    /* Actually free the buffer's underlying storage. The handle stays
+     * valid; tc_checkpoint_realize will re-allocate. Drop the registry
+     * lock first so the discard call can grab the buffer pool's lock
+     * without inversion. */
+    tc_status_t s = tc_buffer_discard_storage(buf);
+    if (s != TC_OK) {
+        /* Roll back the resident flag — we didn't actually free anything. */
+        std::lock_guard<std::mutex> lk(registry_mutex());
+        auto it = registry().find(id);
+        if (it != registry().end()) it->second.resident = true;
+        return s;
+    }
+    discarded_bytes().fetch_add(bytes);
     return TC_OK;
 }
 
-extern "C" TC_WEAK tc_status_t tc_checkpoint_realize(tc_checkpoint_id id) {
-    /* Acquire entry pointer under the lock, then drop the lock before
-     * invoking the user callback (which may take a long time). */
+extern "C" TC_CHECKPOINT_API tc_status_t tc_checkpoint_realize(tc_checkpoint_id id) {
     tc_checkpoint_recompute_fn fn = nullptr;
     void* user_data = nullptr;
+    tc_buffer* buf = nullptr;
     size_t bytes = 0;
-    bool was_discarded = false;
     {
         std::lock_guard<std::mutex> lk(registry_mutex());
         auto it = registry().find(id);
@@ -96,32 +118,39 @@ extern "C" TC_WEAK tc_status_t tc_checkpoint_realize(tc_checkpoint_id id) {
         if (it->second.resident) return TC_OK;
         fn = it->second.recompute_fn;
         user_data = it->second.user_data;
-        was_discarded = true;
-        bytes = tc_buffer_size(it->second.buf);
+        buf = it->second.buf;
+        bytes = tc_buffer_size(buf);
     }
-    tc_status_t s = fn(user_data);
+    /* Re-allocate buffer storage BEFORE the callback so the user's
+     * recompute_fn can write into a valid buffer. */
+    tc_status_t s = tc_buffer_reallocate_storage(buf);
     if (s != TC_OK) return s;
-    if (was_discarded) {
+    s = fn(user_data);
+    if (s != TC_OK) {
+        /* Recompute failed — leave the buffer allocated but not marked
+         * resident. Caller can retry realize or unregister. */
+        return s;
+    }
+    {
         std::lock_guard<std::mutex> lk(registry_mutex());
         auto it = registry().find(id);
         if (it == registry().end()) return TC_ERR_INVALID_ARG;
         if (!it->second.resident) {
             it->second.resident = true;
-            /* Subtract back from discarded_bytes since the buffer is resident again. */
             discarded_bytes().fetch_sub(bytes);
         }
     }
-    return s;
+    return TC_OK;
 }
 
-extern "C" TC_WEAK int tc_checkpoint_is_resident(tc_checkpoint_id id) {
+extern "C" TC_CHECKPOINT_API int tc_checkpoint_is_resident(tc_checkpoint_id id) {
     std::lock_guard<std::mutex> lk(registry_mutex());
     auto it = registry().find(id);
     if (it == registry().end()) return 0;
     return it->second.resident ? 1 : 0;
 }
 
-extern "C" TC_WEAK tc_status_t tc_checkpoint_unregister(tc_checkpoint_id id) {
+extern "C" TC_CHECKPOINT_API tc_status_t tc_checkpoint_unregister(tc_checkpoint_id id) {
     std::lock_guard<std::mutex> lk(registry_mutex());
     auto it = registry().find(id);
     if (it == registry().end()) return TC_ERR_INVALID_ARG;
@@ -132,11 +161,11 @@ extern "C" TC_WEAK tc_status_t tc_checkpoint_unregister(tc_checkpoint_id id) {
     return TC_OK;
 }
 
-extern "C" TC_WEAK uint64_t tc_checkpoint_total_bytes_discarded(void) {
+extern "C" TC_CHECKPOINT_API uint64_t tc_checkpoint_total_bytes_discarded(void) {
     return discarded_bytes().load();
 }
 
-extern "C" TC_WEAK uint64_t tc_checkpoint_count_resident(void) {
+extern "C" TC_CHECKPOINT_API uint64_t tc_checkpoint_count_resident(void) {
     std::lock_guard<std::mutex> lk(registry_mutex());
     uint64_t n = 0;
     for (const auto& [id, entry] : registry()) {
@@ -145,7 +174,7 @@ extern "C" TC_WEAK uint64_t tc_checkpoint_count_resident(void) {
     return n;
 }
 
-extern "C" TC_WEAK uint64_t tc_checkpoint_count_discarded(void) {
+extern "C" TC_CHECKPOINT_API uint64_t tc_checkpoint_count_discarded(void) {
     std::lock_guard<std::mutex> lk(registry_mutex());
     uint64_t n = 0;
     for (const auto& [id, entry] : registry()) {

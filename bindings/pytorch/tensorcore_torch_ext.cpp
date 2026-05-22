@@ -1,6 +1,7 @@
 /* tensorcore_torch_ext.cpp — minimal PyTorch ↔ tensorcore bridge.
  *
- * Exposes one function: `tc_matmul(A, B)` returning A @ B via tc_gemm.
+ * Exposes `matmul(A, B)` returning A @ B via tc_gemm and an opt-in
+ * `set_default_matmul()` dispatcher hook for torch.matmul.
  *
  * v0.1 scope:
  *   - fp32 only (matches the AMX backend's session-1.5 support).
@@ -22,6 +23,10 @@
  */
 
 #include <torch/extension.h>
+#include <torch/library.h>
+
+#include <ATen/ops/matmul_native.h>
+#include <c10/core/DeviceType.h>
 
 extern "C" {
 #include "tensorcore/tensorcore.h"
@@ -38,6 +43,7 @@ namespace {
  * `tc_context*` is reusable across many GEMMs; we don't want to pay
  * `tc_init` cost per matmul. */
 tc_context* g_ctx = nullptr;
+std::atomic<bool> g_default_matmul{false};
 
 void ensure_ctx() {
     static std::atomic<bool> initialized{false};
@@ -57,6 +63,24 @@ void ensure_ctx() {
         initialized.store(true, std::memory_order_release);
     }
     init_lock.clear(std::memory_order_release);
+}
+
+bool is_tc_matmul_eligible(const at::Tensor& A, const at::Tensor& B) {
+    return A.dtype() == torch::kFloat32 &&
+           B.dtype() == torch::kFloat32 &&
+           A.layout() == torch::kStrided &&
+           B.layout() == torch::kStrided &&
+           A.dim() == 2 &&
+           B.dim() == 2 &&
+           A.size(1) == B.size(0) &&
+           A.device().is_cpu() &&
+           B.device().is_cpu();
+}
+
+void register_privateuse1_name() {
+    if (!c10::is_privateuse1_backend_registered()) {
+        c10::register_privateuse1_backend("tensorcore");
+    }
 }
 
 }  // namespace
@@ -141,9 +165,67 @@ const char* tc_last_backend_name() {
     return tc_backend_name(tc_last_backend());
 }
 
+at::Tensor tc_matmul_dispatch(const at::Tensor& A, const at::Tensor& B) {
+    if (g_default_matmul.load(std::memory_order_acquire) &&
+        is_tc_matmul_eligible(A, B)) {
+        return tc_matmul_fp32(A, B);
+    }
+
+    return at::native::matmul(A, B);
+}
+
+at::Tensor tc_matmul_autograd_cpu(const at::Tensor& A, const at::Tensor& B) {
+    if (!A.requires_grad() &&
+        !B.requires_grad() &&
+        g_default_matmul.load(std::memory_order_acquire) &&
+        is_tc_matmul_eligible(A, B)) {
+        return tc_matmul_fp32(A, B);
+    }
+
+    return at::native::matmul(A, B);
+}
+
+at::Tensor tc_matmul_privateuse1(const at::Tensor& A, const at::Tensor& B) {
+    return tc_matmul_fp32(A, B);
+}
+
+bool tc_set_default_matmul(bool enabled = true) {
+    register_privateuse1_name();
+    return g_default_matmul.exchange(enabled, std::memory_order_acq_rel);
+}
+
+bool tc_default_matmul_enabled() {
+    return g_default_matmul.load(std::memory_order_acquire);
+}
+
+std::string tc_privateuse1_backend_name() {
+    register_privateuse1_name();
+    return c10::get_privateuse1_backend(true);
+}
+
+TORCH_LIBRARY_IMPL(aten, CPU, m) {
+    m.impl("matmul", TORCH_FN(tc_matmul_dispatch));
+}
+
+TORCH_LIBRARY_IMPL(aten, AutogradCPU, m) {
+    m.impl("matmul", TORCH_FN(tc_matmul_autograd_cpu));
+}
+
+TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
+    m.impl("matmul", TORCH_FN(tc_matmul_privateuse1));
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+    register_privateuse1_name();
     m.def("matmul", &tc_matmul_fp32,
           "tc_matmul(A: Tensor[fp32, MxK], B: Tensor[fp32, KxN]) -> Tensor[fp32, MxN]");
+    m.def("set_default_matmul", &tc_set_default_matmul,
+          py::arg("enabled") = true,
+          "Enable or disable the opt-in torch.matmul dispatcher hook; returns the previous state");
+    m.def("default_matmul_enabled", &tc_default_matmul_enabled,
+          "Return whether torch.matmul is currently routed through tensorcore for eligible fp32 CPU matrices");
+    m.def("privateuse1_backend_name", &tc_privateuse1_backend_name,
+          "Return the registered PrivateUse1 backend name used by tensorcore");
     m.def("last_backend_name", &tc_last_backend_name,
           "Return the tensorcore backend name that served the last GEMM");
 }
