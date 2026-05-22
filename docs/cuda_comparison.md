@@ -27,7 +27,7 @@ software stack* at the kernel layer.
 | cuDNN activations | `tc_swiglu_forward/backward`, `tc_softmax_forward/backward` |
 | Apex / FusedAdam | `tc_adamw_step` (fp32 master, fp16/fp32 grads, single-kernel) |
 | CUTLASS | the kernels themselves: `gemm_simdgroup.metal`, `flash_attention.metal`, hand-tuned for `simdgroup_matrix` |
-| NCCL | `tc_allreduce`, `tc_broadcast`, `tc_allgather`, `tc_barrier` (single-host today; TB5 ring + Gloo v0.5) |
+| NCCL | `tc_allreduce`, `tc_broadcast`, `tc_allgather`, `tc_barrier` (single-host + portable CPU GLOO TCP today; TB5 ring v0.5) |
 | cudaMalloc / cudaFree | `tc_buffer_alloc` / `tc_buffer_free` (with a power-of-2 LIFO pool — no `cudaMallocAsync` needed because UMA) |
 | cudaMemcpyAsync (host↔device) | not needed — unified memory: `tc_buffer_map` returns a CPU-addressable pointer with no copy |
 | CUDA streams | `tc_stream_create`, `tc_stream_sync` |

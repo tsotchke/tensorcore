@@ -32,7 +32,7 @@ $ICC_HOME/bin/icc architecture-summary --repo tensorcore --bundle --include-chea
 | Call-graph edges (unresolved system / runtime) | 1,446 |
 | Call-graph edges (ambiguous) | 506 |
 | Docs links checked | 240 / 240 local links |
-| Test suite | 24 / 24 default Apple tests, 4 / 4 portable CPU tests |
+| Test suite | 24 / 24 default Apple tests, 6 / 6 portable CPU tests |
 
 ## Public module roots
 

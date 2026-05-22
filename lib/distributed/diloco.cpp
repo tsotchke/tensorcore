@@ -46,6 +46,18 @@
 #include "tensorcore/diloco.h"
 #include "tensorcore/tensorcore.h"
 
+/* Internal helper exported by lib/distributed/distributed_cpu.cpp + Metal's
+ * lib/distributed/distributed.mm. Gives DiLoCo access to the parent
+ * tc_context so it can allocate temporary buffers in the same arena as
+ * the user's tc_dist_ctx. */
+#if defined(_WIN32)
+#define TC_DILOCO_INTERNAL_SYMBOL
+#else
+#define TC_DILOCO_INTERNAL_SYMBOL __attribute__((visibility("hidden")))
+#endif
+
+extern "C" TC_DILOCO_INTERNAL_SYMBOL tc_context* tc_dist_get_context(tc_dist_ctx* d);
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -386,12 +398,36 @@ tc_status_t do_outer_step(tc_diloco_ctx* d) {
             return TC_ERR_UNSUPPORTED_DTYPE;
         }
 
-        /* v1 supports the local/single-rank path end-to-end. Multi-rank
-         * DiLoCo needs a transport-owned temporary buffer so tc_allreduce can
-         * operate on compressed deltas without violating the opaque tc_buffer
-         * contract; leave that as an explicit unsupported path for now. */
+        /* Multi-rank: cross-site all-reduce-AVG of Δθ. The top-k path has
+         * already zeroed sub-threshold entries in `delta`, so the
+         * transport sees mostly zeros. Bandwidth-optimal compression in
+         * transit (packing only the non-zero (idx, val) pairs) is a follow-
+         * up; this dense AVG-allreduce path is correct + the K-step
+         * amortization already provides ~100-1000× over per-step DDP. */
         const int world = d->dist ? tc_dist_world_size(d->dist) : 1;
-        if (world > 1) return TC_ERR_UNSUPPORTED_FAMILY;
+        if (world > 1) {
+            tc_context* parent_ctx = tc_dist_get_context(d->dist);
+            if (!parent_ctx) return TC_ERR_INTERNAL;
+            const size_t bytes = p.num_elements * sizeof(float);
+            tc_buffer* delta_buf = nullptr;
+            if (tc_buffer_alloc(parent_ctx, bytes, &delta_buf) != TC_OK) {
+                return TC_ERR_ALLOC;
+            }
+            void* mp = nullptr;
+            if (tc_buffer_map(delta_buf, &mp) != TC_OK) {
+                tc_buffer_free(parent_ctx, delta_buf);
+                return TC_ERR_INTERNAL;
+            }
+            std::memcpy(mp, delta.data(), bytes);
+            tc_status_t s = tc_allreduce(d->dist, delta_buf, p.num_elements,
+                                          TC_DTYPE_F32, TC_REDUCE_AVG);
+            if (s == TC_OK) {
+                std::memcpy(delta.data(), mp, bytes);
+                total_bytes_sent += bytes;
+            }
+            tc_buffer_free(parent_ctx, delta_buf);
+            if (s != TC_OK) return s;
+        }
 
         /* Outer-optimizer step on θ_anchor. */
         apply_outer_optimizer(p, delta, d->cfg);

@@ -673,7 +673,7 @@ See [gguf.md](gguf.md) for the loading patterns and skip semantics.
 typedef enum {
     TC_DIST_SINGLE = 0,    /* no-op all-reduce; world_size=1 always succeeds */
     TC_DIST_RING   = 1,    /* TB5 ring (v0.5)                                */
-    TC_DIST_GLOO   = 2,    /* CPU/Ethernet (v0.5)                            */
+    TC_DIST_GLOO   = 2,    /* portable CPU TCP baseline                      */
 } tc_dist_backend_t;
 
 typedef enum {
@@ -721,15 +721,15 @@ tc_status_t tc_allgather(tc_dist_ctx*    d,
 tc_status_t tc_barrier  (tc_dist_ctx* d);
 ```
 
-See [distributed.md](distributed.md) for the single-host ring (threads
-and fork transports) and the v0.5 TB5/Gloo plan.
+See [distributed.md](distributed.md) for the single-host ring tests,
+portable CPU GLOO TCP baseline, and the v0.5 TB5 transport plan.
 
 ## DiLoCo — `diloco.h`
 
 DiLoCo is layered above an existing `tc_dist_ctx`. The current runtime
-implements the single-rank/local outer-step path; multi-rank WAN
-transport and compressed sparse all-reduce return explicit unsupported
-statuses until the distributed substrate lands.
+implements local single-rank outer steps and dense multi-rank outer steps
+over portable CPU `TC_DIST_GLOO`. Sparse packed all-reduce, dropout
+tolerance, and async overlap still return explicit unsupported statuses.
 
 ```c
 typedef struct tc_diloco_ctx tc_diloco_ctx;

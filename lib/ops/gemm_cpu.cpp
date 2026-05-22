@@ -32,7 +32,7 @@
 /* Forward decl for the AVX2 micro-kernel in gemm_cpu_avx2.cpp. Returns 0 on
  * success, non-zero on internal failure (in which case the caller falls back
  * to CBLAS or the reference loop). The AVX2 path is preferred for fp32 GEMM
- * on x86_64 with AVX2+FMA — it's self-contained, no BLAS dependency. */
+ * on x86_64 with AVX2+FMA - it's self-contained, no BLAS dependency. */
 extern "C" TC_INTERNAL_SYMBOL int tc_avx2_gemm_f32(int M, int N, int K,
                                                    float alpha,
                                                    const float* A, int lda,
@@ -55,6 +55,22 @@ extern "C" TC_INTERNAL_SYMBOL int tc_neon_gemm_f32(int M, int N, int K,
                                                    float beta,
                                                    float* C, int ldc);
 extern "C" TC_INTERNAL_SYMBOL int tc_neon_gemm_f32_available(void);
+
+/* Forward decl for the Apple AMX matrix-coprocessor backend in
+ * gemm_cpu_amx.cpp. Same contract as the NEON path - returns 0 on success,
+ * non-zero on (unsupported configuration | runtime failure). Built only on
+ * Apple Silicon (__APPLE__ && __aarch64__); stubbed to -1 / 0 elsewhere.
+ *
+ * Session-1 capabilities (see header in gemm_cpu_amx.cpp):
+ *   fp32, !transpose, alpha=1, beta=0, M%16==0, N%16==0. All other cases return -1
+ *   from the kernel so the dispatcher can fall through to NEON / CBLAS. */
+extern "C" TC_INTERNAL_SYMBOL int tc_amx_gemm_f32(int M, int N, int K,
+                                                  float alpha,
+                                                  const float* A, int lda, int transpose_a,
+                                                  const float* B, int ldb, int transpose_b,
+                                                  float beta,
+                                                  float* C, int ldc);
+extern "C" TC_INTERNAL_SYMBOL int tc_amx_gemm_f32_available(void);
 
 namespace {
 
@@ -270,7 +286,7 @@ tc_status_t gemm_compute_cblas_f16(const tc_gemm_desc* d,
     /* Thread-local scratch buffers grow monotonically across calls. A steady-
      * state inference loop pays the malloc cost once, then amortizes it to
      * zero. Without this, each fp16 GEMM call allocs and frees ~3*M*K*4 bytes
-     * and the malloc dominates the actual GEMM cost at 4096³. */
+     * and the malloc dominates the actual GEMM cost at 4096^3. */
     static thread_local std::vector<float> tls_Af, tls_Bf, tls_Cf;
 
     const int32_t a_rows = d->transpose_a ? d->K : d->M;
@@ -310,7 +326,7 @@ tc_status_t gemm_compute(const tc_gemm_desc* d, const void* A, const void* B, vo
     /* Path priority for fp32 GEMM on x86_64:
      *   1. AVX2 in-tree kernel    (self-contained, no BLAS dep, ~800 GFLOPS+)
      *   2. CBLAS (MKL > OpenBLAS) (~1.5-2 TFLOPS on Haswell-EP dual-socket)
-     *   3. Reference triple-loop  (~1 GFLOPS — correctness only)
+     *   3. Reference triple-loop  (~1 GFLOPS - correctness only)
      *
      * Path priority for fp32 GEMM on aarch64:
      *   1. NEON in-tree kernel    (self-contained, no BLAS dep, ~50 GFLOPS/core)
@@ -332,6 +348,26 @@ tc_status_t gemm_compute(const tc_gemm_desc* d, const void* A, const void* B, vo
             return TC_OK;
         }
         /* Fall through to CBLAS / reference on AVX2 internal failure. */
+    }
+
+    /* Apple AMX matrix coprocessor - preferred when available and the
+     * caller has opted in via TC_USE_AMX_GEMM=1. AMX delivers ~10x NEON's
+     * fp32 throughput on Apple Silicon. The kernel itself returns -1 for
+     * unsupported configurations (non-fp32, transposed, alpha!=1, beta!=0, M or N
+     * not divisible by 16) so we fall through to the NEON / CBLAS path
+     * cleanly without a duplicate guard here. */
+    const char* prefer_amx = std::getenv("TC_USE_AMX_GEMM");
+    if (prefer_amx && prefer_amx[0] == '1' && tc_amx_gemm_f32_available() &&
+        d->c_dtype == TC_DTYPE_F32 && d->a_dtype == TC_DTYPE_F32 && d->b_dtype == TC_DTYPE_F32) {
+        if (tc_amx_gemm_f32(d->M, d->N, d->K,
+                            d->alpha,
+                            (const float*)A, effective_lda(d), d->transpose_a ? 1 : 0,
+                            (const float*)B, effective_ldb(d), d->transpose_b ? 1 : 0,
+                            d->beta,
+                            (float*)C, ldc) == 0) {
+            return TC_OK;
+        }
+        /* Fall through to NEON / CBLAS / reference. */
     }
 
     const char* prefer_neon = std::getenv("TC_USE_NEON_GEMM");

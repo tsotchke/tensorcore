@@ -336,7 +336,8 @@ the single-host implementation. Backend enum:
 - `TC_DIST_SINGLE`: no-op all-reduce. `world_size=1` always succeeds; useful
   for testing the API and exercising the Eshkol bindings without a cluster.
 - `TC_DIST_RING`: TB5 ring (phase v0.5, depends on macOS 26.2+ JACCL).
-- `TC_DIST_GLOO`: CPU fallback over Ethernet (phase v0.5).
+- `TC_DIST_GLOO`: portable CPU TCP fallback over Ethernet; TB5-class
+  high-throughput transport work remains v0.5.
 
 The single-host ring is exercised two ways in tests:
 

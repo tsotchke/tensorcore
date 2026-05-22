@@ -314,6 +314,7 @@ else()
         lib/ops/gemm_cpu.cpp
         lib/ops/gemm_cpu_avx2.cpp
         lib/ops/gemm_cpu_neon.cpp
+        lib/ops/gemm_cpu_amx.cpp
         lib/ops/training_cpu.cpp
         lib/ops/attention_cpu.cpp
         lib/ops/conv2d_cpu.cpp

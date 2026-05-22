@@ -102,16 +102,22 @@ What works on the portable CPU build:
 - `tc_quantize_weights` / `tc_gemv_quantized` (Q4_0, Q8_0)
 - `tc_gguf_*` (full reader surface)
 - `tc_dist_*` with `TC_DIST_SINGLE` backend (`world_size=1` no-ops)
-- DiLoCo single-rank outer steps
+- `tc_dist_*` with `TC_DIST_GLOO` on portable CPU builds: TCP rendezvous,
+  fp32 SUM/AVG/MIN/MAX all-reduce, fp16 SUM/AVG all-reduce, byte-level
+  broadcast, allgather, and barrier
+- DiLoCo single-rank outer steps and dense multi-rank outer steps over
+  portable CPU `TC_DIST_GLOO`
 - sparse top-k compression helpers
 - memory-tier and activation-checkpointing stub baselines
 - `tc_status_string` / `tc_dtype_name` / `tc_backend_name`
 
 What doesn't (returns `TC_ERR_UNSUPPORTED_FAMILY`):
 
-- `tc_dist_*` with `TC_DIST_RING` or `TC_DIST_GLOO` (single-host only)
+- `tc_dist_*` with `TC_DIST_RING`
+- `tc_dist_*` with `TC_DIST_GLOO` bf16/int8 reductions and sparse packed
+  wire format
 - HIP/chipStar execution
-- DiLoCo multi-rank WAN transport
+- DiLoCo sparse packed all-reduce, dropout tolerance, and async overlap
 
 `tc_last_backend()` reports `portable_cpu` for every served call on
 this build.

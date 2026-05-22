@@ -30,6 +30,31 @@ if(NOT TC_ENABLE_METAL)
     target_include_directories(test_sparse_compress PRIVATE ${CMAKE_SOURCE_DIR}/include)
     add_test(NAME test_sparse_compress COMMAND test_sparse_compress)
     set_tests_properties(test_sparse_compress PROPERTIES TIMEOUT 30)
+
+    # GLOO multi-rank fork test: actual cross-process allreduce + broadcast
+    # + barrier via TCP sockets on 127.0.0.1. Validates the public
+    # TC_DIST_GLOO dispatch end-to-end at world_size=2.
+    add_executable(test_gloo_fork test_gloo_fork.c)
+    target_link_libraries(test_gloo_fork PRIVATE tensorcore)
+    target_include_directories(test_gloo_fork PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    add_test(NAME test_gloo_fork COMMAND test_gloo_fork)
+    set_tests_properties(test_gloo_fork PROPERTIES
+        SKIP_RETURN_CODE 77
+        TIMEOUT 60
+    )
+
+    # Multi-rank DiLoCo over GLOO: end-to-end cross-process DiLoCo training
+    # with two ranks taking different inner-step updates and converging
+    # at the outer-step boundary. Proves the cross-continent training story
+    # locally without needing two machines.
+    add_executable(test_diloco_gloo_fork test_diloco_gloo_fork.c)
+    target_link_libraries(test_diloco_gloo_fork PRIVATE tensorcore)
+    target_include_directories(test_diloco_gloo_fork PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    add_test(NAME test_diloco_gloo_fork COMMAND test_diloco_gloo_fork)
+    set_tests_properties(test_diloco_gloo_fork PROPERTIES
+        SKIP_RETURN_CODE 77
+        TIMEOUT 60
+    )
     return()
 endif()
 
@@ -79,6 +104,10 @@ target_link_libraries(test_sparse_compress PRIVATE tensorcore ${ACCELERATE_FRAME
 target_include_directories(test_sparse_compress PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME test_sparse_compress COMMAND test_sparse_compress)
 set_tests_properties(test_sparse_compress PROPERTIES TIMEOUT 30)
+
+# GLOO multi-rank fork test (CPU-only; Apple builds use distributed.mm which
+# doesn't have the GLOO TCP transport wired yet). Only registered on the CPU
+# branch via the earlier return().
 
 add_executable(test_buffer_pool test_buffer_pool.mm)
 target_link_libraries(test_buffer_pool PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})

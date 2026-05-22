@@ -74,7 +74,8 @@ are the entry points; everything below goes deeper.
 - **[gguf.md](gguf.md)** — the GGUF v3 reader, metadata helpers, bulk
   tensor loading, matrix descriptors.
 - **[distributed.md](distributed.md)** — distributed primitives, single /
-  ring / Gloo backends, the world_size=1 path, fork test.
+  ring / GLOO backends, the world_size=1 path, portable CPU TCP baseline,
+  and fork tests.
 - **[diloco.md](diloco.md)** — low-communication outer-loop training for
   cross-site meshes, plus current implementation status.
 - **[python.md](python.md)** — the `tensorcore` Python binding, ctypes
@@ -151,7 +152,7 @@ are the entry points; everything below goes deeper.
 | Autotune | `lib/core/autotune.cpp` |
 | Metal kernels | `kernels/metal/*.metal` |
 | GGUF reader | `lib/io/gguf.c` |
-| Distributed | `lib/distributed/{distributed,ring_local}.mm` |
+| Distributed | `lib/distributed/{distributed,ring_local}.mm`, `lib/distributed/{distributed_cpu,gloo_tcp}.cpp` |
 | MPS + Accelerate fallbacks | `lib/fallback/{mps_gemm.mm,accelerate_gemm.c}` |
 | M5 / Metal 4 TensorOps | `lib/tensorops/tensorops_m5.mm` (SDK-gated) |
 | Eshkol bridge | `eshkol/bridge/tensorcore_codegen.cpp` |

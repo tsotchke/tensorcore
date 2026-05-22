@@ -148,7 +148,8 @@ double err = rms_scaled_error(C_host, ref, M * N);
 assert(err <= TOLERANCE);
 ```
 
-This is what the 20 tests in `tests/` do, with shape and dtype variations.
+This is what the default CTest suite does, with shape and dtype
+variations across the native, Python, and example smokes in `tests/`.
 
 ## When you see a number that looks wrong
 

@@ -3,10 +3,10 @@
 ## Unreleased
 
 Heterogeneous compute substrate work: CPU-side attention/training/conv
-kernels, BLAS delegation (Accelerate/MKL/OpenBLAS), opt-in AVX2 and NEON
+kernels, BLAS delegation (Accelerate/MKL/OpenBLAS), opt-in AVX2/NEON/AMX
 GEMM kernels, HIP/chipStar public stubs for non-Apple GPU work, a DiLoCo
-runtime with a tested single-rank outer-step path, sparse top-k
-compression primitives for cross-continent bandwidth efficiency, an
+runtime with tested single-rank and dense GLOO outer-step paths, sparse
+top-k compression primitives for cross-continent bandwidth efficiency, an
 activation-checkpointing API, and memory-tier hints.
 
 ### CPU compute stack expanded
@@ -39,22 +39,28 @@ activation-checkpointing API, and memory-tier hints.
   8×8 aarch64 SIMD kernel for Apple/ARM CPU builds, opt-in via
   `TC_USE_NEON_GEMM=1`, with CBLAS remaining the default until broader
   throughput data is collected.
+- `Add opt-in Apple AMX fp32 GEMM prototype`: `lib/ops/gemm_cpu_amx.cpp`.
+  Apple-Silicon-only 16×16 fp32 tile path, gated by `TC_USE_AMX_GEMM=1`
+  and falling through to NEON/CBLAS for unsupported shapes. A 16³ opt-in
+  smoke validates bit-exact output locally; CBLAS remains the default path.
 
 ### Heterogeneous-mesh substrate
 
 - `Add DiLoCo public ABI and local runtime`: `include/tensorcore/diloco.h`,
   `lib/distributed/diloco.cpp`, and `docs/diloco.md`. The single-rank path
-  is implemented and covered in portable CPU tests; multi-rank WAN
-  transport/compressed all-reduce returns an explicit unsupported status
-  until the Gloo/chipStar substrate lands.
+  is implemented and covered in portable CPU tests; dense multi-rank outer
+  steps over portable `TC_DIST_GLOO` are covered by a forked localhost
+  smoke. Sparse packed all-reduce, dropout tolerance, and async overlap
+  remain staged.
 - `Add HIP/chipStar backend scaffolding`: `include/tensorcore/hip.h`,
   `lib/hip/hip_stub.cpp`, and `lib/hip/README.md`. The public API exports
   deterministic unsupported stubs today and documents the porting plan for
   Intel Level Zero plus NVIDIA/AMD/ARM OpenCL through chipStar.
-- `Keep Gloo TCP transport compiling in CPU builds`: the portable backend
-  now compiles `lib/distributed/gloo_tcp.cpp` so the future Ethernet
-  transport cannot silently rot, while public multi-rank `TC_DIST_GLOO`
-  still returns an explicit unsupported status.
+- `Wire portable CPU GLOO TCP collectives`: `lib/distributed/gloo_tcp.cpp`
+  now backs public multi-rank `TC_DIST_GLOO` on the portable CPU build for
+  fp32 SUM/AVG/MIN/MAX all-reduce, fp16 SUM/AVG all-reduce, byte-level
+  broadcast, allgather, and barrier. The localhost fork smoke validates
+  the public path end-to-end.
 - `Add memory-tier public ABI`: `include/tensorcore/memory_tier.h` and
   `lib/core/memory_tier_stub.cpp` expose buffer tier hints, async
   promote/demote entry points, and usage accounting. The shipped baseline
@@ -93,8 +99,9 @@ v0.1.22:
   anywhere with a C++17 toolchain. New `TC_BACKEND_PORTABLE_CPU = 7`
   enum value; `tc_backend_name` renders it as `"portable_cpu"`.
 - `Tighten portable CPU collectives` — `tc_dist_*` works in the
-  `TC_DIST_SINGLE` (`world_size = 1`) configuration on CPU; ring / Gloo
-  remain v0.5.
+  `TC_DIST_SINGLE` (`world_size = 1`) configuration on CPU, and the
+  portable `TC_DIST_GLOO` TCP baseline now covers localhost multi-rank
+  collectives. `TC_DIST_RING` remains the v0.5 TB5 transport milestone.
 - `Add portable CPU CI coverage` — CI builds and tests the CPU-only
   configuration on every push.
 - New CMake option `TC_ENABLE_METAL` (defaults: ON on Apple, OFF
@@ -105,9 +112,9 @@ v0.1.22:
   `tc_buffer_*`, `tc_stream_*`, `tc_gemm` (all dtypes + transpose
   + batched + async), attention forward/backward, training kernels,
   `tc_conv2d_forward`, `tc_quantize_weights`, `tc_gemv_quantized`,
-  `tc_gguf_*`, `tc_dist_*` (single-host), DiLoCo single-rank outer steps,
-  and diagnostic API (`tc_status_string`, `tc_dtype_name`,
-  `tc_backend_name`).
+  `tc_gguf_*`, `tc_dist_*` (`SINGLE` plus portable GLOO TCP),
+  DiLoCo single-rank and dense GLOO outer steps, and diagnostic API
+  (`tc_status_string`, `tc_dtype_name`, `tc_backend_name`).
 - The portable CPU GEMM path now delegates fp32 GEMM and fp16-through-fp32
   GEMM to CBLAS when available (Accelerate on macOS, system BLAS on
   Linux), with the triple-loop implementation retained as the fallback.
@@ -118,9 +125,10 @@ v0.1.22:
 - The Python binding and wheel packaging can load/package a Linux
   `libtensorcore.so` for portable CPU builds while preserving the macOS
   dylib + metallib release contract.
-- Uncovered backend paths (HIP execution and multi-rank DiLoCo transport)
-  return explicit unsupported statuses so downstream FFI imports can bind
-  the full ABI surface without requiring Metal symbols.
+- Uncovered backend paths (HIP execution, DiLoCo sparse packed all-reduce,
+  dropout tolerance, and async overlap) return explicit unsupported
+  statuses so downstream FFI imports can bind the full ABI surface without
+  requiring Metal symbols.
 
 ### Test surface
 

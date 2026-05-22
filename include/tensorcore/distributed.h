@@ -18,10 +18,14 @@ extern "C" {
  *                     chain + macOS 26.2+ JACCL substrate). Implementation
  *                     lives in lib/distributed/ring_tb5.mm (phase v0.5 once
  *                     we can validate against MLX's JACCL).
- *   - TC_DIST_GLOO:   CPU-backed Gloo fallback over Ethernet (phase v0.5).
+ *   - TC_DIST_GLOO:   portable CPU TCP fallback over Ethernet. The v0.1
+ *                     baseline supports fp32 SUM/AVG/MIN/MAX all-reduce,
+ *                     fp16 SUM/AVG all-reduce, byte-level broadcast,
+ *                     allgather, and barrier.
  *
- * v0.1 ships TC_DIST_SINGLE working end-to-end so the API + Eshkol bindings
- * + correctness tests + the user-side gradient sync code is exercised.
+ * v0.1 ships TC_DIST_SINGLE and the portable CPU TC_DIST_GLOO baseline
+ * working end-to-end so the API + Eshkol bindings + user-side gradient
+ * sync code are exercised.
  */
 
 typedef enum {
@@ -41,8 +45,9 @@ typedef struct tc_dist_ctx tc_dist_ctx;
 
 /* Initialize a distributed context. world_size=1 always succeeds and produces
  * a no-op collective layer. For RING/GLOO, the caller supplies a rendezvous
- * URL (e.g. "tb5://192.168.42.0/cluster"). v0.1 RING returns
- * TC_ERR_UNSUPPORTED_FAMILY until the JACCL substrate ships. */
+ * URL (e.g. "tb5://192.168.42.0/cluster" or
+ * "gloo+tcp://host0:port"). v0.1 RING returns TC_ERR_UNSUPPORTED_FAMILY
+ * until the JACCL substrate ships. */
 tc_status_t tc_dist_init(tc_context*        tc,
                          tc_dist_backend_t   backend,
                          int                 world_size,
@@ -78,7 +83,7 @@ tc_status_t tc_allgather(tc_dist_ctx*       d,
                          size_t              num_elements_per_rank,
                          tc_dtype_t          dtype);
 
-/* Barrier — all ranks meet before any continues. */
+/* Barrier - all ranks meet before any continues. */
 tc_status_t tc_barrier(tc_dist_ctx* d);
 
 #ifdef __cplusplus

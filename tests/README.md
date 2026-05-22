@@ -1,21 +1,29 @@
 # tests/
 
-20 default correctness tests cover every public ABI surface, with two
-executable example smokes registered in the Metal build. The portable
-CPU-only build registers `test_portable_cpu.c` instead. Each test is a
-single `.c` file (or `.mm` for the buffer pool, which needs ObjC++).
-All tests compare against an fp64 CPU reference or a bit-exact CPU oracle
-and pass the tolerances documented in [../docs/numerics.md](../docs/numerics.md).
+24 default CTest entries cover every public ABI surface: 22
+correctness/Python tests plus two executable example smokes in the Metal
+build. The portable
+CPU-only build registers `test_portable_cpu.c`, `test_conv2d.c`,
+`test_diloco.c`, `test_sparse_compress.c`, `test_gloo_fork.c`, and
+`test_diloco_gloo_fork.c`. Each native test is a single `.c` file (or
+`.mm` for the buffer pool, which needs ObjC++).
+Numerical tests compare against an fp64 CPU reference or a bit-exact CPU
+oracle and pass the tolerances documented in
+[../docs/numerics.md](../docs/numerics.md).
 
 ```sh
-ctest --test-dir build --output-on-failure   # 20 correctness tests + example smokes
+ctest --test-dir build --output-on-failure   # 24 default Apple tests
 ```
 
-Runs in ~3s on M2 Ultra.
+Runs in ~5-15s on M2 Ultra.
 
 With `TC_ENABLE_METAL=OFF`, `test_portable_cpu.c` covers the portable
 buffer/device path plus padded f32/f16 GEMM, batched GEMM, i8 GEMM,
-quantized GEMV, and distributed-single collectives.
+quantized GEMV, distributed-single collectives, memory-tier and
+checkpoint baseline APIs, HIP inactive diagnostics, local DiLoCo, and
+the localhost GLOO TCP collective and DiLoCo-over-GLOO smokes. The
+portable build also runs Conv2D, DiLoCo, sparse-compression, GLOO TCP,
+and DiLoCo-over-GLOO tests.
 
 ## Test inventory
 
@@ -39,8 +47,12 @@ quantized GEMV, and distributed-single collectives.
 | 16 | `test_gguf.c` | Synthetic GGUF round-trip, metadata, bulk load, skip-unsupported count, Q4 GEMV from GGUF |
 | 17 | `test_tensorops_select.c` | M5 TensorOps dtype × accum selector (works without M5 hardware) |
 | 18 | `test_tensorops_runtime.c` | TensorOps runtime path coverage (skips politely on non-M5) |
-| 19 | `test_buffer_pool.mm` | LIFO recycling, bucket size classes, concurrent allocate/free |
-| 20 | `python_basic` | The Python binding's `tests/test_basic.py` — full ABI surface exercised from ctypes |
+| 19 | `test_diloco.c` | Local/single-rank DiLoCo outer steps, counters, and unsupported multi-rank guards |
+| 20 | `test_sparse_compress.c` | DiLoCo top-k sparse compression pack/unpack accuracy and merge behavior |
+| 21 | `test_buffer_pool.mm` | LIFO recycling, bucket size classes, concurrent allocate/free |
+| 22 | `python_basic` | The Python binding's `tests/test_basic.py` — full ABI surface exercised from ctypes |
+| 23 | `example_decode_step` | Native decode-step smoke using the installed C ABI |
+| 24 | `example_training_step` | Native training-step smoke using the installed C ABI |
 
 ## Tolerances
 

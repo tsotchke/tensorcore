@@ -235,12 +235,13 @@ the chip doesn't support the path being tested:
 | `test_quantized` | always runs |
 | `test_fused_norm_gemv` | always runs |
 | `test_distributed_ring_fork` | always runs (uses fork + socketpair) |
+| `test_diloco` | always runs (local/single-rank DiLoCo path) |
+| `test_sparse_compress` | always runs (host-side sparse pack/unpack) |
+| `test_tensorops_runtime` | skips politely until Metal 4 TensorOps is available |
 
-The correctness suite is **20 tests on the current checkpoint** (added
-since v0.1.6: `test_attention_backward`, `test_buffer_pool`,
-`test_tensorops_select`, `test_tensorops_runtime`). With the default
-example smokes enabled, `ctest --test-dir build` reports 22 total tests
-and takes ~3-5 seconds.
+The default Apple suite is **24 tests** at this checkpoint: 22
+correctness/Python tests plus the two native example smokes. It takes
+~5-15 seconds on a local Apple workstation.
 
 ## What family you're running on, the lazy way
 

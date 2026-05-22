@@ -128,7 +128,7 @@ and shape semantics, see [api_reference.md](api_reference.md).
 | `tc_allgather(d, in, out, n_per_rank, dtype)` | Concatenate `world_size × n_per_rank` elements. |
 | `tc_barrier(d)` | All ranks meet before any continues. |
 
-`tc_dist_backend_t`: `TC_DIST_SINGLE` (no-op, v0.1), `TC_DIST_RING` (TB5, v0.5), `TC_DIST_GLOO` (Ethernet, v0.5).
+`tc_dist_backend_t`: `TC_DIST_SINGLE` (no-op), `TC_DIST_RING` (TB5, v0.5), `TC_DIST_GLOO` (portable CPU TCP collectives).
 
 ## Dtype + status
 
@@ -211,12 +211,12 @@ Python wrapper parity in `python/tensorcore/__init__.py`.
 | `tc_gemv_quantized` | ✓ | — | — | — | ✓ |
 | `tc_quantize_weights` | ✓ | — | — | — | ✓ |
 | `tc_gguf_*` | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `tc_allreduce` / `_broadcast` / `_allgather` / `_barrier` | ✓ (single, ring, fork) | ✓ | ✓ | ✓ | ✓ (single only) |
+| `tc_allreduce` / `_broadcast` / `_allgather` / `_barrier` | ✓ (single, ring, fork) | ✓ | ✓ | ✓ | ✓ (single + GLOO TCP) |
 
 `—` means returns `TC_ERR_UNSUPPORTED_FAMILY` on that build. The
-portable-CPU backend now covers the main math surface for non-Apple mesh
-workers while HIP execution and multi-rank WAN transport remain explicit
-unsupported paths.
+portable-CPU backend now covers the main math and GLOO TCP collective
+surface for non-Apple mesh workers while HIP execution remains an explicit
+unsupported path.
 
 ## See also
 

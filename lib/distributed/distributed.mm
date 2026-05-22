@@ -74,6 +74,12 @@ extern "C" int tc_dist_rank(const tc_dist_ctx* d) {
     return d ? d->rank : 0;
 }
 
+/* Internal helper: parent tc_context accessor for sibling TUs that
+ * need to allocate temporary buffers in the same arena (DiLoCo runtime). */
+extern "C" TC_INTERNAL_SYMBOL tc_context* tc_dist_get_context(tc_dist_ctx* d) {
+    return d ? d->tc : nullptr;
+}
+
 extern "C" tc_status_t tc_allreduce(tc_dist_ctx* d, tc_buffer* buf,
                                     size_t num_elements, tc_dtype_t dtype,
                                     tc_reduce_op_t op) {
