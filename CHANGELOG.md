@@ -42,8 +42,10 @@ activation-checkpointing API, and memory-tier hints.
 - `Add opt-in Apple AMX fp32 GEMM prototype`: `lib/ops/gemm_cpu_amx.cpp`.
   Apple-Silicon-only 16×16 fp32 tile path, gated by `TC_USE_AMX_GEMM=1`
   and falling through to NEON/CBLAS for unsupported shapes. The committed
-  path remains opt-in and uses GCD worker-local packs for M>=256, with
-  `TC_AMX_THREADS=1` preserving the single-worker path for A/B checks.
+  path remains opt-in and uses persistent pthread worker-local packs for
+  M>=256, with `TC_AMX_THREADS=1` preserving the single-worker path for A/B
+  checks. The worker pool is guarded for concurrent callers and reports
+  worker allocation failures back to the GEMM fallback path.
   Local smokes validate 32³ and 256³ output; CBLAS remains the default path.
 
 ### Heterogeneous-mesh substrate

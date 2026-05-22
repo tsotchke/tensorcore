@@ -18,8 +18,8 @@
  * keeps in sync with new silicon.
  *
  * Scope of this file (v0.2 - session 1.5):
- *   - fp32 only; one AMX worker for small shapes, two GCD workers for
- *     M >= 256 unless TC_AMX_THREADS=1 is set.
+ *   - fp32 only; one AMX worker for small shapes, two persistent pthread
+ *     workers for M >= 256 unless TC_AMX_THREADS=1 is set.
  *   - K-tiled mega-pack inside the (i, j) loop with KC=256 -> ~0.37 TFLOPS
  *     at 4096^3 on M2 Ultra before multi-worker experiments (vs 0.08 TFLOPS
  *     for the single-thread NEON kernel).
@@ -34,8 +34,9 @@
  *     pthread + thread_affinity_policy_data split regressed perf (workers
  *     either co-located on one cluster and serialized on its AMX unit, or
  *     split across clusters but paid heavy UltraFusion-fabric reads for the
- *     shared mega-pack). The current GCD path uses per-worker local packs;
- *     broader worker counts still need topology-aware scheduling.
+ *     shared mega-pack). The current persistent-worker path uses
+ *     per-worker local packs; broader worker counts still need
+ *     topology-aware scheduling.
  *   - **fp16 / bf16 paths** via the corresponding AMX opcodes (FMA16,
  *     MAC16 with the proper accumulator-precision flags).
  *   - **Edge tiles** for M, N not divisible by 16 - pack with zero
@@ -71,6 +72,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <dispatch/dispatch.h>
+#include <pthread.h>
 
 #include <atomic>
 #include <dlfcn.h>
@@ -100,6 +102,54 @@ static pthread_prefer_alternate_cluster_self_fn load_prefer_alternate_cluster() 
             dlsym(RTLD_DEFAULT, "pthread_prefer_alternate_cluster_self"));
     }();
     return fn;
+}
+
+/* Public os_workgroup API. Joining a workgroup gives the scheduler a
+ * topology hint: members of the same workgroup are treated as a coordinated
+ * compute group and given stronger P-cluster stickiness than QoS alone
+ * provides. Combined with `pthread_prefer_alternate_cluster_self` on one
+ * member, this is the recipe Accelerate uses to keep its two AMX workers
+ * locked to two distinct P-clusters.
+ *
+ * The workload_id is opaque to us but registered with the kernel's scheduler
+ * policy table. Apple ships specific IDs for audio / video / etc.;
+ * unrecognized IDs degrade to a generic "real-time compute group" hint. */
+struct alignas(8) tc_os_workgroup_join_token_buf { unsigned char buf[64]; };
+using tc_os_workgroup_t = void*;
+using os_workgroup_create_with_workload_id_fn =
+    tc_os_workgroup_t (*)(const char* name, const char* workload_id, void* attr);
+using os_workgroup_join_fn = int (*)(tc_os_workgroup_t wg, void* token);
+using os_workgroup_leave_fn = void (*)(tc_os_workgroup_t wg, void* token);
+
+struct workgroup_api {
+    os_workgroup_create_with_workload_id_fn create;
+    os_workgroup_join_fn join;
+    os_workgroup_leave_fn leave;
+    tc_os_workgroup_t shared_wg;
+};
+static workgroup_api& workgroup_api_instance() {
+    static workgroup_api api = []() {
+        workgroup_api a = {};
+        a.create = reinterpret_cast<os_workgroup_create_with_workload_id_fn>(
+            dlsym(RTLD_DEFAULT, "os_workgroup_create_with_workload_id"));
+        a.join = reinterpret_cast<os_workgroup_join_fn>(
+            dlsym(RTLD_DEFAULT, "os_workgroup_join"));
+        a.leave = reinterpret_cast<os_workgroup_leave_fn>(
+            dlsym(RTLD_DEFAULT, "os_workgroup_leave"));
+        if (a.create) {
+            /* Try AMX-flavored workload IDs first, fall back to a generic
+             * matrix-compute label. The kernel accepts any non-null ID;
+             * unknown IDs get a generic compute-group policy. */
+            const char* ids[] = {"com.apple.amx", "com.apple.compute.matrix",
+                                 "com.apple.workgroup.compute"};
+            for (const char* id : ids) {
+                a.shared_wg = a.create("tensorcore.amx", id, nullptr);
+                if (a.shared_wg) break;
+            }
+        }
+        return a;
+    }();
+    return api;
 }
 
 /* ----------------------------------------------------------------------------
@@ -206,7 +256,7 @@ inline uint64_t amx_z_op(const void* addr, int slot) {
  * At ~3.2 GHz cluster frequency that's ~1.6 TFLOPS per cluster. M2 Ultra has
  * two clusters -> ~3.2 TFLOPS aggregate ceiling for fp32 GEMM (matches what
  * Accelerate measures). The small-shape path exercises one cluster; the
- * large-shape GCD path attempts to use both clusters with worker-local
+ * large-shape persistent-worker path attempts to use both clusters with worker-local
  * packing. */
 /* The AMX Z register file is partitioned into 4 banks of 16 slots each
  * (slots 0..15, 16..31, 32..47, 48..63). For fp32 outer products, row r of
@@ -361,8 +411,7 @@ static bool amx_worker_local(int i_start, int i_end,
  * Per-thread tile processor.
  *
  * Walks output tiles [i_start, i_end) × [0, N), reading from the shared
- * mega-packed A and B buffers. AMX state is per-thread (thread_local
- * `amx_armed` ensures AMX_SET runs once on entry to each thread); C tile
+ * mega-packed A and B buffers. AMX state is armed by the caller; C tile
  * scratch is on the stack so each thread has its own.
  *
  * Z accumulator is live for the duration of a single (i, j) tile and walks
@@ -372,13 +421,9 @@ static void amx_process_tile_strip(int i_start, int i_end,
                                    const float* A_pack_mega,
                                    const float* B_pack_mega,
                                    float* C) {
-    /* AMX must be armed once per thread. Workers come in fresh, so they
-     * always need to arm; the main thread may have armed in a prior call. */
-    static thread_local bool amx_armed = false;
-    if (!amx_armed) {
-        AMX_SET();
-        amx_armed = true;
-    }
+    /* Caller is responsible for AMX_SET. Doing it here would risk a
+     * double-SET on workers (which arm on entry) — empirically that pattern
+     * SIGILLs on macOS 15.1 / M2 Ultra at the second SET. */
 
     alignas(64) float C_tile[16 * 16];
     constexpr int KC = 256;
@@ -403,6 +448,129 @@ static void amx_process_tile_strip(int i_start, int i_end,
             }
         }
     }
+}
+
+/* ----------------------------------------------------------------------------
+ * Persistent AMX worker pool.
+ *
+ * Per-call GCD dispatch_apply creates fresh threads. macOS often places those
+ * threads on E-cores (no AMX) even with USER_INTERACTIVE QoS. A persistent
+ * pool of 2 long-lived pthreads, each pre-armed and held with
+ * `pthread_prefer_alternate_cluster_self` on worker 1, lets the kernel
+ * settle their cluster placement once and reuse the threads on every call.
+ *
+ * Synchronization: each worker waits on its own start-semaphore; the main
+ * thread posts both, workers cover all M, and waits on the done-semaphores.
+ * Worker queue depth = 1 (one outstanding job per worker), which is all we
+ * need for a two-worker GEMM split. */
+struct amx_work_unit {
+    int i_start, i_end;
+    int N, K, lda, ldb, ldc;
+    const float* A;
+    const float* B;
+    float* C;
+};
+
+struct amx_worker_pool_t {
+    pthread_t threads[2];
+    dispatch_semaphore_t start[2];
+    dispatch_semaphore_t done[2];
+    amx_work_unit work[2];
+    std::atomic<bool> shutdown{false};
+    std::atomic<bool> ready{false};
+    std::atomic<int> failed{0};
+};
+
+static amx_worker_pool_t g_pool;
+static pthread_once_t g_pool_once = PTHREAD_ONCE_INIT;
+static pthread_mutex_t g_pool_dispatch_lock = PTHREAD_MUTEX_INITIALIZER;
+
+extern "C" int pthread_set_qos_class_self_np(qos_class_t qc, int rel_prio);
+
+static void* amx_worker_thread_entry(void* arg) {
+    const int t = (int)(intptr_t)arg;
+
+    /* Pin to a P-core; ask the kernel to push worker 1 to the alternate
+     * cluster. */
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+
+    /* Join the shared os_workgroup — provides P-cluster stickiness across
+     * the worker's lifetime. Both workers join the same group; the
+     * scheduler then sees them as a coordinated compute set. */
+    tc_os_workgroup_join_token_buf join_token{};
+    auto& wg_api = workgroup_api_instance();
+    int workgroup_joined = 0;
+    if (wg_api.shared_wg && wg_api.join &&
+        wg_api.join(wg_api.shared_wg, &join_token) == 0) {
+        workgroup_joined = 1;
+    }
+
+    if (t == 1) {
+        auto prefer_alt = load_prefer_alternate_cluster();
+        if (prefer_alt) prefer_alt();
+    }
+
+    /* AMX is per-thread state. Arm once for this persistent worker. Calling
+     * SET again on an already-armed worker has SIGILL'd on some macOS 15.x
+     * machines, so the tile processor intentionally never self-arms. */
+    AMX_SET();
+
+    while (!g_pool.shutdown.load(std::memory_order_acquire)) {
+        dispatch_semaphore_wait(g_pool.start[t], DISPATCH_TIME_FOREVER);
+        if (g_pool.shutdown.load(std::memory_order_acquire)) break;
+        const amx_work_unit& w = g_pool.work[t];
+        if (!amx_worker_local(w.i_start, w.i_end, w.N, w.K, w.lda, w.ldb, w.ldc,
+                              w.A, w.B, w.C)) {
+            g_pool.failed.store(1, std::memory_order_release);
+        }
+        dispatch_semaphore_signal(g_pool.done[t]);
+    }
+    if (workgroup_joined && wg_api.leave) {
+        wg_api.leave(wg_api.shared_wg, &join_token);
+    }
+    return nullptr;
+}
+
+static void amx_pool_init_once() {
+    g_pool.start[0] = dispatch_semaphore_create(0);
+    g_pool.start[1] = dispatch_semaphore_create(0);
+    g_pool.done[0] = dispatch_semaphore_create(0);
+    g_pool.done[1] = dispatch_semaphore_create(0);
+    if (!g_pool.start[0] || !g_pool.start[1] || !g_pool.done[0] || !g_pool.done[1]) {
+        return;
+    }
+
+    int created = 0;
+    for (int t = 0; t < 2; ++t) {
+        if (pthread_create(&g_pool.threads[t], nullptr, amx_worker_thread_entry,
+                           (void*)(intptr_t)t) != 0) {
+            g_pool.shutdown.store(true, std::memory_order_release);
+            for (int i = 0; i < created; ++i) {
+                dispatch_semaphore_signal(g_pool.start[i]);
+            }
+            return;
+        }
+        pthread_detach(g_pool.threads[t]);
+        ++created;
+    }
+    g_pool.ready.store(true, std::memory_order_release);
+}
+
+static bool amx_pool_dispatch_pair(const amx_work_unit& w0, const amx_work_unit& w1) {
+    pthread_once(&g_pool_once, amx_pool_init_once);
+    if (!g_pool.ready.load(std::memory_order_acquire)) return false;
+
+    pthread_mutex_lock(&g_pool_dispatch_lock);
+    g_pool.failed.store(0, std::memory_order_release);
+    g_pool.work[0] = w0;
+    g_pool.work[1] = w1;
+    dispatch_semaphore_signal(g_pool.start[0]);
+    dispatch_semaphore_signal(g_pool.start[1]);
+    dispatch_semaphore_wait(g_pool.done[0], DISPATCH_TIME_FOREVER);
+    dispatch_semaphore_wait(g_pool.done[1], DISPATCH_TIME_FOREVER);
+    const bool ok = (g_pool.failed.load(std::memory_order_acquire) == 0);
+    pthread_mutex_unlock(&g_pool_dispatch_lock);
+    return ok;
 }
 
 }  // namespace
@@ -432,46 +600,28 @@ extern "C" TC_INTERNAL_SYMBOL int tc_amx_gemm_f32(int M, int N, int K,
      *   - For M < 256: too small for parallel overhead to amortize. Pack
      *     once on the main thread (cluster-local for that thread) and run
      *     the single-thread strip processor.
-     *   - For M >= 256: use GCD dispatch_apply. Each worker packs ITS OWN
-     *     A strip + full B locally, so the AMX kernel reads stay in the
-     *     worker's cluster (no UltraFusion-fabric round-trip on every K
-     *     iter). Memory cost doubles vs shared pack (~2× M·K + 2× K·N
-     *     fp32) but pack throughput parallelizes too.
+     *   - For M >= 256: use the persistent two-thread pool. Each worker
+     *     packs ITS OWN A strip + full B locally, so the AMX kernel reads
+     *     stay in the worker's cluster (no UltraFusion-fabric round-trip on
+     *     every K iter). Memory cost doubles vs shared pack (~2× M·K +
+     *     2× K·N fp32) but pack throughput parallelizes too.
      *   - TC_AMX_THREADS=1 forces single-thread (for A/B measurement). */
     const char* threads_env = std::getenv("TC_AMX_THREADS");
     const bool single_thread = (threads_env && threads_env[0] == '1');
     const bool use_multi = !single_thread && M >= 256;
 
     if (use_multi) {
-        constexpr int N_WORKERS = 2;
+        /* Persistent pool: two long-lived pthreads, each USER_INTERACTIVE +
+         * pre-armed for AMX, with worker 1 pushed to the alternate cluster
+         * via the private hook. Across calls they stay warm — kernel learns
+         * their P-cluster placement instead of re-deciding per dispatch. */
         const int strips_total = M / 16;
-        const int strips_per_worker = strips_total / N_WORKERS;
-        std::atomic<int> worker_failed{0};
-        std::atomic<int>* failed = &worker_failed;
-        /* QOS_CLASS_USER_INTERACTIVE is the highest user-space QoS class —
-         * it pins workers to P-cores (where AMX lives). USER_INITIATED was
-         * not enough: empirically about half the dispatched workers ended
-         * up on E-cores 16-23 (no/weak AMX), regressing throughput. */
-        dispatch_queue_t q = dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0);
-        dispatch_apply(N_WORKERS, q, ^(size_t t) {
-            /* Worker 1 asks the kernel to migrate it to the alternate AMX
-             * cluster (the one the main thread / worker 0 are NOT on).
-             * Without this, both workers land on the same cluster and
-             * serialize on its single AMX unit. The hook is a no-op on
-             * single-cluster M-series silicon. */
-            if (t == 1) {
-                auto prefer_alt = load_prefer_alternate_cluster();
-                if (prefer_alt) prefer_alt();
-            }
-            const int i_start = (int)(t * strips_per_worker * 16);
-            const int i_end = (t == N_WORKERS - 1)
-                ? M
-                : (int)((t + 1) * strips_per_worker * 16);
-            if (!amx_worker_local(i_start, i_end, N, K, lda, ldb, ldc, A, B, C)) {
-                failed->store(1, std::memory_order_relaxed);
-            }
-        });
-        if (worker_failed.load(std::memory_order_relaxed)) return -1;
+        const int strips_per_worker = strips_total / 2;
+        amx_work_unit w0 = {0, strips_per_worker * 16,
+                            N, K, lda, ldb, ldc, A, B, C};
+        amx_work_unit w1 = {strips_per_worker * 16, M,
+                            N, K, lda, ldb, ldc, A, B, C};
+        if (!amx_pool_dispatch_pair(w0, w1)) return -1;
     } else {
         /* Mega pack buffers: pack ALL of A and B once each, then iterate
          * (i, j, kp) with no re-packing. Memory cost is M*K + K*N fp32
@@ -498,6 +648,15 @@ extern "C" TC_INTERNAL_SYMBOL int tc_amx_gemm_f32(int M, int N, int K,
             tls_B_pack_cap = B_pack_needed;
         }
         if (!tls_A_pack || !tls_B_pack) return -1;
+        /* Arm AMX once for the calling thread. amx_process_tile_strip
+         * no longer self-arms (workers handle their own to avoid the
+         * double-SET trap), so callers must AMX_SET here. Subsequent calls
+         * on the same thread skip SET through the thread-local guard. */
+        static thread_local bool main_amx_armed = false;
+        if (!main_amx_armed) {
+            AMX_SET();
+            main_amx_armed = true;
+        }
         pack_A_mega(A, lda, M, K, tls_A_pack);
         pack_B_mega(B, ldb, K, N, tls_B_pack);
         amx_process_tile_strip(0, M, N, K, ldc, tls_A_pack, tls_B_pack, C);
