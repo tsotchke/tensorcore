@@ -2,10 +2,12 @@
 
 ## Unreleased
 
-Heterogeneous compute substrate work: CPU-side attention/training kernels,
-BLAS delegation (Accelerate/MKL/OpenBLAS), an opt-in AVX2 GEMM kernel,
-HIP/chipStar public stubs for non-Apple GPU work, and a DiLoCo surface
-with a tested single-rank outer-step path.
+Heterogeneous compute substrate work: CPU-side attention/training/conv
+kernels, BLAS delegation (Accelerate/MKL/OpenBLAS), opt-in AVX2 and NEON
+GEMM kernels, HIP/chipStar public stubs for non-Apple GPU work, a DiLoCo
+runtime with a tested single-rank outer-step path, sparse top-k
+compression primitives for cross-continent bandwidth efficiency, an
+activation-checkpointing API, and memory-tier hints.
 
 ### CPU compute stack expanded
 

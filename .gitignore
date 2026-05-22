@@ -23,7 +23,9 @@ compile_commands.json
 *.swp
 
 # Tooling caches
-.icc/
+.icc/*
+!.icc/completion-oracles.yaml
+!.icc/modularity-justifications.json
 .claude/
 .cache/
 

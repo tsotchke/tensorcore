@@ -1,0 +1,15 @@
+{
+  "schema_version": "1.0",
+  "thresholds": {
+    "max_file_lines": 2000
+  },
+  "justifications": [
+    {
+      "path": "python/tensorcore/__init__.py",
+      "status": "compatibility_facade",
+      "task_id": "python-binding-module-split",
+      "reason": "The Python binding remains a single-file compatibility facade because release packaging, source-tree imports, and ABI guard scripts currently copy or inspect python/tensorcore/__init__.py as the cohesive ctypes mirror of the public C ABI.",
+      "mitigation": "Keep new native entry points covered by the FFI, constants, ABI-layout, and smoke checks, then split declarations and wrapper groups into focused modules behind the same package facade once the release wheel copy path and guard scripts consume that module boundary."
+    }
+  ]
+}
