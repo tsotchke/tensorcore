@@ -65,6 +65,7 @@ TENSORCORE_LIB="$shared_lib" \
 import ctypes
 import math
 import os
+import subprocess
 import signal
 import socket
 import struct
@@ -199,7 +200,73 @@ def _run_python_gloo_fork_smoke():
     print("python GLOO/DiLoCo fork smoke OK")
 
 
+def _run_gemm_variant_smoke(name, env_updates, allow_sigill_skip=False, require=False):
+    code = r'''
+import ctypes
+import math
+import os
+import tensorcore as tc
+
+M = N = K = 32
+ctx = tc.init()
+bufs = []
+try:
+    A_vals = [((i * 13 + 7) % 17 - 8) / 7.0 for i in range(M * K)]
+    B_vals = [((i * 5 + 3) % 19 - 9) / 9.0 for i in range(K * N)]
+    A_arr = (ctypes.c_float * (M * K))(*A_vals)
+    B_arr = (ctypes.c_float * (K * N))(*B_vals)
+    A = tc.buffer_alloc(ctx, ctypes.sizeof(A_arr))
+    B = tc.buffer_alloc(ctx, ctypes.sizeof(B_arr))
+    C = tc.buffer_alloc(ctx, M * N * ctypes.sizeof(ctypes.c_float))
+    bufs.extend([A, B, C])
+    ctypes.memmove(tc.buffer_map(A), A_arr, ctypes.sizeof(A_arr))
+    ctypes.memmove(tc.buffer_map(B), B_arr, ctypes.sizeof(B_arr))
+    tc.gemm(ctx, A, B, C, M, N, K, dtype="f32", accum="f32")
+    out = (ctypes.c_float * (M * N)).from_address(tc.buffer_map(C).value)
+    max_err = 0.0
+    for m in range(M):
+        for n in range(N):
+            ref = sum(A_vals[m * K + k] * B_vals[k * N + n] for k in range(K))
+            max_err = max(max_err, abs(out[m * N + n] - ref))
+    if max_err > 1e-3:
+        raise SystemExit(f"{os.environ['TC_GEMM_VARIANT_NAME']} max_err={max_err}")
+    print(f"{os.environ['TC_GEMM_VARIANT_NAME']} GEMM variant smoke OK: max_err={max_err:.3g} backend={tc.last_backend_name()}")
+finally:
+    for buf in reversed(bufs):
+        tc.buffer_free(ctx, buf)
+    tc.shutdown(ctx)
+'''
+    env = os.environ.copy()
+    env.update(env_updates)
+    env["TC_GEMM_VARIANT_NAME"] = name
+    proc = subprocess.run([sys.executable, "-c", code],
+                          env=env, text=True, capture_output=True)
+    if proc.returncode == 0:
+        print(proc.stdout.strip())
+        return
+    if allow_sigill_skip and proc.returncode == -signal.SIGILL:
+        msg = f"{name} GEMM variant smoke SKIP: signal {-proc.returncode}"
+        if require:
+            print(proc.stdout, end="")
+            print(proc.stderr, end="", file=sys.stderr)
+            raise SystemExit(msg)
+        print(msg)
+        return
+    print(proc.stdout, end="")
+    print(proc.stderr, end="", file=sys.stderr)
+    raise SystemExit(f"{name} GEMM variant smoke failed: exit {proc.returncode}")
+
+
+def _run_gemm_variant_smokes():
+    _run_gemm_variant_smoke("AVX2 opt-in", {"TC_USE_AVX2_GEMM": "1"})
+    _run_gemm_variant_smoke("NEON opt-in", {"TC_USE_NEON_GEMM": "1"})
+    _run_gemm_variant_smoke("AMX opt-in", {"TC_USE_AMX_GEMM": "1"},
+                            allow_sigill_skip=True,
+                            require=os.environ.get("REQUIRE_AMX_GEMM") == "1")
+
+
 _run_python_gloo_fork_smoke()
+_run_gemm_variant_smokes()
 
 ctx = tc.init()
 bufs = []

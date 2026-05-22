@@ -95,6 +95,20 @@ bash scripts/ci_python_smoke.sh
 The install step is required because the script defaults `PREFIX` to
 `/tmp/tensorcore-install`.
 
+### `ci_portable_cpu.sh`
+
+Builds with `TC_ENABLE_METAL=OFF`, runs the portable CTest suite,
+installs the native SDK, verifies CMake and pkg-config consumers, then
+runs an inline Python smoke against the installed shared library. The
+Python phase covers `TC_DIST_GLOO` and DiLoCo-over-GLOO with two forked
+localhost ranks, and runs isolated subprocess GEMM smokes with
+`TC_USE_AVX2_GEMM=1`, `TC_USE_NEON_GEMM=1`, and `TC_USE_AMX_GEMM=1`.
+
+AMX uses reverse-engineered Apple instructions, so the AMX subprocess
+treats SIGILL as a skip by default instead of taking down the whole smoke
+on hosts that block the instruction. Set `REQUIRE_AMX_GEMM=1` to require
+the AMX opt-in path on local Apple-Silicon verification machines.
+
 ### `check_public_headers.sh`
 
 For every header in `include/tensorcore/`, compiles a minimal C *and* a

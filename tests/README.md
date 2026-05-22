@@ -23,7 +23,9 @@ quantized GEMV, `TC_DIST_SINGLE` collectives, memory-tier and
 checkpoint baseline APIs, HIP inactive diagnostics, local DiLoCo, and
 the localhost GLOO TCP collective and DiLoCo-over-GLOO smokes. The
 portable build also runs Conv2D, DiLoCo, sparse-compression, GLOO TCP,
-and DiLoCo-over-GLOO tests.
+and DiLoCo-over-GLOO tests. `scripts/ci_portable_cpu.sh` adds installed
+SDK consumer checks plus subprocess smokes for the opt-in AVX2, NEON, and
+AMX GEMM environment variants.
 
 ## Test inventory
 

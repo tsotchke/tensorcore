@@ -203,7 +203,7 @@ tensorcore/
 │   ├── ops/              ← gemm.mm, attention.mm, training.mm, conv.mm, quantized.mm
 │   ├── fallback/         ← MPS + Accelerate paths
 │   ├── tensorops/        ← Metal 4 / M5 TensorOps (SDK-gated)
-│   ├── distributed/      ← Single-host ring + multi-Mac stubs
+│   ├── distributed/      ← Single-host ring, portable GLOO TCP, TB5 stubs
 │   ├── io/               ← GGUF v3 reader
 │   └── c_api/            ← ABI shims
 ├── kernels/metal/        ← .metal sources → default.metallib
