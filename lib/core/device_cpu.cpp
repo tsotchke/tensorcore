@@ -28,11 +28,23 @@ struct tc_context {
     std::atomic<int> ref;
 };
 
+/* tc_buffer storage kind. When TC_ENABLE_CUDA is compiled in and
+ * tc_cuda_init has been called on the context, new allocations land in
+ * CUDA managed memory (cudaMallocManaged): the same pointer works from
+ * host and device, the driver handles migration. This eliminates the
+ * per-call cudaMemcpy in tc_cuda_gemm for buffers allocated while CUDA GEMM
+ * is active. Falls back to plain malloc otherwise. */
+enum tc_buffer_storage_t {
+    TC_STORAGE_HOST          = 0,   /* plain malloc                       */
+    TC_STORAGE_CUDA_MANAGED  = 1,   /* cudaMallocManaged                  */
+};
+
 struct tc_buffer {
-    void*       ptr;
-    size_t      bytes;
-    tc_context* owner;
-    bool        owns_ptr;   /* false when wrapped via tc_buffer_from_ptr */
+    void*               ptr;
+    size_t              bytes;
+    tc_context*         owner;
+    bool                owns_ptr;   /* false when wrapped via tc_buffer_from_ptr */
+    tc_buffer_storage_t storage;
 };
 
 struct tc_stream {
@@ -121,6 +133,31 @@ extern "C" tc_status_t tc_init(tc_context** out_ctx) {
 
     g_ctx = ctx;
     *out_ctx = g_ctx;
+
+    /* Auto-attempt the strongest GPU backend available. The user can
+     * always call tc_cuda_init / tc_hip_init explicitly later, but
+     * common-case usage benefits from automatic detection. We attempt
+     * CUDA first (clean fast path on NVIDIA hardware), then HIP, then
+     * leave the context at portable-CPU. Failures are silent: the
+     * context stays valid regardless. */
+#if defined(TC_ENABLE_CUDA)
+    extern tc_status_t tc_cuda_init(tc_context*);
+    tc_status_t cuda_s = tc_cuda_init(g_ctx);
+    if (cuda_s == TC_OK) {
+        std::strncpy(g_ctx->info.name, "cuda", sizeof(g_ctx->info.name) - 1);
+    }
+#endif
+#if defined(TC_ENABLE_HIP)
+    extern tc_status_t tc_hip_init(tc_context*);
+    tc_status_t hip_s = tc_hip_init(g_ctx);
+    if (hip_s == TC_OK) {
+        /* Don't override the name if CUDA succeeded. */
+        if (std::strcmp(g_ctx->info.name, "cuda") != 0) {
+            std::strncpy(g_ctx->info.name, "hip", sizeof(g_ctx->info.name) - 1);
+        }
+    }
+#endif
+
     return TC_OK;
 }
 
@@ -140,14 +177,40 @@ extern "C" tc_status_t tc_device_info_get(tc_context* ctx, tc_device_info* out_i
     return TC_OK;
 }
 
+/* Forward-declared in lib/cuda/device.cpp when TC_ENABLE_CUDA. Returns
+ * 1 if a CUDA context has been initialized on this process AND the
+ * current backend should use it for allocations. */
+#if defined(TC_ENABLE_CUDA)
+extern "C" int tc_cuda_managed_alloc(size_t bytes, void** out_ptr);
+extern "C" void tc_cuda_managed_free(void* ptr);
+extern "C" int tc_cuda_is_active(void);
+#endif
+
 extern "C" tc_status_t tc_buffer_alloc(tc_context* ctx, size_t bytes, tc_buffer** out) {
     if (!ctx || !out || bytes == 0) return TC_ERR_INVALID_ARG;
     tc_buffer* buf = new (std::nothrow) tc_buffer();
     if (!buf) return TC_ERR_ALLOC;
-    buf->ptr = std::malloc(bytes);
+    buf->storage = TC_STORAGE_HOST;
+    buf->ptr = nullptr;
+
+#if defined(TC_ENABLE_CUDA)
+    /* When a CUDA device is active, prefer managed memory so subsequent
+     * tc_cuda_gemm calls skip the host/device copy. Falls back to host
+     * malloc on any error. */
+    if (tc_cuda_is_active()) {
+        if (tc_cuda_managed_alloc(bytes, &buf->ptr) == 0 && buf->ptr) {
+            buf->storage = TC_STORAGE_CUDA_MANAGED;
+        }
+    }
+#endif
+
     if (!buf->ptr) {
-        delete buf;
-        return TC_ERR_ALLOC;
+        buf->ptr = std::malloc(bytes);
+        if (!buf->ptr) {
+            delete buf;
+            return TC_ERR_ALLOC;
+        }
+        buf->storage = TC_STORAGE_HOST;
     }
     buf->bytes = bytes;
     buf->owner = ctx;
@@ -182,7 +245,14 @@ extern "C" tc_status_t tc_buffer_free(tc_context* ctx, tc_buffer* buf) {
     tc_status_t s = tc_buffer_validate(ctx, buf, 0);
     if (s != TC_OK) return s;
     if (buf->owns_ptr) {
-        std::free(buf->ptr);
+#if defined(TC_ENABLE_CUDA)
+        if (buf->storage == TC_STORAGE_CUDA_MANAGED) {
+            tc_cuda_managed_free(buf->ptr);
+        } else
+#endif
+        {
+            std::free(buf->ptr);
+        }
     }
     buf->ptr = nullptr;
     delete buf;

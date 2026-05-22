@@ -122,13 +122,17 @@ tc_status_t tc_device_info_get(tc_context*  ctx, tc_device_info* out_info);
 
 ```c
 tc_status_t tc_buffer_alloc(tc_context* ctx, size_t bytes, tc_buffer** out);
+tc_status_t tc_buffer_from_ptr(tc_context* ctx, void* ptr, size_t bytes,
+                               tc_buffer** out);
 tc_status_t tc_buffer_free (tc_context* ctx, tc_buffer*  buf);
 tc_status_t tc_buffer_map  (tc_buffer*  buf, void**      out_ptr);
 size_t      tc_buffer_size (const tc_buffer* buf);
 ```
 
 `tc_buffer_map` returns a CPU-addressable pointer with no copy. The buffer
-pool uses power-of-2 buckets and LIFO recycling.
+pool uses power-of-2 buckets and LIFO recycling. `tc_buffer_from_ptr`
+creates a wrapper around caller-owned memory; freeing the wrapper does not
+free the underlying allocation.
 
 ### Streams
 
@@ -264,6 +268,7 @@ typedef enum {
     TC_BACKEND_OZAKI_II         = 6,
     TC_BACKEND_PORTABLE_CPU     = 7,   /* portable C CPU backend (TC_ENABLE_METAL=OFF) */
     TC_BACKEND_METAL_COMPUTE    = 8,   /* generic Metal compute kernels */
+    TC_BACKEND_CUDA             = 9,   /* direct CUDA/cuBLAS backend */
 } tc_backend_t;
 
 tc_backend_t tc_last_backend(void);            /* thread-local                */
@@ -841,10 +846,13 @@ plan.
 
 ## CUDA — `cuda.h`
 
-CUDA is the staged NVIDIA-native fast path. The public symbols are
-exported today as deterministic unsupported stubs so SDK consumers and FFI
-generators can bind the future surface while default builds stay
-CUDA-free.
+CUDA is the staged NVIDIA-native fast path. Default builds export
+deterministic unsupported stubs so SDK consumers and FFI generators can
+bind the surface while staying CUDA-free. Builds configured with
+`TC_ENABLE_CUDA=ON` expose device discovery and can route fp32/fp16 GEMM
+through cuBLAS when `TC_USE_CUDA_GEMM=1` is set. Runtime-allocated buffers
+use CUDA managed memory in that mode; externally wrapped host pointers use
+the staged-copy fallback.
 
 ```c
 typedef struct {

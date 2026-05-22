@@ -42,6 +42,8 @@ if tc.backend_name(tc.TC_BACKEND_TENSOROPS_M5) != "tensorops_m5":
     raise SystemExit("backend_name(TENSOROPS_M5) mismatch")
 if tc.backend_name(tc.TC_BACKEND_METAL_COMPUTE) != "metal_compute":
     raise SystemExit("backend_name(METAL_COMPUTE) mismatch")
+if tc.backend_name(tc.TC_BACKEND_CUDA) != "cuda":
+    raise SystemExit("backend_name(CUDA) mismatch")
 if tc.last_backend_name() != "none":
     raise SystemExit("initial last_backend_name mismatch")
 if tc.tensorops_gemm_kernel_name("f16") != "tc4_gemm_f16":

@@ -82,6 +82,7 @@ Python package editable, and runs an inline smoke script that asserts:
 - `tc.dtype_name("fp53") == "fp53"`
 - `tc.backend_name(tc.TC_BACKEND_TENSOROPS_M5) == "tensorops_m5"`
 - `tc.backend_name(tc.TC_BACKEND_METAL_COMPUTE) == "metal_compute"`
+- `tc.backend_name(tc.TC_BACKEND_CUDA) == "cuda"`
 - `tc.last_backend_name() == "none"` (before any kernel runs)
 - `tc.tensorops_gemm_kernel_name("f16") == "tc4_gemm_f16"`
 - `tc.tensorops_gemm_kernel_name("i8", "i32") is None`
@@ -109,6 +110,18 @@ AMX uses reverse-engineered Apple instructions, so the AMX subprocess
 treats SIGILL as a skip by default instead of taking down the whole smoke
 on hosts that block the instruction. Set `REQUIRE_AMX_GEMM=1` to require
 the AMX opt-in path on local Apple-Silicon verification machines.
+
+### `ci_cuda_smoke.sh`
+
+Configures a Linux CUDA build with `TC_ENABLE_CUDA=ON`, runs its CTest
+suite, then runs fp32 and fp16 Python GEMM smokes with
+`TC_USE_CUDA_GEMM=1`. The smoke asserts numerical output, `backend=cuda`,
+and the expected managed-memory cuBLAS kernel names. It requires a visible NVIDIA GPU and
+CUDA Toolkit with `CUDA::cudart` plus `CUDA::cublas`.
+
+```sh
+TC_CUDA_BUILD_DIR=build-cuda scripts/ci_cuda_smoke.sh
+```
 
 ### `check_public_headers.sh`
 

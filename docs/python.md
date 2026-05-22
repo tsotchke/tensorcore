@@ -104,8 +104,8 @@ Function names follow the C ABI with `tc_` dropped. Status codes raise
 `TensorcoreError`.
 
 ### Lifecycle
-`init`, `shutdown`, `device_info`, `buffer_alloc`, `buffer_free`,
-`buffer_map`, `buffer_size`, `buffer_write`, `buffer_read`,
+`init`, `shutdown`, `device_info`, `buffer_alloc`, `buffer_from_ptr`,
+`buffer_free`, `buffer_map`, `buffer_size`, `buffer_write`, `buffer_read`,
 `stream_create`, `stream_sync`, `stream_destroy`.
 
 ### Diagnostics
@@ -136,6 +136,9 @@ runtime is built in.
 `cuda_init`, `cuda_device_count`, `cuda_device_at`, `cuda_select_device`,
 `cuda_last_kernel_name`. The in-tree CUDA backend currently exposes
 deterministic unsupported diagnostics when no CUDA runtime is built in.
+When tensorcore is built with `TC_ENABLE_CUDA=ON`, `TC_USE_CUDA_GEMM=1`
+opts fp32/fp16 `gemm` calls into the cuBLAS path. Runtime-allocated buffers
+use CUDA managed memory in that mode.
 
 ### GEMM
 `gemm`, `gemm_async`, `gemm_batched`.
@@ -196,6 +199,7 @@ Methods (excerpt):
 | Method | What it does |
 |---|---|
 | `buffer(nbytes)` | Allocate a raw `Buffer` of `nbytes` |
+| `buffer_from_ptr(ptr, nbytes)` | Wrap externally owned host memory without copying |
 | `buffer_from_array(arr)` | Allocate + `write(arr)` in one call |
 | `memory_tier_usage(tier)` | Return `(resident_bytes, capacity_bytes)` for a tier |
 | `stream()` | Create a `Stream` |

@@ -140,6 +140,7 @@ TC_BACKEND_SF64_EMULATED = 5
 TC_BACKEND_OZAKI_II = 6
 TC_BACKEND_PORTABLE_CPU = 7
 TC_BACKEND_METAL_COMPUTE = 8
+TC_BACKEND_CUDA = 9
 
 TC_TIER_L0_DEVICE = 0
 TC_TIER_L1_HOST_RAM = 1
@@ -438,6 +439,8 @@ if _lib is not None:
     _lib.tc_shutdown.argtypes = [c_void_p];               _lib.tc_shutdown.restype = c_int
     _lib.tc_device_info_get.argtypes = [c_void_p, POINTER(TCDeviceInfo)]; _lib.tc_device_info_get.restype = c_int
     _lib.tc_buffer_alloc.argtypes = [c_void_p, c_size_t, POINTER(c_void_p)]; _lib.tc_buffer_alloc.restype = c_int
+    _lib.tc_buffer_from_ptr.argtypes = [c_void_p, c_void_p, c_size_t, POINTER(c_void_p)]
+    _lib.tc_buffer_from_ptr.restype = c_int
     _lib.tc_buffer_free.argtypes  = [c_void_p, c_void_p]; _lib.tc_buffer_free.restype  = c_int
     _lib.tc_buffer_map.argtypes   = [c_void_p, POINTER(c_void_p)]; _lib.tc_buffer_map.restype = c_int
     _lib.tc_buffer_size.argtypes  = [c_void_p];           _lib.tc_buffer_size.restype  = c_size_t
@@ -965,6 +968,20 @@ def device_info(ctx):
 def buffer_alloc(ctx, nbytes):
     buf = c_void_p()
     _check(_lib.tc_buffer_alloc(_as_handle(ctx), c_size_t(nbytes), byref(buf)))
+    return buf
+
+
+def buffer_from_ptr(ctx, ptr, nbytes):
+    """Wrap externally owned host memory in a tc_buffer without copying it."""
+    if isinstance(ptr, c_void_p):
+        raw = ptr
+    else:
+        try:
+            raw = ctypes.cast(ptr, c_void_p)
+        except (ctypes.ArgumentError, TypeError):
+            raw = c_void_p(int(ptr))
+    buf = c_void_p()
+    _check(_lib.tc_buffer_from_ptr(_as_handle(ctx), raw, c_size_t(nbytes), byref(buf)))
     return buf
 
 
@@ -1870,6 +1887,9 @@ class Context:
 
     def buffer(self, nbytes):
         return Buffer(self, nbytes)
+
+    def buffer_from_ptr(self, ptr, nbytes):
+        return Buffer(self, handle=buffer_from_ptr(self, ptr, nbytes))
 
     def buffer_from_array(self, arr):
         return self.buffer(arr.nbytes).write(arr)

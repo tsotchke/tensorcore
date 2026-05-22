@@ -346,6 +346,16 @@ try:
     if any(math.fabs(out[i] - expected[i]) > 1e-5 for i in range(4)):
         raise SystemExit(f"unexpected GEMM result: {[out[i] for i in range(4)]}")
 
+    external = (ctypes.c_float * 2)(3.0, 4.0)
+    wrapped = tc.buffer_from_ptr(ctx, ctypes.addressof(external), ctypes.sizeof(external))
+    bufs.append(wrapped)
+    if tc.buffer_map(wrapped).value != ctypes.addressof(external):
+        raise SystemExit("buffer_from_ptr did not preserve external address")
+    wrapped_view = (ctypes.c_float * 2).from_address(tc.buffer_map(wrapped).value)
+    wrapped_view[1] = 9.0
+    if external[1] != 9.0:
+        raise SystemExit("buffer_from_ptr did not expose external storage")
+
     tc.buffer_set_tier_hint(C, "warm")
     if tc.buffer_get_tier(C) != tc.TC_TIER_L0_DEVICE:
         raise SystemExit("portable memory tier should remain L0")

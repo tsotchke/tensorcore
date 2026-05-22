@@ -18,6 +18,7 @@ and shape semantics, see [api_reference.md](api_reference.md).
 | Symbol | One-liner |
 |---|---|
 | `tc_buffer_alloc(ctx, bytes, out_buf)` | Allocate from the power-of-2 LIFO pool. |
+| `tc_buffer_from_ptr(ctx, ptr, bytes, out_buf)` | Wrap externally owned host memory without copying. |
 | `tc_buffer_free(ctx, buf)` | Return to the pool. |
 | `tc_buffer_map(buf, out_ptr)` | Get the CPU-addressable pointer (no copy on UMA). |
 | `tc_buffer_size(buf)` | Byte size of the buffer. |
@@ -160,7 +161,7 @@ and shape semantics, see [api_reference.md](api_reference.md).
 ### `tc_backend_t`
 `TC_BACKEND_NONE`, `_SIMDGROUP_MATRIX`, `_TENSOROPS_M5`, `_MPS`,
 `_ACCELERATE_CPU`, `_SF64_EMULATED`, `_OZAKI_II`, `_PORTABLE_CPU`,
-`_METAL_COMPUTE`.
+`_METAL_COMPUTE`, `_CUDA`.
 
 ### `tc_quant_t`
 `TC_QUANT_Q4_0`, `TC_QUANT_Q8_0`.

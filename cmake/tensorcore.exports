@@ -10,6 +10,7 @@ _tc_broadcast
 _tc_buffer_alloc
 _tc_buffer_demote_async
 _tc_buffer_free
+_tc_buffer_from_ptr
 _tc_buffer_get_tier
 _tc_buffer_map
 _tc_buffer_promote_async

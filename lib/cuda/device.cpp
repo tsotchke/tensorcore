@@ -1,9 +1,9 @@
 /*
- * tensorcore — direct CUDA backend, device init + enumeration.
+ * tensorcore - direct CUDA backend, device init + enumeration.
  *
  * Gated on TC_ENABLE_CUDA=ON. When CUDA is unavailable (no toolkit on
  * host, or no NVIDIA device at runtime), this TU compiles to stubs that
- * return TC_ERR_UNSUPPORTED_FAMILY — the public dispatch then falls
+ * return TC_ERR_UNSUPPORTED_FAMILY - the public dispatch then falls
  * through to whichever next backend can serve the call.
  */
 
@@ -43,7 +43,12 @@ bool populate_info(int index, tc_cuda_device_info* info) {
     cudaDeviceProp prop;
     if (cudaGetDeviceProperties(&prop, index) != cudaSuccess) return false;
     std::memset(info, 0, sizeof(*info));
-    std::strncpy(info->device_name, prop.name, sizeof(info->device_name) - 1);
+    size_t name_len = 0;
+    while (name_len + 1 < sizeof(info->device_name) && prop.name[name_len] != '\0') {
+        ++name_len;
+    }
+    std::memcpy(info->device_name, prop.name, name_len);
+    info->device_name[name_len] = '\0';
     std::snprintf(info->compute_capability, sizeof(info->compute_capability),
                   "%d.%d", prop.major, prop.minor);
     info->major = prop.major;
@@ -53,7 +58,7 @@ bool populate_info(int index, tc_cuda_device_info* info) {
     info->multiprocessor_count = prop.multiProcessorCount;
     info->max_threads_per_block = prop.maxThreadsPerBlock;
     info->warp_size = prop.warpSize;
-    /* Feature gating by compute capability — these are stable defaults. */
+    /* Feature gating by compute capability: these are stable defaults. */
     info->supports_fp16            = (prop.major > 5) || (prop.major == 5 && prop.minor >= 3);
     info->supports_bf16            = (prop.major >= 8);
     info->supports_int8_tensor_core = (prop.major > 7) || (prop.major == 7 && prop.minor >= 2);

@@ -2,36 +2,38 @@
 #define TENSORCORE_CUDA_H
 
 /*
- * tensorcore — direct CUDA backend (NVIDIA-native fast path).
+ * tensorcore - direct CUDA backend (NVIDIA-native fast path).
  *
  * Why this exists alongside the HIP/chipStar backend:
  *
- *   chipStar's HIP→SPIR-V→OpenCL/Level Zero pipeline gives vendor-neutral
+ *   chipStar's HIP-to-SPIR-V-to-OpenCL/Level Zero pipeline gives vendor-neutral
  *   GPU compute on Intel, AMD, and ARM. NVIDIA's OpenCL driver does not
  *   ingest SPIR-V, so chipStar can't reach NVIDIA hardware. The clean
  *   answer is a direct CUDA backend: tensorcore's tc_gemm / tc_attention_*
  *   route into cuBLAS / cuDNN / native CUDA kernels when an NVIDIA device
  *   is present and the user opts in.
  *
- *   This is the *fast path* for NVIDIA — full hardware tensor-core access,
+ *   This is the *fast path* for NVIDIA: full hardware tensor-core access,
  *   PTX-level kernel control, no SPIR-V translation overhead. The
  *   substrate's architecture intentionally treats CUDA as one backend
  *   among several: required for production NVIDIA use, optional in the
  *   sense that nothing else depends on it.
  *
  * Build gate: TC_ENABLE_CUDA=ON in CMake. Requires CUDA Toolkit >= 11.0
- * and a recent driver. Off by default; auto-detected when nvcc is on
- * PATH at configure time.
+ * and a recent driver. Off by default; enable explicitly with
+ * -DTC_ENABLE_CUDA=ON.
  *
- * Runtime dispatch:
+ * Current runtime dispatch:
  *
- *   if   APPLE && Metal device              → Metal backend
- *   elif CUDA toolkit + NVIDIA device       → CUDA backend         (this header)
- *   elif chipStar HIP + SPIR-V GPU          → HIP backend
- *   else                                     → CPU SIMD backend
+ *   if   APPLE && Metal device              -> Metal backend
+ *   elif TC_USE_CUDA_GEMM=1 && CUDA fp32/fp16 GEMM succeeds
+ *                                            -> CUDA/cuBLAS GEMM
+ *   else                                     -> CPU SIMD/BLAS backend
  *
- * The CUDA backend is therefore selected automatically when an NVIDIA
- * device is the best available match; the user doesn't have to pick.
+ * The CUDA GEMM path is intentionally opt-in. With TC_USE_CUDA_GEMM=1,
+ * tc_buffer_alloc uses CUDA managed memory so cuBLAS can dereference A/B/C
+ * directly. Buffers wrapped around ordinary host pointers still use an
+ * internal staged cudaMemcpy fallback.
  */
 
 #include <stdint.h>

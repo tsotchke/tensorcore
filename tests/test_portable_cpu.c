@@ -591,6 +591,37 @@ static int run_memory_tier_stubs(tc_context* ctx) {
     return rc;
 }
 
+static int run_buffer_from_ptr(tc_context* ctx) {
+    int rc = 0;
+    float external[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+    tc_buffer* b = NULL;
+    void* mapped = NULL;
+
+    rc |= expect_status("buffer from ptr",
+                        tc_buffer_from_ptr(ctx, external, sizeof(external), &b),
+                        TC_OK);
+    rc |= expect_status("buffer from ptr map", tc_buffer_map(b, &mapped), TC_OK);
+    if (mapped != external || tc_buffer_size(b) != sizeof(external)) rc = 1;
+    ((float*)mapped)[2] = 9.0f;
+    if (external[2] != 9.0f) rc = 1;
+    rc |= expect_status("buffer from ptr free", tc_buffer_free(ctx, b), TC_OK);
+    if (external[2] != 9.0f) rc = 1;
+
+    rc |= expect_status("buffer from ptr rejects NULL ctx",
+                        tc_buffer_from_ptr(NULL, external, sizeof(external), &b),
+                        TC_ERR_INVALID_ARG);
+    rc |= expect_status("buffer from ptr rejects NULL ptr",
+                        tc_buffer_from_ptr(ctx, NULL, sizeof(external), &b),
+                        TC_ERR_INVALID_ARG);
+    rc |= expect_status("buffer from ptr rejects zero bytes",
+                        tc_buffer_from_ptr(ctx, external, 0, &b),
+                        TC_ERR_INVALID_ARG);
+    rc |= expect_status("buffer from ptr rejects NULL out",
+                        tc_buffer_from_ptr(ctx, external, sizeof(external), NULL),
+                        TC_ERR_INVALID_ARG);
+    return rc;
+}
+
 static int run_checkpoint_stubs(tc_context* ctx) {
     int rc = 0;
     int calls = 0;
@@ -643,10 +674,19 @@ static int run_future_backend_stubs(tc_context* ctx) {
     if (tc_hip_device_count() != 0) rc = 1;
     if (strcmp(tc_hip_last_kernel_name(), "none") != 0) rc = 1;
 
-    rc |= expect_status("cuda init unsupported", tc_cuda_init(ctx), TC_ERR_UNSUPPORTED_FAMILY);
-    rc |= expect_status("cuda device at unsupported",
-                        tc_cuda_device_at(0, &cuda_info), TC_ERR_UNSUPPORTED_FAMILY);
-    if (tc_cuda_device_count() != 0) rc = 1;
+    int cuda_count = tc_cuda_device_count();
+    if (cuda_count == 0) {
+        rc |= expect_status("cuda init unsupported", tc_cuda_init(ctx), TC_ERR_UNSUPPORTED_FAMILY);
+        rc |= expect_status("cuda device at unsupported",
+                            tc_cuda_device_at(0, &cuda_info), TC_ERR_UNSUPPORTED_FAMILY);
+    } else {
+        rc |= expect_status("cuda init", tc_cuda_init(ctx), TC_OK);
+        rc |= expect_status("cuda device at", tc_cuda_device_at(0, &cuda_info), TC_OK);
+        if (cuda_info.device_name[0] == '\0' || cuda_info.major <= 0 ||
+            cuda_info.global_memory_bytes == 0) {
+            rc = 1;
+        }
+    }
     if (strcmp(tc_cuda_last_kernel_name(), "none") != 0) rc = 1;
 
     rc |= expect_status("dist init for diloco",
@@ -696,9 +736,10 @@ int main(void) {
 
     tc_device_info info;
     rc |= expect_status("device info", tc_device_info_get(ctx, &info), TC_OK);
-    if (strcmp(info.name, "portable-cpu") != 0) rc = 1;
+    if (strcmp(info.name, "portable-cpu") != 0 && strcmp(info.name, "cuda") != 0) rc = 1;
     if (strcmp(tc_backend_name(TC_BACKEND_PORTABLE_CPU), "portable_cpu") != 0) rc = 1;
     if (strcmp(tc_backend_name(TC_BACKEND_METAL_COMPUTE), "metal_compute") != 0) rc = 1;
+    if (strcmp(tc_backend_name(TC_BACKEND_CUDA), "cuda") != 0) rc = 1;
 
     rc |= run_padded_f32_gemm(ctx);
     rc |= run_padded_f16_gemm(ctx);
@@ -710,6 +751,7 @@ int main(void) {
     rc |= run_attention_forward(ctx);
     rc |= run_conv2d_forward(ctx);
     rc |= run_memory_tier_stubs(ctx);
+    rc |= run_buffer_from_ptr(ctx);
     rc |= run_checkpoint_stubs(ctx);
     rc |= run_future_backend_stubs(ctx);
     rc |= expect_status("attention NULL desc rejects",
