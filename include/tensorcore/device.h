@@ -61,6 +61,23 @@ tc_status_t tc_buffer_free (tc_context* ctx, tc_buffer* buf);
 tc_status_t tc_buffer_map  (tc_buffer* buf, void** out_ptr);
 size_t      tc_buffer_size (const tc_buffer* buf);
 
+/* Zero-copy wrap of externally-owned memory. The returned tc_buffer
+ * references `ptr` without taking ownership: tc_buffer_free will release
+ * the wrapper but not the underlying allocation. Bridges (e.g.
+ * bindings/pytorch) use this to pass framework-allocated tensor data to
+ * the dispatcher without an alloc-and-memcpy.
+ *
+ * Constraints:
+ *   * `ptr` must remain valid for the lifetime of the returned tc_buffer.
+ *   * On Apple Silicon CPU backends this is unconditionally zero-copy
+ *     (unified memory). On Metal builds the returned buffer is host-only
+ *     and ops requiring an MTLBuffer-backed view will return
+ *     TC_ERR_UNSUPPORTED — host->device handoff requires a real alloc.
+ *
+ * Returns TC_ERR_INVALID_ARG if any pointer is null. */
+tc_status_t tc_buffer_from_ptr(tc_context* ctx, void* ptr, size_t bytes,
+                               tc_buffer** out);
+
 /* Streams ≈ MTLCommandQueue lanes; for now, NULL stream means default. */
 tc_status_t tc_stream_create (tc_context* ctx, tc_stream** out);
 tc_status_t tc_stream_destroy(tc_context* ctx, tc_stream* s);

@@ -6,9 +6,10 @@
  *   - fp32 only (matches the AMX backend's session-1.5 support).
  *   - 2-D inputs, no batching, no transpose (caller transposes upstream).
  *   - CPU tensors only — Apple unified memory means tensorcore's CPU
- *     backend reads from the same physical RAM PyTorch is using; the
- *     bridge `memcpy`s in/out to avoid lifetime entanglement with
- *     PyTorch's allocator, which is the simplest correct path.
+ *     backend reads from the same physical RAM PyTorch is using.
+ *     Uses `tc_buffer_from_ptr` to wrap PyTorch's allocator output
+ *     in a zero-copy tc_buffer view, eliminating the alloc-and-memcpy
+ *     that dominated v0.1 perf at small sizes.
  *
  * Backend selection is honored via the same env vars as the rest of
  * tensorcore: `TC_USE_AMX_GEMM=1` picks the reverse-engineered AMX
@@ -80,8 +81,11 @@ at::Tensor tc_matmul_fp32(const at::Tensor& A, const at::Tensor& B) {
 
     ensure_ctx();
 
-    /* Allocate three tc_buffers and copy data in. tc_buffer_map on Apple
-     * returns a pointer into unified memory; memcpy is fast. */
+    /* Zero-copy wrap: tc_buffer_from_ptr returns a tc_buffer that aliases
+     * the PyTorch tensor's data buffer (and the output tensor's data
+     * buffer for C). Apple unified memory makes this trivially correct.
+     * Lifetime: A_c, B_c, and `out` outlive the GEMM call (synchronous),
+     * so the wrapped pointers stay valid. */
     tc_buffer *bA = nullptr, *bB = nullptr, *bC = nullptr;
     auto cleanup = [&]() {
         if (bA) tc_buffer_free(g_ctx, bA);
@@ -93,23 +97,18 @@ at::Tensor tc_matmul_fp32(const at::Tensor& A, const at::Tensor& B) {
     const size_t bytes_b = static_cast<size_t>(K) * N * sizeof(float);
     const size_t bytes_c = static_cast<size_t>(M) * N * sizeof(float);
 
-    if (tc_buffer_alloc(g_ctx, bytes_a, &bA) != TC_OK ||
-        tc_buffer_alloc(g_ctx, bytes_b, &bB) != TC_OK ||
-        tc_buffer_alloc(g_ctx, bytes_c, &bC) != TC_OK) {
-        cleanup();
-        throw std::runtime_error("tc_buffer_alloc failed");
-    }
+    auto out = torch::empty({M, N}, A_c.options());
 
-    void *pA = nullptr, *pB = nullptr, *pC = nullptr;
-    if (tc_buffer_map(bA, &pA) != TC_OK ||
-        tc_buffer_map(bB, &pB) != TC_OK ||
-        tc_buffer_map(bC, &pC) != TC_OK) {
+    if (tc_buffer_from_ptr(g_ctx, const_cast<float*>(A_c.data_ptr<float>()),
+                           bytes_a, &bA) != TC_OK ||
+        tc_buffer_from_ptr(g_ctx, const_cast<float*>(B_c.data_ptr<float>()),
+                           bytes_b, &bB) != TC_OK ||
+        tc_buffer_from_ptr(g_ctx, out.data_ptr<float>(),
+                           bytes_c, &bC) != TC_OK) {
         cleanup();
-        throw std::runtime_error("tc_buffer_map failed");
+        throw std::runtime_error("tc_buffer_from_ptr failed (build against "
+                                 "tensorcore with the from_ptr API)");
     }
-
-    std::memcpy(pA, A_c.data_ptr<float>(), bytes_a);
-    std::memcpy(pB, B_c.data_ptr<float>(), bytes_b);
 
     tc_gemm_desc desc{};
     desc.M = M; desc.N = N; desc.K = K;
@@ -133,9 +132,7 @@ at::Tensor tc_matmul_fp32(const at::Tensor& A, const at::Tensor& B) {
             std::to_string(static_cast<int>(rc)));
     }
 
-    auto out = torch::empty({M, N}, A_c.options());
-    std::memcpy(out.data_ptr<float>(), pC, bytes_c);
-
+    /* C was written directly into `out.data_ptr` — no copy needed. */
     cleanup();
     return out;
 }

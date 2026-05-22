@@ -32,6 +32,7 @@ struct tc_buffer {
     void*       ptr;
     size_t      bytes;
     tc_context* owner;
+    bool        owns_ptr;   /* false when wrapped via tc_buffer_from_ptr */
 };
 
 struct tc_stream {
@@ -56,6 +57,7 @@ extern "C" const char* tc_backend_name(tc_backend_t b) {
         case TC_BACKEND_OZAKI_II:         return "ozaki_ii";
         case TC_BACKEND_PORTABLE_CPU:     return "portable_cpu";
         case TC_BACKEND_METAL_COMPUTE:    return "metal_compute";
+        case TC_BACKEND_CUDA:             return "cuda";
     }
     return "?";
 }
@@ -149,6 +151,20 @@ extern "C" tc_status_t tc_buffer_alloc(tc_context* ctx, size_t bytes, tc_buffer*
     }
     buf->bytes = bytes;
     buf->owner = ctx;
+    buf->owns_ptr = true;
+    *out = buf;
+    return TC_OK;
+}
+
+extern "C" tc_status_t tc_buffer_from_ptr(tc_context* ctx, void* ptr,
+                                          size_t bytes, tc_buffer** out) {
+    if (!ctx || !ptr || !out || bytes == 0) return TC_ERR_INVALID_ARG;
+    tc_buffer* buf = new (std::nothrow) tc_buffer();
+    if (!buf) return TC_ERR_ALLOC;
+    buf->ptr = ptr;
+    buf->bytes = bytes;
+    buf->owner = ctx;
+    buf->owns_ptr = false;
     *out = buf;
     return TC_OK;
 }
@@ -165,7 +181,9 @@ extern "C" TC_INTERNAL_SYMBOL tc_status_t tc_buffer_validate(tc_context* ctx,
 extern "C" tc_status_t tc_buffer_free(tc_context* ctx, tc_buffer* buf) {
     tc_status_t s = tc_buffer_validate(ctx, buf, 0);
     if (s != TC_OK) return s;
-    std::free(buf->ptr);
+    if (buf->owns_ptr) {
+        std::free(buf->ptr);
+    }
     buf->ptr = nullptr;
     delete buf;
     return TC_OK;

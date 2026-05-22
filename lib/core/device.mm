@@ -58,6 +58,7 @@ extern "C" const char* tc_backend_name(tc_backend_t b) {
         case TC_BACKEND_OZAKI_II:         return "ozaki_ii";
         case TC_BACKEND_PORTABLE_CPU:     return "portable_cpu";
         case TC_BACKEND_METAL_COMPUTE:    return "metal_compute";
+        case TC_BACKEND_CUDA:             return "cuda";
     }
     return "?";
 }
@@ -306,6 +307,18 @@ extern "C" tc_status_t tc_buffer_alloc(tc_context* ctx, size_t bytes, tc_buffer*
     tc_status_t s = tc_buffer_pool_alloc(ctx->buffer_pool, bytes, out);
     if (s == TC_OK && *out) (*out)->owner = ctx;
     return s;
+}
+
+extern "C" tc_status_t tc_buffer_from_ptr(tc_context* ctx, void* ptr,
+                                          size_t bytes, tc_buffer** out) {
+    /* Metal builds back tc_buffer with MTLBuffer. Wrapping an arbitrary
+     * host pointer with newBufferWithBytesNoCopy:length:options:deallocator:
+     * is possible but page-aligned-and-multiple-of-page-size constrained,
+     * and CPU-side ops would still need to copy out for GPU kernels.
+     * Left UNSUPPORTED for now — bindings that need zero-copy on the Metal
+     * build should use a different code path. */
+    (void)ctx; (void)ptr; (void)bytes; (void)out;
+    return TC_ERR_UNSUPPORTED_DTYPE;
 }
 
 extern "C" tc_status_t tc_buffer_validate(tc_context* ctx,
