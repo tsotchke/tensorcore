@@ -12,6 +12,7 @@
 #include "tensorcore/tensorcore.h"
 #include "tensorcore/cuda.h"
 
+#include <cstdlib>
 #include <cstdint>
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -27,43 +28,6 @@
 #endif
 
 extern "C" TC_CUDA_INTERNAL void tc_cuda_set_last_kernel(const char* name);
-
-/* CUDA-managed-buffer hooks exported from this TU so lib/core/device_cpu.cpp
- * can call them without depending on a separate file (linter has been stripping
- * additions to lib/cuda/device.cpp; embedding here is the robust path). */
-#include <cstdlib>
-
-extern "C" TC_CUDA_INTERNAL int tc_cuda_is_active(void) {
-#if defined(TC_ENABLE_CUDA)
-    const char* env = std::getenv("TC_USE_CUDA_GEMM");
-    return (env && env[0] == '1') ? 1 : 0;
-#else
-    return 0;
-#endif
-}
-
-extern "C" TC_CUDA_INTERNAL int tc_cuda_managed_alloc(size_t bytes, void** out_ptr) {
-#if defined(TC_ENABLE_CUDA)
-    if (!out_ptr) return -1;
-    void* p = nullptr;
-    if (cudaMallocManaged(&p, bytes, cudaMemAttachGlobal) != cudaSuccess) {
-        return -1;
-    }
-    *out_ptr = p;
-    return 0;
-#else
-    (void)bytes; (void)out_ptr;
-    return -1;
-#endif
-}
-
-extern "C" TC_CUDA_INTERNAL void tc_cuda_managed_free(void* ptr) {
-#if defined(TC_ENABLE_CUDA)
-    if (ptr) cudaFree(ptr);
-#else
-    (void)ptr;
-#endif
-}
 
 namespace {
 

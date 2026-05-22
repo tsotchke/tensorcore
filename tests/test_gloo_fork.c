@@ -1,8 +1,8 @@
 /*
  * tests/test_gloo_fork.c - portable CPU TC_DIST_GLOO TCP smoke.
  *
- * Spawns world_size=2 processes via fork(). Rank 0 listens on
- * 127.0.0.1:<free port>; rank 1 connects. Each rank initializes the public
+ * Spawns world_size=4 processes via fork(). Rank 0 listens on
+ * 127.0.0.1:<free port>; peers connect. Each rank initializes the public
  * tc_dist_ctx with TC_DIST_GLOO, then validates fp32/fp16 allreduce,
  * any-root fp32 broadcast, allgather, and barrier.
  */
@@ -24,7 +24,7 @@ int main(void) { return 77; }
 #include <sys/wait.h>
 #include <unistd.h>
 
-#define WORLD 2
+#define WORLD 4
 #define N_ELEMS 16
 
 static int fail_rank(int rank, const char* what) {
@@ -149,14 +149,14 @@ static int run_rank(int rank, const char* url) {
     rc |= expect_status(rank, "map fp32", tc_buffer_map(buf32, (void**)&p32), TC_OK);
     if (rc) goto done;
 
-    for (size_t i = 0; i < N_ELEMS; ++i) {
-        p32[i] = (rank == 0) ? (float)(i + 1) : (float)(100 + i);
-    }
+    const float rank_sum = (float)(WORLD * (WORLD - 1) / 2);
+    for (size_t i = 0; i < N_ELEMS; ++i) p32[i] = (float)(rank * 10 + (int)i);
     rc |= expect_status(rank, "fp32 SUM",
                         tc_allreduce(dist, buf32, N_ELEMS, TC_DTYPE_F32, TC_REDUCE_SUM),
                         TC_OK);
     for (size_t i = 0; i < N_ELEMS; ++i) {
-        rc |= expect_close(rank, "fp32 SUM value", p32[i], (float)(101 + 2 * (int)i), 1e-6f);
+        rc |= expect_close(rank, "fp32 SUM value",
+                           p32[i], 10.0f * rank_sum + (float)(WORLD * (int)i), 1e-6f);
     }
 
     rc |= expect_status(rank, "alloc fp16",
@@ -166,27 +166,29 @@ static int run_rank(int rank, const char* url) {
     rc |= expect_status(rank, "map fp16", tc_buffer_map(buf16, (void**)&p16), TC_OK);
     if (rc) goto done;
     for (size_t i = 0; i < N_ELEMS; ++i) {
-        p16[i] = f32_to_f16(rank == 0 ? 0.5f * (float)(i + 1) : 1.5f * (float)(i + 1));
+        p16[i] = f32_to_f16(0.5f * (float)(rank + 1) * (float)(i + 1));
     }
     rc |= expect_status(rank, "fp16 SUM",
                         tc_allreduce(dist, buf16, N_ELEMS, TC_DTYPE_F16, TC_REDUCE_SUM),
                         TC_OK);
     for (size_t i = 0; i < N_ELEMS; ++i) {
         rc |= expect_close(rank, "fp16 SUM value",
-                           f16_to_f32(p16[i]), 2.0f * (float)(i + 1), 1e-2f);
+                           f16_to_f32(p16[i]),
+                           0.25f * (float)(WORLD * (WORLD + 1)) * (float)(i + 1),
+                           1e-2f);
     }
 
-    for (size_t i = 0; i < N_ELEMS; ++i) {
-        p32[i] = (rank == 0) ? (float)(i + 2) : (float)(10 + i);
-    }
+    for (size_t i = 0; i < N_ELEMS; ++i) p32[i] = (float)(rank * 10 + 2 + (int)i);
     rc |= expect_status(rank, "fp32 AVG",
                         tc_allreduce(dist, buf32, N_ELEMS, TC_DTYPE_F32, TC_REDUCE_AVG),
                         TC_OK);
     for (size_t i = 0; i < N_ELEMS; ++i) {
-        rc |= expect_close(rank, "fp32 AVG value", p32[i], (float)(i + 6), 1e-6f);
+        rc |= expect_close(rank, "fp32 AVG value",
+                           p32[i], 10.0f * rank_sum / (float)WORLD + 2.0f + (float)i,
+                           1e-6f);
     }
 
-    for (size_t i = 0; i < N_ELEMS; ++i) p32[i] = (rank == 0) ? (float)(10 + i) : (float)(5 + i);
+    for (size_t i = 0; i < N_ELEMS; ++i) p32[i] = (float)(rank * 10 + 5 + (int)i);
     rc |= expect_status(rank, "fp32 MIN",
                         tc_allreduce(dist, buf32, N_ELEMS, TC_DTYPE_F32, TC_REDUCE_MIN),
                         TC_OK);
@@ -194,12 +196,13 @@ static int run_rank(int rank, const char* url) {
         rc |= expect_close(rank, "fp32 MIN value", p32[i], (float)(5 + i), 1e-6f);
     }
 
-    for (size_t i = 0; i < N_ELEMS; ++i) p32[i] = (rank == 0) ? (float)(10 + i) : (float)(5 + i);
+    for (size_t i = 0; i < N_ELEMS; ++i) p32[i] = (float)(rank * 10 + 5 + (int)i);
     rc |= expect_status(rank, "fp32 MAX",
                         tc_allreduce(dist, buf32, N_ELEMS, TC_DTYPE_F32, TC_REDUCE_MAX),
                         TC_OK);
     for (size_t i = 0; i < N_ELEMS; ++i) {
-        rc |= expect_close(rank, "fp32 MAX value", p32[i], (float)(10 + i), 1e-6f);
+        rc |= expect_close(rank, "fp32 MAX value",
+                           p32[i], (float)((WORLD - 1) * 10 + 5 + (int)i), 1e-6f);
     }
 
     for (size_t i = 0; i < N_ELEMS; ++i) p32[i] = (rank == 0) ? (float)(42 + i) : -1.0f;
@@ -230,10 +233,12 @@ static int run_rank(int rank, const char* url) {
     rc |= expect_status(rank, "allgather",
                         tc_allgather(dist, buf32, gather_out, N_ELEMS, TC_DTYPE_F32),
                         TC_OK);
-    for (size_t i = 0; i < N_ELEMS; ++i) {
-        rc |= expect_close(rank, "allgather rank 0", gathered[i], (float)i, 1e-6f);
-        rc |= expect_close(rank, "allgather rank 1",
-                           gathered[N_ELEMS + i], (float)(100 + (int)i), 1e-6f);
+    for (int r = 0; r < WORLD; ++r) {
+        for (size_t i = 0; i < N_ELEMS; ++i) {
+            rc |= expect_close(rank, "allgather value",
+                               gathered[(size_t)r * N_ELEMS + i],
+                               (float)(r * 100 + (int)i), 1e-6f);
+        }
     }
 
     rc |= expect_status(rank, "barrier", tc_barrier(dist), TC_OK);
@@ -276,9 +281,9 @@ int main(void) {
                 }
             }
             const int rc = run_rank(r, url);
-            (void)write(pipes[r][1], &rc, sizeof(rc));
+            const ssize_t wrote = write(pipes[r][1], &rc, sizeof(rc));
             close(pipes[r][1]);
-            _exit(rc ? 1 : 0);
+            _exit((rc || wrote != (ssize_t)sizeof(rc)) ? 1 : 0);
         }
     }
 

@@ -13,7 +13,8 @@
  *
  *   Collectives:
  *
- *     allreduce  = rank-0 brokered reduction + broadcast.
+ *     allreduce  = rank-0 brokered reduction + broadcast for <=2 ranks,
+ *                  ring reduce-scatter + all-gather for fp32 SUM at >=3.
  *     broadcast  = rank-0 brokered bitwise replication from any root.
  *     allgather  = rank-0 brokered gather + broadcast.
  *     barrier    = rank-0 brokered byte exchange.
@@ -33,12 +34,14 @@
 #include "tensorcore/tensorcore.h"
 #include "../core/internal.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <new>
 #include <string>
+#include <thread>
 #include <vector>
 
 #if defined(_WIN32)
@@ -207,10 +210,38 @@ uint16_t f32_to_f16_gloo(float v) {
     return (uint16_t)(sign | ((uint32_t)half_exp << 10) | (rounded >> 13));
 }
 
+bool exchange_ring_chunks(GlooState* s,
+                          const void* send_data, size_t send_bytes,
+                          void* recv_data, size_t recv_bytes) {
+    bool write_ok = true;
+    std::thread writer([&]() {
+        if (send_bytes > 0) {
+            write_ok = write_all(s->next_fd, send_data, send_bytes);
+        }
+    });
+    const bool read_ok = (recv_bytes == 0) || read_all(s->prev_fd, recv_data, recv_bytes);
+    writer.join();
+    return write_ok && read_ok;
+}
+
 }  // namespace
 
 void close_gloo_state(GlooState* s) {
     if (!s) return;
+    auto is_peer_fd = [&](int fd) {
+        for (int peer : s->peer_conns) {
+            if (peer == fd) return true;
+        }
+        return false;
+    };
+    auto close_if_unique = [&](int fd) {
+        if (fd < 0) return;
+        if (fd == s->rendez_listen_fd || fd == s->rendez_conn_fd) return;
+        if (is_peer_fd(fd)) return;
+        ::close(fd);
+    };
+    close_if_unique(s->next_fd);
+    if (s->prev_fd != s->next_fd) close_if_unique(s->prev_fd);
     if (s->rendez_listen_fd >= 0) ::close(s->rendez_listen_fd);
     if (s->rendez_conn_fd >= 0 && s->rendez_conn_fd != s->peer_conns[0]) {
         ::close(s->rendez_conn_fd);
@@ -262,16 +293,132 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
         s->peer_conns[0] = fd;
     }
 
-    /* Set up ring neighbors. For the ring, each rank communicates with
-     * rank+1 (next) and rank-1 (prev). On rank 0, the connections to all
-     * others are already set up. For ranks > 0, we currently route all
-     * collectives through the rendezvous (rank 0). For a real ring with
-     * direct rank-to-rank links, the topology exchange would happen here
-     * - for v0 we use the rendezvous-as-broker pattern which is correct
-     * but slower (2x bandwidth through rank 0). */
-    s->next_fd = (rank + 1 < world_size) ? s->peer_conns[(rank + 1) % world_size] : -1;
-    s->prev_fd = (rank > 0)              ? s->peer_conns[(rank - 1 + world_size) % world_size]
-                                         : ((world_size > 1) ? s->peer_conns[world_size - 1] : -1);
+    /* ------------------------------------------------------------------
+     * Ring topology exchange.
+     *
+     * After rendezvous, each rank > 0 only has a connection to rank 0.
+     * For ring all-reduce we need rank r connected to rank (r+1)%N.
+     *
+     * Protocol (executed by all ranks, in lockstep):
+     *
+     *   Phase A: each rank picks a local port and opens a listening socket
+     *            on it. Ranks > 0 send their port to rank 0.
+     *   Phase B: rank 0 builds a (rank, host, port) table and broadcasts
+     *            it to everyone via the existing peer_conns[r] sockets.
+     *   Phase C: each rank r opens a NEW connection to rank (r+1)%N's
+     *            listening port. Accepts a connection from (r-1+N)%N.
+     *            These become next_fd and prev_fd.
+     *
+     * For N=2 the ring degenerates to the broker pattern but still works:
+     * rank 0 <-> rank 1 directly via the rendezvous, no extra connections
+     * needed. We keep that fast path.
+     * ------------------------------------------------------------------ */
+    s->next_fd = -1;
+    s->prev_fd = -1;
+
+    if (world_size <= 2) {
+        if (world_size == 2) {
+            s->next_fd = s->peer_conns[(rank + 1) % world_size];
+            s->prev_fd = s->peer_conns[(rank + 1) % world_size];   /* same fd */
+        }
+        return s;
+    }
+
+    /* --- Phase A: every rank listens on a local ring port. --- */
+    const uint16_t ring_port_base = (uint16_t)(port + 1);
+    int my_ring_listen = -1;
+    uint16_t my_ring_port = 0;
+    for (int attempt = 0; attempt < 64; ++attempt) {
+        my_ring_port = (uint16_t)(ring_port_base + rank + attempt * world_size);
+        std::string ignored;
+        my_ring_listen = tcp_listen(my_ring_port, &ignored);
+        if (my_ring_listen >= 0) break;
+    }
+    if (my_ring_listen < 0) { close_gloo_state(s); return nullptr; }
+    s->self_port = my_ring_port;
+    auto fail_ring_setup = [&]() -> GlooState* {
+        if (my_ring_listen >= 0) {
+            ::close(my_ring_listen);
+            my_ring_listen = -1;
+        }
+        close_gloo_state(s);
+        return nullptr;
+    };
+
+    /* --- Phase B: each rank > 0 reports (port) to rank 0; rank 0
+     *              collects + broadcasts the table. ----- */
+    std::vector<uint16_t> ports((size_t)world_size, 0);
+    std::vector<uint32_t> hosts_n((size_t)world_size, 0);   /* peer IPs as seen by rank 0 */
+    if (rank == 0) {
+        ports[0] = my_ring_port;
+        /* Read each peer's chosen port. Resolve their address from the
+         * peer_conns[r] socket using getpeername. */
+        for (int r = 1; r < world_size; ++r) {
+            uint16_t pr = 0;
+            if (!read_all(s->peer_conns[r], &pr, 2)) return fail_ring_setup();
+            ports[r] = pr;
+            sockaddr_in addr = {};
+            socklen_t alen = sizeof(addr);
+            if (::getpeername(s->peer_conns[r], (sockaddr*)&addr, &alen) < 0) {
+                return fail_ring_setup();
+            }
+            hosts_n[r] = addr.sin_addr.s_addr;
+        }
+        /* Resolve rank 0's own address: use the rendezvous host arg if it
+         * was a numeric IP; otherwise resolve via gethostbyname. */
+        hosts_n[0] = inet_addr(host.c_str());
+        /* Broadcast the table. */
+        for (int r = 1; r < world_size; ++r) {
+            if (!write_all(s->peer_conns[r], ports.data(),
+                           ports.size() * sizeof(uint16_t)) ||
+                !write_all(s->peer_conns[r], hosts_n.data(),
+                           hosts_n.size() * sizeof(uint32_t))) {
+                return fail_ring_setup();
+            }
+        }
+    } else {
+        /* Tell rank 0 my port. */
+        if (!write_all(s->peer_conns[0], &my_ring_port, 2)) {
+            return fail_ring_setup();
+        }
+        if (!read_all(s->peer_conns[0], ports.data(),
+                      ports.size() * sizeof(uint16_t)) ||
+            !read_all(s->peer_conns[0], hosts_n.data(),
+                      hosts_n.size() * sizeof(uint32_t))) {
+            return fail_ring_setup();
+        }
+    }
+
+    /* --- Phase C: open ring neighbor connections. ----------------------
+     *
+     * Each listener is already open and has backlog, so every rank can
+     * connect to next first, then accept the prev connection. This avoids
+     * parity corner cases for odd world sizes and keeps rank 0 from
+     * reusing rendezvous connections as ring links.
+     * ------------------------------------------------------------------ */
+    const int next_rank = (rank + 1) % world_size;
+
+    auto resolve_host = [&](int r) -> std::string {
+        if (r == 0) {
+            /* Rank 0 might be on a different machine - use the rendezvous host. */
+            return host;
+        }
+        in_addr a; a.s_addr = hosts_n[r];
+        return std::string(inet_ntoa(a));
+    };
+
+    s->next_fd = tcp_connect(resolve_host(next_rank), ports[next_rank]);
+    if (s->next_fd < 0) return fail_ring_setup();
+    sockaddr_in peer_addr = {};
+    socklen_t alen = sizeof(peer_addr);
+    s->prev_fd = ::accept(my_ring_listen, (sockaddr*)&peer_addr, &alen);
+    if (s->prev_fd < 0) return fail_ring_setup();
+
+    int yes = 1;
+    if (s->next_fd >= 0) ::setsockopt(s->next_fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
+    if (s->prev_fd >= 0) ::setsockopt(s->prev_fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
+    if (my_ring_listen >= 0) ::close(my_ring_listen);
+
     return s;
 }
 
@@ -279,17 +426,93 @@ extern "C" TC_GLOO_HIDDEN void tc_gloo_destroy(GlooState* s) {
     close_gloo_state(s);
 }
 
-/* All-reduce SUM over a host fp32 buffer using rank-0-as-broker. Simpler
- * than full ring but correct: each non-zero rank sends to rank 0, rank 0
- * sums + broadcasts back. O(N * count) bytes through rank 0.
+/* Ring all-reduce SUM over fp32 buffer.
  *
- * For large clusters this should be replaced with the ring reduce-scatter
- * + all-gather algorithm; for the Quebec <-> Alaska 2-site case (effectively
- * world_size=2 across the bridge), the broker pattern is identical to
- * ring in bandwidth and simpler in code. */
+ * Bandwidth: 2*(N-1)/N * count bytes per rank, vs N*count for broker.
+ * For N=4 this is ~1.5*count per rank instead of 4*count through rank 0,
+ * so the rank-0 hot spot disappears and per-rank wall-time drops ~2-4x.
+ *
+ * Algorithm (standard ring):
+ *   Phase 1 (reduce-scatter, N-1 steps): each rank cycles a chunk of the
+ *     buffer to its next neighbor while receiving and accumulating a
+ *     chunk from its prev neighbor. After N-1 steps, rank r owns the
+ *     fully-reduced chunk at index (r+1)%N.
+ *   Phase 2 (all-gather, N-1 steps): each rank passes its now-reduced
+ *     chunk around the ring, overwriting (not summing) on receive.
+ *
+ * Chunks are equal-sized except the last, which may be smaller. We pad
+ * up to ceil-divide so every rank sends/receives the same chunk size,
+ * keeping the loop simple. */
+extern "C" TC_GLOO_HIDDEN int tc_gloo_allreduce_f32_sum_ring(GlooState* s, int world_size, int rank,
+                                                              float* data, size_t n) {
+    if (world_size <= 1) return 0;
+    if (s->next_fd < 0 || s->prev_fd < 0) return -1;
+    const size_t chunk_elems = (n + world_size - 1) / world_size;
+    std::vector<float> recv_buf(chunk_elems, 0.0f);
+
+    auto chunk_range = [&](int idx, size_t* start, size_t* len) {
+        *start = (size_t)idx * chunk_elems;
+        if (*start >= n) { *len = 0; return; }
+        const size_t end = std::min(n, *start + chunk_elems);
+        *len = end - *start;
+    };
+
+    /* Phase 1: reduce-scatter.
+     * Initial state: each rank holds the full buffer; we'll cycle chunks.
+     * At step k, rank r sends chunk[(r-k+N)%N] to next, recvs chunk from
+     * prev and accumulates into chunk[(r-k-1+N)%N]. */
+    int send_idx = rank;
+    int recv_idx = (rank - 1 + world_size) % world_size;
+    for (int step = 0; step < world_size - 1; ++step) {
+        size_t send_off = 0, send_len = 0;
+        size_t recv_off = 0, recv_len = 0;
+        chunk_range(send_idx, &send_off, &send_len);
+        chunk_range(recv_idx, &recv_off, &recv_len);
+
+        if (!exchange_ring_chunks(s,
+                                  data + send_off, send_len * sizeof(float),
+                                  recv_buf.data(), recv_len * sizeof(float))) return -1;
+        if (recv_len > 0) {
+            for (size_t i = 0; i < recv_len; ++i) data[recv_off + i] += recv_buf[i];
+        }
+        send_idx = recv_idx;
+        recv_idx = (recv_idx - 1 + world_size) % world_size;
+    }
+
+    /* Phase 2: all-gather. Each rank now owns the fully-reduced chunk at
+     * index (rank+1)%N. Cycle it around. */
+    send_idx = (rank + 1) % world_size;
+    recv_idx = rank;
+    for (int step = 0; step < world_size - 1; ++step) {
+        size_t send_off = 0, send_len = 0;
+        size_t recv_off = 0, recv_len = 0;
+        chunk_range(send_idx, &send_off, &send_len);
+        chunk_range(recv_idx, &recv_off, &recv_len);
+
+        if (!exchange_ring_chunks(s,
+                                  data + send_off, send_len * sizeof(float),
+                                  data + recv_off, recv_len * sizeof(float))) return -1;
+        send_idx = recv_idx;
+        recv_idx = (recv_idx - 1 + world_size) % world_size;
+    }
+    return 0;
+}
+
+/* All-reduce SUM over a host fp32 buffer. For world_size <= 2 uses the
+ * rank-0-as-broker pattern (which is identical to ring at N=2). For
+ * world_size >= 3 uses the ring algorithm via tc_gloo_allreduce_f32_sum_ring
+ * which eliminates the rank-0 hot spot.
+ *
+ * Opt-out: set TC_GLOO_NO_RING=1 to force broker even at N >= 3 (useful
+ * for debugging if the ring topology setup fails). */
 extern "C" TC_GLOO_HIDDEN int tc_gloo_allreduce_f32_sum(GlooState* s, int world_size, int rank,
                                                          float* data, size_t n) {
     if (world_size <= 1) return 0;
+    const char* no_ring = std::getenv("TC_GLOO_NO_RING");
+    if (world_size >= 3 && !(no_ring && no_ring[0] == '1') &&
+        s->next_fd >= 0 && s->prev_fd >= 0) {
+        return tc_gloo_allreduce_f32_sum_ring(s, world_size, rank, data, n);
+    }
     const size_t bytes = n * sizeof(float);
     if (rank == 0) {
         std::vector<float> tmp(n);

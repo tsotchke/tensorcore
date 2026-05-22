@@ -20,8 +20,9 @@ every architectural primitive in code and tested:
   **32.28 TFLOPS fp16/fp32-accum**, and **60.42 TFLOPS fp16-accum**.
 - **chipStar HIP backend** scaffolding for Intel Level Zero, AMD OpenCL,
   ARM Mali — runs on every Khronos-standards GPU vendor.
-- GLOO TCP transport with full collective set: SUM/AVG/MIN/MAX, broadcast
-  any-root, allgather, sparse_allreduce.
+- GLOO TCP transport with full collective set: ring fp32 SUM/AVG for
+  3+ ranks, brokered SUM/AVG/MIN/MAX fallback, broadcast any-root,
+  allgather, sparse_allreduce.
 - DiLoCo runtime with NONE/FP16/TOPK_1PCT/TOPK_01PCT compression,
   SGD/Nesterov/Adam outer optimizers, async overlap, sparse-on-the-wire
   cross-continent path.
@@ -34,6 +35,7 @@ every architectural primitive in code and tested:
 
 | Run | Hardware | Result |
 |---|---|---|
+| `test_gloo_fork` (forked) | Atlas M2 Ultra | ✓ — 4-rank TCP ring SUM |
 | `test_diloco_gloo_fork` (forked) | Atlas M2 Ultra | ✓ — 2 ranks converge |
 | `test_diloco_sparse_fork` (forked) | Atlas M2 Ultra | ✓ — **16× bandwidth reduction** |
 | Atlas ↔ Enki (Tailscale) | M2 Ultra + M4 | ✓ — cross-arch Apple |
@@ -41,8 +43,8 @@ every architectural primitive in code and tested:
 | Atlas ↔ cosbox (Tailscale, CUDA-built) | Mac + RTX 3090 host | ✓ — TC_ENABLE_CUDA validated |
 | **4-rank cross-continent: Atlas + Enki + old-donkey + cosbox** | **Mac×2 + Linux×2, two continents** | **✓ — first 4-way mesh** |
 | `tc_cuda_init` device introspection | RTX 3090 Ampere sm_8.6 | ✓ — fp16+bf16+int8_tc+tf32 |
-| `tc_gemm` via cuBLAS tensor cores | RTX 3090 4096³ fp16 | ✓ — **5.93 TFLOPS** |
-| `tc_gemm` via cuBLAS sgemm | RTX 3090 4096³ fp32 | ✓ — 3.39 TFLOPS |
+| `tc_gemm` via cuBLAS tensor cores | RTX 3090 4096³ fp16 | ✓ — **32.28 TFLOPS** fp32-accum / **60.42 TFLOPS** fp16-accum |
+| `tc_gemm` via cuBLAS sgemm | RTX 3090 4096³ fp32 | ✓ — 31.32 TFLOPS |
 
 ### Observability
 
@@ -137,6 +139,11 @@ every architectural primitive in code and tested:
   The default CTest suite registers the GLOO, DiLoCo-over-GLOO, and sparse
   TOPK-over-GLOO fork smokes so Darwin distributed behavior is exercised
   before release.
+- `Add GLOO TCP ring all-reduce`: `TC_DIST_GLOO` now builds direct ring
+  neighbor sockets for `world_size >= 3` and routes fp32 SUM through a
+  reduce-scatter/all-gather ring. `TC_GLOO_NO_RING=1` forces the broker
+  fallback for debugging. `test_gloo_fork` now runs four forked ranks so
+  the ring path is covered in default and portable CTest.
 - `Add memory-tier public ABI`: `include/tensorcore/memory_tier.h` and
   `lib/core/memory_tier_stub.cpp` expose buffer tier hints, async
   promote/demote entry points, and usage accounting. The shipped baseline

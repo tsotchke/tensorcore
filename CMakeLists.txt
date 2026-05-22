@@ -334,6 +334,7 @@ set(TC_COMMON_SOURCES
     lib/hip/device.cpp
     lib/hip/gemm.cpp
     lib/cuda/device.cpp
+    lib/cuda/buffer.cpp
     lib/cuda/gemm.cpp
     lib/core/memory_tier_stub.cpp
     lib/core/checkpoint_stub.cpp

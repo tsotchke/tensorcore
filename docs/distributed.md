@@ -77,11 +77,13 @@ runtime yet).
 ### `TC_DIST_GLOO`
 
 CPU-backed all-reduce over Ethernet for default Apple and portable CPU
-builds. Slower than ring but works between any two networked hosts. The
-current in-tree transport is a rank-0 brokered TCP implementation with
-`gloo+tcp://host:port` rendezvous. It supports fp32 SUM/AVG/MIN/MAX
-all-reduce, fp16 SUM/AVG all-reduce, byte-level broadcast from any root,
-allgather, barrier, and the internal sparse TOPK DiLoCo wire path.
+builds. Slower than the future TB5/JACCL backend but works between any
+networked hosts. The current in-tree transport uses `gloo+tcp://host:port`
+rendezvous, direct ring neighbor sockets for `world_size >= 3` fp32 SUM,
+and rank-0 broker fallback for two-rank or non-SUM collectives. It
+supports fp32 SUM/AVG/MIN/MAX all-reduce, fp16 SUM/AVG all-reduce,
+byte-level broadcast from any root, allgather, barrier, and the internal
+sparse TOPK DiLoCo wire path.
 bf16/int8 reductions and public generic sparse packed wire-format APIs
 still return explicit unsupported statuses.
 

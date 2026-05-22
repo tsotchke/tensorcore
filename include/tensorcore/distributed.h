@@ -19,9 +19,9 @@ extern "C" {
  *                     lives in lib/distributed/ring_tb5.mm (phase v0.5 once
  *                     we can validate against MLX's JACCL).
  *   - TC_DIST_GLOO:   portable CPU TCP fallback over Ethernet. The v0.1
- *                     baseline supports fp32 SUM/AVG/MIN/MAX all-reduce,
- *                     fp16 SUM/AVG all-reduce, byte-level broadcast,
- *                     allgather, and barrier.
+ *                     baseline supports ring fp32 SUM/AVG for 3+ ranks,
+ *                     brokered fp32 MIN/MAX and two-rank SUM/AVG, fp16
+ *                     SUM/AVG, byte-level broadcast, allgather, and barrier.
  *
  * v0.1 ships TC_DIST_SINGLE and the portable CPU TC_DIST_GLOO baseline
  * working end-to-end so the API + Eshkol bindings + user-side gradient

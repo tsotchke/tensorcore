@@ -237,11 +237,10 @@ selected with `TC_USE_CUDA_GEMM=1`, and HIP remains behind `tc_hip_init`.
 |---|---|---|---|
 | `TC_DIST_SINGLE` | World size 1, in-process tests | n/a | Single rank only |
 | `TC_DIST_RING` | Apple TB5 ring (future) | 80-120 Gbps | Reserved for v0.5 |
-| `TC_DIST_GLOO` | **All real multi-host setups today** | Link-limited | Rank-0-broker (functional for any N, optimal for 2) |
+| `TC_DIST_GLOO` | **All real multi-host setups today** | Link-limited | Ring fp32 SUM for 3+ ranks; broker fallback for the rest |
 
-Future: `TC_DIST_GLOO` will swap its rank-0 broker for a proper ring
-reduce-scatter+allgather for >2-rank meshes. The public ABI doesn't
-change.
+Set `TC_GLOO_NO_RING=1` to force the rank-0 broker for debugging or when
+validating a link that rejects direct rank-to-rank sockets.
 
 ## 6. DiLoCo configuration
 
@@ -317,7 +316,6 @@ network issue.
   managed-memory cuBLAS path is validated on RTX 3090, while default
   selection still waits for broader correctness/perf evidence.
 - Auto-select backend in `tc_init` (`Metal>CUDA>HIP>CPU` priority)
-- Ring all-reduce in GLOO (replaces broker for >2-rank meshes)
 - Broader CUDA allocator policy for default no-copy GEMM without an env
   flag.
 - Activation checkpointing real impl (currently registry-stub)
