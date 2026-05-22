@@ -320,6 +320,28 @@ tc_status_t gemm_compute_cblas_f16(const tc_gemm_desc* d,
 }
 #endif  /* TC_HAS_CBLAS */
 
+/* Cache the in-tree-kernel opt-in env vars once per thread. Env vars do not
+ * change mid-process for these flags (they're configuration, not run-time
+ * inputs). Reading getenv on every gemm_compute call added ~30 ns of
+ * syscall-ish overhead and showed up as a +5-10 % penalty for the very
+ * small matmuls coming through the PyTorch bridge. */
+struct gemm_env_cache {
+    bool prefer_avx2;
+    bool prefer_amx;
+    bool prefer_neon;
+};
+static const gemm_env_cache& load_gemm_env() {
+    static thread_local gemm_env_cache cache = []() {
+        gemm_env_cache c{};
+        const char* e;
+        e = std::getenv("TC_USE_AVX2_GEMM"); c.prefer_avx2 = (e && e[0] == '1');
+        e = std::getenv("TC_USE_AMX_GEMM");  c.prefer_amx  = (e && e[0] == '1');
+        e = std::getenv("TC_USE_NEON_GEMM"); c.prefer_neon = (e && e[0] == '1');
+        return c;
+    }();
+    return cache;
+}
+
 tc_status_t gemm_compute(const tc_gemm_desc* d, const void* A, const void* B, void* C) {
     const int32_t ldc = effective_ldc(d);
 
@@ -336,8 +358,12 @@ tc_status_t gemm_compute(const tc_gemm_desc* d, const void* A, const void* B, vo
      * For now both in-tree kernels are opt-in via TC_USE_AVX2_GEMM / TC_USE_NEON_GEMM
      * so we can A/B against the BLAS delegate. Once the OpenMP outer loops are
      * wired (Phase 1.x), the defaults flip. */
-    const char* prefer_avx2 = std::getenv("TC_USE_AVX2_GEMM");
-    if (prefer_avx2 && prefer_avx2[0] == '1' && tc_avx2_gemm_f32_available() &&
+    /* CUDA GEMM dispatch happens in tc_gemm() proper (it has tc_buffer*
+     * which we need; gemm_compute only has raw pointers). */
+
+    const auto& env = load_gemm_env();
+
+    if (env.prefer_avx2 && tc_avx2_gemm_f32_available() &&
         d->c_dtype == TC_DTYPE_F32 && d->a_dtype == TC_DTYPE_F32 && d->b_dtype == TC_DTYPE_F32) {
         if (tc_avx2_gemm_f32(d->M, d->N, d->K,
                              d->alpha,
@@ -356,8 +382,7 @@ tc_status_t gemm_compute(const tc_gemm_desc* d, const void* A, const void* B, vo
      * unsupported configurations (non-fp32, transposed, alpha!=1, beta!=0, M or N
      * not divisible by 16) so we fall through to the NEON / CBLAS path
      * cleanly without a duplicate guard here. */
-    const char* prefer_amx = std::getenv("TC_USE_AMX_GEMM");
-    if (prefer_amx && prefer_amx[0] == '1' && tc_amx_gemm_f32_available() &&
+    if (env.prefer_amx && tc_amx_gemm_f32_available() &&
         d->c_dtype == TC_DTYPE_F32 && d->a_dtype == TC_DTYPE_F32 && d->b_dtype == TC_DTYPE_F32) {
         if (tc_amx_gemm_f32(d->M, d->N, d->K,
                             d->alpha,
@@ -370,8 +395,7 @@ tc_status_t gemm_compute(const tc_gemm_desc* d, const void* A, const void* B, vo
         /* Fall through to NEON / CBLAS / reference. */
     }
 
-    const char* prefer_neon = std::getenv("TC_USE_NEON_GEMM");
-    if (prefer_neon && prefer_neon[0] == '1' && tc_neon_gemm_f32_available() &&
+    if (env.prefer_neon && tc_neon_gemm_f32_available() &&
         d->c_dtype == TC_DTYPE_F32 && d->a_dtype == TC_DTYPE_F32 && d->b_dtype == TC_DTYPE_F32) {
         /* The NEON pack functions handle transposed A and B natively, so no
          * dispatch guard is needed beyond the dtype check. */
@@ -484,6 +508,14 @@ bool batched_matrix_bytes(int32_t rows,
 
 }  // namespace
 
+#if defined(TC_ENABLE_CUDA)
+extern "C" tc_status_t tc_cuda_gemm(tc_context* ctx,
+                                     const tc_gemm_desc* desc,
+                                     const tc_buffer* A,
+                                     const tc_buffer* B,
+                                     tc_buffer* C);
+#endif
+
 extern "C" tc_status_t tc_gemm(tc_context* ctx,
                                const tc_gemm_desc* desc,
                                const tc_buffer* A,
@@ -494,6 +526,22 @@ extern "C" tc_status_t tc_gemm(tc_context* ctx,
     if (!supports_cpu_gemm(desc)) return TC_ERR_UNSUPPORTED_DTYPE;
     tc_status_t s = validate_gemm_buffers(ctx, desc, A, B, C);
     if (s != TC_OK) return s;
+
+#if defined(TC_ENABLE_CUDA)
+    /* CUDA dispatch: when TC_USE_CUDA_GEMM=1 and a CUDA device is available,
+     * route fp32/fp16 GEMM into cuBLAS. The current CUDA path stages through
+     * host tc_buffers and manages its own host/device transfers internally. */
+    const char* prefer_cuda = std::getenv("TC_USE_CUDA_GEMM");
+    if (prefer_cuda && prefer_cuda[0] == '1' &&
+        (desc->c_dtype == TC_DTYPE_F32 || desc->c_dtype == TC_DTYPE_F16) &&
+        desc->a_dtype == desc->c_dtype && desc->b_dtype == desc->c_dtype) {
+        tc_status_t cs = tc_cuda_gemm(ctx, desc, A, B, C);
+        if (cs == TC_OK) {
+            return tc_record_dispatch("tc_gemm", TC_BACKEND_CUDA, TC_OK);
+        }
+        /* Fall through to CPU path on CUDA error (e.g. no device). */
+    }
+#endif
 
     void* Ap = nullptr;
     void* Bp = nullptr;
