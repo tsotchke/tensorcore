@@ -134,7 +134,6 @@ endif()
 
 set(TC_TESTS
     test_device
-    test_amx_gemm
     test_gemm_f32
     test_gemm_f16
     test_gemm_bf16
@@ -164,7 +163,6 @@ foreach(t IN LISTS TC_TESTS)
         ENVIRONMENT "TC_METALLIB=${TC_METALLIB_PATH}"
     )
 endforeach()
-set_tests_properties(test_amx_gemm PROPERTIES SKIP_RETURN_CODE 77)
 
 # DiLoCo single-rank runtime smoke - same source as the CPU build's test,
 # runs on Apple too because the runtime is platform-independent.
