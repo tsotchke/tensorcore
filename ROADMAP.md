@@ -153,9 +153,10 @@ some still queued.
       packed exchange, and DiLoCo dense outer steps. WAN correctness proof
       exists; long-duration performance soak remains.
 - [x] **NAT-tolerant direct GLOO ring** — ranks advertise reachable
-      per-host addresses, bound neighbor-connection timeouts, coordinate
-      broker fallback, and emit `TC_GLOO_TRACE=1` route logs. Proven on the
-      four-rank Atlas + Enki + old-donkey + cosbox cross-continent mesh.
+      IPv4/IPv6 per-host addresses, bound neighbor-connection timeouts,
+      coordinate broker fallback, and emit `TC_GLOO_TRACE=1` route logs.
+      Proven on localhost IPv4/IPv6 fork smokes and on the four-rank
+      Atlas + Enki + old-donkey + cosbox cross-continent mesh.
 - [x] **Sparse top-k compressed all-reduce** in DiLoCo — GLOO
       now ships TOPK deltas as sparse `(idx, fp16)` payloads and validates
       the bandwidth cut with forked localhost and cross-continent sparse

@@ -224,10 +224,17 @@ wait
 ```
 
 Validated working state for this exact deployment:
-- Rank 0 rendezvous: 17 sec (waits for 3 peers via WAN)
-- DiLoCo 3 outer x 5 inner across all four ranks: 4-17 sec depending on
-  which rank's network leg is slowest
-- All ranks converge to the same theta; bit-correct sum verified
+- `2026-05-23` on commit `2ebf797`: four-rank
+  Atlas -> Enki -> old-donkey -> cosbox -> Atlas Tailscale ring with
+  `TC_GLOO_RING=1 TC_GLOO_TRACE=1 TC_GLOO_RING_CONNECT_TIMEOUT_MS=10000`.
+  All four ranks logged `direct_ring=enabled` and
+  `allreduce_f32_sum route=ring` for `--test allreduce --elements 65536
+  --iters 2`.
+- Rank 0 rendezvous: 14.1 sec waiting for three WAN peers. Timed 0.25 MB
+  fp32 SUM allreduce was 835-925 ms/iter across the Alaska relay leg.
+- Earlier full DiLoCo proof: 3 outer x 5 inner across all four ranks in
+  4-17 sec depending on which network leg is slowest, with all ranks
+  converging to the same theta and bit-correct sum verified.
 
 ## 4. Backend selection
 
