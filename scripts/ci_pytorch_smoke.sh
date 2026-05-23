@@ -105,10 +105,15 @@ if state.get("factory_kernels") is not False or state.get("storage_kernels") is 
     raise AssertionError(f"backend state should report missing factory/storage kernels: {state}")
 if state.get("matmul_extension_loaded") is not True:
     raise AssertionError(f"backend state should report matmul extension loaded: {state}")
+probe = state.get("matmul_dispatch_probe")
+if not isinstance(probe, dict) or probe.get("reason") != "eligible":
+    raise AssertionError(f"backend state dispatch probe mismatch: {state}")
 if torch.tensorcore.backend_state() != state:
     raise AssertionError("torch.tensorcore.backend_state does not match package state")
 report = tct.pytorch_backend_report()
-if "allocation=not_implemented" not in report or "registered=True" not in report:
+if ("allocation=not_implemented" not in report or
+        "dispatch_probe=eligible" not in report or
+        "registered=True" not in report):
     raise AssertionError(f"backend report missing expected fields: {report}")
 if torch.tensorcore.backend_report() != report:
     raise AssertionError("torch.tensorcore.backend_report does not match package report")
@@ -134,6 +139,21 @@ torch.manual_seed(7)
 A = torch.randn(3, 4, dtype=torch.float32)
 B = torch.randn(4, 5, dtype=torch.float32)
 expected = A @ B
+elig = tct.matmul_eligibility(A, B)
+if elig.get("reason") != "eligible" or not elig.get("eligible"):
+    raise AssertionError(f"expected eligible matmul probe, got {elig}")
+if not tct.is_matmul_eligible(A, B):
+    raise AssertionError("is_matmul_eligible rejected an eligible fp32 CPU matmul")
+if tct.matmul_eligibility(A, B.to(torch.bfloat16)).get("reason") != "dtype_mismatch":
+    raise AssertionError("matmul_eligibility did not report dtype_mismatch")
+if tct.matmul_eligibility(
+        torch.ones(2, 2, dtype=torch.int32),
+        torch.ones(2, 2, dtype=torch.int32)).get("reason") != "unsupported_dtype":
+    raise AssertionError("matmul_eligibility did not report unsupported_dtype")
+if tct.matmul_eligibility(torch.randn(2, 3), torch.randn(4, 2)).get("reason") != "shape_mismatch":
+    raise AssertionError("matmul_eligibility did not report shape_mismatch")
+if tct.matmul_eligibility(torch.randn(2, 3, 1), torch.randn(3, 2)).get("reason") != "rank_mismatch":
+    raise AssertionError("matmul_eligibility did not report rank_mismatch")
 out = tct.matmul(A, B)
 assert_close(out, expected)
 if tct.last_backend_name() != "portable_cpu":

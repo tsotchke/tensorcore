@@ -56,6 +56,8 @@ every architectural primitive in code and tested:
 - Experimental PyTorch bridge with zero-copy fp32 CPU matmul, an opt-in
   `torch.matmul` dispatcher hook, and structured backend-state reporting
   for the current PrivateUse1 shim versus future allocator/factory kernels.
+  The bridge now also exposes `matmul_eligibility()` so training code can
+  see the exact tensorcore-dispatch versus ATen-fallback reason.
 
 ### End-to-end validation matrix
 

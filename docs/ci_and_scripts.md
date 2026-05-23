@@ -119,6 +119,9 @@ script force-builds `tensorcore_torch` against
   snapshot: registered runtime shim, generated tensor helpers, matmul
   extension loaded, and allocator/storage/factory kernels still marked
   `not_implemented`
+- `tensorcore_torch.matmul_eligibility()` exposes the dispatcher gate used
+  by the opt-in `torch.matmul` hook, including explicit fallback reasons for
+  dtype, rank, and shape mismatches
 - direct tensor allocation with `torch.empty(..., device="tensorcore")`
   remains unavailable unless `REQUIRE_PYTORCH_BACKEND=1` is set, because
   allocator/storage/factory kernels are a later backend step

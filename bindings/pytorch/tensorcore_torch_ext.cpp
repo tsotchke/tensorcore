@@ -27,6 +27,7 @@
 
 #include <ATen/ops/matmul_native.h>
 #include <c10/core/DeviceType.h>
+#include <pybind11/stl.h>
 
 extern "C" {
 #include "tensorcore/tensorcore.h"
@@ -38,8 +39,10 @@ extern "C" {
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace {
+namespace py = pybind11;
 
 /* Process-wide tensorcore context, lazily constructed. The C API's
  * `tc_context*` is reusable across many GEMMs; we don't want to pay
@@ -70,18 +73,26 @@ void ensure_ctx() {
     init_lock.clear(std::memory_order_release);
 }
 
+std::string tc_matmul_eligibility_reason(const at::Tensor& A, const at::Tensor& B) {
+    if (A.dtype() != B.dtype()) return "dtype_mismatch";
+    if (A.dtype() != torch::kFloat32 && A.dtype() != torch::kBFloat16) {
+        return "unsupported_dtype";
+    }
+    if (A.layout() != torch::kStrided || B.layout() != torch::kStrided) {
+        return "non_strided_layout";
+    }
+    if (A.dim() != 2 || B.dim() != 2) return "rank_mismatch";
+    if (A.size(1) != B.size(0)) return "shape_mismatch";
+    if (!A.device().is_cpu() || !B.device().is_cpu()) return "non_cpu_device";
+    return "eligible";
+}
+
 bool is_tc_matmul_eligible(const at::Tensor& A, const at::Tensor& B) {
-    const bool dtype_ok =
-        (A.dtype() == torch::kFloat32 && B.dtype() == torch::kFloat32) ||
-        (A.dtype() == torch::kBFloat16 && B.dtype() == torch::kBFloat16);
-    return dtype_ok &&
-           A.layout() == torch::kStrided &&
-           B.layout() == torch::kStrided &&
-           A.dim() == 2 &&
-           B.dim() == 2 &&
-           A.size(1) == B.size(0) &&
-           A.device().is_cpu() &&
-           B.device().is_cpu();
+    return tc_matmul_eligibility_reason(A, B) == "eligible";
+}
+
+std::vector<int64_t> tensor_sizes(const at::Tensor& t) {
+    return std::vector<int64_t>(t.sizes().begin(), t.sizes().end());
 }
 
 void register_privateuse1_name() {
@@ -110,6 +121,22 @@ size_t checked_matrix_bytes(const char* name, int64_t rows, int64_t cols,
 }
 
 }  // namespace
+
+py::dict tc_matmul_eligibility(const at::Tensor& A, const at::Tensor& B) {
+    const std::string reason = tc_matmul_eligibility_reason(A, B);
+    py::dict result;
+    result["eligible"] = (reason == "eligible");
+    result["reason"] = reason;
+    result["a_sizes"] = tensor_sizes(A);
+    result["b_sizes"] = tensor_sizes(B);
+    result["a_dtype"] = std::string(c10::toString(A.scalar_type()));
+    result["b_dtype"] = std::string(c10::toString(B.scalar_type()));
+    result["a_device"] = A.device().str();
+    result["b_device"] = B.device().str();
+    result["default_matmul_enabled"] =
+        g_default_matmul.load(std::memory_order_acquire);
+    return result;
+}
 
 at::Tensor tc_matmul_fp32(const at::Tensor& A, const at::Tensor& B) {
     TORCH_CHECK(A.dtype() == B.dtype(),
@@ -299,6 +326,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "tc_matmul(A: Tensor[fp32|bf16, MxK], B: Tensor[fp32|bf16, KxN]) -> Tensor[MxN]");
     m.def("matmul_bf16", &tc_matmul_bf16,
           "tc_matmul_bf16(A: Tensor[bf16, MxK], B: Tensor[bf16, KxN]) -> Tensor[bf16, MxN]");
+    m.def("is_matmul_eligible", &is_tc_matmul_eligible,
+          "Return whether A and B can route through tensorcore's torch.matmul dispatcher hook");
+    m.def("matmul_eligibility", &tc_matmul_eligibility,
+          "Return a structured reason for tensorcore torch.matmul dispatcher eligibility");
     m.def("set_default_matmul", &tc_set_default_matmul,
           py::arg("enabled") = true,
           "Enable or disable the opt-in torch.matmul dispatcher hook; returns the previous state");

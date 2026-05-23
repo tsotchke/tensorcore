@@ -250,7 +250,9 @@ See `make help` for the full menu.
   storage / factory kernels land. Use
   `tensorcore_torch.pytorch_backend_state()` or
   `torch.tensorcore.backend_state()` to inspect that split explicitly from
-  training/deployment scripts. When PyTorch is installed, run
+  training/deployment scripts; `tensorcore_torch.matmul_eligibility()`
+  reports the exact dispatcher reason for tensorcore versus ATen fallback.
+  When PyTorch is installed, run
   `REQUIRE_PYTORCH=1 scripts/ci_pytorch_smoke.sh` to force-build the bridge
   and validate fp32/bf16, empty matmul, dispatcher, autograd fallback, and
   PrivateUse1 registration/backend-state behavior.

@@ -195,18 +195,22 @@ _PYTORCH_BACKEND_REGISTERED = _ensure_torch_backend_module()
 
 from ._C import (  # noqa: E402
     default_matmul_enabled,
+    is_matmul_eligible,
     last_backend_name,
     matmul,
     matmul_bf16,
+    matmul_eligibility,
     privateuse1_backend_name,
     set_default_matmul,
 )
 
 __all__ = [
     "default_matmul_enabled",
+    "is_matmul_eligible",
     "last_backend_name",
     "matmul",
     "matmul_bf16",
+    "matmul_eligibility",
     "privateuse1_backend_name",
     "pytorch_backend_report",
     "pytorch_backend_registered",
@@ -234,6 +238,10 @@ def pytorch_backend_state() -> Dict[str, Any]:
     device_count = 0
     current_device: Optional[int] = None
     amp_supported_dtypes: List[str] = []
+    matmul_dispatch_probe: Dict[str, Any] = {
+        "eligible": False,
+        "reason": "unprobed",
+    }
 
     if module is not None:
         is_available_fn = getattr(module, "is_available", None)
@@ -250,12 +258,20 @@ def pytorch_backend_state() -> Dict[str, Any]:
             )
             if amp_dtype_fn is not None:
                 amp_supported_dtypes = [str(dtype) for dtype in amp_dtype_fn()]
+            matmul_dispatch_probe = matmul_eligibility(
+                torch.empty((1, 1), dtype=torch.float32),
+                torch.empty((1, 1), dtype=torch.float32),
+            )
         except Exception:
             is_available = False
             device_count = 0
             current_device = None
             supports_device_allocation = False
             amp_supported_dtypes = []
+            matmul_dispatch_probe = {
+                "eligible": False,
+                "reason": "probe_error",
+            }
 
     allocator_status = "available" if supports_device_allocation else "not_implemented"
     if not _PYTORCH_BACKEND_REGISTERED:
@@ -276,6 +292,7 @@ def pytorch_backend_state() -> Dict[str, Any]:
         "factory_kernels": supports_device_allocation,
         "storage_kernels": supports_device_allocation,
         "matmul_extension_loaded": callable(matmul),
+        "matmul_dispatch_probe": matmul_dispatch_probe,
         "default_matmul_enabled": bool(default_matmul_enabled()),
         "last_backend_name": last_backend_name(),
         "amp_supported_dtypes": amp_supported_dtypes,
@@ -292,6 +309,7 @@ def pytorch_backend_report() -> str:
         f"module={state['torch_module_registered']} "
         f"tensor_methods={state['generated_tensor_methods']} "
         f"allocation={state['allocator_status']} "
+        f"dispatch_probe={state['matmul_dispatch_probe']['reason']} "
         f"matmul_extension={state['matmul_extension_loaded']} "
         f"default_matmul={state['default_matmul_enabled']} "
         f"last_backend={state['last_backend_name']}"
