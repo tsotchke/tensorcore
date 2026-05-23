@@ -66,8 +66,10 @@ void ensure_ctx() {
 }
 
 bool is_tc_matmul_eligible(const at::Tensor& A, const at::Tensor& B) {
-    return A.dtype() == torch::kFloat32 &&
-           B.dtype() == torch::kFloat32 &&
+    const bool dtype_ok =
+        (A.dtype() == torch::kFloat32 && B.dtype() == torch::kFloat32) ||
+        (A.dtype() == torch::kBFloat16 && B.dtype() == torch::kBFloat16);
+    return dtype_ok &&
            A.layout() == torch::kStrided &&
            B.layout() == torch::kStrided &&
            A.dim() == 2 &&
@@ -86,8 +88,10 @@ void register_privateuse1_name() {
 }  // namespace
 
 at::Tensor tc_matmul_fp32(const at::Tensor& A, const at::Tensor& B) {
-    TORCH_CHECK(A.dtype() == torch::kFloat32, "tc_matmul requires fp32 A");
-    TORCH_CHECK(B.dtype() == torch::kFloat32, "tc_matmul requires fp32 B");
+    TORCH_CHECK(A.dtype() == B.dtype(),
+                "tc_matmul requires A and B to share dtype");
+    TORCH_CHECK(A.dtype() == torch::kFloat32 || A.dtype() == torch::kBFloat16,
+                "tc_matmul supports fp32 and bf16; got ", A.dtype());
     TORCH_CHECK(A.dim() == 2, "tc_matmul requires 2-D A; got dim=", A.dim());
     TORCH_CHECK(B.dim() == 2, "tc_matmul requires 2-D B; got dim=", B.dim());
     TORCH_CHECK(A.size(1) == B.size(0),
@@ -103,6 +107,10 @@ at::Tensor tc_matmul_fp32(const at::Tensor& A, const at::Tensor& B) {
     const int K = static_cast<int>(A_c.size(1));
     const int N = static_cast<int>(B_c.size(1));
 
+    const bool is_bf16 = (A.dtype() == torch::kBFloat16);
+    const size_t elem  = is_bf16 ? sizeof(uint16_t) : sizeof(float);
+    const tc_dtype_t tc_dt = is_bf16 ? TC_DTYPE_BF16 : TC_DTYPE_F32;
+
     ensure_ctx();
 
     /* Zero-copy wrap: tc_buffer_from_ptr returns a tc_buffer that aliases
@@ -117,18 +125,15 @@ at::Tensor tc_matmul_fp32(const at::Tensor& A, const at::Tensor& B) {
         if (bC) tc_buffer_free(g_ctx, bC);
     };
 
-    const size_t bytes_a = static_cast<size_t>(M) * K * sizeof(float);
-    const size_t bytes_b = static_cast<size_t>(K) * N * sizeof(float);
-    const size_t bytes_c = static_cast<size_t>(M) * N * sizeof(float);
+    const size_t bytes_a = static_cast<size_t>(M) * K * elem;
+    const size_t bytes_b = static_cast<size_t>(K) * N * elem;
+    const size_t bytes_c = static_cast<size_t>(M) * N * elem;
 
     auto out = torch::empty({M, N}, A_c.options());
 
-    if (tc_buffer_from_ptr(g_ctx, const_cast<float*>(A_c.data_ptr<float>()),
-                           bytes_a, &bA) != TC_OK ||
-        tc_buffer_from_ptr(g_ctx, const_cast<float*>(B_c.data_ptr<float>()),
-                           bytes_b, &bB) != TC_OK ||
-        tc_buffer_from_ptr(g_ctx, out.data_ptr<float>(),
-                           bytes_c, &bC) != TC_OK) {
+    if (tc_buffer_from_ptr(g_ctx, A_c.data_ptr(), bytes_a, &bA) != TC_OK ||
+        tc_buffer_from_ptr(g_ctx, B_c.data_ptr(), bytes_b, &bB) != TC_OK ||
+        tc_buffer_from_ptr(g_ctx, out.data_ptr(),  bytes_c, &bC) != TC_OK) {
         cleanup();
         throw std::runtime_error("tc_buffer_from_ptr failed (build against "
                                  "tensorcore with the from_ptr API)");
@@ -136,10 +141,10 @@ at::Tensor tc_matmul_fp32(const at::Tensor& A, const at::Tensor& B) {
 
     tc_gemm_desc desc{};
     desc.M = M; desc.N = N; desc.K = K;
-    desc.a_dtype = TC_DTYPE_F32;
-    desc.b_dtype = TC_DTYPE_F32;
-    desc.c_dtype = TC_DTYPE_F32;
-    desc.accum_dtype = TC_DTYPE_F32;
+    desc.a_dtype = tc_dt;
+    desc.b_dtype = tc_dt;
+    desc.c_dtype = tc_dt;
+    desc.accum_dtype = TC_DTYPE_F32;     /* bf16 in/out, fp32 accum (CBLAS) */
     desc.alpha = 1.0f;
     desc.beta  = 0.0f;
     desc.transpose_a = false;

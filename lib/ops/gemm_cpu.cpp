@@ -190,10 +190,13 @@ bool supports_cpu_gemm(const tc_gemm_desc* d) {
     const bool f16 =
         d->a_dtype == TC_DTYPE_F16 && d->b_dtype == TC_DTYPE_F16 &&
         d->c_dtype == TC_DTYPE_F16 && d->accum_dtype == TC_DTYPE_F32;
+    const bool bf16 =
+        d->a_dtype == TC_DTYPE_BF16 && d->b_dtype == TC_DTYPE_BF16 &&
+        d->c_dtype == TC_DTYPE_BF16 && d->accum_dtype == TC_DTYPE_F32;
     const bool i8 =
         d->a_dtype == TC_DTYPE_I8 && d->b_dtype == TC_DTYPE_I8 &&
         d->c_dtype == TC_DTYPE_I32 && d->accum_dtype == TC_DTYPE_I32;
-    return f32 || f16 || i8;
+    return f32 || f16 || bf16 || i8;
 }
 
 float load_a_f32(const float* A, const tc_gemm_desc* d, int m, int k) {
@@ -265,6 +268,50 @@ void quantize_fp32_to_fp16(const float* src, int32_t rows, int32_t cols,
     }
 }
 
+/* BF16 ↔ FP32: trivially-aligned formats. BF16 IS the high 16 bits of an
+ * FP32 (sign + 8 exp + 7 mantissa). Dequant = shift up; quant = take high
+ * half with round-to-nearest-even applied to the truncated low half. */
+static inline float bf16_to_f32(uint16_t b) {
+    union { uint32_t u; float f; } v = { (uint32_t)b << 16 };
+    return v.f;
+}
+
+static inline uint16_t f32_to_bf16(float f) {
+    union { float f; uint32_t u; } v = { f };
+    /* Round-to-nearest-even: add half-ulp and round up only when the
+     * bottom 16 bits exceed 0x8000, or equal 0x8000 with an odd top half. */
+    const uint32_t lower = v.u & 0xFFFFu;
+    const uint32_t upper = v.u >> 16;
+    const uint32_t round =
+        (lower > 0x8000u) || ((lower == 0x8000u) && (upper & 1u));
+    return (uint16_t)(upper + round);
+}
+
+/* No #pragma omp here: this code path runs from inside Python via the
+ * PyTorch bridge, where libomp is already loaded by PyTorch. A second
+ * libomp init from tensorcore's link of OpenMP::OpenMP_CXX triggers OMP
+ * Error #15 ("multiple OMP runtimes linked") and the KMP_DUPLICATE_LIB_OK
+ * workaround segfaults. BF16 dequant/quant is a few hundred MB of
+ * straight-line work — fast enough serial even at 4096x4096. The fp32
+ * path doesn't hit this because it doesn't dequant. */
+void dequant_bf16_to_fp32(const uint16_t* src, int32_t rows, int32_t cols,
+                          int32_t ld, float* dst) {
+    for (int32_t r = 0; r < rows; ++r) {
+        const uint16_t* row = src + (size_t)r * ld;
+        float* dst_row = dst + (size_t)r * cols;
+        for (int32_t c = 0; c < cols; ++c) dst_row[c] = bf16_to_f32(row[c]);
+    }
+}
+
+void quantize_fp32_to_bf16(const float* src, int32_t rows, int32_t cols,
+                           int32_t ld, uint16_t* dst) {
+    for (int32_t r = 0; r < rows; ++r) {
+        uint16_t* dst_row = dst + (size_t)r * ld;
+        const float* src_row = src + (size_t)r * cols;
+        for (int32_t c = 0; c < cols; ++c) dst_row[c] = f32_to_bf16(src_row[c]);
+    }
+}
+
 tc_status_t gemm_compute_cblas_f32(const tc_gemm_desc* d,
                                    const float* A, const float* B, float* C) {
     /* tensorcore's descriptor is row-major; cblas with CblasRowMajor honors
@@ -274,6 +321,45 @@ tc_status_t gemm_compute_cblas_f32(const tc_gemm_desc* d,
     tc_cblas_sgemm(ta, tb, d->M, d->N, d->K, d->alpha,
                    A, effective_lda(d), B, effective_ldb(d),
                    d->beta, C, effective_ldc(d));
+    return TC_OK;
+}
+
+tc_status_t gemm_compute_cblas_bf16(const tc_gemm_desc* d,
+                                    const uint16_t* A, const uint16_t* B,
+                                    uint16_t* C) {
+    /* BF16 path: same shape as the fp16 path but with bf16 dequant/quant.
+     * BF16 dequant/quant is one shift each (vs the branchier fp16 path),
+     * so this is slightly cheaper at the conversion step. The Accelerate
+     * sgemm call in the middle is identical. */
+    static thread_local std::vector<float> tls_Af, tls_Bf, tls_Cf;
+
+    const int32_t a_rows = d->transpose_a ? d->K : d->M;
+    const int32_t a_cols = d->transpose_a ? d->M : d->K;
+    const int32_t b_rows = d->transpose_b ? d->N : d->K;
+    const int32_t b_cols = d->transpose_b ? d->K : d->N;
+
+    const size_t Af_n = (size_t)a_rows * a_cols;
+    const size_t Bf_n = (size_t)b_rows * b_cols;
+    const size_t Cf_n = (size_t)d->M * d->N;
+    if (tls_Af.size() < Af_n) tls_Af.resize(Af_n);
+    if (tls_Bf.size() < Bf_n) tls_Bf.resize(Bf_n);
+    if (tls_Cf.size() < Cf_n) tls_Cf.resize(Cf_n);
+    float* Af = tls_Af.data();
+    float* Bf = tls_Bf.data();
+    float* Cf = tls_Cf.data();
+
+    dequant_bf16_to_fp32(A, a_rows, a_cols, effective_lda(d), Af);
+    dequant_bf16_to_fp32(B, b_rows, b_cols, effective_ldb(d), Bf);
+    if (d->beta != 0.0f) {
+        dequant_bf16_to_fp32(C, d->M, d->N, effective_ldc(d), Cf);
+    }
+
+    const CBLAS_TRANSPOSE ta = d->transpose_a ? CblasTrans : CblasNoTrans;
+    const CBLAS_TRANSPOSE tb = d->transpose_b ? CblasTrans : CblasNoTrans;
+    tc_cblas_sgemm(ta, tb, d->M, d->N, d->K, d->alpha,
+                   Af, a_cols, Bf, b_cols,
+                   d->beta, Cf, d->N);
+    quantize_fp32_to_bf16(Cf, d->M, d->N, effective_ldc(d), C);
     return TC_OK;
 }
 
@@ -421,6 +507,10 @@ tc_status_t gemm_compute(const tc_gemm_desc* d, const void* A, const void* B, vo
         d->a_dtype == TC_DTYPE_F16 && d->b_dtype == TC_DTYPE_F16) {
         return gemm_compute_cblas_f16(d, (const uint16_t*)A, (const uint16_t*)B, (uint16_t*)C);
     }
+    if (d->c_dtype == TC_DTYPE_BF16 &&
+        d->a_dtype == TC_DTYPE_BF16 && d->b_dtype == TC_DTYPE_BF16) {
+        return gemm_compute_cblas_bf16(d, (const uint16_t*)A, (const uint16_t*)B, (uint16_t*)C);
+    }
     /* I32 (int8 inputs) falls through to the integer reference below. */
 #endif
 
@@ -523,18 +613,28 @@ extern "C" tc_status_t tc_gemm(tc_context* ctx,
                                tc_buffer* C) {
     if (!ctx) return TC_ERR_NOT_INITIALIZED;
     if (!validate_desc(desc) || !A || !B || !C) return TC_ERR_INVALID_ARG;
-    if (!supports_cpu_gemm(desc)) return TC_ERR_UNSUPPORTED_DTYPE;
+    /* Defer the CPU dtype gate until after CUDA dispatch: bf16/i8 may not
+     * be supported by the portable CPU path but ARE supported by CUDA. */
     tc_status_t s = validate_gemm_buffers(ctx, desc, A, B, C);
     if (s != TC_OK) return s;
 
 #if defined(TC_ENABLE_CUDA)
     /* CUDA dispatch: when TC_USE_CUDA_GEMM=1 and a CUDA device is available,
-     * route fp32/fp16 GEMM into cuBLAS. The current CUDA path stages through
-     * host tc_buffers and manages its own host/device transfers internally. */
+     * route GEMM into cuBLAS. Supported dtype combos:
+     *   - fp32 in, fp32 out, fp32 accum
+     *   - fp16 in, fp16 out, fp32 or fp16 accum (TC_CUDA_FP16_ACCUM=1)
+     *   - bf16 in, bf16 out, fp32 accum
+     *   - int8 in, int32 out, int32 accum (K must be multiple of 16)
+     */
     const char* prefer_cuda = std::getenv("TC_USE_CUDA_GEMM");
-    if (prefer_cuda && prefer_cuda[0] == '1' &&
-        (desc->c_dtype == TC_DTYPE_F32 || desc->c_dtype == TC_DTYPE_F16) &&
-        desc->a_dtype == desc->c_dtype && desc->b_dtype == desc->c_dtype) {
+    const bool same_float =
+        (desc->c_dtype == TC_DTYPE_F32 || desc->c_dtype == TC_DTYPE_F16 ||
+         desc->c_dtype == TC_DTYPE_BF16) &&
+        desc->a_dtype == desc->c_dtype && desc->b_dtype == desc->c_dtype;
+    const bool i8_to_i32 =
+        desc->a_dtype == TC_DTYPE_I8 && desc->b_dtype == TC_DTYPE_I8 &&
+        desc->c_dtype == TC_DTYPE_I32;
+    if (prefer_cuda && prefer_cuda[0] == '1' && (same_float || i8_to_i32)) {
         tc_status_t cs = tc_cuda_gemm(ctx, desc, A, B, C);
         if (cs == TC_OK) {
             return tc_record_dispatch("tc_gemm", TC_BACKEND_CUDA, TC_OK);
@@ -542,6 +642,9 @@ extern "C" tc_status_t tc_gemm(tc_context* ctx,
         /* Fall through to CPU path on CUDA error (e.g. no device). */
     }
 #endif
+
+    /* Now apply the CPU dtype gate. Only reached if CUDA didn't service the call. */
+    if (!supports_cpu_gemm(desc)) return TC_ERR_UNSUPPORTED_DTYPE;
 
     void* Ap = nullptr;
     void* Bp = nullptr;
