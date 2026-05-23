@@ -130,6 +130,11 @@ some still queued.
       `lib/cuda/device.cpp` + `lib/cuda/gemm.cpp`. Public diagnostics and
       a hidden cuBLAS hook exist so NVIDIA-native support can land without
       changing the ABI.
+- [x] **CUDA training closure on RTX 3090** — managed-memory training
+      dispatch covers RMSnorm forward/backward, SwiGLU forward/backward,
+      softmax forward/backward, and fp32/fp16-gradient AdamW, with
+      `test_training_kernels`, `test_e2e_training`, `training_step`, and
+      `mesh_training_demo` registered for non-Metal CUDA CTest proof.
 - [x] **chipStar 1.1 built on cosbox (RTX 3090 host)** — hipcc + libCHIP.so
       verified; HIP source compiles. Runtime test blocked on NVIDIA driver
       mismatch; restart-pending.
@@ -145,14 +150,25 @@ some still queued.
 - [ ] **Multi-thread + 1024+ scaling of the AVX2 GEMM kernel**. Phase 2.
 - [x] **`TC_DIST_GLOO` backend** for Apple and portable CPU collectives over TCP:
       fp32/fp16 all-reduce, min/max, broadcast, allgather, barrier, sparse
-      packed exchange, and DiLoCo dense outer steps. Real WAN soak remains.
+      packed exchange, and DiLoCo dense outer steps. WAN correctness proof
+      exists; long-duration performance soak remains.
+- [x] **NAT-tolerant direct GLOO ring** — ranks advertise reachable
+      per-host addresses, bound neighbor-connection timeouts, coordinate
+      broker fallback, and emit `TC_GLOO_TRACE=1` route logs. Proven on the
+      four-rank Atlas + Enki + old-donkey + cosbox cross-continent mesh.
 - [x] **Sparse top-k compressed all-reduce** in DiLoCo — GLOO
       now ships TOPK deltas as sparse `(idx, fp16)` payloads and validates
-      the bandwidth cut with a forked localhost smoke. Real WAN soak remains.
+      the bandwidth cut with forked localhost and cross-continent sparse
+      training smoke coverage.
+- [x] **Activation checkpointing runtime + mesh demo** — CPU and Metal
+      backends free owned buffer storage on `tc_checkpoint_discard`, keep
+      handles valid but unmapped, reallocate before recompute on
+      `tc_checkpoint_realize`, and exercise RMSNorm activation
+      discard/realize in `mesh_training_demo --checkpoint`.
 
 ### v0.1 — Foundation (shipped this checkpoint)
 - [x] CMake + metallib precompile + cross-family runtime detect
-- [x] Public C ABI (`include/tensorcore/`) — 16 headers, 106 exported symbols
+- [x] Public C ABI (`include/tensorcore/`) — 16 headers, 109 exported symbols
 - [x] Device init / pipeline cache / power-of-2 buffer pool, autotune sweep + JSON cache
 - [x] **`simdgroup_matrix` GEMM** — fp16/fp32 (64×64 tile, BK=32, vec4 loads,
       f32-accum) — **17.88 TFLOPS @ 4096³ on M2 Ultra, fp32 bit-exact vs Accelerate**
@@ -170,7 +186,7 @@ some still queued.
       matrix descriptors
 - [x] RMSNorm, LayerNorm, RoPE, SwiGLU, softmax, AdamW, and fused
       RMSNorm+GEMV kernels (fwd + bwd where applicable)
-- [x] Python binding — full ABI parity (100 exports / 100 wrappers), owned object
+- [x] Python binding — full public ABI parity, owned object
       wrappers (`Context`, `Buffer`, `Stream`, `DistContext`, `GgufFile`,
       `LoadedModel`, `QuantizedMatrix`), NumPy interop
 - [x] Distributed primitives — single-host ring all-reduce / broadcast / allgather
@@ -179,8 +195,9 @@ some still queued.
 - [x] M5 TensorOps GEMM + FlashAttention kernels (`tensorops_*.metal`),
       SDK 26.0+ gated, runtime selector
 - [x] MPS + Accelerate fallback paths
-- [x] Correctness tests vs `cblas_sgemm` + fp64 reference — **24/24 pass** on M2 Ultra
-      in the default tree, plus 7/7 portable CPU backend tests
+- [x] Correctness tests vs `cblas_sgemm` + fp64 reference — default Apple
+      CI, macOS 15 CI, Ubuntu portable CPU CI, and macOS portable CPU CI
+      pass on every push
 - [x] TFLOPS bench harness (GEMM sweep, attention sweep, 7B Q4_0 inference)
 - [x] Eshkol binding skeleton + bridge file dropped into both `eshkol/` and
       `eshkol-platform/`, opt-in via `ESHKOL_ENABLE_TENSORCORE=1`
