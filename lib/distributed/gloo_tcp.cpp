@@ -40,6 +40,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <new>
 #include <string>
 #include <thread>
@@ -123,6 +124,17 @@ bool read_all(int fd, void* data, size_t bytes) {
         p += n; bytes -= (size_t)n;
     }
     return true;
+}
+
+bool checked_mul_size(size_t a, size_t b, size_t* out) {
+    if (!out) return false;
+    if (a != 0 && b > std::numeric_limits<size_t>::max() / a) return false;
+    *out = a * b;
+    return true;
+}
+
+bool checked_f32_bytes(size_t n, size_t* out) {
+    return checked_mul_size(n, sizeof(float), out);
 }
 
 int tcp_listen(uint16_t port, std::string* out_host) {
@@ -477,6 +489,7 @@ extern "C" TC_GLOO_HIDDEN int tc_gloo_allreduce_f32_sum_ring(GlooState* s, int w
                                                               float* data, size_t n) {
     if (world_size <= 1) return 0;
     if (s->next_fd < 0 || s->prev_fd < 0) return -1;
+    if (n > std::numeric_limits<size_t>::max() - (size_t)(world_size - 1)) return -1;
     const size_t chunk_elems = (n + world_size - 1) / world_size;
     std::vector<float> recv_buf(chunk_elems, 0.0f);
 
@@ -499,9 +512,11 @@ extern "C" TC_GLOO_HIDDEN int tc_gloo_allreduce_f32_sum_ring(GlooState* s, int w
         chunk_range(send_idx, &send_off, &send_len);
         chunk_range(recv_idx, &recv_off, &recv_len);
 
-        if (!exchange_ring_chunks(s,
-                                  data + send_off, send_len * sizeof(float),
-                                  recv_buf.data(), recv_len * sizeof(float))) return -1;
+        size_t send_bytes = 0, recv_bytes = 0;
+        if (!checked_f32_bytes(send_len, &send_bytes) ||
+            !checked_f32_bytes(recv_len, &recv_bytes)) return -1;
+        if (!exchange_ring_chunks(s, data + send_off, send_bytes,
+                                  recv_buf.data(), recv_bytes)) return -1;
         if (recv_len > 0) {
             for (size_t i = 0; i < recv_len; ++i) data[recv_off + i] += recv_buf[i];
         }
@@ -519,9 +534,11 @@ extern "C" TC_GLOO_HIDDEN int tc_gloo_allreduce_f32_sum_ring(GlooState* s, int w
         chunk_range(send_idx, &send_off, &send_len);
         chunk_range(recv_idx, &recv_off, &recv_len);
 
-        if (!exchange_ring_chunks(s,
-                                  data + send_off, send_len * sizeof(float),
-                                  data + recv_off, recv_len * sizeof(float))) return -1;
+        size_t send_bytes = 0, recv_bytes = 0;
+        if (!checked_f32_bytes(send_len, &send_bytes) ||
+            !checked_f32_bytes(recv_len, &recv_bytes)) return -1;
+        if (!exchange_ring_chunks(s, data + send_off, send_bytes,
+                                  data + recv_off, recv_bytes)) return -1;
         send_idx = recv_idx;
         recv_idx = (recv_idx - 1 + world_size) % world_size;
     }
@@ -542,7 +559,8 @@ extern "C" TC_GLOO_HIDDEN int tc_gloo_allreduce_f32_sum(GlooState* s, int world_
         s->next_fd >= 0 && s->prev_fd >= 0) {
         return tc_gloo_allreduce_f32_sum_ring(s, world_size, rank, data, n);
     }
-    const size_t bytes = n * sizeof(float);
+    size_t bytes = 0;
+    if (!checked_f32_bytes(n, &bytes)) return -1;
     if (rank == 0) {
         std::vector<float> tmp(n);
         for (int r = 1; r < world_size; ++r) {
@@ -562,6 +580,9 @@ extern "C" TC_GLOO_HIDDEN int tc_gloo_allreduce_f32_sum(GlooState* s, int world_
 extern "C" TC_GLOO_HIDDEN int tc_gloo_allreduce_f16_sum(GlooState* s, int world_size, int rank,
                                                          uint16_t* data, size_t n) {
     /* Convert to fp32, allreduce, convert back. */
+    size_t bytes = 0;
+    if (!checked_f32_bytes(n, &bytes)) return -1;
+    (void)bytes;
     std::vector<float> f32(n);
     for (size_t i = 0; i < n; ++i) f32[i] = f16_to_f32_gloo(data[i]);
     const int rc = tc_gloo_allreduce_f32_sum(s, world_size, rank, f32.data(), n);
@@ -572,7 +593,8 @@ extern "C" TC_GLOO_HIDDEN int tc_gloo_allreduce_f16_sum(GlooState* s, int world_
 
 extern "C" TC_GLOO_HIDDEN int tc_gloo_broadcast_f32(GlooState* s, int world_size, int rank, int root,
                                                     float* data, size_t n) {
-    const size_t bytes = n * sizeof(float);
+    size_t bytes = 0;
+    if (!checked_f32_bytes(n, &bytes)) return -1;
     if (rank == root) {
         for (int r = 0; r < world_size; ++r) {
             if (r == root) continue;
@@ -617,7 +639,8 @@ extern "C" TC_GLOO_HIDDEN int tc_gloo_barrier(GlooState* s, int world_size, int 
 extern "C" TC_GLOO_HIDDEN int tc_gloo_allreduce_f32_min(GlooState* s, int world_size, int rank,
                                                          float* data, size_t n) {
     if (world_size <= 1) return 0;
-    const size_t bytes = n * sizeof(float);
+    size_t bytes = 0;
+    if (!checked_f32_bytes(n, &bytes)) return -1;
     if (rank == 0) {
         std::vector<float> tmp(n);
         for (int r = 1; r < world_size; ++r) {
@@ -637,7 +660,8 @@ extern "C" TC_GLOO_HIDDEN int tc_gloo_allreduce_f32_min(GlooState* s, int world_
 extern "C" TC_GLOO_HIDDEN int tc_gloo_allreduce_f32_max(GlooState* s, int world_size, int rank,
                                                          float* data, size_t n) {
     if (world_size <= 1) return 0;
-    const size_t bytes = n * sizeof(float);
+    size_t bytes = 0;
+    if (!checked_f32_bytes(n, &bytes)) return -1;
     if (rank == 0) {
         std::vector<float> tmp(n);
         for (int r = 1; r < world_size; ++r) {
@@ -670,25 +694,29 @@ extern "C" TC_GLOO_HIDDEN int tc_gloo_allgather(GlooState* s, int world_size, in
                                                   void* out, size_t bytes_per_rank) {
     if (world_size <= 1) return 0;
     uint8_t* full = (uint8_t*)out;
+    size_t total = 0;
+    if (!checked_mul_size((size_t)world_size, bytes_per_rank, &total)) return -1;
     if (rank == 0) {
         /* My slice is already at out + 0; receive each other rank's slice. */
         for (int r = 1; r < world_size; ++r) {
-            if (!read_all(s->peer_conns[r], full + (size_t)r * bytes_per_rank, bytes_per_rank)) {
+            size_t offset = 0;
+            if (!checked_mul_size((size_t)r, bytes_per_rank, &offset)) return -1;
+            if (!read_all(s->peer_conns[r], full + offset, bytes_per_rank)) {
                 return -1;
             }
         }
         /* Broadcast the full concatenated buffer. */
-        const size_t total = (size_t)world_size * bytes_per_rank;
         for (int r = 1; r < world_size; ++r) {
             if (!write_all(s->peer_conns[r], full, total)) return -1;
         }
     } else {
         /* Send my slice (currently at out + rank * bytes_per_rank). */
-        if (!write_all(s->peer_conns[0], full + (size_t)rank * bytes_per_rank, bytes_per_rank)) {
+        size_t offset = 0;
+        if (!checked_mul_size((size_t)rank, bytes_per_rank, &offset)) return -1;
+        if (!write_all(s->peer_conns[0], full + offset, bytes_per_rank)) {
             return -1;
         }
         /* Receive the full concatenated buffer. */
-        const size_t total = (size_t)world_size * bytes_per_rank;
         if (!read_all(s->peer_conns[0], full, total)) return -1;
     }
     return 0;
@@ -762,10 +790,12 @@ extern "C" TC_GLOO_HIDDEN int tc_gloo_sparse_allreduce(GlooState* s, int world_s
         return 0;
     }
     if (!s || !payload_in || !dense_out || n_total > 0xffffffffu) return -1;
+    size_t dense_bytes = 0;
+    if (!checked_f32_bytes(n_total, &dense_bytes)) return -1;
     /* Wire format on rank-0 inbound: uint32 payload_bytes, then payload. */
     if (rank == 0) {
         /* Start the dense accumulator zeroed. */
-        std::memset(dense_out, 0, n_total * sizeof(float));
+        std::memset(dense_out, 0, dense_bytes);
         /* Unpack rank 0's own payload first. */
         const uint8_t* in = (const uint8_t*)payload_in;
         uint32_t n_t = 0, n_kept = 0;
@@ -807,9 +837,8 @@ extern "C" TC_GLOO_HIDDEN int tc_gloo_sparse_allreduce(GlooState* s, int world_s
          * re-sparsify for the broadcast too, but at this point the merged
          * vector has ~world_size*0.001*N entries which is no longer
          * usefully sparse). */
-        const size_t total_bytes = n_total * sizeof(float);
         for (int r = 1; r < world_size; ++r) {
-            if (!write_all(s->peer_conns[r], dense_out, total_bytes)) return -1;
+            if (!write_all(s->peer_conns[r], dense_out, dense_bytes)) return -1;
         }
     } else {
         /* Send my payload (length-prefixed). */
@@ -818,7 +847,7 @@ extern "C" TC_GLOO_HIDDEN int tc_gloo_sparse_allreduce(GlooState* s, int world_s
         if (!write_all(s->peer_conns[0], &payload_bytes, 4)) return -1;
         if (!write_all(s->peer_conns[0], payload_in, payload_in_bytes)) return -1;
         /* Receive merged dense vector from rank 0. */
-        if (!read_all(s->peer_conns[0], dense_out, n_total * sizeof(float))) return -1;
+        if (!read_all(s->peer_conns[0], dense_out, dense_bytes)) return -1;
     }
     return 0;
 }

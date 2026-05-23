@@ -92,8 +92,9 @@ every architectural primitive in code and tested:
   zero-byte buffers into the C ABI.
 - `Harden distributed collective validation`: Apple and portable GLOO
   collectives now check byte-count and allgather total-size overflow before
-  buffer validation, with a portable CPU regression for allreduce,
-  broadcast, and allgather overflow rejection.
+  buffer validation, and the hidden GLOO transport checks its own send/recv
+  byte counts. The portable CPU suite now regresses allreduce, broadcast,
+  and allgather overflow rejection.
 - `Add hand-tuned AVX2 fp32 GEMM micro-kernel`: `lib/ops/gemm_cpu_avx2.cpp`.
   6×16 BLIS-style inner kernel, 12 ymm accumulators, FMA inner loop,
   thread-local pack buffers. Opt-in via `TC_USE_AVX2_GEMM=1`. Self-contained
