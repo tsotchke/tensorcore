@@ -1,10 +1,11 @@
 /*
  * tests/test_gloo_fork.c - portable CPU TC_DIST_GLOO TCP smoke.
  *
- * Spawns world_size=4 processes via fork(). Rank 0 listens on
- * 127.0.0.1:<free port>; peers connect. Each rank initializes the public
- * tc_dist_ctx with TC_DIST_GLOO, then validates fp32/fp16 allreduce,
- * any-root fp32 broadcast, allgather, and barrier.
+ * Spawns world_size=4 processes via fork(). Rank 0 listens on loopback;
+ * peers connect. Each rank initializes the public tc_dist_ctx with
+ * TC_DIST_GLOO, then validates fp32/fp16 allreduce, any-root fp32
+ * broadcast, allgather, and barrier. The main path covers IPv4 loopback;
+ * when available, the same suite also covers bracketed IPv6 rendezvous.
  */
 
 #include "tensorcore/tensorcore.h"
@@ -50,6 +51,30 @@ static int reserve_loopback_port(void) {
         return -1;
     }
     const int port = (int)ntohs(addr.sin_port);
+    close(fd);
+    return port;
+}
+
+static int reserve_loopback_port_ipv6(void) {
+    int fd = socket(AF_INET6, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    int v6only = 1;
+    (void)setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only));
+    struct sockaddr_in6 addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin6_family = AF_INET6;
+    addr.sin6_addr = in6addr_loopback;
+    addr.sin6_port = 0;
+    if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+        close(fd);
+        return -1;
+    }
+    socklen_t len = sizeof(addr);
+    if (getsockname(fd, (struct sockaddr*)&addr, &len) != 0) {
+        close(fd);
+        return -1;
+    }
+    const int port = (int)ntohs(addr.sin6_port);
     close(fd);
     return port;
 }
@@ -252,16 +277,7 @@ done:
     return rc ? 1 : 0;
 }
 
-int main(void) {
-    const int port = reserve_loopback_port();
-    if (port <= 0) {
-        fprintf(stderr, "gloo_fork: SKIP: no loopback port\n");
-        return 77;
-    }
-
-    char url[96];
-    snprintf(url, sizeof(url), "gloo+tcp://127.0.0.1:%d", port);
-
+static int run_forked_case(const char* label, const char* url) {
     int pipes[WORLD][2];
     pid_t pids[WORLD];
     for (int r = 0; r < WORLD; ++r) {
@@ -304,8 +320,31 @@ int main(void) {
         }
     }
 
-    printf("gloo_fork world=%d elements=%d %s\n", WORLD, N_ELEMS, ok ? "OK" : "FAIL");
+    printf("gloo_fork %s world=%d elements=%d %s\n",
+           label, WORLD, N_ELEMS, ok ? "OK" : "FAIL");
     return ok ? 0 : 1;
+}
+
+int main(void) {
+    int rc = 0;
+    const int port4 = reserve_loopback_port();
+    if (port4 <= 0) {
+        fprintf(stderr, "gloo_fork: SKIP: no IPv4 loopback port\n");
+        return 77;
+    }
+
+    char url[96];
+    snprintf(url, sizeof(url), "gloo+tcp://127.0.0.1:%d", port4);
+    rc |= run_forked_case("ipv4", url);
+
+    const int port6 = reserve_loopback_port_ipv6();
+    if (port6 <= 0) {
+        printf("gloo_fork ipv6 SKIP: no IPv6 loopback port\n");
+    } else {
+        snprintf(url, sizeof(url), "gloo+tcp://[::1]:%d", port6);
+        rc |= run_forked_case("ipv6", url);
+    }
+    return rc;
 }
 
 #endif
