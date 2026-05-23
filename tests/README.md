@@ -30,7 +30,8 @@ TOPK DiLoCo-over-GLOO tests.
 subprocess smokes for the opt-in AVX2, NEON, and AMX GEMM environment
 variants. Direct AMX C regressions for the raw tile kernel and edge-tile
 alpha/beta wrapper are compiled in portable CPU builds and skip unless
-`TC_RUN_AMX_GEMM_TEST=1` is set.
+`TC_RUN_AMX_GEMM_TEST=1` is set; the safe `test_amx_probe` metadata/stub
+regression runs unconditionally and does not execute raw AMX instructions.
 
 ## Test inventory
 

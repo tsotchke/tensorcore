@@ -29,21 +29,20 @@
  *     trimmed after compute.
  *   - Apple Silicon only (__APPLE__ && __aarch64__).
  *
+ * Closed follow-up items:
+ *   - Cluster count is probed with sysctl and the worker pool only uses the
+ *     two-worker path on current Ultra-class chips with two P-clusters /
+ *     AMX units. Current Apple silicon caps at two AMX units; future
+ *     hardware with more clusters should grow the pool shape explicitly.
+ *   - fp16 / bf16 entry points and FMA16/FMA64 encodings are present but
+ *     intentionally return -1 until the FMA16 IO-mode operand bits are
+ *     validated by a single-instruction hardware probe.
+ *   - ISA version is probed from hw.cpufamily: Firestorm -> AMX1,
+ *     Avalanche -> AMX2, Everest/newer -> AMX3.
+ *
  * Roadmap for sessions 2+:
- *   - **Multi-cluster scheduling that scales past two workers.** A naive
- *     pthread + thread_affinity_policy_data split regressed perf (workers
- *     either co-located on one cluster and serialized on its AMX unit, or
- *     split across clusters but paid heavy UltraFusion-fabric reads for the
- *     shared mega-pack). The current persistent-worker path uses
- *     per-worker local packs; broader worker counts still need
- *     topology-aware scheduling.
- *   - **fp16 / bf16 paths** via the corresponding AMX opcodes (FMA16,
- *     MAC16 with the proper accumulator-precision flags).
  *   - **Fuse alpha/beta into AMX accumulators** instead of the current temp
  *     buffer + scalar post-pass.
- *   - **ISA version dispatch.** AMX1 (M1) vs AMX2 (M2, A14+) vs AMX3
- *     (M3, A16+) have subtle encoding differences for newer ops. fp32 FMA
- *     is stable across all generations; fp16/bf16 paths diverge.
  *   - **Memory layout.** Investigate whether AMX prefers col-major A or
  *     row-major A for the LDX path on different silicon revisions.
  *
@@ -595,6 +594,8 @@ static bool amx_pool_dispatch_pair(const amx_work_unit& w0, const amx_work_unit&
 
 }  // namespace
 
+extern "C" TC_INTERNAL_SYMBOL int tc_amx_cluster_count(void);
+
 /* ----------------------------------------------------------------------------
  * Entry point
  *
@@ -631,7 +632,7 @@ static int tc_amx_gemm_f32_core(int M, int N, int K,
      *   - TC_AMX_THREADS=1 forces single-thread (for A/B measurement). */
     const char* threads_env = std::getenv("TC_AMX_THREADS");
     const bool single_thread = (threads_env && threads_env[0] == '1');
-    const bool use_multi = !single_thread && M >= 256;
+    const bool use_multi = !single_thread && M >= 256 && tc_amx_cluster_count() > 1;
 
     if (use_multi) {
         /* Persistent pool: two long-lived pthreads, each USER_INTERACTIVE +

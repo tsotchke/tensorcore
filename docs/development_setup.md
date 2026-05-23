@@ -113,7 +113,8 @@ What works on the portable CPU build:
   `TC_USE_NEON_GEMM=1`, and `TC_USE_AMX_GEMM=1`; the portable CI script
   smokes these in isolated Python subprocesses. Direct AMX C regressions
   also build in portable CPU mode but skip unless `TC_RUN_AMX_GEMM_TEST=1`
-  is set on known-good Apple-Silicon hardware.
+  is set on known-good Apple-Silicon hardware. `test_amx_probe` runs
+  everywhere because it checks only non-trapping AMX metadata/stub paths.
 - sparse top-k compression helpers
 - memory-tier stub baseline and portable CPU activation-checkpointing
   discard/realize

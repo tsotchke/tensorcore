@@ -117,17 +117,20 @@ every architectural primitive in code and tested:
   `test_portable_cpu`.
 - `Add opt-in Apple AMX fp32 GEMM prototype`: `lib/ops/gemm_cpu_amx.cpp`.
   Apple-Silicon-only 16×16 fp32 tile path, gated by `TC_USE_AMX_GEMM=1`
-  and falling through to NEON/CBLAS for transposed shapes. The committed
-  path remains opt-in, handles M/N edge tiles plus alpha/beta through a
-  pad-and-trim wrapper, and uses persistent pthread worker-local packs for
-  M>=256, with `TC_AMX_THREADS=1` preserving the single-worker path for A/B
-  checks. The worker pool is guarded for concurrent callers and reports
-  worker allocation failures back to the GEMM fallback path.
+  and falling through to NEON/CBLAS when disabled. The committed path
+  remains opt-in, handles transpose A/B, M/N edge tiles, K==0, and
+  alpha/beta through a pad-and-trim wrapper, and uses persistent pthread
+  worker-local packs for M>=256 only when `tc_amx_cluster_count()` reports
+  two AMX-capable P-clusters. `TC_AMX_THREADS=1` preserves the single-worker
+  path for A/B checks. The worker pool is guarded for concurrent callers and
+  reports worker allocation failures back to the GEMM fallback path.
   The FMA loop now uses AMX FMA32 skip-Z instead of zero-loading each tile,
-  handles K==0 explicitly, and has direct `test_amx_gemm` /
-  `test_amx_edge` regression tests. Those tests compile in portable builds
+  `tc_amx_isa_version()` records AMX1/2/3 from `hw.cpufamily`, and f16/bf16
+  entry points remain gated until FMA16 IO-mode hardware validation. Direct
+  `test_amx_gemm` / `test_amx_edge` regressions compile in portable builds
   but only execute when `TC_RUN_AMX_GEMM_TEST=1` is set, because hosted
-  macOS runners can trap reverse-engineered AMX instructions. CBLAS remains
+  macOS runners can trap reverse-engineered AMX instructions. `test_amx_probe`
+  runs unconditionally for the safe metadata/stub contract. CBLAS remains
   the default path.
 
 ### Heterogeneous-mesh substrate

@@ -132,7 +132,9 @@ subprocess GEMM smokes with
 `TC_USE_AVX2_GEMM=1`, `TC_USE_NEON_GEMM=1`, and `TC_USE_AMX_GEMM=1`.
 The portable CTest suite also builds direct AMX regression binaries for the
 tile kernel and edge-tile alpha/beta wrapper; they skip unless
-`TC_RUN_AMX_GEMM_TEST=1` is set.
+`TC_RUN_AMX_GEMM_TEST=1` is set. The separate `test_amx_probe` CTest
+validates AMX availability, ISA-version, cluster-count, and fp16/bf16
+gating metadata without executing raw AMX instructions.
 
 AMX uses reverse-engineered Apple instructions, so the AMX subprocess
 treats SIGILL as a skip by default instead of taking down the whole smoke
