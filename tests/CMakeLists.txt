@@ -19,6 +19,15 @@ if(NOT TC_ENABLE_METAL)
         SKIP_RETURN_CODE 77
     )
 
+    add_executable(test_amx_edge test_amx_edge.c)
+    target_link_libraries(test_amx_edge PRIVATE tensorcore)
+    target_include_directories(test_amx_edge PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    add_test(NAME test_amx_edge COMMAND test_amx_edge)
+    set_tests_properties(test_amx_edge PROPERTIES
+        TIMEOUT 120
+        SKIP_RETURN_CODE 77
+    )
+
     add_executable(test_conv2d test_conv2d.c)
     target_link_libraries(test_conv2d PRIVATE tensorcore)
     target_include_directories(test_conv2d PRIVATE ${CMAKE_SOURCE_DIR}/include)

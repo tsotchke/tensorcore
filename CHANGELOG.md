@@ -93,16 +93,24 @@ every architectural primitive in code and tested:
   8×8 aarch64 SIMD kernel for Apple/ARM CPU builds, opt-in via
   `TC_USE_NEON_GEMM=1`, with CBLAS remaining the default until broader
   throughput data is collected.
+- `Normalize K==0 portable GEMM`: the CPU path now treats the degenerate
+  matrix product as `C := beta*C` for f32, f16, bf16, and i32 outputs,
+  preserves padded `ldc` regions, and covers that behavior in
+  `test_portable_cpu`.
 - `Add opt-in Apple AMX fp32 GEMM prototype`: `lib/ops/gemm_cpu_amx.cpp`.
   Apple-Silicon-only 16×16 fp32 tile path, gated by `TC_USE_AMX_GEMM=1`
-  and falling through to NEON/CBLAS for unsupported shapes. The committed
-  path remains opt-in and uses persistent pthread worker-local packs for
+  and falling through to NEON/CBLAS for transposed shapes. The committed
+  path remains opt-in, handles M/N edge tiles plus alpha/beta through a
+  pad-and-trim wrapper, and uses persistent pthread worker-local packs for
   M>=256, with `TC_AMX_THREADS=1` preserving the single-worker path for A/B
   checks. The worker pool is guarded for concurrent callers and reports
   worker allocation failures back to the GEMM fallback path.
   The FMA loop now uses AMX FMA32 skip-Z instead of zero-loading each tile,
-  handles K==0 explicitly, and has a direct `test_amx_gemm` regression test;
-  CBLAS remains the default path.
+  handles K==0 explicitly, and has direct `test_amx_gemm` /
+  `test_amx_edge` regression tests. Those tests compile in portable builds
+  but only execute when `TC_RUN_AMX_GEMM_TEST=1` is set, because hosted
+  macOS runners can trap reverse-engineered AMX instructions. CBLAS remains
+  the default path.
 
 ### Heterogeneous-mesh substrate
 

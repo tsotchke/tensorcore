@@ -11,6 +11,15 @@ extern int tc_amx_gemm_f32(int M, int N, int K,
                            float* C, int ldc);
 extern int tc_amx_gemm_f32_available(void);
 
+static int amx_test_enabled(void) {
+    const char* run = getenv("TC_RUN_AMX_GEMM_TEST");
+    if (!run || strcmp(run, "1") != 0) {
+        printf("AMX direct regression skipped; set TC_RUN_AMX_GEMM_TEST=1 to run\n");
+        return 0;
+    }
+    return 1;
+}
+
 static float value_a(int m, int k) {
     return (float)(((m * 17 + k * 13) % 29) - 14) * 0.03125f;
 }
@@ -109,6 +118,8 @@ static int run_k_zero_case(void) {
 }
 
 int main(void) {
+    if (!amx_test_enabled()) return 77;
+
     if (!tc_amx_gemm_f32_available()) {
         printf("AMX unavailable on this build\n");
         return 77;

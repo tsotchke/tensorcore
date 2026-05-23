@@ -75,7 +75,9 @@ extern "C" TC_INTERNAL_SYMBOL int tc_amx_gemm_f32_available(void);
 namespace {
 
 bool validate_desc(const tc_gemm_desc* d) {
-    return d && d->M > 0 && d->N > 0 && d->K > 0;
+    /* K==0 is the BLAS degenerate sgemm (C := beta*C, no MAC accumulated).
+     * Public ABI honors it; handled by a short-circuit in tc_gemm. */
+    return d && d->M > 0 && d->N > 0 && d->K >= 0;
 }
 
 bool checked_mul(size_t a, size_t b, size_t* out) {
@@ -465,9 +467,8 @@ tc_status_t gemm_compute(const tc_gemm_desc* d, const void* A, const void* B, vo
     /* Apple AMX matrix coprocessor - preferred when available and the
      * caller has opted in via TC_USE_AMX_GEMM=1. AMX delivers ~10x NEON's
      * fp32 throughput on Apple Silicon. The kernel itself returns -1 for
-     * unsupported configurations (non-fp32, transposed, alpha!=1, beta!=0, M or N
-     * not divisible by 16) so we fall through to the NEON / CBLAS path
-     * cleanly without a duplicate guard here. */
+     * invalid arguments or scratch-allocation failures, so we fall through
+     * to the NEON / CBLAS path cleanly without a duplicate guard. */
     if (env.prefer_amx && tc_amx_gemm_f32_available() &&
         d->c_dtype == TC_DTYPE_F32 && d->a_dtype == TC_DTYPE_F32 && d->b_dtype == TC_DTYPE_F32) {
         if (tc_amx_gemm_f32(d->M, d->N, d->K,
@@ -613,6 +614,77 @@ extern "C" tc_status_t tc_gemm(tc_context* ctx,
                                tc_buffer* C) {
     if (!ctx) return TC_ERR_NOT_INITIALIZED;
     if (!validate_desc(desc) || !A || !B || !C) return TC_ERR_INVALID_ARG;
+
+    /* K=0 short-circuit: BLAS degenerate GEMM = C := beta*C. Validate only
+     * C (A,B can have any layout when K=0 — they're not touched), then
+     * scale or zero. */
+    if (desc->K == 0) {
+        if (!supports_cpu_gemm(desc)) return TC_ERR_UNSUPPORTED_DTYPE;
+        size_t c_bytes = 0;
+        if (!matrix_storage_bytes(desc->M, desc->N, effective_ldc(desc),
+                                  desc->c_dtype, &c_bytes)) {
+            return TC_ERR_INVALID_ARG;
+        }
+        tc_status_t cs = tc_buffer_validate(ctx, C, c_bytes);
+        if (cs != TC_OK) return cs;
+        void* Cp = nullptr;
+        cs = tc_buffer_map(C, &Cp);
+        if (cs != TC_OK) return cs;
+        const int32_t ldc = effective_ldc(desc);
+        if (desc->c_dtype == TC_DTYPE_F32) {
+            float* Cd = (float*)Cp;
+            if (desc->beta == 0.0f) {
+                for (int32_t i = 0; i < desc->M; ++i)
+                    std::memset(Cd + (size_t)i * ldc, 0, (size_t)desc->N * sizeof(float));
+            } else {
+                for (int32_t i = 0; i < desc->M; ++i) {
+                    float* row = Cd + (size_t)i * ldc;
+                    for (int32_t j = 0; j < desc->N; ++j) row[j] *= desc->beta;
+                }
+            }
+        } else if (desc->c_dtype == TC_DTYPE_F16) {
+            uint16_t* Cd = (uint16_t*)Cp;
+            if (desc->beta == 0.0f) {
+                for (int32_t i = 0; i < desc->M; ++i)
+                    std::memset(Cd + (size_t)i * ldc, 0, (size_t)desc->N * sizeof(uint16_t));
+            } else {
+                for (int32_t i = 0; i < desc->M; ++i) {
+                    uint16_t* row = Cd + (size_t)i * ldc;
+                    for (int32_t j = 0; j < desc->N; ++j) {
+                        row[j] = f32_to_f16(f16_to_f32(row[j]) * desc->beta);
+                    }
+                }
+            }
+        } else if (desc->c_dtype == TC_DTYPE_BF16) {
+            uint16_t* Cd = (uint16_t*)Cp;
+            if (desc->beta == 0.0f) {
+                for (int32_t i = 0; i < desc->M; ++i)
+                    std::memset(Cd + (size_t)i * ldc, 0, (size_t)desc->N * sizeof(uint16_t));
+            } else {
+                for (int32_t i = 0; i < desc->M; ++i) {
+                    uint16_t* row = Cd + (size_t)i * ldc;
+                    for (int32_t j = 0; j < desc->N; ++j) {
+                        row[j] = f32_to_bf16(bf16_to_f32(row[j]) * desc->beta);
+                    }
+                }
+            }
+        } else if (desc->c_dtype == TC_DTYPE_I32) {
+            int32_t* Cd = (int32_t*)Cp;
+            if (desc->beta == 0.0f) {
+                for (int32_t i = 0; i < desc->M; ++i)
+                    std::memset(Cd + (size_t)i * ldc, 0, (size_t)desc->N * sizeof(int32_t));
+            } else {
+                for (int32_t i = 0; i < desc->M; ++i) {
+                    int32_t* row = Cd + (size_t)i * ldc;
+                    for (int32_t j = 0; j < desc->N; ++j) {
+                        row[j] = (int32_t)(desc->beta * (float)row[j]);
+                    }
+                }
+            }
+        }
+        return tc_record_dispatch("tc_gemm", TC_BACKEND_PORTABLE_CPU, TC_OK);
+    }
+
     /* Defer the CPU dtype gate until after CUDA dispatch: bf16/i8 may not
      * be supported by the portable CPU path but ARE supported by CUDA. */
     tc_status_t s = validate_gemm_buffers(ctx, desc, A, B, C);

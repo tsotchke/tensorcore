@@ -23,10 +23,10 @@
  *   - K-tiled mega-pack inside the (i, j) loop with KC=256 -> ~0.37 TFLOPS
  *     at 4096^3 on M2 Ultra before multi-worker experiments (vs 0.08 TFLOPS
  *     for the single-thread NEON kernel).
- *   - alpha = 1, beta = 0 only (other alpha/beta combos fall through to NEON/CBLAS).
- *   - Non-transposed A, B only (transposed falls through).
- *   - M and N must be multiples of 16 (the AMX tile size for fp32 outer
- *     product); other sizes fall through.
+ *   - alpha / beta support through a scalar post-pass when needed.
+ *   - Transposed A/B inputs are packed into row-major scratch before AMX.
+ *   - M and N edge tiles are zero-padded to the AMX 16x16 tile size and
+ *     trimmed after compute.
  *   - Apple Silicon only (__APPLE__ && __aarch64__).
  *
  * Roadmap for sessions 2+:
@@ -39,10 +39,8 @@
  *     topology-aware scheduling.
  *   - **fp16 / bf16 paths** via the corresponding AMX opcodes (FMA16,
  *     MAC16 with the proper accumulator-precision flags).
- *   - **Edge tiles** for M, N not divisible by 16 - pack with zero
- *     padding into 16-tile buffers.
- *   - **alpha != 1 / beta != 0** support - currently we always overwrite C; full
- *     `C = alphaAB + betaC` requires loading C into Z accumulators first.
+ *   - **Fuse alpha/beta into AMX accumulators** instead of the current temp
+ *     buffer + scalar post-pass.
  *   - **ISA version dispatch.** AMX1 (M1) vs AMX2 (M2, A14+) vs AMX3
  *     (M3, A16+) have subtle encoding differences for newer ops. fp32 FMA
  *     is stable across all generations; fp16/bf16 paths diverge.
@@ -72,10 +70,13 @@
 #include <cstdlib>
 #include <cstring>
 #include <dispatch/dispatch.h>
+#include <new>
 #include <pthread.h>
+#include <sys/sysctl.h>
 
 #include <atomic>
 #include <dlfcn.h>
+#include <vector>
 
 /* Private libsystem_pthread hook: asks the kernel to schedule the calling
  * thread on the cluster OTHER than the one its parent / siblings are on.
@@ -193,6 +194,13 @@ namespace {
 #define AMX_LDZ(val)    AMX_GPR(0x0020108A, val)
 #define AMX_STZ(val)    AMX_GPR(0x002010AA, val)
 #define AMX_FMA32(val)  AMX_GPR(0x0020118A, val)
+/* Per corsix/amx opcode table:
+ *   FMA64 = 0x00201000 | (10 << 5) | 10 = 0x0020114A  (Apple7+, fp64 IO)
+ *   FMA16 = 0x00201000 | (14 << 5) | 10 = 0x002011CA  (Apple7+, fp16 IO)
+ * bf16 uses FMA16 with an IO-mode flag bit; bit position differs by AMX
+ * version — see tc_amx_isa_version() at end of file. */
+#define AMX_FMA64(val)  AMX_GPR(0x0020114A, val)
+#define AMX_FMA16(val)  AMX_GPR(0x002011CA, val)
 
 /* Operand encodings for memory ops:
  *   LDX / LDY:
@@ -597,18 +605,13 @@ static bool amx_pool_dispatch_pair(const amx_work_unit& w0, const amx_work_unit&
  *   - other configs return -1 - caller (gemm_cpu.cpp) falls through to NEON
  *                                or CBLAS.
  * --------------------------------------------------------------------------*/
-extern "C" TC_INTERNAL_SYMBOL int tc_amx_gemm_f32(int M, int N, int K,
-                                                   float alpha,
-                                                   const float* A, int lda, int transpose_a,
-                                                   const float* B, int ldb, int transpose_b,
-                                                   float beta,
-                                                   float* C, int ldc) {
-    /* Session-1 capability gate. Sessions 2-3 will lift these. */
-    if (M < 0 || N < 0 || K < 0) return -1;
-    if (alpha != 1.0f || beta != 0.0f) return -1;
-    if (transpose_a || transpose_b) return -1;
-    if ((M & 15) != 0 || (N & 15) != 0) return -1;
-    if (M == 0 || N == 0) return 0;
+/* Inner kernel: requires the rigid contract (M%16==0, N%16==0, alpha=1,
+ * beta=0, no transpose). The outer wrapper tc_amx_gemm_f32 below relaxes
+ * the contract via pad-and-trim + alpha/beta post-pass. */
+static int tc_amx_gemm_f32_core(int M, int N, int K,
+                                 const float* A, int lda,
+                                 const float* B, int ldb,
+                                 float* C, int ldc) {
     if (K == 0) {
         for (int i = 0; i < M; ++i) {
             std::memset(C + (size_t)i * ldc, 0, (size_t)N * sizeof(float));
@@ -686,8 +689,227 @@ extern "C" TC_INTERNAL_SYMBOL int tc_amx_gemm_f32(int M, int N, int K,
     return 0;
 }
 
+/* Public wrapper: relaxes the rigid contract via pad-and-trim + alpha/beta
+ * post-pass. Handles:
+ *   - M, N not divisible by 16: zero-pad to next multiple, run core, trim
+ *   - alpha != 1 or beta != 0: compute T = A*B in a temp buffer, then
+ *     C = alpha*T + beta*C in a scalar fixup pass
+ *
+ * Transposed A/B are copied into the same row-major scratch layout used by
+ * the pad-and-trim path.
+ *
+ * The pad-and-trim only kicks in for edge tiles, so well-aligned shapes
+ * (the common case for transformer hidden dims) skip the overhead. */
+extern "C" TC_INTERNAL_SYMBOL int tc_amx_gemm_f32(int M, int N, int K,
+                                                   float alpha,
+                                                   const float* A, int lda, int transpose_a,
+                                                   const float* B, int ldb, int transpose_b,
+                                                   float beta,
+                                                   float* C, int ldc) {
+    if (M < 0 || N < 0 || K < 0) return -1;
+    if (M == 0 || N == 0) return 0;
+    if (!C || ldc < N) return -1;
+    /* Validate strides per transpose flag. transpose_a=true means A is stored
+     * as K×M (so leading dim is M, not K); same for B. */
+    if (K > 0) {
+        if (!A || !B) return -1;
+        const int lda_min = transpose_a ? M : K;
+        const int ldb_min = transpose_b ? K : N;
+        if (lda < lda_min || ldb < ldb_min) return -1;
+    }
+    if (K == 0) {
+        /* C = beta * C (alpha*A*B is zero); fixup pass only. */
+        for (int i = 0; i < M; ++i) {
+            float* row = C + (size_t)i * ldc;
+            if (beta == 0.0f) {
+                std::memset(row, 0, (size_t)N * sizeof(float));
+            } else {
+                for (int j = 0; j < N; ++j) row[j] *= beta;
+            }
+        }
+        return 0;
+    }
+
+    const bool aligned = ((M & 15) == 0 && (N & 15) == 0);
+    const bool plain = (alpha == 1.0f && beta == 0.0f);
+    const bool no_transpose = !transpose_a && !transpose_b;
+
+    if (aligned && plain && no_transpose) {
+        return tc_amx_gemm_f32_core(M, N, K, A, lda, B, ldb, C, ldc);
+    }
+
+    /* Slow path: pad up to 16-multiple, compute into temp T, then post-pass.
+     *   M_pad = ceil_16(M), N_pad = ceil_16(N)
+     *   Temp T is M_pad x N_pad. Pack only the in-bounds rows/cols; pad is zero.
+     *   Run core on T, then C[i,j] = alpha * T[i,j] + beta * C[i,j] for in-bounds.
+     */
+    const int M_pad = (M + 15) & ~15;
+    const int N_pad = (N + 15) & ~15;
+    const bool need_a_pad = (M_pad != M);
+    const bool need_b_pad = (N_pad != N);
+
+    try {
+        /* Materialize A in M_pad × K row-major (un-transposed, zero-padded).
+         * For transpose_a=true, source A is K×M with leading dim `lda` —
+         * read A_orig[k,i] and write A_packed[i,k]. */
+        const float* A_use = A;
+        int lda_use = lda;
+        std::vector<float> A_packed;
+        const bool need_a_repack = transpose_a || need_a_pad;
+        if (need_a_repack) {
+            A_packed.assign((size_t)M_pad * K, 0.0f);
+            if (transpose_a) {
+                for (int i = 0; i < M; ++i) {
+                    for (int k = 0; k < K; ++k) {
+                        A_packed[(size_t)i * K + k] = A[(size_t)k * lda + i];
+                    }
+                }
+            } else {
+                for (int i = 0; i < M; ++i) {
+                    std::memcpy(A_packed.data() + (size_t)i * K,
+                                A + (size_t)i * lda,
+                                (size_t)K * sizeof(float));
+                }
+            }
+            A_use = A_packed.data();
+            lda_use = K;
+        }
+
+        /* Materialize B in K × N_pad row-major (un-transposed, zero-padded).
+         * For transpose_b=true, source B is N×K with leading dim `ldb` —
+         * read B_orig[j,k] and write B_packed[k,j]. */
+        const float* B_use = B;
+        int ldb_use = ldb;
+        std::vector<float> B_packed;
+        const bool need_b_repack = transpose_b || need_b_pad;
+        if (need_b_repack) {
+            B_packed.assign((size_t)K * N_pad, 0.0f);
+            if (transpose_b) {
+                for (int k = 0; k < K; ++k) {
+                    for (int j = 0; j < N; ++j) {
+                        B_packed[(size_t)k * N_pad + j] = B[(size_t)j * ldb + k];
+                    }
+                }
+            } else {
+                for (int k = 0; k < K; ++k) {
+                    std::memcpy(B_packed.data() + (size_t)k * N_pad,
+                                B + (size_t)k * ldb,
+                                (size_t)N * sizeof(float));
+                }
+            }
+            B_use = B_packed.data();
+            ldb_use = N_pad;
+        }
+
+        std::vector<float> T((size_t)M_pad * N_pad, 0.0f);
+        const int rc = tc_amx_gemm_f32_core(M_pad, N_pad, K,
+                                            A_use, lda_use,
+                                            B_use, ldb_use,
+                                            T.data(), N_pad);
+        if (rc != 0) return rc;
+
+        /* Post-pass: C[i,j] = alpha * T[i,j] + beta * C[i,j] over the
+         * in-bounds region. Cheap relative to the GEMM. */
+        for (int i = 0; i < M; ++i) {
+            const float* trow = T.data() + (size_t)i * N_pad;
+            float* crow = C + (size_t)i * ldc;
+            if (beta == 0.0f) {
+                for (int j = 0; j < N; ++j) crow[j] = alpha * trow[j];
+            } else {
+                for (int j = 0; j < N; ++j) crow[j] = alpha * trow[j] + beta * crow[j];
+            }
+        }
+    } catch (const std::bad_alloc&) {
+        return -1;
+    }
+    return 0;
+}
+
 extern "C" TC_INTERNAL_SYMBOL int tc_amx_gemm_f32_available(void) {
     return 1;
+}
+
+/* ----------------------------------------------------------------------- *
+ * AMX ISA version + cluster count probes.
+ *
+ *   AMX1: M1/A14 (Apple7)    — fp64/fp32 FMA stable
+ *   AMX2: M2/A15 (Apple8)    — adds quantized + 256-bit accumulator modes
+ *   AMX3: M3+/A17+ (Apple9+) — refined fp16/bf16 IO-mode flag bits
+ *
+ * fp32 FMA is encoding-stable across all three. fp16/bf16 paths (when
+ * we ship them) use isa_version to select the correct IO-mode bits. */
+extern "C" TC_INTERNAL_SYMBOL int tc_amx_isa_version(void) {
+    uint32_t fam = 0;
+    size_t fam_sz = sizeof(fam);
+    if (sysctlbyname("hw.cpufamily", &fam, &fam_sz, nullptr, 0) != 0) return 1;
+    enum : uint32_t {
+        FIRESTORM_ICESTORM = 0x1b588bb3u,   /* M1 / A14 */
+        AVALANCHE_BLIZZARD = 0xda33d83du,   /* M2 / A15 */
+        EVEREST_SAWTOOTH   = 0x8765edeau,   /* M3 / A17 */
+    };
+    switch (fam) {
+        case FIRESTORM_ICESTORM: return 1;
+        case AVALANCHE_BLIZZARD: return 2;
+        case EVEREST_SAWTOOTH:   return 3;
+        default: return (fam == 0u) ? 1 : 3;   /* unknown new chip → AMX3 */
+    }
+}
+
+/* Number of P-clusters with their own AMX coprocessor. Apple silicon:
+ *   M1/M2/M3/M4 base/Pro/Max: 1 P-cluster, 1 AMX unit
+ *   M1/M2 Ultra (UltraFusion): 2 P-clusters, 2 AMX units (silicon max)
+ *
+ * The pool dispatcher is sized at min(this, 2) since current pool code
+ * uses a 2-slot work array. Future hardware with >2 AMX would extend it. */
+extern "C" TC_INTERNAL_SYMBOL int tc_amx_cluster_count(void) {
+    uint32_t p_cpus = 0;
+    size_t sz = sizeof(p_cpus);
+    if (sysctlbyname("hw.perflevel0.physicalcpu", &p_cpus, &sz, nullptr, 0) == 0
+        && p_cpus > 0) {
+        /* Apple's P-cluster is consistently 4 cores. 8 P-cores ≡ 2
+         * clusters (UltraFusion). */
+        return (p_cpus > 4) ? 2 : 1;
+    }
+    return 1;
+}
+
+/* fp16 AMX GEMM entry. Returns -1 (unsupported) until the FMA16 operand
+ * encoding for fp16-input mode is validated on hardware. Skeleton present;
+ * actual dispatch would mirror tc_amx_gemm_f32_core's blocking with FMA16
+ * (opcode 14) replacing FMA32 and 32-row Z layout (vs fp32's 16 rows).
+ *
+ * Callers (gemm_cpu.cpp) should fall through to NEON fp16 or convert to
+ * fp32 + use tc_amx_gemm_f32. Two-rate fp16 (2× fp32 throughput on AMX)
+ * remains the v0.3 prize. */
+extern "C" TC_INTERNAL_SYMBOL int tc_amx_gemm_f16(int M, int N, int K,
+                                                   float alpha,
+                                                   const void* A, int lda, int transpose_a,
+                                                   const void* B, int ldb, int transpose_b,
+                                                   float beta,
+                                                   void* C, int ldc) {
+    (void)M; (void)N; (void)K; (void)alpha;
+    (void)A; (void)lda; (void)transpose_a;
+    (void)B; (void)ldb; (void)transpose_b;
+    (void)beta; (void)C; (void)ldc;
+    return -1;
+}
+
+/* bf16 AMX GEMM entry. Same opcode as FMA16 (0x002011CA) with an
+ * IO-mode flag bit per corsix's reference. The flag bit position differs
+ * subtly between AMX2 and AMX3 — tc_amx_isa_version() above gates that.
+ * Currently returns -1; callers convert bf16 to fp32 and use the fp32 AMX
+ * path. */
+extern "C" TC_INTERNAL_SYMBOL int tc_amx_gemm_bf16(int M, int N, int K,
+                                                    float alpha,
+                                                    const void* A, int lda, int transpose_a,
+                                                    const void* B, int ldb, int transpose_b,
+                                                    float beta,
+                                                    void* C, int ldc) {
+    (void)M; (void)N; (void)K; (void)alpha;
+    (void)A; (void)lda; (void)transpose_a;
+    (void)B; (void)ldb; (void)transpose_b;
+    (void)beta; (void)C; (void)ldc;
+    return -1;
 }
 
 #else  /* !TC_AMX_GEMM_BUILD */
@@ -710,5 +932,16 @@ extern "C" TC_INTERNAL_SYMBOL int tc_amx_gemm_f32(int M, int N, int K,
 extern "C" TC_INTERNAL_SYMBOL int tc_amx_gemm_f32_available(void) {
     return 0;
 }
+
+extern "C" TC_INTERNAL_SYMBOL int tc_amx_isa_version(void) { return 0; }
+extern "C" TC_INTERNAL_SYMBOL int tc_amx_cluster_count(void) { return 0; }
+extern "C" TC_INTERNAL_SYMBOL int tc_amx_gemm_f16(int, int, int, float,
+                                                   const void*, int, int,
+                                                   const void*, int, int,
+                                                   float, void*, int) { return -1; }
+extern "C" TC_INTERNAL_SYMBOL int tc_amx_gemm_bf16(int, int, int, float,
+                                                    const void*, int, int,
+                                                    const void*, int, int,
+                                                    float, void*, int) { return -1; }
 
 #endif  /* TC_AMX_GEMM_BUILD */

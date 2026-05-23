@@ -28,7 +28,9 @@ opt-in ring GLOO TCP, activation checkpointing, DiLoCo-over-GLOO, and sparse
 TOPK DiLoCo-over-GLOO tests.
 `scripts/ci_portable_cpu.sh` adds installed SDK consumer checks plus
 subprocess smokes for the opt-in AVX2, NEON, and AMX GEMM environment
-variants.
+variants. Direct AMX C regressions for the raw tile kernel and edge-tile
+alpha/beta wrapper are compiled in portable CPU builds and skip unless
+`TC_RUN_AMX_GEMM_TEST=1` is set.
 
 ## Test inventory
 

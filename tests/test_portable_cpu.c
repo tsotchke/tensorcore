@@ -59,6 +59,19 @@ static uint16_t f32_to_f16(float value) {
     return (uint16_t)(sign | ((uint32_t)half_exp << 10) | (rounded >> 13));
 }
 
+static float bf16_to_f32(uint16_t bits) {
+    return f32_from_bits((uint32_t)bits << 16);
+}
+
+static uint16_t f32_to_bf16(float value) {
+    const uint32_t bits = f32_to_bits(value);
+    const uint32_t lower = bits & 0xffffu;
+    const uint32_t upper = bits >> 16;
+    const uint32_t round =
+        (lower > 0x8000u) || ((lower == 0x8000u) && (upper & 1u));
+    return (uint16_t)(upper + round);
+}
+
 static int expect_status(const char* name, tc_status_t got, tc_status_t want) {
     if (got == want) return 0;
     fprintf(stderr, "%s: got %s want %s\n", name, tc_status_string(got), tc_status_string(want));
@@ -276,6 +289,123 @@ static int run_i8_gemm(tc_context* ctx) {
     tc_buffer_free(ctx, C);
     tc_buffer_free(ctx, B);
     tc_buffer_free(ctx, A);
+    return rc;
+}
+
+static int run_k_zero_gemm(tc_context* ctx) {
+    tc_buffer *A = NULL, *B = NULL, *C = NULL;
+    int rc = 0;
+
+    rc |= expect_status("K0 placeholder A", tc_buffer_alloc(ctx, 1, &A), TC_OK);
+    rc |= expect_status("K0 placeholder B", tc_buffer_alloc(ctx, 1, &B), TC_OK);
+    if (rc) goto cleanup;
+
+    {
+        const int M = 2, N = 3, ldc = 4;
+        float* Cp = NULL;
+        rc |= expect_status("K0 f32 C", tc_buffer_alloc(ctx, M * ldc * sizeof(float), &C), TC_OK);
+        if (tc_buffer_map(C, (void**)&Cp) != TC_OK) rc = 1;
+        for (int i = 0; i < M * ldc; ++i) Cp[i] = -11.0f;
+        for (int m = 0; m < M; ++m)
+            for (int n = 0; n < N; ++n)
+                Cp[m * ldc + n] = (float)(m * N + n + 1);
+        tc_gemm_desc d = {0};
+        d.M = M; d.N = N; d.K = 0;
+        d.a_dtype = TC_DTYPE_F32; d.b_dtype = TC_DTYPE_F32;
+        d.c_dtype = TC_DTYPE_F32; d.accum_dtype = TC_DTYPE_F32;
+        d.beta = 2.0f; d.ldc = ldc;
+        rc |= expect_status("K0 f32 gemm", tc_gemm(ctx, &d, A, B, C), TC_OK);
+        for (int m = 0; m < M; ++m) {
+            for (int n = 0; n < N; ++n) {
+                const float want = 2.0f * (float)(m * N + n + 1);
+                if (fabsf(Cp[m * ldc + n] - want) > 1e-6f) rc = 1;
+            }
+            if (Cp[m * ldc + N] != -11.0f) rc = 1;
+        }
+        tc_buffer_free(ctx, C); C = NULL;
+    }
+
+    {
+        const int M = 2, N = 2, ldc = 3;
+        uint16_t* Cp = NULL;
+        rc |= expect_status("K0 f16 C", tc_buffer_alloc(ctx, M * ldc * sizeof(uint16_t), &C), TC_OK);
+        if (tc_buffer_map(C, (void**)&Cp) != TC_OK) rc = 1;
+        for (int i = 0; i < M * ldc; ++i) Cp[i] = f32_to_f16(-11.0f);
+        for (int m = 0; m < M; ++m)
+            for (int n = 0; n < N; ++n)
+                Cp[m * ldc + n] = f32_to_f16(0.25f * (float)(m * N + n + 1));
+        tc_gemm_desc d = {0};
+        d.M = M; d.N = N; d.K = 0;
+        d.a_dtype = TC_DTYPE_F16; d.b_dtype = TC_DTYPE_F16;
+        d.c_dtype = TC_DTYPE_F16; d.accum_dtype = TC_DTYPE_F32;
+        d.beta = -0.5f; d.ldc = ldc;
+        rc |= expect_status("K0 f16 gemm", tc_gemm(ctx, &d, A, B, C), TC_OK);
+        for (int m = 0; m < M; ++m) {
+            for (int n = 0; n < N; ++n) {
+                const uint16_t initial = f32_to_f16(0.25f * (float)(m * N + n + 1));
+                const uint16_t want = f32_to_f16(f16_to_f32(initial) * -0.5f);
+                if (Cp[m * ldc + n] != want) rc = 1;
+            }
+            if (Cp[m * ldc + N] != f32_to_f16(-11.0f)) rc = 1;
+        }
+        tc_buffer_free(ctx, C); C = NULL;
+    }
+
+    {
+        const int M = 2, N = 2, ldc = 3;
+        uint16_t* Cp = NULL;
+        rc |= expect_status("K0 bf16 C", tc_buffer_alloc(ctx, M * ldc * sizeof(uint16_t), &C), TC_OK);
+        if (tc_buffer_map(C, (void**)&Cp) != TC_OK) rc = 1;
+        for (int i = 0; i < M * ldc; ++i) Cp[i] = f32_to_bf16(-11.0f);
+        for (int m = 0; m < M; ++m)
+            for (int n = 0; n < N; ++n)
+                Cp[m * ldc + n] = f32_to_bf16(0.5f * (float)(m * N + n + 1));
+        tc_gemm_desc d = {0};
+        d.M = M; d.N = N; d.K = 0;
+        d.a_dtype = TC_DTYPE_BF16; d.b_dtype = TC_DTYPE_BF16;
+        d.c_dtype = TC_DTYPE_BF16; d.accum_dtype = TC_DTYPE_F32;
+        d.beta = 0.5f; d.ldc = ldc;
+        rc |= expect_status("K0 bf16 gemm", tc_gemm(ctx, &d, A, B, C), TC_OK);
+        for (int m = 0; m < M; ++m) {
+            for (int n = 0; n < N; ++n) {
+                const uint16_t initial = f32_to_bf16(0.5f * (float)(m * N + n + 1));
+                const uint16_t want = f32_to_bf16(bf16_to_f32(initial) * 0.5f);
+                if (Cp[m * ldc + n] != want) rc = 1;
+            }
+            if (Cp[m * ldc + N] != f32_to_bf16(-11.0f)) rc = 1;
+        }
+        tc_buffer_free(ctx, C); C = NULL;
+    }
+
+    {
+        const int M = 2, N = 2, ldc = 3;
+        int32_t* Cp = NULL;
+        rc |= expect_status("K0 i32 C", tc_buffer_alloc(ctx, M * ldc * sizeof(int32_t), &C), TC_OK);
+        if (tc_buffer_map(C, (void**)&Cp) != TC_OK) rc = 1;
+        for (int i = 0; i < M * ldc; ++i) Cp[i] = -11;
+        for (int m = 0; m < M; ++m)
+            for (int n = 0; n < N; ++n)
+                Cp[m * ldc + n] = m * N + n + 1;
+        tc_gemm_desc d = {0};
+        d.M = M; d.N = N; d.K = 0;
+        d.a_dtype = TC_DTYPE_I8; d.b_dtype = TC_DTYPE_I8;
+        d.c_dtype = TC_DTYPE_I32; d.accum_dtype = TC_DTYPE_I32;
+        d.beta = -2.0f; d.ldc = ldc;
+        rc |= expect_status("K0 i32 gemm", tc_gemm(ctx, &d, A, B, C), TC_OK);
+        for (int m = 0; m < M; ++m) {
+            for (int n = 0; n < N; ++n) {
+                const int32_t want = -2 * (m * N + n + 1);
+                if (Cp[m * ldc + n] != want) rc = 1;
+            }
+            if (Cp[m * ldc + N] != -11) rc = 1;
+        }
+        tc_buffer_free(ctx, C); C = NULL;
+    }
+
+cleanup:
+    if (C) tc_buffer_free(ctx, C);
+    if (B) tc_buffer_free(ctx, B);
+    if (A) tc_buffer_free(ctx, A);
     return rc;
 }
 
@@ -745,6 +875,7 @@ int main(void) {
     rc |= run_padded_f16_gemm(ctx);
     rc |= run_batched_f32_gemm(ctx);
     rc |= run_i8_gemm(ctx);
+    rc |= run_k_zero_gemm(ctx);
     rc |= run_quantized(ctx);
     rc |= run_distributed(ctx);
     rc |= run_training_ops(ctx);
