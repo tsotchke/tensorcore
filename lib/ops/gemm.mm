@@ -110,6 +110,12 @@ TileChoice kernel_for(const tc_gemm_desc* d, tc_family_t fam, tc_context* ctx, t
     if (d->a_dtype == TC_DTYPE_BF16 && d->b_dtype == TC_DTYPE_BF16 &&
         d->c_dtype == TC_DTYPE_BF16 && d->accum_dtype == TC_DTYPE_F32) {
         if (fam < TC_FAMILY_APPLE9) { *err = TC_ERR_UNSUPPORTED_FAMILY; return {nil,0,0,0}; }
+        if (async_path && !d->transpose_a && !d->transpose_b) {
+            id<MTLFunction> probe = [ctx->library newFunctionWithName:@"tc_gemm_bf16_f32_async"];
+            if (probe) {
+                return { @"tc_gemm_bf16_f32_async", 64, 64, 128 };
+            }
+        }
         return { big ? @"tc_gemm_bf16_f32_128" : @"tc_gemm_bf16_f32", BM, BN, T };
     }
     if (d->a_dtype == TC_DTYPE_I8 && d->b_dtype == TC_DTYPE_I8 &&
@@ -311,10 +317,13 @@ extern "C" tc_status_t tc_gemm(tc_context* ctx,
     }
 #endif
 
-    /* MPS dispatch policy (Apple M-series, profiled on M2 Ultra):
-     *   fp32: MPS wins by 3.2-8.3× across all sizes — auto-route.
-     *   fp16: keep our simdgroup_matrix kernel — numerics match the
-     *         Python wrappers' tight tolerance; MPS would deviate ~2e-2.
+    /* MPS dispatch policy, profiled per Apple family:
+     *   Apple7/8 (M1/M2):  fp32→MPS (3-8× win), fp16→ours (ties/beats MPS,
+     *                       and Python wrapper test tolerance prefers ours).
+     *   Apple9+ (M3/M4):   fp32→MPS, fp16/bf16→MPS (small-GPU systems
+     *                       benefit 2.5× from Apple's blessed tuning;
+     *                       our kernel was tuned for M2 Ultra's 76 cores
+     *                       and underperforms on the M4's 10 cores).
      *
      * TC_USE_MPS_GEMM=1 forces MPS regardless (A/B benchmarking).
      * TC_USE_MPS_GEMM=0 forces our kernel (regression-chasing). */
@@ -325,7 +334,18 @@ extern "C" tc_status_t tc_gemm(tc_context* ctx,
         const bool is_fp32 = (desc->a_dtype == TC_DTYPE_F32 &&
                               desc->b_dtype == TC_DTYPE_F32 &&
                               desc->c_dtype == TC_DTYPE_F32);
-        if (force_on || is_fp32) {
+        const bool is_fp16 = (desc->a_dtype == TC_DTYPE_F16 &&
+                              desc->b_dtype == TC_DTYPE_F16 &&
+                              desc->c_dtype == TC_DTYPE_F16);
+        const bool is_bf16 = (desc->a_dtype == TC_DTYPE_BF16 &&
+                              desc->b_dtype == TC_DTYPE_BF16 &&
+                              desc->c_dtype == TC_DTYPE_BF16);
+        const bool small_gpu = (ctx->info.family >= TC_FAMILY_APPLE9);
+        const bool route_to_mps =
+            force_on ||
+            is_fp32 ||
+            (small_gpu && (is_fp16 || is_bf16));
+        if (route_to_mps) {
             return tc_record_dispatch("tc_gemm", TC_BACKEND_MPS,
                                       tc_mps_gemm(ctx, desc, A, B, C));
         }

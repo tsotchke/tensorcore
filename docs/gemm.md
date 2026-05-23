@@ -30,7 +30,7 @@ beta * C[M, N]`. Leading dims default to row-major contiguous when 0.
 | `gemm_simdgroup.metal` | 64×64, BK=32 | fp16, bf16, fp32 | default `simdgroup_matrix` path |
 | `gemm_simdgroup.metal` (i8 variant) | 64×64, BK=32 | int8 → i32 accum | Apple10+ |
 | `gemm_simdgroup_128.metal` | 128×128, BK=32 | fp16, fp32 | opt-in via `TC_USE_128_TILE=1` |
-| `gemm_async.metal` | 64×64 with async_copy | fp16 | SDK < 26 only; uses private `__asm` |
+| `gemm_async.metal` | 64×64 with async_copy | fp16, bf16 | SDK < 26 only; uses private `__asm` |
 | `gemm_async_128.metal` | 128×128 with async_copy | fp16 | SDK < 26 only |
 | `tensorops_gemm.metal` | tile from `mpp::tensor_ops` | fp16, bf16, fp32 | Apple11 + SDK 26.0+ + `TC_ENABLE_TENSOROPS=ON` |
 | `gemm_quantized_v2.metal` | M ≤ 4 GEMV | Q4_0 → fp16 | `tc_gemv_quantized` default |

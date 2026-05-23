@@ -56,6 +56,7 @@ compute proceeds. Compiler reorders compute instructions ahead of wait
 when register pressure allows, giving latency hiding.
 
 - **Tile:** BM = BN = 64, BK = 32
+- **Dtypes:** fp16 and bf16 (bf16 requires Apple9+ and the async path)
 - **Single-buffered** (matches MFA's production kernel)
 - **TG memory:** 64×32×2 + 32×64×2 = 8 KB
 - **Compatibility:** Xcode 16.x accepts the `__asm("air.simdgroup_async_copy_2d…")`

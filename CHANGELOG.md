@@ -133,6 +133,10 @@ every architectural primitive in code and tested:
   fallback for host-only buffers.
   Default builds return deterministic unsupported statuses until
   `TC_ENABLE_CUDA` is wired to a CUDA toolchain.
+- `Extend async Metal GEMM to bf16`: `kernels/metal/gemm_async.metal`
+  now has a templated fp16/bf16 async-copy body and exports
+  `tc_gemm_bf16_f32_async`; dispatch probes it on Apple9+ when the async
+  simdgroup path is forced over the MPS fallback.
 - `Add opt-in CUDA/HIP CMake detection`: `TC_ENABLE_CUDA=ON` now enables
   the direct CUDA scaffolding only when CMake finds `CUDA::cudart` and
   `CUDA::cublas`; `TC_ENABLE_HIP=ON` requires HIP runtime plus hipBLAS
