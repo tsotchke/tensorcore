@@ -33,9 +33,10 @@ setup(
     name="tensorcore_torch",
     version="0.1.0",
     description="PyTorch ↔ tensorcore bridge (aten::matmul via tc_gemm)",
+    packages=["tensorcore_torch"],
     ext_modules=[
         CppExtension(
-            name="tensorcore_torch",
+            name="tensorcore_torch._C",
             sources=["tensorcore_torch_ext.cpp"],
             include_dirs=[str(INCLUDE_DIR)],
             library_dirs=[str(LIB_DIR)],

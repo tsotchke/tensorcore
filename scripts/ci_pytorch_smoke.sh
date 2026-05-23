@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 TENSORCORE_LIB_DIR="${TENSORCORE_LIB_DIR:-${ROOT}/build-portable-cpu-current}"
 REQUIRE_PYTORCH="${REQUIRE_PYTORCH:-0}"
+REQUIRE_PYTORCH_BACKEND="${REQUIRE_PYTORCH_BACKEND:-0}"
 
 if ! "${PYTHON_BIN}" - <<'PY' >/dev/null 2>&1
 import torch  # noqa: F401
@@ -34,8 +35,10 @@ TENSORCORE_LIB_DIR="$(cd "${TENSORCORE_LIB_DIR}" && pwd)"
 
 PYTHONPATH="${ROOT}/bindings/pytorch:${ROOT}/python${PYTHONPATH:+:${PYTHONPATH}}" \
 TENSORCORE_LIB_DIR="${TENSORCORE_LIB_DIR}" \
+REQUIRE_PYTORCH_BACKEND="${REQUIRE_PYTORCH_BACKEND}" \
 "${PYTHON_BIN}" - <<'PY'
 import os
+import sys
 import torch
 
 # Pre-initialize the C ABI through the ctypes wrapper before importing the
@@ -56,6 +59,25 @@ if not ctx:
     raise AssertionError("tensorcore ctypes pre-init returned a null context")
 
 import tensorcore_torch as tct
+
+if not tct.pytorch_backend_registered():
+    raise AssertionError("tensorcore_torch did not register the PyTorch PrivateUse1 backend module")
+if not hasattr(torch, "tensorcore"):
+    raise AssertionError("torch.tensorcore runtime module is not registered")
+if sys.modules.get("torch.tensorcore") is not torch.tensorcore:
+    raise AssertionError("torch.tensorcore is not present in sys.modules")
+if not torch.tensorcore.is_available():
+    raise AssertionError("torch.tensorcore reports unavailable")
+if torch.tensorcore.device_count() != 1:
+    raise AssertionError("torch.tensorcore should expose one logical device")
+if torch.tensorcore.current_device() != 0:
+    raise AssertionError("torch.tensorcore current_device should be 0")
+if torch.device("tensorcore").type != "tensorcore":
+    raise AssertionError("torch.device did not recognize the tensorcore backend name")
+if torch.device("tensorcore:0").index != 0:
+    raise AssertionError("torch.device did not recognize tensorcore:0")
+if not hasattr(torch.Tensor, "is_tensorcore"):
+    raise AssertionError("PrivateUse1 tensor helpers were not generated")
 
 
 def assert_close(actual, expected, *, rtol=1e-5, atol=1e-5):
@@ -123,6 +145,23 @@ finally:
 
 if tct.privateuse1_backend_name() != "tensorcore":
     raise AssertionError("PrivateUse1 backend name mismatch")
+
+backend_required = os.environ.get("REQUIRE_PYTORCH_BACKEND") == "1"
+try:
+    allocated = torch.empty((1,), device="tensorcore")
+except Exception as exc:
+    if backend_required:
+        raise AssertionError(
+            "torch.empty(device='tensorcore') failed; full tensorcore device "
+            "allocation requires PrivateUse1 allocator/storage/factory kernels"
+        ) from exc
+    print(
+        "torch.empty(device='tensorcore') unavailable as expected without "
+        "PrivateUse1 allocator/storage/factory kernels"
+    )
+else:
+    if allocated.device.type != "tensorcore":
+        raise AssertionError(f"unexpected allocated device: {allocated.device}")
 
 print("tensorcore PyTorch bridge smoke OK")
 PY

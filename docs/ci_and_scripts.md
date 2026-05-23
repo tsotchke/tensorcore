@@ -111,6 +111,12 @@ script force-builds `tensorcore_torch` against
 - opt-in `torch.matmul` dispatcher routing and autograd fallback
 - importing the extension after the ctypes wrapper already initialized the
   native library
+- `tensorcore_torch` package import registers PyTorch's PrivateUse1 backend
+  name as `tensorcore`, installs `torch.tensorcore`, and generates the
+  usual tensor helper methods
+- direct tensor allocation with `torch.empty(..., device="tensorcore")`
+  remains unavailable unless `REQUIRE_PYTORCH_BACKEND=1` is set, because
+  allocator/storage/factory kernels are a later backend step
 
 If PyTorch is not importable, the script skips by default. Set
 `REQUIRE_PYTORCH=1` to make that a hard failure.
