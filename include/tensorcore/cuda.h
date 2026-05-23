@@ -9,9 +9,9 @@
  *   chipStar's HIP-to-SPIR-V-to-OpenCL/Level Zero pipeline gives vendor-neutral
  *   GPU compute on Intel, AMD, and ARM. NVIDIA's OpenCL driver does not
  *   ingest SPIR-V, so chipStar can't reach NVIDIA hardware. The clean
- *   answer is a direct CUDA backend: tensorcore's tc_gemm / tc_attention_*
+ *   answer is a direct CUDA backend: tensorcore's tc_gemm / training kernels
  *   route into cuBLAS / cuDNN / native CUDA kernels when an NVIDIA device
- *   is present and the user opts in.
+ *   is present.
  *
  *   This is the *fast path* for NVIDIA: full hardware tensor-core access,
  *   PTX-level kernel control, no SPIR-V translation overhead. The
@@ -26,14 +26,16 @@
  * Current runtime dispatch:
  *
  *   if   APPLE && Metal device              -> Metal backend
- *   elif TC_USE_CUDA_GEMM=1 && CUDA fp32/fp16 GEMM succeeds
+ *   elif CUDA initialized && CUDA GEMM succeeds
  *                                            -> CUDA/cuBLAS GEMM
  *   else                                     -> CPU SIMD/BLAS backend
  *
- * The CUDA GEMM path is intentionally opt-in. With TC_USE_CUDA_GEMM=1,
- * tc_buffer_alloc uses CUDA managed memory so cuBLAS can dereference A/B/C
- * directly. Buffers wrapped around ordinary host pointers still use an
- * internal staged cudaMemcpy fallback.
+ * tc_init auto-attempts tc_cuda_init() on CUDA builds. Once initialization
+ * succeeds, tc_buffer_alloc uses CUDA managed memory so cuBLAS/native CUDA
+ * kernels can dereference A/B/C directly. Buffers wrapped around ordinary
+ * host pointers still use internal staged fallbacks where available.
+ * TC_DISABLE_CUDA_GEMM=1, TC_CUDA_GEMM=0, or TC_USE_CUDA_GEMM=0 force CPU
+ * fallback for debugging and compatibility.
  */
 
 #include <stdint.h>

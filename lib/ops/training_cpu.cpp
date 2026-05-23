@@ -42,7 +42,8 @@
 
 #if defined(TC_ENABLE_CUDA)
 /* CUDA training kernels live in lib/cuda/training.cu. Hidden visibility,
- * called from public ops in this file when TC_USE_CUDA_GEMM=1. */
+ * called from public ops in this file when CUDA is active for the context. */
+extern "C" int tc_cuda_is_active(void);
 extern "C" int tc_cuda_rmsnorm_forward(const void* X, const void* gamma,
                                         void* Y, void* rstd,
                                         int N, int D, float eps);
@@ -99,8 +100,7 @@ inline tc_status_t validate_pointwise_buf(tc_context* ctx, const tc_buffer* b, s
 
 #if defined(TC_ENABLE_CUDA)
 bool cuda_training_enabled() {
-    const char* prefer_cuda = std::getenv("TC_USE_CUDA_GEMM");
-    return prefer_cuda && prefer_cuda[0] == '1';
+    return tc_cuda_is_active() != 0;
 }
 #endif
 

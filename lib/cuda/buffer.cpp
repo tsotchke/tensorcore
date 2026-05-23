@@ -23,13 +23,61 @@
 #  include <cstdlib>
 #endif
 
-/* Gate managed allocations on the same env var the user already sets to
- * opt into CUDA GEMM dispatch. Keeps the surface coherent: if the user
- * has chosen CUDA for compute, buffers go straight to managed memory. */
+namespace {
+
+#if defined(TC_ENABLE_CUDA)
+extern "C" TC_CUDA_INTERNAL int tc_cuda_runtime_initialized(void);
+
+bool env_equals_ci(const char* value, const char* expected) {
+    if (!value || !expected) return false;
+    while (*value && *expected) {
+        char a = *value++;
+        char b = *expected++;
+        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+        if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+        if (a != b) return false;
+    }
+    return *value == '\0' && *expected == '\0';
+}
+
+bool env_true(const char* value) {
+    return value &&
+           (env_equals_ci(value, "1") ||
+            env_equals_ci(value, "true") ||
+            env_equals_ci(value, "yes") ||
+            env_equals_ci(value, "on") ||
+            env_equals_ci(value, "enable") ||
+            env_equals_ci(value, "enabled"));
+}
+
+bool env_false(const char* value) {
+    return value &&
+           (env_equals_ci(value, "0") ||
+            env_equals_ci(value, "false") ||
+            env_equals_ci(value, "no") ||
+            env_equals_ci(value, "off") ||
+            env_equals_ci(value, "disable") ||
+            env_equals_ci(value, "disabled"));
+}
+
+bool cuda_policy_disabled(void) {
+    if (env_true(std::getenv("TC_DISABLE_CUDA_GEMM"))) return true;
+    if (env_false(std::getenv("TC_CUDA_GEMM"))) return true;
+    if (env_false(std::getenv("TC_USE_CUDA_GEMM"))) return true;
+    return false;
+}
+#endif
+
+}  // namespace
+
+/* CUDA-enabled builds auto-activate managed allocations once tc_cuda_init()
+ * succeeds (tc_init attempts it on CUDA builds). TC_USE_CUDA_GEMM=1 remains
+ * accepted for older scripts; TC_CUDA_GEMM=0 or TC_DISABLE_CUDA_GEMM=1 force
+ * the host/CPU policy for debugging and A/B comparisons. */
 extern "C" TC_CUDA_INTERNAL int tc_cuda_is_active(void) {
 #if defined(TC_ENABLE_CUDA)
-    const char* env = std::getenv("TC_USE_CUDA_GEMM");
-    return (env && env[0] == '1') ? 1 : 0;
+    if (cuda_policy_disabled()) return 0;
+    return tc_cuda_runtime_initialized() ? 1 : 0;
 #else
     return 0;
 #endif

@@ -852,10 +852,12 @@ plan.
 CUDA is the staged NVIDIA-native fast path. Default builds export
 deterministic unsupported stubs so SDK consumers and FFI generators can
 bind the surface while staying CUDA-free. Builds configured with
-`TC_ENABLE_CUDA=ON` expose device discovery and can route supported
-fp32/fp16/bf16/int8 GEMM through cuBLAS when `TC_USE_CUDA_GEMM=1` is set.
+`TC_ENABLE_CUDA=ON` expose device discovery and route supported
+fp32/fp16/bf16/int8 GEMM through cuBLAS by default after CUDA initialization.
 Runtime-allocated buffers use CUDA managed memory in that mode; externally
-wrapped host pointers use the staged-copy fallback. CUDA builds also compile
+wrapped host pointers use the staged-copy fallback. Set
+`TC_DISABLE_CUDA_GEMM=1`, `TC_CUDA_GEMM=0`, or `TC_USE_CUDA_GEMM=0` to force
+CPU fallback. CUDA builds also compile
 managed-memory kernels for RMSNorm forward/backward, LayerNorm forward,
 SwiGLU forward/backward, softmax forward/backward, and fp32/fp16-gradient
 AdamW; host-only buffers fall back to the portable CPU implementations.

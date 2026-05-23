@@ -32,10 +32,29 @@ TENSORCORE_LIB_DIR="$(cd "${TENSORCORE_LIB_DIR}" && pwd)"
         "${PYTHON_BIN}" setup.py build_ext --inplace --force
 )
 
-PYTHONPATH="${ROOT}/bindings/pytorch${PYTHONPATH:+:${PYTHONPATH}}" \
+PYTHONPATH="${ROOT}/bindings/pytorch:${ROOT}/python${PYTHONPATH:+:${PYTHONPATH}}" \
 TENSORCORE_LIB_DIR="${TENSORCORE_LIB_DIR}" \
 "${PYTHON_BIN}" - <<'PY'
+import os
 import torch
+
+# Pre-initialize the C ABI through the ctypes wrapper before importing the
+# PyTorch bridge. The extension must tolerate tc_init returning
+# TC_ERR_ALREADY_INITIALIZED with a valid context.
+lib_dir = os.environ["TENSORCORE_LIB_DIR"]
+for lib_name in ("libtensorcore.dylib", "libtensorcore.so"):
+    candidate = os.path.join(lib_dir, lib_name)
+    if os.path.exists(candidate):
+        os.environ["TENSORCORE_LIB"] = candidate
+        break
+else:
+    raise AssertionError(f"no tensorcore shared library found in {lib_dir}")
+
+import tensorcore as tc
+ctx = tc.init()
+if not ctx:
+    raise AssertionError("tensorcore ctypes pre-init returned a null context")
+
 import tensorcore_torch as tct
 
 

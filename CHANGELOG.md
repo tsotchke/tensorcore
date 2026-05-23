@@ -96,7 +96,10 @@ every architectural primitive in code and tested:
   tensors, `K == 0` / empty-result matmuls, error paths, and the opt-in
   `torch.matmul` dispatcher/autograd fallback. The bridge now handles
   degenerate PyTorch matmuls at the binding boundary instead of passing
-  zero-byte buffers into the C ABI.
+  zero-byte buffers into the C ABI. The smoke also pre-initializes the
+  ctypes C ABI before importing the extension, covering the
+  `TC_ERR_ALREADY_INITIALIZED` path that appears in mixed Python
+  integrations.
 - `Harden distributed collective validation`: Apple and portable GLOO
   collectives now check byte-count and allgather total-size overflow before
   buffer validation, and the hidden GLOO transport checks its own send/recv
@@ -150,19 +153,21 @@ every architectural primitive in code and tested:
 - `Add direct CUDA backend scaffolding`: `include/tensorcore/cuda.h`,
   `lib/cuda/device.cpp`, and `lib/cuda/gemm.cpp` expose NVIDIA-native
   device diagnostics, hidden managed-buffer hooks, and a hidden cuBLAS
-  dispatch hook. `TC_BACKEND_CUDA` now identifies successful opt-in
-  `TC_USE_CUDA_GEMM=1` cuBLAS GEMM dispatches; runtime allocations use
+  dispatch hook. `TC_BACKEND_CUDA` now identifies successful default
+  cuBLAS GEMM dispatches after CUDA initialization; runtime allocations use
   CUDA managed memory in that mode, while wrapped host pointers use the
-  staged fallback. `scripts/ci_cuda_smoke.sh` and `test_cuda_gemm` cover
-  fp32/fp16 GEMM on CUDA hosts, including a 4096^3 managed-memory perf
-  gate on high-end Ampere+ devices. CUDA builds also route bf16/fp32-accum
-  and int8/i32-accum GEMM through cuBLAS when the device reports support.
+  staged fallback. `TC_DISABLE_CUDA_GEMM=1`, `TC_CUDA_GEMM=0`, or
+  `TC_USE_CUDA_GEMM=0` force CPU fallback for A/B testing.
+  `scripts/ci_cuda_smoke.sh` and `test_cuda_gemm` cover fp32/fp16 GEMM on
+  CUDA hosts, including a 4096^3 managed-memory perf gate on high-end
+  Ampere+ devices. CUDA builds also route bf16/fp32-accum and int8/i32-accum
+  GEMM through cuBLAS when the device reports support.
   CUDA builds also compile managed-memory training kernels for RMSNorm
   forward/backward, LayerNorm forward, SwiGLU forward/backward, softmax
   forward/backward, and fp32/fp16-gradient AdamW with CPU fallback for
   host-only buffers. `test_training_kernels` now requires CUDA dispatch for
-  these managed-memory paths when a CUDA device is visible and
-  `TC_USE_CUDA_GEMM=1` is set.
+  these managed-memory paths when a CUDA device is visible and CUDA has not
+  been explicitly disabled.
   Default builds return deterministic unsupported statuses until
   `TC_ENABLE_CUDA` is wired to a CUDA toolchain.
 - `Extend async Metal GEMM to bf16`: `kernels/metal/gemm_async.metal`

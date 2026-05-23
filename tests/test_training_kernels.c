@@ -76,8 +76,15 @@ static int backend_is_compute(const char* op) {
 }
 
 static int cuda_training_expected(void) {
-    const char* env = getenv("TC_USE_CUDA_GEMM");
-    return env && env[0] == '1' && tc_cuda_device_count() > 0;
+    const char* disable = getenv("TC_DISABLE_CUDA_GEMM");
+    const char* policy = getenv("TC_CUDA_GEMM");
+    const char* legacy = getenv("TC_USE_CUDA_GEMM");
+    if ((disable && disable[0] == '1') ||
+        (policy && policy[0] == '0') ||
+        (legacy && legacy[0] == '0')) {
+        return 0;
+    }
+    return tc_cuda_device_count() > 0;
 }
 
 static int backend_matches_training_contract(const char* op, int expect_cuda) {

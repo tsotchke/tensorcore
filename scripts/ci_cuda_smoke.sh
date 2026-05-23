@@ -21,10 +21,10 @@ esac
 LD_LIBRARY_PATH="$BUILD:${LD_LIBRARY_PATH:-}" \
 PYTHONPATH="$ROOT/python" \
 TENSORCORE_LIB="$BUILD/$shared_lib" \
-TC_USE_CUDA_GEMM=1 \
 "$PYTHON_BIN" - <<'PY'
 import ctypes
 import math
+import os
 import struct
 
 import tensorcore as tc
@@ -104,6 +104,23 @@ try:
         tc.buffer_free(ctx, A16)
         tc.buffer_free(ctx, B16)
         tc.buffer_free(ctx, C16)
+
+    os.environ["TC_DISABLE_CUDA_GEMM"] = "1"
+    A32 = tc.buffer_alloc(ctx, ctypes.sizeof(A32_vals))
+    B32 = tc.buffer_alloc(ctx, ctypes.sizeof(B32_vals))
+    C32 = tc.buffer_alloc(ctx, ctypes.sizeof(C32_vals))
+    try:
+        _fill_buffer(A32, A32_vals)
+        _fill_buffer(B32, B32_vals)
+        _fill_buffer(C32, C32_vals)
+        tc.gemm(ctx, A32, B32, C32, 2, 2, 2, dtype="f32", accum="f32")
+        if tc.last_backend_name() == "cuda":
+            raise SystemExit("TC_DISABLE_CUDA_GEMM did not force CPU fallback")
+    finally:
+        tc.buffer_free(ctx, A32)
+        tc.buffer_free(ctx, B32)
+        tc.buffer_free(ctx, C32)
+        os.environ.pop("TC_DISABLE_CUDA_GEMM", None)
 
     print(
         "CUDA smoke OK: "

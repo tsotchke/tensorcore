@@ -109,6 +109,8 @@ script force-builds `tensorcore_torch` against
 - `K == 0` and empty-result matmuls
 - dtype/shape error paths
 - opt-in `torch.matmul` dispatcher routing and autograd fallback
+- importing the extension after the ctypes wrapper already initialized the
+  native library
 
 If PyTorch is not importable, the script skips by default. Set
 `REQUIRE_PYTORCH=1` to make that a hard failure.
@@ -147,17 +149,17 @@ known-good local hardware.
 ### `ci_cuda_smoke.sh`
 
 Configures a Linux CUDA build with `TC_ENABLE_CUDA=ON`, runs its CTest
-suite, then runs fp32 and fp16 Python GEMM smokes with
-`TC_USE_CUDA_GEMM=1`. When `TC_ENABLE_CUDA=ON`, CTest also includes
+suite, then runs fp32 and fp16 Python GEMM smokes through the default CUDA
+dispatch policy. When `TC_ENABLE_CUDA=ON`, CTest also includes
 `test_cuda_gemm`, which asserts managed-memory cuBLAS dispatch and applies
 a 4096^3 fp32 perf gate on high-end Ampere+ devices. On CUDA devices that
 report support, the CTest path also covers bf16/fp32-accum and int8/i32-accum
 cuBLAS GEMM plus managed-memory RMSNorm/LayerNorm/SwiGLU/softmax/AdamW
 training dispatch, including RMSNorm/SwiGLU/softmax backward and both
 fp32/fp16-gradient AdamW paths. The Python smoke asserts numerical output,
-`backend=cuda`, and the expected
-managed-memory cuBLAS kernel names. It requires a visible NVIDIA GPU and CUDA
-Toolkit with `CUDA::cudart` plus `CUDA::cublas`.
+`backend=cuda`, expected managed-memory cuBLAS kernel names, and explicit
+`TC_DISABLE_CUDA_GEMM=1` CPU fallback. It requires a visible NVIDIA GPU and
+CUDA Toolkit with `CUDA::cudart` plus `CUDA::cublas`.
 
 ```sh
 TC_CUDA_BUILD_DIR=build-cuda scripts/ci_cuda_smoke.sh

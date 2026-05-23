@@ -603,6 +603,7 @@ extern "C" tc_status_t tc_cuda_gemm(tc_context* ctx,
                                      const tc_buffer* A,
                                      const tc_buffer* B,
                                      tc_buffer* C);
+extern "C" int tc_cuda_is_active(void);
 #endif
 
 extern "C" tc_status_t tc_gemm(tc_context* ctx,
@@ -689,14 +690,14 @@ extern "C" tc_status_t tc_gemm(tc_context* ctx,
     if (s != TC_OK) return s;
 
 #if defined(TC_ENABLE_CUDA)
-    /* CUDA dispatch: when TC_USE_CUDA_GEMM=1 and a CUDA device is available,
-     * route GEMM into cuBLAS. Supported dtype combos:
+    /* CUDA dispatch: when a CUDA-enabled context is active, route supported
+     * GEMM calls into cuBLAS. TC_DISABLE_CUDA_GEMM=1 / TC_CUDA_GEMM=0 /
+     * TC_USE_CUDA_GEMM=0 force CPU fallback for debugging. Supported dtype combos:
      *   - fp32 in, fp32 out, fp32 accum
      *   - fp16 in, fp16 out, fp32 or fp16 accum (TC_CUDA_FP16_ACCUM=1)
      *   - bf16 in, bf16 out, fp32 accum
      *   - int8 in, int32 out, int32 accum (K must be multiple of 16)
      */
-    const char* prefer_cuda = std::getenv("TC_USE_CUDA_GEMM");
     const bool same_float =
         (desc->c_dtype == TC_DTYPE_F32 || desc->c_dtype == TC_DTYPE_F16 ||
          desc->c_dtype == TC_DTYPE_BF16) &&
@@ -704,7 +705,7 @@ extern "C" tc_status_t tc_gemm(tc_context* ctx,
     const bool i8_to_i32 =
         desc->a_dtype == TC_DTYPE_I8 && desc->b_dtype == TC_DTYPE_I8 &&
         desc->c_dtype == TC_DTYPE_I32;
-    if (prefer_cuda && prefer_cuda[0] == '1' && (same_float || i8_to_i32)) {
+    if (tc_cuda_is_active() && (same_float || i8_to_i32)) {
         tc_status_t cs = tc_cuda_gemm(ctx, desc, A, B, C);
         if (cs == TC_OK) {
             return tc_record_dispatch("tc_gemm", TC_BACKEND_CUDA, TC_OK);

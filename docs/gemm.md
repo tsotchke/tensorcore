@@ -150,7 +150,7 @@ Apple9+  bf16           → simdgroup_matrix (TC_BACKEND_SIMDGROUP_MATRIX)
 Apple7..8 bf16          → fp32-cast fallback via tc_gemm (TC_BACKEND_SIMDGROUP_MATRIX after cast)
 small/odd shapes        → MPSMatrix (TC_BACKEND_MPS)
 all GPU paths failed    → cblas_sgemm (TC_BACKEND_ACCELERATE_CPU)
-Linux + TC_USE_CUDA_GEMM=1 + CUDA success -> cuBLAS (TC_BACKEND_CUDA)
+Linux + CUDA init success -> cuBLAS (TC_BACKEND_CUDA)
 ```
 
 Use `tc_last_backend()` to see which row matched.

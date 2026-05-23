@@ -91,17 +91,19 @@ int main() {
 
 Expected for an RTX 3090: `NVIDIA GeForce RTX 3090, cc=8.6, 25.3 GB, fp16=1 bf16=1 tf32=1`.
 
-GEMM dispatch to cuBLAS is currently opt-in:
+On CUDA builds, `tc_init` auto-attempts CUDA initialization. Once CUDA is
+active, runtime-allocated buffers use CUDA managed memory and supported GEMM
+calls route to cuBLAS by default:
 
 ```sh
-TC_USE_CUDA_GEMM=1 ./build/bench/bench_gemm
+./build/bench/bench_gemm
 ```
 
-Successful opt-in CUDA GEMM reports `TC_BACKEND_CUDA` / `"cuda"` via
-`tc_last_backend()`. Buffers allocated while `TC_USE_CUDA_GEMM=1` is set
-use CUDA managed memory, so cuBLAS can dereference A/B/C directly. Wrapped
-host pointers still use an internal staged-copy fallback. If CUDA dispatch
-fails or is not requested, `tc_gemm` falls back to the portable CPU/BLAS path.
+Successful CUDA GEMM reports `TC_BACKEND_CUDA` / `"cuda"` via
+`tc_last_backend()`. Wrapped host pointers still use an internal staged-copy
+fallback. If CUDA dispatch fails, or if `TC_DISABLE_CUDA_GEMM=1`,
+`TC_CUDA_GEMM=0`, or `TC_USE_CUDA_GEMM=0` is set, `tc_gemm` falls back to
+the portable CPU/BLAS path.
 
 ### Linux with chipStar (vendor-neutral GPU: Intel Level Zero, AMD OpenCL, ARM Mali)
 
@@ -226,15 +228,12 @@ Validated working state for this exact deployment:
 `tc_init` initializes the default backend for the host:
 
 - On Apple: Metal (always, when `TC_ENABLE_METAL=ON`).
-- On Linux: CPU. If `TC_ENABLE_CUDA=ON` was set at build time, `tc_cuda_init`
-  can be called explicitly to attach an NVIDIA device and
-  `TC_USE_CUDA_GEMM=1` opts supported fp32/fp16/bf16/int8 GEMM calls into
-  cuBLAS.
+- On Linux: CPU. If `TC_ENABLE_CUDA=ON` was set at build time, `tc_init`
+  auto-attempts `tc_cuda_init` and supported fp32/fp16/bf16/int8 GEMM calls
+  route into cuBLAS by default.
 
-The substrate doesn't currently auto-route compute to the fastest
-available backend at `tc_init` time - that's a v0.2 feature. Today, the
-build flags determine which backends are linked; CUDA GEMM is explicitly
-selected with `TC_USE_CUDA_GEMM=1`, and HIP remains behind `tc_hip_init`.
+Build flags determine which backends are linked; CUDA GEMM is selected by
+default after CUDA initialization, and HIP remains behind `tc_hip_init`.
 
 ## 5. Distributed transport selection
 
@@ -324,20 +323,14 @@ network issue.
 - Heterogeneous-vendor mesh (Apple GPU + Linux CPU + NVIDIA-capable
   host all in one DiLoCo run)
 - Direct CUDA backend init + device introspection (RTX 3090 validated)
-- Opt-in CUDA GEMM with managed-memory tc_buffer allocations
-  (`TC_USE_CUDA_GEMM=1`, RTX 3090 validated for fp32/fp16; bf16/int8 are
-  gated by CUDA device capability)
+- Default CUDA GEMM with managed-memory tc_buffer allocations
+  (RTX 3090 validated for fp32/fp16; bf16/int8 are gated by CUDA device
+  capability)
 - Managed-memory CUDA training dispatch for RMSNorm forward/backward,
   LayerNorm forward, SwiGLU forward/backward, softmax forward/backward, and
   fp32/fp16-gradient AdamW, with host-buffer fallback to portable CPU kernels
 
 **Coming, not blocking:**
-- CUDA GEMM default selection without `TC_USE_CUDA_GEMM=1`; the opt-in
-  managed-memory cuBLAS path is validated on RTX 3090, while default
-  selection still waits for broader correctness/perf evidence.
-- Auto-select backend in `tc_init` (`Metal>CUDA>HIP>CPU` priority)
-- Broader CUDA allocator policy for default no-copy GEMM without an env
-  flag.
 - Larger-network activation-checkpoint policy: the buffer-level CPU/Metal
   discard/realize primitive is implemented; framework-level scheduling
   still needs mesh-aware placement and recompute heuristics.

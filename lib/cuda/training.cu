@@ -2,7 +2,7 @@
  * tensorcore - CUDA training kernels.
  *
  * Pointwise + row-reduction ops on managed memory. These run on the
- * NVIDIA GPU when TC_USE_CUDA_GEMM=1 and the input buffer is CUDA-managed,
+ * NVIDIA GPU when CUDA is active and the input buffer is CUDA-managed,
  * matching the existing CPU implementations in lib/ops/training_cpu.cpp.
  *
  * Kernels here:

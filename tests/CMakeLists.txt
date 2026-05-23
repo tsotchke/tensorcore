@@ -45,11 +45,6 @@ if(NOT TC_ENABLE_METAL)
     target_include_directories(test_training_kernels PRIVATE ${CMAKE_SOURCE_DIR}/include)
     add_test(NAME test_training_kernels COMMAND test_training_kernels)
     set_tests_properties(test_training_kernels PROPERTIES TIMEOUT 120)
-    if(TC_ENABLE_CUDA)
-        set_tests_properties(test_training_kernels PROPERTIES
-            ENVIRONMENT "TC_USE_CUDA_GEMM=1"
-        )
-    endif()
 
     # DiLoCo single-rank runtime smoke; runs everywhere since the runtime
     # is platform-independent (lives in lib/distributed/diloco.cpp).

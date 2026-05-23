@@ -136,10 +136,12 @@ runtime is built in.
 `cuda_init`, `cuda_device_count`, `cuda_device_at`, `cuda_select_device`,
 `cuda_last_kernel_name`. The in-tree CUDA backend currently exposes
 deterministic unsupported diagnostics when no CUDA runtime is built in.
-When tensorcore is built with `TC_ENABLE_CUDA=ON`, `TC_USE_CUDA_GEMM=1`
-opts supported fp32/fp16/bf16/int8 `gemm` calls into the cuBLAS path.
-Runtime-allocated buffers use CUDA managed memory in that mode. Managed
-buffers can also dispatch RMSNorm forward/backward, LayerNorm forward,
+When tensorcore is built with `TC_ENABLE_CUDA=ON`, CUDA initialization makes
+supported fp32/fp16/bf16/int8 `gemm` calls route into the cuBLAS path by
+default. Runtime-allocated buffers use CUDA managed memory in that mode.
+Set `TC_DISABLE_CUDA_GEMM=1`, `TC_CUDA_GEMM=0`, or `TC_USE_CUDA_GEMM=0` to
+force CPU fallback. Managed buffers can also dispatch RMSNorm forward/backward,
+LayerNorm forward,
 SwiGLU forward/backward, softmax forward/backward, and fp32/fp16-gradient
 AdamW to CUDA; host-only wrappers fall back to portable CPU kernels.
 

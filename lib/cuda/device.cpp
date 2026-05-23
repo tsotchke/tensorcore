@@ -139,3 +139,12 @@ extern "C" const char* tc_cuda_last_kernel_name(void) {
 extern "C" TC_CUDA_INTERNAL void tc_cuda_set_last_kernel(const char* name) {
     g_last_kernel = name ? name : "unknown";
 }
+
+extern "C" TC_CUDA_INTERNAL int tc_cuda_runtime_initialized(void) {
+#if !defined(TC_ENABLE_CUDA)
+    return 0;
+#else
+    std::lock_guard<std::mutex> lk(state_mutex());
+    return state().initialized ? 1 : 0;
+#endif
+}

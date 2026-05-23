@@ -3,7 +3,16 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+static void force_cpu_dispatch_for_portable_smoke(void) {
+#if defined(_WIN32)
+    _putenv_s("TC_DISABLE_CUDA_GEMM", "1");
+#else
+    setenv("TC_DISABLE_CUDA_GEMM", "1", 1);
+#endif
+}
 
 static float f32_from_bits(uint32_t bits) {
     float out;
@@ -891,6 +900,8 @@ static int run_future_backend_stubs(tc_context* ctx) {
 }
 
 int main(void) {
+    force_cpu_dispatch_for_portable_smoke();
+
     tc_context* ctx = NULL;
     int rc = 0;
     rc |= expect_status("init", tc_init(&ctx), TC_OK);

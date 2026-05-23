@@ -7,9 +7,9 @@
  *
  * Validates:
  *   1. tc_cuda_init() succeeds and reports a device.
- *   2. tc_buffer_alloc returns CUDA-managed memory when
- *      TC_USE_CUDA_GEMM=1 (writes from host code remain coherent).
- *   3. tc_gemm() with TC_USE_CUDA_GEMM=1 routes to cuBLAS for fp32, fp16,
+ *   2. tc_buffer_alloc returns CUDA-managed memory by default after CUDA
+ *      initialization (writes from host code remain coherent).
+ *   3. tc_gemm() routes to cuBLAS by default for fp32, fp16,
  *      bf16, and int8 when the device reports support.
  *   4. fp32 numerics: random-input identity (M=512, alpha=1, beta=0) error
  *      < 1e-3 vs CPU reference.
@@ -63,8 +63,10 @@ static int expect_cuda_backend(const char* label, const char* expected_kernel) {
 }
 
 int main(void) {
-    /* Opt into CUDA GEMM dispatch + managed-memory buffer allocations. */
-    setenv("TC_USE_CUDA_GEMM", "1", 1);
+    /* Validate the default CUDA policy, independent of the caller's shell. */
+    unsetenv("TC_USE_CUDA_GEMM");
+    unsetenv("TC_CUDA_GEMM");
+    unsetenv("TC_DISABLE_CUDA_GEMM");
 
     tc_context* ctx = NULL;
     if (tc_init(&ctx) != TC_OK) {
@@ -429,6 +431,43 @@ int main(void) {
         printf("  int8 GEMM 1024^3: %.3f ms, %.2f TOPS, sums=%d  last=%s\n",
                dt * 1000.0, tops, c[0], tc_cuda_last_kernel_name());
         tc_buffer_free(ctx, A); tc_buffer_free(ctx, B); tc_buffer_free(ctx, C);
+    }
+
+    /* Explicit opt-out still forces the CPU path, which is useful for A/B
+     * debugging and for hosts that want CUDA built but not selected. */
+    {
+        setenv("TC_DISABLE_CUDA_GEMM", "1", 1);
+        tc_buffer *A, *B, *C;
+        float a_vals[4] = {1, 2, 3, 4};
+        float b_vals[4] = {5, 6, 7, 8};
+        if (tc_buffer_alloc(ctx, sizeof(a_vals), &A) != TC_OK ||
+            tc_buffer_alloc(ctx, sizeof(b_vals), &B) != TC_OK ||
+            tc_buffer_alloc(ctx, sizeof(a_vals), &C) != TC_OK) {
+            fprintf(stderr, "cuda opt-out alloc failed\n");
+            return 1;
+        }
+        void *Ap, *Bp, *Cp;
+        tc_buffer_map(A, &Ap);
+        tc_buffer_map(B, &Bp);
+        tc_buffer_map(C, &Cp);
+        memcpy(Ap, a_vals, sizeof(a_vals));
+        memcpy(Bp, b_vals, sizeof(b_vals));
+        memset(Cp, 0, sizeof(a_vals));
+        tc_gemm_desc d = {0};
+        d.M = 2; d.N = 2; d.K = 2;
+        d.alpha = 1.0f; d.beta = 0.0f;
+        d.a_dtype = d.b_dtype = d.c_dtype = TC_DTYPE_F32;
+        d.accum_dtype = TC_DTYPE_F32;
+        if (tc_gemm(ctx, &d, A, B, C) != TC_OK) {
+            fprintf(stderr, "cuda opt-out GEMM failed\n");
+            return 1;
+        }
+        if (tc_last_backend() == TC_BACKEND_CUDA) {
+            fprintf(stderr, "TC_DISABLE_CUDA_GEMM did not force CPU fallback\n");
+            return 1;
+        }
+        tc_buffer_free(ctx, A); tc_buffer_free(ctx, B); tc_buffer_free(ctx, C);
+        unsetenv("TC_DISABLE_CUDA_GEMM");
     }
 
     tc_shutdown(ctx);
