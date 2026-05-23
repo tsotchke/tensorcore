@@ -104,9 +104,9 @@ every architectural primitive in code and tested:
   and allgather overflow rejection.
 - `Add hand-tuned AVX2 fp32 GEMM micro-kernel`: `lib/ops/gemm_cpu_avx2.cpp`.
   6×16 BLIS-style inner kernel, 12 ymm accumulators, FMA inner loop,
-  thread-local pack buffers. Opt-in via `TC_USE_AVX2_GEMM=1`. Self-contained
-  and hidden from the public export surface. Multi-thread outer + large-shape
-  scaling remain pending.
+  shared A/B panel packing, and OpenMP fanout over independent tile work.
+  Opt-in via `TC_USE_AVX2_GEMM=1`; `TC_AVX2_THREADS=1` forces serial A/B
+  runs. Self-contained and hidden from the public export surface.
 - `Add hand-tuned NEON fp32 GEMM micro-kernel`: `lib/ops/gemm_cpu_neon.cpp`.
   8×8 aarch64 SIMD kernel for Apple/ARM CPU builds, opt-in via
   `TC_USE_NEON_GEMM=1`, with CBLAS remaining the default until broader

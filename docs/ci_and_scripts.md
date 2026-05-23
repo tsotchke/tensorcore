@@ -129,7 +129,8 @@ CTest phase covers `TC_DIST_GLOO` with four forked localhost ranks,
 including the TCP ring fp32 SUM path. The Python phase covers
 DiLoCo-over-GLOO with two forked localhost ranks, and runs isolated
 subprocess GEMM smokes with
-`TC_USE_AVX2_GEMM=1`, `TC_USE_NEON_GEMM=1`, and `TC_USE_AMX_GEMM=1`.
+`TC_USE_AVX2_GEMM=1`, `TC_USE_AVX2_GEMM=1 TC_AVX2_THREADS=1`,
+`TC_USE_NEON_GEMM=1`, and `TC_USE_AMX_GEMM=1`.
 The portable CTest suite also builds direct AMX regression binaries for the
 tile kernel and edge-tile alpha/beta wrapper; they skip unless
 `TC_RUN_AMX_GEMM_TEST=1` is set. The separate `test_amx_probe` CTest

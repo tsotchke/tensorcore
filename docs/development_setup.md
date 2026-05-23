@@ -110,11 +110,12 @@ What works on the portable CPU build:
 - DiLoCo single-rank, dense multi-rank, and sparse TOPK multi-rank outer
   steps over `TC_DIST_GLOO`
 - opt-in CPU GEMM variants via `TC_USE_AVX2_GEMM=1`,
-  `TC_USE_NEON_GEMM=1`, and `TC_USE_AMX_GEMM=1`; the portable CI script
-  smokes these in isolated Python subprocesses. Direct AMX C regressions
-  also build in portable CPU mode but skip unless `TC_RUN_AMX_GEMM_TEST=1`
-  is set on known-good Apple-Silicon hardware. `test_amx_probe` runs
-  everywhere because it checks only non-trapping AMX metadata/stub paths.
+  `TC_USE_AVX2_GEMM=1 TC_AVX2_THREADS=1`, `TC_USE_NEON_GEMM=1`, and
+  `TC_USE_AMX_GEMM=1`; the portable CI script smokes these in isolated
+  Python subprocesses. Direct AMX C regressions also build in portable CPU
+  mode but skip unless `TC_RUN_AMX_GEMM_TEST=1` is set on known-good
+  Apple-Silicon hardware. `test_amx_probe` runs everywhere because it checks
+  only non-trapping AMX metadata/stub paths.
 - sparse top-k compression helpers
 - memory-tier stub baseline and portable CPU activation-checkpointing
   discard/realize

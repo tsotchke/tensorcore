@@ -51,6 +51,10 @@ For the AMD64 hand-tuned AVX2 kernel:
 TC_USE_AVX2_GEMM=1 ./build/bench/bench_gemm
 ```
 
+The AVX2 macro-kernel uses OpenMP tile fanout when the shared library was
+built with OpenMP support. Set `TC_AVX2_THREADS=1` to force serial execution
+for A/B comparisons, or `TC_AVX2_THREADS=N` to cap the internal worker count.
+
 For the aarch64 NEON kernel (xavier, Apple CPU side):
 
 ```sh
@@ -337,8 +341,8 @@ network issue.
 - Larger-network activation-checkpoint policy: the buffer-level CPU/Metal
   discard/realize primitive is implemented; framework-level scheduling
   still needs mesh-aware placement and recompute heuristics.
-- AVX2 GEMM multi-thread (single-thread 40 GFLOPS shipped; multi-thread
-  needs BLIS-style 5-loop)
+- AVX2 GEMM default selection and broader throughput tuning; the opt-in
+  BLIS-style OpenMP tile fanout is implemented.
 - Thunderbolt 4 link validation between two Macs (cable-dependent)
 
 ## 9. Where files live

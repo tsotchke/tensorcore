@@ -7,7 +7,8 @@
  * loop or to CBLAS if available).
  *
  * Strategy (BLIS-style 6×16):
- *   - Outer parallelism over rows of A (M dimension) via OpenMP.
+ *   - OpenMP fanout over the independent micro-kernel tile grid after A/B
+ *     panels are packed once into shared read-only buffers.
  *   - Cache-block (MC×KC) tiles of A and (KC×NC) tiles of B; pack each tile
  *     into contiguous row-major / column-major buffers so the micro-kernel
  *     reads with unit stride.
@@ -45,6 +46,7 @@
 #include <cstring>
 #include <new>
 #include <algorithm>
+#include <mutex>
 
 #if defined(_OPENMP)
 #include <omp.h>
@@ -202,10 +204,11 @@ inline float* aligned_alloc_fp32(size_t n_floats) {
 
 }  // namespace
 
-/* Single-thread GEMM with SHARED pack buffers. The OpenMP parallel region
- * lives INSIDE this function around the inner-most kernel loop, not as an
- * outer wrapper. The pack work happens once per (K-tile, N-tile, M-tile)
- * on the main thread; the inner kernel-call grid is parallelized.
+/* BLIS-style macro-kernel with shared pack buffers. The OpenMP parallel
+ * region lives INSIDE this function around the inner micro-kernel tile
+ * grid, not as an outer wrapper. The pack work happens once per
+ * (K-tile, N-tile, M-tile) on the caller thread; workers only read packed
+ * panels and write disjoint C tiles.
  *
  * Why not the simpler "split M across threads" approach: each thread
  * would independently pack B for the full N, multiplying the pack work
@@ -219,7 +222,11 @@ static int tc_avx2_gemm_f32_slice(int M, int N, int K,
                                   float beta,
                                   float* C, int ldc) {
     /* Single shared pack buffer (no thread_local — those would be per-OMP-thread
-     * and cause cache thrashing as we observed). Persist across calls. */
+     * and cause cache thrashing as we observed). Persist across calls and
+     * guard against concurrent public tc_gemm callers using the AVX2 opt-in
+     * path while still allowing OpenMP workers inside one call. */
+    static std::mutex shared_pack_mutex;
+    std::lock_guard<std::mutex> shared_pack_lock(shared_pack_mutex);
     static float* shared_packed_A = nullptr;
     static size_t shared_packed_A_cap = 0;
     static float* shared_packed_B = nullptr;
@@ -256,9 +263,13 @@ static int tc_avx2_gemm_f32_slice(int M, int N, int K,
         }
     }
 
-    /* Outer M loop is parallelizable; the OpenMP wrapper in gemm_cpu.cpp does
-     * that. Here we run sequentially per-thread on a sub-range; the caller
-     * pre-partitions M before calling. */
+#if defined(_OPENMP)
+    const char* threads_env = std::getenv("TC_AVX2_THREADS");
+    const int requested_threads = (threads_env && threads_env[0]) ? std::atoi(threads_env) : 0;
+    const int omp_threads = (requested_threads > 0) ? requested_threads : omp_get_max_threads();
+    const bool allow_parallel = requested_threads != 1 && omp_threads > 1 && !omp_in_parallel();
+#endif
+
     for (int p = 0; p < K; p += TC_AVX2_KC) {
         const int kc = (p + TC_AVX2_KC <= K) ? TC_AVX2_KC : (K - p);
         for (int j = 0; j < N; j += TC_AVX2_NC) {
@@ -269,17 +280,19 @@ static int tc_avx2_gemm_f32_slice(int M, int N, int K,
                 const int mc = (i + TC_AVX2_MC <= M) ? TC_AVX2_MC : (M - i);
                 pack_A(A + (size_t)i * lda + p, lda, mc, kc, tls_packed_A);
 
-                /* Single-thread inner kernel grid. Multi-thread AVX2 with
-                 * shared pack still loses to MKL on this hardware; switching
-                 * to a BLIS-style 5-loop nest with proper barrier-synced
-                 * cache blocking is v0.2 work. For now this path serves as
-                 * a self-contained BLAS-free fallback at ~80 GFLOPS per
-                 * core; multi-thread acceleration goes through MKL/OpenBLAS
-                 * via the CBLAS dispatch in gemm_cpu.cpp. */
-                for (int jr = 0; jr < nc; jr += TC_AVX2_NR) {
-                    const int nr = (jr + TC_AVX2_NR <= nc) ? TC_AVX2_NR : (nc - jr);
-                    const float* pB = tls_packed_B + (size_t)(jr / TC_AVX2_NR) * kc * TC_AVX2_NR;
-                    for (int ir = 0; ir < mc; ir += TC_AVX2_MR) {
+                const int jr_tiles = (nc + TC_AVX2_NR - 1) / TC_AVX2_NR;
+                const int ir_tiles = (mc + TC_AVX2_MR - 1) / TC_AVX2_MR;
+#if defined(_OPENMP)
+                const int tile_count = jr_tiles * ir_tiles;
+                const bool use_parallel = allow_parallel && tile_count >= 8;
+#pragma omp parallel for collapse(2) schedule(static) if(use_parallel) num_threads(omp_threads)
+#endif
+                for (int jt = 0; jt < jr_tiles; ++jt) {
+                    for (int it = 0; it < ir_tiles; ++it) {
+                        const int jr = jt * TC_AVX2_NR;
+                        const int ir = it * TC_AVX2_MR;
+                        const int nr = (jr + TC_AVX2_NR <= nc) ? TC_AVX2_NR : (nc - jr);
+                        const float* pB = tls_packed_B + (size_t)(jr / TC_AVX2_NR) * kc * TC_AVX2_NR;
                         const int mr = (ir + TC_AVX2_MR <= mc) ? TC_AVX2_MR : (mc - ir);
                         const float* pA = tls_packed_A + (size_t)(ir / TC_AVX2_MR) * TC_AVX2_MR * kc;
                         float* Cij = C + (size_t)(i + ir) * ldc + (j + jr);
@@ -305,10 +318,10 @@ static int tc_avx2_gemm_f32_slice(int M, int N, int K,
     return 0;
 }
 
-/* Public entry point: partition M across OpenMP threads, call the per-slice
- * worker on each thread's M-range. Each thread holds its own thread_local
- * pack buffers (TC_AVX2_MC × TC_AVX2_KC + TC_AVX2_KC × TC_AVX2_NC ≈ 4.1 MB
- * per worker) — fine for the 88-thread Xeon E5-2699 v4 (~360 MB total). */
+/* Public entry point. The macro-kernel packs each A/B panel once, then fans
+ * out independent 6×16 tile work to OpenMP threads when available. Set
+ * TC_AVX2_THREADS=1 to force serial execution for A/B comparisons; set it
+ * to N>1 to cap the internal worker count. */
 extern "C" TC_INTERNAL_SYMBOL int tc_avx2_gemm_f32(int M, int N, int K,
                                                    float alpha,
                                                    const float* A, int lda,

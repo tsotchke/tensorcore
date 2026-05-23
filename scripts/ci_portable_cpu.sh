@@ -258,7 +258,15 @@ finally:
 
 
 def _run_gemm_variant_smokes():
-    _run_gemm_variant_smoke("AVX2 opt-in", {"TC_USE_AVX2_GEMM": "1"})
+    _run_gemm_variant_smoke("AVX2 opt-in", {
+                                "TC_USE_AVX2_GEMM": "1",
+                                "TC_GEMM_VARIANT_SIZE": "192",
+                            })
+    _run_gemm_variant_smoke("AVX2 serial opt-in", {
+                                "TC_USE_AVX2_GEMM": "1",
+                                "TC_AVX2_THREADS": "1",
+                                "TC_GEMM_VARIANT_SIZE": "96",
+                            })
     _run_gemm_variant_smoke("NEON opt-in", {"TC_USE_NEON_GEMM": "1"})
     machine = os.uname().machine if hasattr(os, "uname") else ""
     amx_size = "256" if sys.platform == "darwin" and machine in ("arm64", "aarch64") else "32"
