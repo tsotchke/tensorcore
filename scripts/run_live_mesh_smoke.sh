@@ -9,6 +9,9 @@ port="${TC_MESH_PORT:-}"
 test_filter="${TC_MESH_TEST:-all}"
 elements="${TC_MESH_ELEMENTS:-65536}"
 iters="${TC_MESH_ITERS:-2}"
+diloco_elements="${TC_MESH_DILOCO_ELEMENTS:-65536}"
+diloco_cycles="${TC_MESH_DILOCO_CYCLES:-3}"
+diloco_inner_steps="${TC_MESH_DILOCO_INNER_STEPS:-5}"
 ring="${TC_MESH_RING:-1}"
 trace="${TC_MESH_TRACE:-1}"
 timeout_ms="${TC_MESH_RING_CONNECT_TIMEOUT_MS:-10000}"
@@ -41,6 +44,9 @@ Environment:
   TC_MESH_TEST=$test_filter                 all | allreduce | diloco
   TC_MESH_ELEMENTS=$elements                fp32 elements for allreduce probe
   TC_MESH_ITERS=$iters                      timed allreduce iterations
+  TC_MESH_DILOCO_ELEMENTS=$diloco_elements  fp16 parameters for DiLoCo probe
+  TC_MESH_DILOCO_CYCLES=$diloco_cycles      DiLoCo outer steps
+  TC_MESH_DILOCO_INNER_STEPS=$diloco_inner_steps
   TC_MESH_PREPARE=$prepare                  1 archives/builds remote binaries first
   TC_MESH_PORT=<port>                       rendezvous port; auto-selected if unset
   TC_MESH_LOG_DIR=$log_dir
@@ -144,6 +150,9 @@ rank_args=(
     --test "$test_filter"
     --elements "$elements"
     --iters "$iters"
+    --diloco-elements "$diloco_elements"
+    --diloco-cycles "$diloco_cycles"
+    --diloco-inner-steps "$diloco_inner_steps"
 )
 
 pids=()
@@ -167,9 +176,8 @@ run_remote_rank() {
     local host="$2"
     local bin="$3"
     local log="$log_dir/rank${rank}.log"
-    ssh "$host" \
-        "TC_GLOO_RING='$ring' TC_GLOO_TRACE='$trace' TC_GLOO_RING_CONNECT_TIMEOUT_MS='$timeout_ms' '$bin' --rank '$rank' --world '$world' --url '$url' --test '$test_filter' --elements '$elements' --iters '$iters'" \
-        >"$log" 2>&1 &
+    local remote_cmd="TC_GLOO_RING='$ring' TC_GLOO_TRACE='$trace' TC_GLOO_RING_CONNECT_TIMEOUT_MS='$timeout_ms' '$bin' --rank '$rank' --world '$world' --url '$url' --test '$test_filter' --elements '$elements' --iters '$iters' --diloco-elements '$diloco_elements' --diloco-cycles '$diloco_cycles' --diloco-inner-steps '$diloco_inner_steps'"
+    ssh "$host" "$remote_cmd" >"$log" 2>&1 &
     pids[$rank]=$!
 }
 

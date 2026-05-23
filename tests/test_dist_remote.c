@@ -18,6 +18,10 @@
  *     TC_GLOO_RING=1 TC_GLOO_TRACE=1 ./test_dist_remote ... \
  *         --test allreduce --elements 65536 --iters 2
  *
+ * For DiLoCo soak tests, tune the synthetic workload:
+ *     ./test_dist_remote ... --test diloco --diloco-elements 65536 \
+ *         --diloco-cycles 10 --diloco-inner-steps 20
+ *
  * Validates:
  *     1. Cross-machine TCP rendezvous
  *     2. allreduce (sum, avg, min, max)
@@ -57,7 +61,8 @@ static int fail_(const char* what, int rank) {
 static void usage(const char* argv0) {
     fprintf(stderr,
         "Usage: %s --rank <int> --world <int> --url <tcp://host:port> "
-        "[--test all|allreduce|diloco] [--elements N] [--iters N]\n"
+        "[--test all|allreduce|diloco] [--elements N] [--iters N] "
+        "[--diloco-elements N] [--diloco-cycles N] [--diloco-inner-steps N]\n"
         "Examples:\n"
         "  %s --rank 0 --world 2 --url tcp://192.168.42.1:9000\n"
         "  %s --rank 1 --world 2 --url tcp://192.168.42.1:9000\n",
@@ -70,6 +75,9 @@ int main(int argc, char** argv) {
     const char* test_filter = "all";
     size_t allreduce_elements = 1024 * 1024;   /* 4 MB fp32 payload */
     int allreduce_iters = 5;
+    size_t diloco_elements = 65536;
+    int diloco_cycles = 3;
+    int diloco_inner_steps = 5;
 
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--rank") && i + 1 < argc) {
@@ -96,6 +104,30 @@ int main(int argc, char** argv) {
                 return 2;
             }
             allreduce_iters = (int)v;
+        } else if (!strcmp(argv[i], "--diloco-elements") && i + 1 < argc) {
+            char* end = NULL;
+            unsigned long long v = strtoull(argv[++i], &end, 10);
+            if (!end || *end != '\0' || v == 0 || v > 100000000ull) {
+                fprintf(stderr, "invalid --diloco-elements value\n");
+                return 2;
+            }
+            diloco_elements = (size_t)v;
+        } else if (!strcmp(argv[i], "--diloco-cycles") && i + 1 < argc) {
+            char* end = NULL;
+            long v = strtol(argv[++i], &end, 10);
+            if (!end || *end != '\0' || v <= 0 || v > 100000) {
+                fprintf(stderr, "invalid --diloco-cycles value\n");
+                return 2;
+            }
+            diloco_cycles = (int)v;
+        } else if (!strcmp(argv[i], "--diloco-inner-steps") && i + 1 < argc) {
+            char* end = NULL;
+            long v = strtol(argv[++i], &end, 10);
+            if (!end || *end != '\0' || v <= 0 || v > 100000) {
+                fprintf(stderr, "invalid --diloco-inner-steps value\n");
+                return 2;
+            }
+            diloco_inner_steps = (int)v;
         } else {
             fprintf(stderr, "Unknown argument: %s\n", argv[i]);
             usage(argv[0]);
@@ -109,6 +141,12 @@ int main(int argc, char** argv) {
     }
     if (rank >= world) {
         fprintf(stderr, "rank %d out of range for world %d\n", rank, world);
+        return 2;
+    }
+    if (strcmp(test_filter, "all") &&
+        strcmp(test_filter, "allreduce") &&
+        strcmp(test_filter, "diloco")) {
+        fprintf(stderr, "invalid --test value: %s\n", test_filter);
         return 2;
     }
 
@@ -130,6 +168,9 @@ int main(int argc, char** argv) {
     if (!strcmp(test_filter, "all") || !strcmp(test_filter, "allreduce")) {
         const size_t N = allreduce_elements;
         tc_buffer* buf = NULL;
+        if (N > SIZE_MAX / sizeof(float)) {
+            return fail_("allreduce element count overflow", rank);
+        }
         if (tc_buffer_alloc(ctx, N * sizeof(float), &buf) != TC_OK) {
             return fail_("alloc allreduce buffer", rank);
         }
@@ -179,7 +220,7 @@ int main(int argc, char** argv) {
     if (!strcmp(test_filter, "all") || !strcmp(test_filter, "diloco")) {
         tc_diloco_config cfg;
         memset(&cfg, 0, sizeof(cfg));
-        cfg.inner_steps = 5;
+        cfg.inner_steps = diloco_inner_steps;
         cfg.outer_lr = 1.0f;
         cfg.outer_optimizer = TC_DILOCO_OUTER_SGD;
         cfg.compress = TC_DILOCO_COMPRESS_TOPK_01PCT;
@@ -189,25 +230,29 @@ int main(int argc, char** argv) {
             return fail_("diloco_init", rank);
         }
 
-        const int N = 65536;
         tc_buffer* theta = NULL;
-        if (tc_buffer_alloc(ctx, N * sizeof(uint16_t), &theta) != TC_OK) {
+        if (diloco_elements > SIZE_MAX / sizeof(uint16_t)) {
+            return fail_("diloco element count overflow", rank);
+        }
+        if (tc_buffer_alloc(ctx, diloco_elements * sizeof(uint16_t), &theta) != TC_OK) {
             return fail_("alloc theta", rank);
         }
         void* tp = NULL; tc_buffer_map(theta, &tp);
         uint16_t* t = (uint16_t*)tp;
-        for (int i = 0; i < N; ++i) t[i] = 0x3C00;   /* fp16 1.0 */
+        for (size_t i = 0; i < diloco_elements; ++i) t[i] = 0x3C00;   /* fp16 1.0 */
 
-        if (tc_diloco_add_parameter(d, "p", theta, N, TC_DTYPE_F16) != TC_OK) {
+        if (tc_diloco_add_parameter(d, "p", theta, diloco_elements, TC_DTYPE_F16) != TC_OK) {
             return fail_("add_parameter", rank);
         }
 
-        /* Run a few full DiLoCo cycles. */
+        /* Run configurable full DiLoCo cycles. */
         const double t0 = now();
-        for (int cycle = 0; cycle < 3; ++cycle) {
-            for (int step = 0; step < 5; ++step) {
+        for (int cycle = 0; cycle < diloco_cycles; ++cycle) {
+            for (int step = 0; step < diloco_inner_steps; ++step) {
                 /* Synthetic gradient: just nudge a unique index. */
-                const int idx = (rank * 100 + cycle * 10 + step) % N;
+                const size_t idx =
+                    ((size_t)rank * 100u + (size_t)cycle * 10u + (size_t)step) %
+                    diloco_elements;
                 t[idx] = 0x4000;   /* fp16 2.0 - large gradient at one location */
                 bool outer_pending = false;
                 if (tc_diloco_step(d, &outer_pending) != TC_OK) rc |= fail_("step", rank);
@@ -216,8 +261,9 @@ int main(int argc, char** argv) {
             if (tc_diloco_apply_outer(d) != TC_OK) rc |= fail_("apply_outer", rank);
         }
         const double dt = now() - t0;
-        printf("[rank %d] DiLoCo 3 outer steps x 5 inner: %.3f sec, bandwidth/step=%.1f bytes\n",
-               rank, dt, tc_diloco_last_outer_bytes_sent(d));
+        printf("[rank %d] DiLoCo %d outer steps x %d inner, %zu fp16 params: %.3f sec, bandwidth/step=%.1f bytes\n",
+               rank, diloco_cycles, diloco_inner_steps, diloco_elements,
+               dt, tc_diloco_last_outer_bytes_sent(d));
 
         tc_diloco_finalize(d);
         tc_buffer_free(ctx, theta);

@@ -215,7 +215,10 @@ uploads the portable CPU rank binary to Enki, builds the remote
 With the default `TC_MESH_TEST=all`, the smoke covers both direct-ring
 fp32 SUM and the DiLoCo sparse TOPK outer-step path. Set
 `TC_MESH_TEST=allreduce` for a short transport-only run, or
-`TC_MESH_TEST=diloco` for training-sync traffic only.
+`TC_MESH_TEST=diloco` for training-sync traffic only. Use
+`TC_MESH_DILOCO_CYCLES`, `TC_MESH_DILOCO_INNER_STEPS`, and
+`TC_MESH_DILOCO_ELEMENTS` to scale the DiLoCo soak without changing the
+binary.
 
 ### 4-rank reference deployment
 
@@ -252,6 +255,10 @@ Validated working state for this exact deployment:
   binaries from the current checkout, launched all four ranks, verified
   direct-ring allreduce logs, and completed DiLoCo TOPK outer steps with
   `bandwidth/step=528.0 bytes` on every rank.
+- The parameterized soak path was also validated with
+  `TC_MESH_DILOCO_CYCLES=5 TC_MESH_DILOCO_INNER_STEPS=8`: all four ranks
+  completed 65,536-parameter TOPK DiLoCo in 9.4-10.2 sec while preserving
+  the direct-ring allreduce check.
 - Earlier full DiLoCo proof: 3 outer x 5 inner across all four ranks in
   4-17 sec depending on which network leg is slowest, with all ranks
   converging to the same theta and bit-correct sum verified.

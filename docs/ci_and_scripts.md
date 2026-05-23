@@ -160,6 +160,8 @@ rank binary to Enki, archives the current committed checkout to the Linux
 nodes, builds their portable `test_dist_remote` target, launches all four
 ranks, and verifies per-rank logs. The default `TC_MESH_TEST=all` covers
 direct GLOO ring fp32 SUM and the DiLoCo sparse TOPK outer-step path.
+`TC_MESH_DILOCO_CYCLES`, `TC_MESH_DILOCO_INNER_STEPS`, and
+`TC_MESH_DILOCO_ELEMENTS` scale the training-sync soak.
 
 ```sh
 TC_MESH_PREPARE=1 scripts/run_live_mesh_smoke.sh
