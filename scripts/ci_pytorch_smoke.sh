@@ -24,6 +24,7 @@ if [[ ! -f "${TENSORCORE_LIB_DIR}/libtensorcore.dylib" &&
     echo "Build tensorcore first or set TENSORCORE_LIB_DIR." >&2
     exit 1
 fi
+TENSORCORE_LIB_DIR="$(cd "${TENSORCORE_LIB_DIR}" && pwd)"
 
 (
     cd "${ROOT}/bindings/pytorch"

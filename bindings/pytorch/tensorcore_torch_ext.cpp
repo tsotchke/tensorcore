@@ -56,7 +56,10 @@ void ensure_ctx() {
     while (init_lock.test_and_set(std::memory_order_acquire)) {}
     if (!initialized.load(std::memory_order_relaxed)) {
         const auto rc = tc_init(&g_ctx);
-        if (rc != TC_OK || g_ctx == nullptr) {
+        const bool ok =
+            (rc == TC_OK || rc == TC_ERR_ALREADY_INITIALIZED) &&
+            g_ctx != nullptr;
+        if (!ok) {
             init_lock.clear(std::memory_order_release);
             throw std::runtime_error(
                 std::string("tc_init failed: ") +
