@@ -58,7 +58,7 @@ equivalent, see **[docs/cuda_comparison.md](docs/cuda_comparison.md)**.
 | `tc_attention_backward` fp16 D=64/D=128 | scaled-RMS ≤ 3e-3 | LSE-saved scheme |
 | Q4_0 / Q8_0 quantized GEMV plus GPU quantize | bit-exact vs dequant ref | 7B decode harness |
 | Q4_0 async-stream batched GEMV | ~79% of LPDDR5 peak bw | **186 tok/s, 632 GB/s @ synthetic 7B decode** |
-| RMSnorm / LayerNorm / RoPE / SwiGLU / softmax / AdamW | fused Metal kernels | C tests + Python smoke |
+| RMSnorm / LayerNorm / RoPE / SwiGLU / softmax / AdamW | Metal, portable CPU, and CUDA managed-memory kernels | C tests + Python smoke |
 | Fused RMSnorm/LayerNorm+GEMV | inference projection primitives | correctness vs separate paths |
 | Conv2D fwd + backward (im2col + GEMM) | scaled-RMS ≤ 1e-3 | multi-batch validated |
 | GGUF reader | v3 metadata, tensors, bulk copy, Q4/Q8 descriptors | synthetic + Q4 GEMV end-to-end |
@@ -227,7 +227,7 @@ tensorcore/
   early-exit pruning, split-K).
 - **Full mixed-precision training loop test** (small transformer block,
   matched against PyTorch-MPS gradients).
-- **RoPE backward, fused-AdamW for fp16 grads.**
+- **CUDA default selection and broader mixed-precision training evidence.**
 - **M ≥ 4 quantized GEMV** so prefill works at scale.
 
 The honest "compete-with-NVIDIA" picture, the per-watt advantage, and the

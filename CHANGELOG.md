@@ -146,10 +146,13 @@ every architectural primitive in code and tested:
   staged fallback. `scripts/ci_cuda_smoke.sh` and `test_cuda_gemm` cover
   fp32/fp16 GEMM on CUDA hosts, including a 4096^3 managed-memory perf
   gate on high-end Ampere+ devices. CUDA builds also route bf16/fp32-accum
-  and int8/i32-accum GEMM through cuBLAS when the device reports support,
-  and compile managed-memory CUDA kernels for RMSNorm forward, LayerNorm
-  forward, SwiGLU forward, softmax forward, and fp32-grad AdamW with CPU
-  fallback for host-only buffers.
+  and int8/i32-accum GEMM through cuBLAS when the device reports support.
+  CUDA builds also compile managed-memory training kernels for RMSNorm
+  forward/backward, LayerNorm forward, SwiGLU forward/backward, softmax
+  forward/backward, and fp32/fp16-gradient AdamW with CPU fallback for
+  host-only buffers. `test_training_kernels` now requires CUDA dispatch for
+  these managed-memory paths when a CUDA device is visible and
+  `TC_USE_CUDA_GEMM=1` is set.
   Default builds return deterministic unsupported statuses until
   `TC_ENABLE_CUDA` is wired to a CUDA toolchain.
 - `Extend async Metal GEMM to bf16`: `kernels/metal/gemm_async.metal`

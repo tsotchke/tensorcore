@@ -150,8 +150,9 @@ suite, then runs fp32 and fp16 Python GEMM smokes with
 a 4096^3 fp32 perf gate on high-end Ampere+ devices. On CUDA devices that
 report support, the CTest path also covers bf16/fp32-accum and int8/i32-accum
 cuBLAS GEMM plus managed-memory RMSNorm/LayerNorm/SwiGLU/softmax/AdamW
-training dispatch. The
-Python smoke asserts numerical output, `backend=cuda`, and the expected
+training dispatch, including RMSNorm/SwiGLU/softmax backward and both
+fp32/fp16-gradient AdamW paths. The Python smoke asserts numerical output,
+`backend=cuda`, and the expected
 managed-memory cuBLAS kernel names. It requires a visible NVIDIA GPU and CUDA
 Toolkit with `CUDA::cudart` plus `CUDA::cublas`.
 

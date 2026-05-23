@@ -140,9 +140,9 @@ deterministic unsupported diagnostics when no CUDA runtime is built in.
 When tensorcore is built with `TC_ENABLE_CUDA=ON`, `TC_USE_CUDA_GEMM=1`
 opts supported fp32/fp16/bf16/int8 `gemm` calls into the cuBLAS path.
 Runtime-allocated buffers use CUDA managed memory in that mode. Managed
-buffers can also dispatch RMSNorm forward, LayerNorm forward, SwiGLU forward,
-softmax forward, and fp32-grad AdamW to CUDA; host-only wrappers fall back to
-portable CPU kernels.
+buffers can also dispatch RMSNorm forward/backward, LayerNorm forward,
+SwiGLU forward/backward, softmax forward/backward, and fp32/fp16-gradient
+AdamW to CUDA; host-only wrappers fall back to portable CPU kernels.
 
 ### GEMM
 `gemm`, `gemm_async`, `gemm_batched`.

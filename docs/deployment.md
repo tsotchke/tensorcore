@@ -315,9 +315,9 @@ network issue.
 - Opt-in CUDA GEMM with managed-memory tc_buffer allocations
   (`TC_USE_CUDA_GEMM=1`, RTX 3090 validated for fp32/fp16; bf16/int8 are
   gated by CUDA device capability)
-- Managed-memory CUDA training dispatch for RMSNorm forward, LayerNorm
-  forward, SwiGLU forward, softmax forward, and fp32-grad AdamW, with
-  host-buffer fallback to portable CPU kernels
+- Managed-memory CUDA training dispatch for RMSNorm forward/backward,
+  LayerNorm forward, SwiGLU forward/backward, softmax forward/backward, and
+  fp32/fp16-gradient AdamW, with host-buffer fallback to portable CPU kernels
 
 **Coming, not blocking:**
 - CUDA GEMM default selection without `TC_USE_CUDA_GEMM=1`; the opt-in

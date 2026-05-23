@@ -204,8 +204,10 @@ some still queued.
   - Br=64 for D=128 via aliased TG memory regions
   - Causal-mask early-exit pruning at K-block granularity
   - Split-K for short-seq → long-context generation
-- Backward pass kernels: GEMM grad, FlashAttention backward (the LSE-saved scheme),
-  RMSnorm grad, RoPE grad, fused-AdamW
+- Backward/perf closeout: GEMM-gradient throughput and FlashAttention
+  backward tuning. RMSnorm, RoPE, SwiGLU, softmax, and AdamW backward/optimizer
+  ABI paths have correctness coverage across the active CPU/Metal/CUDA
+  backends.
 - Full mixed-precision training loop test (small transformer block) matching
   PyTorch-MPS gradient outputs
 

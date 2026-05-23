@@ -75,6 +75,21 @@ static int backend_is_compute(const char* op) {
     return 0;
 }
 
+static int cuda_training_expected(void) {
+    const char* env = getenv("TC_USE_CUDA_GEMM");
+    return env && env[0] == '1' && tc_cuda_device_count() > 0;
+}
+
+static int backend_matches_training_contract(const char* op, int expect_cuda) {
+    const tc_backend_t b = tc_last_backend();
+    if (expect_cuda && b != TC_BACKEND_CUDA) {
+        fprintf(stderr, "%s backend was %s, expected cuda\n",
+                op, tc_backend_name(b));
+        return 0;
+    }
+    return backend_is_compute(op);
+}
+
 static int test_rmsnorm(tc_context* ctx) {
     const int N = 8, D = 128;
     const float eps = 1e-5f;
@@ -113,9 +128,14 @@ static int test_rmsnorm(tc_context* ctx) {
         for (int d = 0; d < D; ++d) Yref[n*D+d] = (float)(Xf[n*D+d] * rstd * gf[d]);
     }
 
+    const int expect_cuda = cuda_training_expected();
     tc_status_t s = tc_rmsnorm_forward(ctx, Xb, gb, Yb, rstdb, N, D, eps);
+    const int fwd_backend_ok = (s == TC_OK) &&
+                               backend_matches_training_contract("rmsnorm_forward", expect_cuda);
     const double err = rms_scaled(Yp, Yref, N*D);
     tc_status_t sb = tc_rmsnorm_backward(ctx, Xb, gb, dYb, rstdb, dXb, dgb, N, D);
+    const int bwd_backend_ok = (sb == TC_OK) &&
+                               backend_matches_training_contract("rmsnorm_backward", expect_cuda);
     memset(dgref, 0, D*sizeof(float));
     for (int n = 0; n < N; ++n) {
         double dot = 0.0;
@@ -145,7 +165,8 @@ static int test_rmsnorm(tc_context* ctx) {
     tc_buffer_free(ctx, Xb); tc_buffer_free(ctx, gb);
     tc_buffer_free(ctx, Yb); tc_buffer_free(ctx, rstdb);
     tc_buffer_free(ctx, dYb); tc_buffer_free(ctx, dXb); tc_buffer_free(ctx, dgb);
-    return (s == TC_OK && sb == TC_OK && err < 5e-3 && dx_err < 5e-3 && dg_err < 5e-4) ? 0 : 1;
+    return (s == TC_OK && sb == TC_OK && fwd_backend_ok && bwd_backend_ok &&
+            err < 5e-3 && dx_err < 5e-3 && dg_err < 5e-4) ? 0 : 1;
 }
 
 static int test_layernorm(tc_context* ctx) {
@@ -257,9 +278,14 @@ static int test_swiglu(tc_context* ctx) {
         duref[i] = (float)(dzq * silu_g);
     }
 
+    const int expect_cuda = cuda_training_expected();
     tc_status_t s = tc_swiglu_forward(ctx, gb, ub, ob, N);
+    const int fwd_backend_ok = (s == TC_OK) &&
+                               backend_matches_training_contract("swiglu_forward", expect_cuda);
     const double err = rms_scaled(op, ref, N);
     tc_status_t sb = tc_swiglu_backward(ctx, gb, ub, doutb, dgateb, dupb, N);
+    const int bwd_backend_ok = (sb == TC_OK) &&
+                               backend_matches_training_contract("swiglu_backward", expect_cuda);
     const double dg_err = rms_scaled(dgatep, dgref, N);
     const double du_err = rms_scaled(dupp, duref, N);
     printf("  swiglu_forward    N=%d         rms_scaled=%.3e  %s\n",
@@ -269,7 +295,8 @@ static int test_swiglu(tc_context* ctx) {
     free(gf); free(uf); free(ref); free(dgref); free(duref);
     tc_buffer_free(ctx, gb); tc_buffer_free(ctx, ub); tc_buffer_free(ctx, ob);
     tc_buffer_free(ctx, doutb); tc_buffer_free(ctx, dgateb); tc_buffer_free(ctx, dupb);
-    return (s == TC_OK && sb == TC_OK && err < 5e-3 && dg_err < 5e-3 && du_err < 5e-3) ? 0 : 1;
+    return (s == TC_OK && sb == TC_OK && fwd_backend_ok && bwd_backend_ok &&
+            err < 5e-3 && dg_err < 5e-3 && du_err < 5e-3) ? 0 : 1;
 }
 
 static int test_softmax(tc_context* ctx) {
@@ -296,9 +323,14 @@ static int test_softmax(tc_context* ctx) {
         for (int d = 0; d < D; ++d) s += exp(Xf[n*D+d] - m);
         for (int d = 0; d < D; ++d) Yref[n*D+d] = (float)(exp(Xf[n*D+d] - m) / s);
     }
+    const int expect_cuda = cuda_training_expected();
     tc_status_t s = tc_softmax_forward(ctx, Xb, Yb, N, D);
+    const int fwd_backend_ok = (s == TC_OK) &&
+                               backend_matches_training_contract("softmax_forward", expect_cuda);
     const double err = rms_scaled(Yp, Yref, N*D);
     tc_status_t sb = tc_softmax_backward(ctx, Yb, dYb, dXb, N, D);
+    const int bwd_backend_ok = (sb == TC_OK) &&
+                               backend_matches_training_contract("softmax_backward", expect_cuda);
     for (int n = 0; n < N; ++n) {
         double dot = 0.0;
         for (int d = 0; d < D; ++d)
@@ -317,7 +349,8 @@ static int test_softmax(tc_context* ctx) {
     free(Xf); free(Yref); free(dXref);
     tc_buffer_free(ctx, Xb); tc_buffer_free(ctx, Yb);
     tc_buffer_free(ctx, dYb); tc_buffer_free(ctx, dXb);
-    return (s == TC_OK && sb == TC_OK && err < 5e-3 && dx_err < 5e-3) ? 0 : 1;
+    return (s == TC_OK && sb == TC_OK && fwd_backend_ok && bwd_backend_ok &&
+            err < 5e-3 && dx_err < 5e-3) ? 0 : 1;
 }
 
 static int test_rope(tc_context* ctx) {
@@ -379,6 +412,8 @@ static int test_rope(tc_context* ctx) {
 
 static int test_adamw(tc_context* ctx) {
     const int n = 256;
+    const int expect_cuda = cuda_training_expected();
+    int rc = 0;
     tc_buffer *pb, *mb, *vb, *gb;
     tc_buffer_alloc(ctx, n*4, &pb);
     tc_buffer_alloc(ctx, n*4, &mb);
@@ -410,14 +445,57 @@ static int test_adamw(tc_context* ctx) {
     }
     tc_status_t s = tc_adamw_step(ctx, pb, mb, vb, gb, TC_DTYPE_F32, n,
                                   lr, b1, b2, eps, wd, bc1, bc2);
-    const int backend_ok = (s == TC_OK) && backend_is_compute("adamw_step");
+    const int backend_ok = (s == TC_OK) &&
+                           backend_matches_training_contract("adamw_step_fp32", expect_cuda);
     const double err = rms_scaled_f32(pp, p_ref, n);
-    printf("  adamw_step        n=%d         rms_scaled=%.3e  %s\n",
+    printf("  adamw_step_f32    n=%d         rms_scaled=%.3e  %s\n",
            n, err, (s==TC_OK && err<1e-5) ? "OK" : "FAIL");
+    if (!(s == TC_OK && backend_ok && err < 1e-5)) rc = 1;
     free(p_ref); free(m_ref); free(v_ref);
     tc_buffer_free(ctx, pb); tc_buffer_free(ctx, mb);
     tc_buffer_free(ctx, vb); tc_buffer_free(ctx, gb);
-    return (s == TC_OK && backend_ok && err < 1e-5) ? 0 : 1;
+
+    tc_buffer *p16b, *m16b, *v16b, *g16b;
+    tc_buffer_alloc(ctx, n*4, &p16b);
+    tc_buffer_alloc(ctx, n*4, &m16b);
+    tc_buffer_alloc(ctx, n*4, &v16b);
+    tc_buffer_alloc(ctx, n*2, &g16b);
+    float *p16p, *m16p, *v16p;
+    uint16_t* g16p;
+    tc_buffer_map(p16b, (void**)&p16p);
+    tc_buffer_map(m16b, (void**)&m16p);
+    tc_buffer_map(v16b, (void**)&v16p);
+    tc_buffer_map(g16b, (void**)&g16p);
+    p_ref = malloc(n*sizeof(float));
+    m_ref = malloc(n*sizeof(float));
+    v_ref = malloc(n*sizeof(float));
+    srand(0xCD);
+    for (int i = 0; i < n; ++i) {
+        p16p[i] = p_ref[i] = ((float)rand()/RAND_MAX-0.5f);
+        m16p[i] = m_ref[i] = 0.0f;
+        v16p[i] = v_ref[i] = 0.0f;
+        g16p[i] = f32_to_f16(((float)rand()/RAND_MAX-0.5f) * 0.1f);
+    }
+    for (int i = 0; i < n; ++i) {
+        float g = f16_to_f32(g16p[i]);
+        m_ref[i] = b1*m_ref[i] + (1-b1)*g;
+        v_ref[i] = b2*v_ref[i] + (1-b2)*g*g;
+        float mh = m_ref[i] / bc1;
+        float vh = v_ref[i] / bc2;
+        p_ref[i] = p_ref[i] - lr * (mh / (sqrtf(vh)+eps) + wd*p_ref[i]);
+    }
+    s = tc_adamw_step(ctx, p16b, m16b, v16b, g16b, TC_DTYPE_F16, n,
+                      lr, b1, b2, eps, wd, bc1, bc2);
+    const int backend16_ok = (s == TC_OK) &&
+                             backend_matches_training_contract("adamw_step_fp16", expect_cuda);
+    const double err16 = rms_scaled_f32(p16p, p_ref, n);
+    printf("  adamw_step_f16    n=%d         rms_scaled=%.3e  %s\n",
+           n, err16, (s==TC_OK && err16<2e-5) ? "OK" : "FAIL");
+    if (!(s == TC_OK && backend16_ok && err16 < 2e-5)) rc = 1;
+    free(p_ref); free(m_ref); free(v_ref);
+    tc_buffer_free(ctx, p16b); tc_buffer_free(ctx, m16b);
+    tc_buffer_free(ctx, v16b); tc_buffer_free(ctx, g16b);
+    return rc;
 }
 
 int main(void) {

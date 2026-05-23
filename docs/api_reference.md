@@ -857,9 +857,9 @@ bind the surface while staying CUDA-free. Builds configured with
 fp32/fp16/bf16/int8 GEMM through cuBLAS when `TC_USE_CUDA_GEMM=1` is set.
 Runtime-allocated buffers use CUDA managed memory in that mode; externally
 wrapped host pointers use the staged-copy fallback. CUDA builds also compile
-managed-memory kernels for RMSNorm forward, LayerNorm forward, SwiGLU
-forward, softmax forward, and fp32-grad AdamW; host-only buffers fall back to
-the portable CPU implementations.
+managed-memory kernels for RMSNorm forward/backward, LayerNorm forward,
+SwiGLU forward/backward, softmax forward/backward, and fp32/fp16-gradient
+AdamW; host-only buffers fall back to the portable CPU implementations.
 
 ```c
 typedef struct {

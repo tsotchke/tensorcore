@@ -7,10 +7,13 @@
  *
  * Kernels here:
  *   - rmsnorm_forward      : row-wise rsqrt(mean(x^2) + eps) * gamma
+ *   - rmsnorm_backward     : row-wise dX plus fp32 dgamma reduction
  *   - layernorm_forward    : row-wise mean/variance normalization
- *   - adamw_step_fp32      : AdamW optimizer update, fp32 grads + master weights
+ *   - adamw_step_fp32/fp16 : AdamW optimizer update + master weights
  *   - swiglu_forward       : elementwise x * sigmoid(x) * up
+ *   - swiglu_backward      : elementwise dgate/dup
  *   - softmax_forward      : row-wise max-stabilized softmax
+ *   - softmax_backward     : row-wise softmax Jacobian-vector product
  *
  * All take device pointers (CUDA-managed memory satisfies this) and run
  * with a configurable thread/block layout. Calls cudaDeviceSynchronize
@@ -27,6 +30,8 @@
 #else
 #  define TC_CUDA_INTERNAL
 #endif
+
+extern "C" TC_CUDA_INTERNAL void tc_cuda_set_last_kernel(const char* name);
 
 namespace {
 
@@ -87,6 +92,38 @@ __global__ void rmsnorm_forward_kernel(
     }
 }
 
+__global__ void rmsnorm_backward_kernel(
+        const __half* __restrict__ X,
+        const __half* __restrict__ gamma,
+        const __half* __restrict__ dY,
+        const float* __restrict__ rstd,
+        __half* __restrict__ dX,
+        float* __restrict__ dgamma,
+        int D) {
+    const int n = blockIdx.x;
+    const int tid = threadIdx.x;
+    const int block_size = blockDim.x;
+    const float rs = rstd[n];
+
+    float local_dot = 0.0f;
+    for (int d = tid; d < D; d += block_size) {
+        const float x = __half2float(X[n * D + d]);
+        const float g = __half2float(gamma[d]);
+        const float dy = __half2float(dY[n * D + d]);
+        local_dot += dy * g * x * rs;
+    }
+    const float dot = block_reduce_sum_f32(local_dot) / (float)D;
+
+    for (int d = tid; d < D; d += block_size) {
+        const float x = __half2float(X[n * D + d]);
+        const float g = __half2float(gamma[d]);
+        const float dy = __half2float(dY[n * D + d]);
+        const float xhat = x * rs;
+        dX[n * D + d] = __float2half_rn(rs * (g * dy - xhat * dot));
+        atomicAdd(dgamma + d, dy * xhat);
+    }
+}
+
 __global__ void adamw_step_fp32_kernel(
         float* __restrict__ params,
         const float* __restrict__ grads,
@@ -115,6 +152,33 @@ __global__ void adamw_step_fp32_kernel(
     params[i] = (params[i] - lr * weight_decay * params[i]) - lr * update;
 }
 
+__global__ void adamw_step_fp16_kernel(
+        float* __restrict__ params,
+        const __half* __restrict__ grads,
+        float* __restrict__ m,
+        float* __restrict__ v,
+        int n_elements,
+        float lr,
+        float beta1,
+        float beta2,
+        float eps,
+        float weight_decay,
+        float bias_correction1,
+        float bias_correction2) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n_elements) return;
+
+    const float g = __half2float(grads[i]);
+    const float new_m = beta1 * m[i] + (1.0f - beta1) * g;
+    const float new_v = beta2 * v[i] + (1.0f - beta2) * g * g;
+    m[i] = new_m;
+    v[i] = new_v;
+    const float m_hat = new_m / bias_correction1;
+    const float v_hat = new_v / bias_correction2;
+    const float update = m_hat / (sqrtf(v_hat) + eps);
+    params[i] = (params[i] - lr * weight_decay * params[i]) - lr * update;
+}
+
 __global__ void swiglu_forward_kernel(
         const __half* __restrict__ gate,
         const __half* __restrict__ up,
@@ -131,6 +195,35 @@ __global__ void swiglu_forward_kernel(
     else if (gd > 50.0) silu = gd;
     else silu = gd / (1.0 + exp(-gd));
     out[i] = __float2half_rn((float)(silu * (double)u));
+}
+
+__global__ void swiglu_backward_kernel(
+        const __half* __restrict__ gate,
+        const __half* __restrict__ up,
+        const __half* __restrict__ dout,
+        __half* __restrict__ dgate,
+        __half* __restrict__ dup,
+        int n_elements) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n_elements) return;
+    const float g = __half2float(gate[i]);
+    const float u = __half2float(up[i]);
+    const float dy = __half2float(dout[i]);
+    float silu;
+    float dsilu;
+    if (g < -50.0f) {
+        silu = 0.0f;
+        dsilu = 0.0f;
+    } else if (g > 50.0f) {
+        silu = g;
+        dsilu = 1.0f;
+    } else {
+        const float sig = 1.0f / (1.0f + expf(-g));
+        silu = g * sig;
+        dsilu = sig + g * sig * (1.0f - sig);
+    }
+    dgate[i] = __float2half_rn(dy * u * dsilu);
+    dup[i] = __float2half_rn(dy * silu);
 }
 
 /* LayerNorm forward: y = (x - mean) / sqrt(var + eps) * gamma + beta. */
@@ -221,6 +314,30 @@ __global__ void softmax_forward_kernel(
     }
 }
 
+__global__ void softmax_backward_kernel(
+        const __half* __restrict__ Y,
+        const __half* __restrict__ dY,
+        __half* __restrict__ dX,
+        int D) {
+    const int n = blockIdx.x;
+    const int tid = threadIdx.x;
+    const int block_size = blockDim.x;
+
+    float local_dot = 0.0f;
+    for (int d = tid; d < D; d += block_size) {
+        const float y = __half2float(Y[n * D + d]);
+        const float dy = __half2float(dY[n * D + d]);
+        local_dot += y * dy;
+    }
+    const float dot = block_reduce_sum_f32(local_dot);
+
+    for (int d = tid; d < D; d += block_size) {
+        const float y = __half2float(Y[n * D + d]);
+        const float dy = __half2float(dY[n * D + d]);
+        dX[n * D + d] = __float2half_rn(y * (dy - dot));
+    }
+}
+
 }  /* namespace */
 
 /* C-linkage entry points called from lib/ops/training_cpu.cpp when the
@@ -262,6 +379,20 @@ bool all_managed4(const void* a, const void* b, const void* c, const void* d) {
            is_managed_cuda_ptr(c) && is_managed_cuda_ptr(d);
 }
 
+bool all_managed5(const void* a, const void* b, const void* c,
+                  const void* d, const void* e) {
+    return is_managed_cuda_ptr(a) && is_managed_cuda_ptr(b) &&
+           is_managed_cuda_ptr(c) && is_managed_cuda_ptr(d) &&
+           is_managed_cuda_ptr(e);
+}
+
+bool all_managed6(const void* a, const void* b, const void* c,
+                  const void* d, const void* e, const void* f) {
+    return is_managed_cuda_ptr(a) && is_managed_cuda_ptr(b) &&
+           is_managed_cuda_ptr(c) && is_managed_cuda_ptr(d) &&
+           is_managed_cuda_ptr(e) && is_managed_cuda_ptr(f);
+}
+
 }  /* namespace */
 
 extern "C" TC_CUDA_INTERNAL int tc_cuda_rmsnorm_forward(
@@ -280,6 +411,33 @@ extern "C" TC_CUDA_INTERNAL int tc_cuda_rmsnorm_forward(
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) return kCudaTrainingError;
     if (cudaDeviceSynchronize() != cudaSuccess) return kCudaTrainingError;
+    tc_cuda_set_last_kernel("cuda_rmsnorm_forward");
+    return kCudaTrainingOk;
+}
+
+extern "C" TC_CUDA_INTERNAL int tc_cuda_rmsnorm_backward(
+        const void* X, const void* gamma, const void* dY, const void* rstd,
+        void* dX, void* dgamma, int N, int D) {
+    if (!X || !gamma || !dY || !rstd || !dX || !dgamma || N <= 0 || D <= 0) {
+        return kCudaTrainingError;
+    }
+    if (!all_managed6(X, gamma, dY, rstd, dX, dgamma)) {
+        return kCudaTrainingUnsupported;
+    }
+
+    int block_size = 32;
+    while (block_size < D && block_size < 1024) block_size <<= 1;
+
+    if (cudaMemset(dgamma, 0, (size_t)D * sizeof(float)) != cudaSuccess) {
+        return kCudaTrainingError;
+    }
+    rmsnorm_backward_kernel<<<N, block_size>>>(
+        (const __half*)X, (const __half*)gamma, (const __half*)dY,
+        (const float*)rstd, (__half*)dX, (float*)dgamma, D);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) return kCudaTrainingError;
+    if (cudaDeviceSynchronize() != cudaSuccess) return kCudaTrainingError;
+    tc_cuda_set_last_kernel("cuda_rmsnorm_backward");
     return kCudaTrainingOk;
 }
 
@@ -299,6 +457,27 @@ extern "C" TC_CUDA_INTERNAL int tc_cuda_adamw_step_fp32(
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) return kCudaTrainingError;
     if (cudaDeviceSynchronize() != cudaSuccess) return kCudaTrainingError;
+    tc_cuda_set_last_kernel("cuda_adamw_step_fp32");
+    return kCudaTrainingOk;
+}
+
+extern "C" TC_CUDA_INTERNAL int tc_cuda_adamw_step_fp16(
+        void* params, const void* grads, void* m, void* v,
+        int n_elements, float lr, float beta1, float beta2,
+        float eps, float weight_decay,
+        float bias_correction1, float bias_correction2) {
+    if (!params || !grads || !m || !v || n_elements <= 0) return kCudaTrainingError;
+    if (!all_managed4(params, grads, m, v)) return kCudaTrainingUnsupported;
+    const int block_size = 256;
+    const int blocks = (n_elements + block_size - 1) / block_size;
+    adamw_step_fp16_kernel<<<blocks, block_size>>>(
+        (float*)params, (const __half*)grads, (float*)m, (float*)v,
+        n_elements, lr, beta1, beta2, eps, weight_decay,
+        bias_correction1, bias_correction2);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) return kCudaTrainingError;
+    if (cudaDeviceSynchronize() != cudaSuccess) return kCudaTrainingError;
+    tc_cuda_set_last_kernel("cuda_adamw_step_fp16");
     return kCudaTrainingOk;
 }
 
@@ -315,6 +494,28 @@ extern "C" TC_CUDA_INTERNAL int tc_cuda_swiglu_forward(
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) return kCudaTrainingError;
     if (cudaDeviceSynchronize() != cudaSuccess) return kCudaTrainingError;
+    tc_cuda_set_last_kernel("cuda_swiglu_forward");
+    return kCudaTrainingOk;
+}
+
+extern "C" TC_CUDA_INTERNAL int tc_cuda_swiglu_backward(
+        const void* gate, const void* up, const void* dout,
+        void* dgate, void* dup, int n_elements) {
+    if (!gate || !up || !dout || !dgate || !dup || n_elements <= 0) {
+        return kCudaTrainingError;
+    }
+    if (!all_managed5(gate, up, dout, dgate, dup)) {
+        return kCudaTrainingUnsupported;
+    }
+    const int block_size = 256;
+    const int blocks = (n_elements + block_size - 1) / block_size;
+    swiglu_backward_kernel<<<blocks, block_size>>>(
+        (const __half*)gate, (const __half*)up, (const __half*)dout,
+        (__half*)dgate, (__half*)dup, n_elements);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) return kCudaTrainingError;
+    if (cudaDeviceSynchronize() != cudaSuccess) return kCudaTrainingError;
+    tc_cuda_set_last_kernel("cuda_swiglu_backward");
     return kCudaTrainingOk;
 }
 
@@ -338,6 +539,7 @@ extern "C" TC_CUDA_INTERNAL int tc_cuda_layernorm_forward(
         (__half*)Y, (float*)mean, (float*)rstd, D, eps);
     if (cudaGetLastError() != cudaSuccess) return kCudaTrainingError;
     if (cudaDeviceSynchronize() != cudaSuccess) return kCudaTrainingError;
+    tc_cuda_set_last_kernel("cuda_layernorm_forward");
     return kCudaTrainingOk;
 }
 
@@ -353,5 +555,23 @@ extern "C" TC_CUDA_INTERNAL int tc_cuda_softmax_forward(
         (const __half*)X, (__half*)Y, D);
     if (cudaGetLastError() != cudaSuccess) return kCudaTrainingError;
     if (cudaDeviceSynchronize() != cudaSuccess) return kCudaTrainingError;
+    tc_cuda_set_last_kernel("cuda_softmax_forward");
+    return kCudaTrainingOk;
+}
+
+extern "C" TC_CUDA_INTERNAL int tc_cuda_softmax_backward(
+        const void* Y, const void* dY, void* dX, int N, int D) {
+    if (!Y || !dY || !dX || N <= 0 || D <= 0) return kCudaTrainingError;
+    if (!is_managed_cuda_ptr(Y) || !is_managed_cuda_ptr(dY) ||
+        !is_managed_cuda_ptr(dX)) {
+        return kCudaTrainingUnsupported;
+    }
+    int block_size = 32;
+    while (block_size < D && block_size < 1024) block_size <<= 1;
+    softmax_backward_kernel<<<N, block_size>>>(
+        (const __half*)Y, (const __half*)dY, (__half*)dX, D);
+    if (cudaGetLastError() != cudaSuccess) return kCudaTrainingError;
+    if (cudaDeviceSynchronize() != cudaSuccess) return kCudaTrainingError;
+    tc_cuda_set_last_kernel("cuda_softmax_backward");
     return kCudaTrainingOk;
 }

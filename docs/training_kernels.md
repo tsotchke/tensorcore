@@ -2,8 +2,13 @@
 
 `training.h` is the transformer training kit: RMSnorm, LayerNorm, RoPE,
 SwiGLU, softmax, AdamW, and the fused-RMSnorm-GEMV inference primitive.
-All kernels live in `kernels/metal/training_kernels.metal` (and
-`fused_norm_gemv.metal` for the fusion).
+Apple builds use `kernels/metal/training_kernels.metal` (and
+`fused_norm_gemv.metal` for the fusion). Portable CPU builds use
+`lib/ops/training_cpu.cpp`. CUDA builds with `TC_ENABLE_CUDA=ON` and
+`TC_USE_CUDA_GEMM=1` route managed-memory RMSNorm forward/backward,
+LayerNorm forward, SwiGLU forward/backward, softmax forward/backward, and
+fp32/fp16-gradient AdamW through `lib/cuda/training.cu`; host-only buffers
+fall back to the portable CPU path.
 
 This page describes shapes, the kernel design, and the conventions you
 need to plug them into a training step.
