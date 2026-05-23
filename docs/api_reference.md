@@ -543,6 +543,15 @@ tc_status_t tc_gemv_quantized_async(tc_context* ctx,
                                     int M, int N, int K,
                                     tc_stream*       stream);
 
+tc_status_t tc_fused_rmsnorm_gemv_quantized(tc_context* ctx,
+                                            const tc_buffer* X,
+                                            const tc_buffer* gamma,
+                                            const tc_buffer* W_quant,
+                                            tc_buffer*       Y,
+                                            tc_quant_t       fmt,
+                                            int M, int N, int K,
+                                            float eps);
+
 size_t      tc_quantized_size      (tc_quant_t fmt, int N, int K);
 ```
 

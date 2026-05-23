@@ -443,10 +443,12 @@ if native_full_tests:
             "validate_quantize_buffers",
             "tc_quantized_size",
             "validate_gemv_quantized_buffers",
+            "validate_fused_rmsnorm_gemv_quantized_buffers",
             "tc_quantize_weights",
             "gemv_quant_encode",
             "tc_gemv_quantized",
             "tc_gemv_quantized_async",
+            "tc_fused_rmsnorm_gemv_quantized",
         ],
         "lib/ops/training.mm": [
             "pso_for",

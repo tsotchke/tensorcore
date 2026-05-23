@@ -84,9 +84,10 @@ neighbor sockets for `world_size >= 3` fp32 SUM when `TC_GLOO_RING=1` is
 set. Direct ring setup is opportunistic: ranks advertise their reachable
 IPv4 address, try bounded neighbor connects, and coordinate fallback over
 the rendezvous sockets if any direct edge is blocked by NAT/firewall
-policy. It supports fp32 SUM/AVG/MIN/MAX all-reduce, fp16 SUM/AVG
-all-reduce, byte-level broadcast from any root, allgather, barrier, and
-the internal sparse TOPK DiLoCo wire path.
+policy. Set `TC_GLOO_TRACE=1` to confirm whether a run selected
+`route=ring` or `route=broker`. It supports fp32 SUM/AVG/MIN/MAX
+all-reduce, fp16 SUM/AVG all-reduce, byte-level broadcast from any root,
+allgather, barrier, and the internal sparse TOPK DiLoCo wire path.
 bf16/int8 reductions and public generic sparse packed wire-format APIs
 still return explicit unsupported statuses.
 

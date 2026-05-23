@@ -14,6 +14,10 @@
  *     # Rank 1 (connect to rank 0):
  *     ./test_dist_remote --rank 1 --world 2 --url tcp://192.168.42.1:9000
  *
+ * For WAN ring smoke tests, use a smaller allreduce probe:
+ *     TC_GLOO_RING=1 TC_GLOO_TRACE=1 ./test_dist_remote ... \
+ *         --test allreduce --elements 65536 --iters 2
+ *
  * Validates:
  *     1. Cross-machine TCP rendezvous
  *     2. allreduce (sum, avg, min, max)
@@ -52,7 +56,8 @@ static int fail_(const char* what, int rank) {
 
 static void usage(const char* argv0) {
     fprintf(stderr,
-        "Usage: %s --rank <int> --world <int> --url <tcp://host:port> [--test all|allreduce|diloco]\n"
+        "Usage: %s --rank <int> --world <int> --url <tcp://host:port> "
+        "[--test all|allreduce|diloco] [--elements N] [--iters N]\n"
         "Examples:\n"
         "  %s --rank 0 --world 2 --url tcp://192.168.42.1:9000\n"
         "  %s --rank 1 --world 2 --url tcp://192.168.42.1:9000\n",
@@ -63,6 +68,8 @@ int main(int argc, char** argv) {
     int rank = -1, world = -1;
     const char* url = NULL;
     const char* test_filter = "all";
+    size_t allreduce_elements = 1024 * 1024;   /* 4 MB fp32 payload */
+    int allreduce_iters = 5;
 
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--rank") && i + 1 < argc) {
@@ -73,6 +80,22 @@ int main(int argc, char** argv) {
             url = argv[++i];
         } else if (!strcmp(argv[i], "--test") && i + 1 < argc) {
             test_filter = argv[++i];
+        } else if (!strcmp(argv[i], "--elements") && i + 1 < argc) {
+            char* end = NULL;
+            unsigned long long v = strtoull(argv[++i], &end, 10);
+            if (!end || *end != '\0' || v == 0) {
+                fprintf(stderr, "invalid --elements value\n");
+                return 2;
+            }
+            allreduce_elements = (size_t)v;
+        } else if (!strcmp(argv[i], "--iters") && i + 1 < argc) {
+            char* end = NULL;
+            long v = strtol(argv[++i], &end, 10);
+            if (!end || *end != '\0' || v <= 0 || v > 1000) {
+                fprintf(stderr, "invalid --iters value\n");
+                return 2;
+            }
+            allreduce_iters = (int)v;
         } else {
             fprintf(stderr, "Unknown argument: %s\n", argv[i]);
             usage(argv[0]);
@@ -105,10 +128,10 @@ int main(int argc, char** argv) {
 
     /* ---------- allreduce bandwidth probe ---------- */
     if (!strcmp(test_filter, "all") || !strcmp(test_filter, "allreduce")) {
-        const size_t N = 1024 * 1024;   /* 4 MB fp32 - meaningful payload */
+        const size_t N = allreduce_elements;
         tc_buffer* buf = NULL;
         if (tc_buffer_alloc(ctx, N * sizeof(float), &buf) != TC_OK) {
-            return fail_("alloc 4MB", rank);
+            return fail_("alloc allreduce buffer", rank);
         }
         void* p = NULL; tc_buffer_map(buf, &p);
         float* data = (float*)p;
@@ -122,22 +145,22 @@ int main(int argc, char** argv) {
         for (size_t i = 0; i < N; ++i) data[i] = (float)(rank + 1);
 
         /* Timed loop. */
-        const int iters = 5;
         const double t0 = now();
-        for (int it = 0; it < iters; ++it) {
+        for (int it = 0; it < allreduce_iters; ++it) {
             for (size_t i = 0; i < N; ++i) data[i] = (float)(rank + 1);
             if (tc_allreduce(dist, buf, N, TC_DTYPE_F32, TC_REDUCE_SUM) != TC_OK) {
                 rc |= fail_("timed allreduce", rank);
             }
         }
-        const double dt = (now() - t0) / iters;
+        const double dt = (now() - t0) / allreduce_iters;
         /* For 2-rank brokered allreduce: each iteration moves count*4 bytes
          * up + count*4 bytes down per non-zero rank = ~8MB total round-trip
          * per rank. Effective per-rank throughput: */
         const double bytes_per_iter = (double)N * sizeof(float) * 2.0;
-        const double gbps = bytes_per_iter / dt / 1e9;
-        printf("[rank %d] allreduce 4MB sum: %.2f ms/iter, ~%.2f GB/s\n",
-               rank, dt * 1000.0, gbps);
+        const double gbps = (dt > 0.0) ? (bytes_per_iter / dt / 1e9) : 0.0;
+        printf("[rank %d] allreduce %.2fMB sum: %.2f ms/iter, ~%.2f GB/s (%d iters)\n",
+               rank, ((double)N * sizeof(float)) / (1024.0 * 1024.0),
+               dt * 1000.0, gbps, allreduce_iters);
 
         /* Verify result. */
         const float expected = (float)(world * (world + 1) / 2);  /* 1+2+...+world */

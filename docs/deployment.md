@@ -197,22 +197,28 @@ fp16 parameter with TOPK_01PCT compression, each outer step ships ~528
 bytes. Compare to the dense 4 MB allreduce in the line above to see the
 multiplier.
 
+For a short WAN ring proof, keep the same rank launch pattern but add
+`TC_GLOO_RING=1 TC_GLOO_TRACE=1 --test allreduce --elements 65536
+--iters 2`. The trace must show `direct_ring=enabled` and
+`allreduce_f32_sum route=ring` on every rank.
+
 ### 4-rank reference deployment
 
 Launch rank 0 first (must start listening before others try to connect):
 
 ```sh
 # rank 0 (Atlas):
-TC_METALLIB=... ./test_dist_remote --rank 0 --world 4 --url tcp://100.96.130.16:9000 &
+TC_GLOO_RING=1 TC_GLOO_TRACE=1 TC_METALLIB=... \
+    ./test_dist_remote --rank 0 --world 4 --url tcp://100.96.130.16:9000 &
 
 # rank 1 (Enki):
-ssh enki.local 'TC_METALLIB=... /tmp/test_dist_remote --rank 1 --world 4 --url tcp://100.96.130.16:9000' &
+ssh enki.local 'TC_GLOO_RING=1 TC_GLOO_TRACE=1 TC_METALLIB=... /tmp/test_dist_remote --rank 1 --world 4 --url tcp://100.96.130.16:9000' &
 
 # rank 2 (old-donkey):
-ssh old-donkey 'cd /tmp/tc && ./build/tests/test_dist_remote --rank 2 --world 4 --url tcp://100.96.130.16:9000' &
+ssh old-donkey 'cd /tmp/tc && TC_GLOO_RING=1 TC_GLOO_TRACE=1 ./build/tests/test_dist_remote --rank 2 --world 4 --url tcp://100.96.130.16:9000' &
 
 # rank 3 (cosbox):
-ssh cosbox 'cd /tmp/tc-cuda && LD_LIBRARY_PATH=./build ./build/tests/test_dist_remote --rank 3 --world 4 --url tcp://100.96.130.16:9000' &
+ssh cosbox 'cd /tmp/tc-cuda && TC_GLOO_RING=1 TC_GLOO_TRACE=1 LD_LIBRARY_PATH=./build ./build/tests/test_dist_remote --rank 3 --world 4 --url tcp://100.96.130.16:9000' &
 
 wait
 ```
@@ -255,7 +261,8 @@ set per rank to the address peers should dial for direct ring links. If
 unset, each rank reports the local address selected for the rendezvous
 connection. `TC_GLOO_RING_CONNECT_TIMEOUT_MS` bounds direct-ring connect
 attempts before fallback, and `TC_GLOO_NO_RING=1` forces broker dispatch
-if you need to debug a ring-capable build.
+if you need to debug a ring-capable build. Set `TC_GLOO_TRACE=1` to log
+whether each rank enabled the direct ring or coordinated broker fallback.
 
 ## 6. DiLoCo configuration
 
@@ -307,8 +314,10 @@ cable. Software cannot work around a cable that physically lacks the TB
 protocol lanes.
 
 ### Verification: bit-correct sum across ranks
-`test_dist_remote --test allreduce` runs a 4MB allreduce SUM and verifies
-each element equals the expected `sum(1..world_size)`. Any mismatch
+`test_dist_remote --test allreduce` runs a configurable fp32 allreduce SUM
+and verifies each element equals the expected `sum(1..world_size)`.
+Defaults are 1,048,576 elements and 5 timed iterations; use
+`--elements N --iters N` for shorter WAN smoke tests. Any mismatch
 indicates the transport corrupted bits - usually a code bug, not a
 network issue.
 

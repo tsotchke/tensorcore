@@ -236,6 +236,14 @@ single-host ring algorithm is validated in `tests/test_distributed_ring_fork.c`;
 `world_size >= 3` when `TC_GLOO_RING=1` is set.
 The TB5/JACCL multi-Mac `TC_DIST_RING` backend lands in v0.5.
 
+### Did my GLOO run use the direct ring or the broker?
+
+Set `TC_GLOO_TRACE=1` on every rank. A direct-ring setup prints
+`direct_ring=enabled` and fp32 SUM allreduces print
+`allreduce_f32_sum route=ring`. If any direct neighbor cannot connect,
+all ranks coordinate fallback and the trace prints `direct_ring=fallback`
+followed by `allreduce_f32_sum route=broker`.
+
 ### `tc_dist_init(TC_DIST_GLOO, ...)` fails or hangs
 
 Use a rendezvous URL like `gloo+tcp://127.0.0.1:29500` for local tests or

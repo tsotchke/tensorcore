@@ -518,6 +518,8 @@ if _lib is not None:
     _lib.tc_quantize_weights.restype = c_int
     _lib.tc_gemv_quantized.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int, c_int, c_int]
     _lib.tc_gemv_quantized.restype = c_int
+    _lib.tc_fused_rmsnorm_gemv_quantized.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int, c_int, c_int, c_float]
+    _lib.tc_fused_rmsnorm_gemv_quantized.restype = c_int
     _lib.tc_gemv_quantized_async.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int, c_int, c_int, c_void_p]
     _lib.tc_gemv_quantized_async.restype = c_int
     _lib.tc_quantized_size.argtypes = [c_int, c_int, c_int]
@@ -1569,6 +1571,15 @@ def gemv_quantized(ctx, X, W_quant, Y, fmt, M, N, K):
                                   _quant(fmt), int(M), int(N), int(K)))
 
 
+def fused_rmsnorm_gemv_quantized(ctx, X, gamma, W_quant, Y, fmt, M, N, K, eps=1e-5):
+    """Compute RMSNorm(X, gamma) followed by quantized GEMV."""
+    _check(_lib.tc_fused_rmsnorm_gemv_quantized(
+        _as_handle(ctx), _as_handle(X), _as_handle(gamma),
+        _as_handle(W_quant), _as_handle(Y), _quant(fmt),
+        int(M), int(N), int(K), c_float(float(eps))
+    ))
+
+
 def gemv_quantized_async(ctx, X, W_quant, Y, fmt, M, N, K, stream):
     """Encode quantized GEMV into stream."""
     _check(_lib.tc_gemv_quantized_async(
@@ -1956,6 +1967,10 @@ class Context:
 
     def gemv_quantized(self, X, W_quant, Y, fmt, M, N, K):
         return gemv_quantized(self, X, W_quant, Y, fmt, M, N, K)
+
+    def fused_rmsnorm_gemv_quantized(self, X, gamma, W_quant, Y, fmt, M, N, K, eps=1e-5):
+        return fused_rmsnorm_gemv_quantized(self, X, gamma, W_quant, Y,
+                                            fmt, M, N, K, eps)
 
     def gemv_quantized_async(self, X, W_quant, Y, fmt, M, N, K, stream):
         return gemv_quantized_async(self, X, W_quant, Y, fmt, M, N, K, stream)

@@ -10,9 +10,9 @@
  *   4. If direct ring neighbors are unreachable, init stays alive and
  *      collectives transparently fall back to the rank-0 broker.
  *
- * The cross-continent ring case (test_dist_remote --world 4) hits NAT
- * issues with Tailscale's getpeername-based topology discovery; this
- * test exercises the same code path locally where loopback works.
+ * The cross-continent ring case is exercised manually with
+ * test_dist_remote plus TC_GLOO_RING=1 / TC_GLOO_TRACE=1; this fork test
+ * keeps the same direct-ring and coordinated-fallback paths in local CI.
  */
 
 #include "tensorcore/tensorcore.h"

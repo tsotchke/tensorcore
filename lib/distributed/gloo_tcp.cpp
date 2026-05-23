@@ -36,6 +36,7 @@
 #include "../core/internal.h"
 
 #include <algorithm>
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -86,6 +87,22 @@ struct RingPeerInfo {
     uint16_t port;
     uint32_t host_n;   /* IPv4 address in network byte order */
 };
+
+bool gloo_trace_enabled(void) {
+    const char* env = std::getenv("TC_GLOO_TRACE");
+    return env && env[0] == '1';
+}
+
+void gloo_trace(int rank, const char* fmt, ...) {
+    if (!gloo_trace_enabled()) return;
+    std::fprintf(stderr, "[tensorcore:gloo rank %d] ", rank);
+    va_list ap;
+    va_start(ap, fmt);
+    std::vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    std::fprintf(stderr, "\n");
+    std::fflush(stderr);
+}
 
 bool parse_rendezvous(const std::string& url, std::string* host, uint16_t* port) {
     size_t prefix_len = 0;
@@ -482,6 +499,7 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
     if (my_ring_listen < 0) my_ring_port = 0;
     s->self_port = my_ring_port;
     auto broker_fallback = [&]() -> GlooState* {
+        gloo_trace(rank, "direct_ring=fallback");
         if (my_ring_listen >= 0) {
             ::close(my_ring_listen);
             my_ring_listen = -1;
@@ -608,6 +626,9 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
     if (s->prev_fd >= 0) ::setsockopt(s->prev_fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
     if (my_ring_listen >= 0) ::close(my_ring_listen);
 
+    gloo_trace(rank, "direct_ring=enabled next_rank=%d next=%s:%u timeout_ms=%d",
+               next_rank, resolve_host(next_rank).c_str(), peers[next_rank].port,
+               timeout_ms);
     return s;
 }
 
@@ -704,8 +725,10 @@ extern "C" TC_GLOO_HIDDEN int tc_gloo_allreduce_f32_sum(GlooState* s, int world_
     const char* no_ring = std::getenv("TC_GLOO_NO_RING");
     if (world_size >= 3 && !(no_ring && no_ring[0] == '1') &&
         s->next_fd >= 0 && s->prev_fd >= 0) {
+        gloo_trace(rank, "allreduce_f32_sum route=ring elements=%zu", n);
         return tc_gloo_allreduce_f32_sum_ring(s, world_size, rank, data, n);
     }
+    gloo_trace(rank, "allreduce_f32_sum route=broker elements=%zu", n);
     size_t bytes = 0;
     if (!checked_f32_bytes(n, &bytes)) return -1;
     if (rank == 0) {

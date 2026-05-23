@@ -167,7 +167,7 @@ helpers `conv2d_output_shape`, `conv2d_scratch_bytes`,
 
 ### Quantized
 `quantize_weights`, `gemv_quantized`, `gemv_quantized_async`,
-`quantized_size`.
+`fused_rmsnorm_gemv_quantized`, `quantized_size`.
 
 ### GGUF
 `gguf_open`, `gguf_close`, `gguf_tensor_count`, `gguf_metadata_count`,

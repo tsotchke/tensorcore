@@ -26,6 +26,15 @@ every architectural primitive in code and tested:
 - NAT-tolerant GLOO ring setup: direct neighbor links now use advertised
   per-rank addresses, bounded connect timeouts, and coordinated broker
   fallback when any ring edge is unreachable.
+- GLOO ring observability: `TC_GLOO_TRACE=1` logs direct-ring enablement,
+  coordinated fallback, and fp32 SUM route selection so WAN runs prove
+  whether they used the ring or broker.
+- `test_dist_remote` now accepts `--elements` and `--iters`, making short
+  WAN ring proofs possible without changing the default 4 MB throughput
+  probe.
+- Fused quantized RMSNorm GEMV is now closed across the public release
+  surface: shared-library exports, Python ctypes binding, and
+  release-smoke source-manifest coverage.
 - DiLoCo runtime with NONE/FP16/TOPK_1PCT/TOPK_01PCT compression,
   SGD/Nesterov/Adam outer optimizers, async overlap, sparse-on-the-wire
   cross-continent path.
