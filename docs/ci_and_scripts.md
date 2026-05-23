@@ -97,6 +97,29 @@ bash scripts/ci_python_smoke.sh
 The install step is required because the script defaults `PREFIX` to
 `/tmp/tensorcore-install`.
 
+### `ci_pytorch_smoke.sh`
+
+Optional bridge smoke for `bindings/pytorch`. If PyTorch is importable, the
+script force-builds `tensorcore_torch` against
+`${TENSORCORE_LIB_DIR:-build-portable-cpu-current}` and validates:
+
+- fp32 matmul against PyTorch
+- bf16 matmul against fp32-accum then bf16-rounded reference
+- non-contiguous inputs
+- `K == 0` and empty-result matmuls
+- dtype/shape error paths
+- opt-in `torch.matmul` dispatcher routing and autograd fallback
+
+If PyTorch is not importable, the script skips by default. Set
+`REQUIRE_PYTORCH=1` to make that a hard failure.
+
+Run locally:
+
+```sh
+cmake --build build-portable-cpu-current --parallel
+REQUIRE_PYTORCH=1 scripts/ci_pytorch_smoke.sh
+```
+
 ### `ci_portable_cpu.sh`
 
 Builds with `TC_ENABLE_METAL=OFF`, runs the portable CTest suite,

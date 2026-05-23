@@ -33,7 +33,9 @@ extern "C" {
 }
 
 #include <atomic>
+#include <cstdint>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -85,6 +87,25 @@ void register_privateuse1_name() {
     }
 }
 
+void check_dim_fits_tc(const char* name, int64_t value) {
+    TORCH_CHECK(value >= 0 && value <= std::numeric_limits<int>::max(),
+                "tc_matmul dimension ", name, " is outside tensorcore int32 range: ",
+                value);
+}
+
+size_t checked_matrix_bytes(const char* name, int64_t rows, int64_t cols,
+                            size_t elem_size) {
+    const uint64_t max_size = std::numeric_limits<size_t>::max();
+    const uint64_t r = static_cast<uint64_t>(rows);
+    const uint64_t c = static_cast<uint64_t>(cols);
+    TORCH_CHECK(c == 0 || r <= max_size / c,
+                "tc_matmul byte-size overflow for ", name);
+    const uint64_t elems = r * c;
+    TORCH_CHECK(elem_size == 0 || elems <= max_size / elem_size,
+                "tc_matmul byte-size overflow for ", name);
+    return static_cast<size_t>(elems * elem_size);
+}
+
 }  // namespace
 
 at::Tensor tc_matmul_fp32(const at::Tensor& A, const at::Tensor& B) {
@@ -103,13 +124,29 @@ at::Tensor tc_matmul_fp32(const at::Tensor& A, const at::Tensor& B) {
     const auto A_c = A.contiguous();
     const auto B_c = B.contiguous();
 
-    const int M = static_cast<int>(A_c.size(0));
-    const int K = static_cast<int>(A_c.size(1));
-    const int N = static_cast<int>(B_c.size(1));
+    const int64_t M64 = A_c.size(0);
+    const int64_t K64 = A_c.size(1);
+    const int64_t N64 = B_c.size(1);
+    check_dim_fits_tc("M", M64);
+    check_dim_fits_tc("N", N64);
+    check_dim_fits_tc("K", K64);
+
+    const int M = static_cast<int>(M64);
+    const int K = static_cast<int>(K64);
+    const int N = static_cast<int>(N64);
 
     const bool is_bf16 = (A.dtype() == torch::kBFloat16);
     const size_t elem  = is_bf16 ? sizeof(uint16_t) : sizeof(float);
     const tc_dtype_t tc_dt = is_bf16 ? TC_DTYPE_BF16 : TC_DTYPE_F32;
+
+    auto out = torch::empty({M64, N64}, A_c.options());
+
+    /* PyTorch matmul accepts empty result dimensions. The tensorcore C ABI
+     * intentionally rejects zero-byte buffers, so handle those cases at the
+     * bridge boundary. For K==0 and a non-empty output, BLAS semantics are
+     * C := 0 for this alpha=1, beta=0 wrapper. */
+    if (M == 0 || N == 0) return out;
+    if (K == 0) return out.zero_();
 
     ensure_ctx();
 
@@ -146,11 +183,9 @@ at::Tensor tc_matmul_fp32(const at::Tensor& A, const at::Tensor& B) {
         return tc_buffer_alloc(g_ctx, bytes, out_buf) == TC_OK;
     };
 
-    const size_t bytes_a = static_cast<size_t>(M) * K * elem;
-    const size_t bytes_b = static_cast<size_t>(K) * N * elem;
-    const size_t bytes_c = static_cast<size_t>(M) * N * elem;
-
-    auto out = torch::empty({M, N}, A_c.options());
+    const size_t bytes_a = checked_matrix_bytes("A", M64, K64, elem);
+    const size_t bytes_b = checked_matrix_bytes("B", K64, N64, elem);
+    const size_t bytes_c = checked_matrix_bytes("C", M64, N64, elem);
 
     if (!make_input_buffer(A_c.data_ptr(), bytes_a, &bA) ||
         !make_input_buffer(B_c.data_ptr(), bytes_b, &bB) ||

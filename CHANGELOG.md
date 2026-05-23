@@ -84,6 +84,12 @@ every architectural primitive in code and tested:
   - reference triple-loop: **0.66 GFLOPS** at 1024³
   - OpenBLAS 44-thread: **1.34 TFLOPS** at 4096³
   - Intel MKL 44-thread: **2.10 TFLOPS** at 4096³
+- `Harden the PyTorch bridge smoke`: `scripts/ci_pytorch_smoke.sh` now
+  force-builds `bindings/pytorch`, validates fp32, bf16, non-contiguous
+  tensors, `K == 0` / empty-result matmuls, error paths, and the opt-in
+  `torch.matmul` dispatcher/autograd fallback. The bridge now handles
+  degenerate PyTorch matmuls at the binding boundary instead of passing
+  zero-byte buffers into the C ABI.
 - `Add hand-tuned AVX2 fp32 GEMM micro-kernel`: `lib/ops/gemm_cpu_avx2.cpp`.
   6×16 BLIS-style inner kernel, 12 ymm accumulators, FMA inner loop,
   thread-local pack buffers. Opt-in via `TC_USE_AVX2_GEMM=1`. Self-contained
