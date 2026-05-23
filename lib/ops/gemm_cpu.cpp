@@ -223,6 +223,23 @@ float load_b_f16(const uint16_t* B, const tc_gemm_desc* d, int k, int n) {
     return f16_to_f32(v);
 }
 
+/* BF16 <-> FP32: trivially-aligned formats. BF16 is the high 16 bits of an
+ * FP32 (sign + 8 exp + 7 mantissa). These helpers are used by both CBLAS
+ * bf16 fallback and the always-compiled K==0 short-circuit. */
+static inline float bf16_to_f32(uint16_t b) {
+    union { uint32_t u; float f; } v = { (uint32_t)b << 16 };
+    return v.f;
+}
+
+static inline uint16_t f32_to_bf16(float f) {
+    union { float f; uint32_t u; } v = { f };
+    const uint32_t lower = v.u & 0xFFFFu;
+    const uint32_t upper = v.u >> 16;
+    const uint32_t round =
+        (lower > 0x8000u) || ((lower == 0x8000u) && (upper & 1u));
+    return (uint16_t)(upper + round);
+}
+
 #if defined(TC_HAS_CBLAS)
 void tc_cblas_sgemm(CBLAS_TRANSPOSE ta, CBLAS_TRANSPOSE tb,
                     int32_t m, int32_t n, int32_t k,
@@ -268,25 +285,6 @@ void quantize_fp32_to_fp16(const float* src, int32_t rows, int32_t cols,
         const float* src_row = src + (size_t)r * cols;
         for (int32_t c = 0; c < cols; ++c) dst_row[c] = f32_to_f16(src_row[c]);
     }
-}
-
-/* BF16 ↔ FP32: trivially-aligned formats. BF16 IS the high 16 bits of an
- * FP32 (sign + 8 exp + 7 mantissa). Dequant = shift up; quant = take high
- * half with round-to-nearest-even applied to the truncated low half. */
-static inline float bf16_to_f32(uint16_t b) {
-    union { uint32_t u; float f; } v = { (uint32_t)b << 16 };
-    return v.f;
-}
-
-static inline uint16_t f32_to_bf16(float f) {
-    union { float f; uint32_t u; } v = { f };
-    /* Round-to-nearest-even: add half-ulp and round up only when the
-     * bottom 16 bits exceed 0x8000, or equal 0x8000 with an odd top half. */
-    const uint32_t lower = v.u & 0xFFFFu;
-    const uint32_t upper = v.u >> 16;
-    const uint32_t round =
-        (lower > 0x8000u) || ((lower == 0x8000u) && (upper & 1u));
-    return (uint16_t)(upper + round);
 }
 
 /* No #pragma omp here: this code path runs from inside Python via the
