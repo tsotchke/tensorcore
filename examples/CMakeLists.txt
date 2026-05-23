@@ -29,15 +29,11 @@ if(TC_BUILD_TESTS AND TC_ENABLE_METAL)
         ENVIRONMENT "TC_METALLIB=${TC_METALLIB_PATH}"
         TIMEOUT 60
     )
-
-    add_test(NAME example_training_step COMMAND training_step)
-    set_tests_properties(example_training_step PROPERTIES
-        ENVIRONMENT "TC_METALLIB=${TC_METALLIB_PATH}"
-        TIMEOUT 60
-    )
 endif()
 
 if(TC_BUILD_TESTS)
+    add_test(NAME example_training_step COMMAND training_step)
+    set_tests_properties(example_training_step PROPERTIES TIMEOUT 60)
     add_test(NAME example_mesh_training_demo
         COMMAND mesh_training_demo --inner 2 --outer 1
     )
@@ -47,6 +43,9 @@ if(TC_BUILD_TESTS)
     )
     set_tests_properties(example_mesh_training_demo_checkpoint PROPERTIES TIMEOUT 60)
     if(TC_ENABLE_METAL)
+        set_tests_properties(example_training_step PROPERTIES
+            ENVIRONMENT "TC_METALLIB=${TC_METALLIB_PATH}"
+        )
         set_tests_properties(example_mesh_training_demo PROPERTIES
             ENVIRONMENT "TC_METALLIB=${TC_METALLIB_PATH}"
         )

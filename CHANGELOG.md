@@ -35,6 +35,9 @@ every architectural primitive in code and tested:
 - Fused quantized RMSNorm GEMV is now closed across the public release
   surface: shared-library exports, Python ctypes binding, and
   release-smoke source-manifest coverage.
+- CUDA/portable training closure now registers the end-to-end training
+  convergence test and native `training_step` example in non-Metal CTest,
+  so CUDA hosts prove more than isolated training kernels.
 - DiLoCo runtime with NONE/FP16/TOPK_1PCT/TOPK_01PCT compression,
   SGD/Nesterov/Adam outer optimizers, async overlap, sparse-on-the-wire
   cross-continent path.

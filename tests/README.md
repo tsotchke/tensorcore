@@ -1,19 +1,21 @@
 # tests/
 
-29 default CTest entries cover every public ABI surface: 26 native
-correctness tests, the Python binding smoke, and two executable example
+31 default CTest entries cover every public ABI surface: 26 native
+correctness tests, the Python binding smoke, and four executable example
 smokes in the Metal build. The portable
 CPU-only build registers `test_portable_cpu.c`, `test_conv2d.c`,
-`test_diloco.c`, `test_sparse_compress.c`, `test_gloo_fork.c`, and
-`test_gloo_ring_fork.c`, plus `test_checkpoint.c` and the
-DiLoCo-over-GLOO fork tests. Each native test is a single `.c` file (or
-`.mm` for the buffer pool, which needs ObjC++).
+`test_training_kernels.c`, `test_e2e_training.c`, `test_diloco.c`,
+`test_sparse_compress.c`, `test_gloo_fork.c`, and `test_gloo_ring_fork.c`,
+plus `test_checkpoint.c` and the DiLoCo-over-GLOO fork tests. Non-Metal
+builds also register `example_training_step` when `TC_BUILD_EXAMPLES=ON`.
+Each native test is a single `.c` file (or `.mm` for the buffer pool,
+which needs ObjC++).
 Numerical tests compare against an fp64 CPU reference or a bit-exact CPU
 oracle and pass the tolerances documented in
 [../docs/numerics.md](../docs/numerics.md).
 
 ```sh
-ctest --test-dir build --output-on-failure   # 29 default Apple tests
+ctest --test-dir build --output-on-failure   # 31 default Apple tests
 ```
 
 Runs in ~5-15s on M2 Ultra.
@@ -23,9 +25,11 @@ buffer/device path plus padded f32/f16 GEMM, batched GEMM, i8 GEMM,
 quantized GEMV, `TC_DIST_SINGLE` collectives, memory-tier and
 checkpoint baseline APIs, HIP/CUDA inactive diagnostics, local DiLoCo, and
 the localhost GLOO TCP collective and DiLoCo-over-GLOO smokes. The
-portable build also runs Conv2D, DiLoCo, sparse-compression, broker GLOO TCP,
-opt-in ring GLOO TCP, activation checkpointing, DiLoCo-over-GLOO, and sparse
-TOPK DiLoCo-over-GLOO tests.
+portable build also runs Conv2D, training-kernel correctness, end-to-end
+training convergence, DiLoCo, sparse-compression, broker GLOO TCP, opt-in
+ring GLOO TCP, activation checkpointing, DiLoCo-over-GLOO, sparse TOPK
+DiLoCo-over-GLOO, and, when examples are enabled, the native training-step
+example.
 `scripts/ci_portable_cpu.sh` adds installed SDK consumer checks plus
 subprocess smokes for the opt-in AVX2, NEON, and AMX GEMM environment
 variants, including an AVX2 serial override via `TC_AVX2_THREADS=1`.

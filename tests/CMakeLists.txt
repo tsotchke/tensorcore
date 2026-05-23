@@ -46,6 +46,12 @@ if(NOT TC_ENABLE_METAL)
     add_test(NAME test_training_kernels COMMAND test_training_kernels)
     set_tests_properties(test_training_kernels PROPERTIES TIMEOUT 120)
 
+    add_executable(test_e2e_training test_e2e_training.c)
+    target_link_libraries(test_e2e_training PRIVATE tensorcore)
+    target_include_directories(test_e2e_training PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    add_test(NAME test_e2e_training COMMAND test_e2e_training)
+    set_tests_properties(test_e2e_training PROPERTIES TIMEOUT 120)
+
     # DiLoCo single-rank runtime smoke; runs everywhere since the runtime
     # is platform-independent (lives in lib/distributed/diloco.cpp).
     add_executable(test_diloco test_diloco.c)
