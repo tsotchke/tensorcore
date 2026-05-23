@@ -59,12 +59,13 @@ alpha/beta wrapper are compiled in portable CPU builds and skip unless
 | 21 | `test_gloo_fork.c` | Four forked ranks over broker GLOO TCP; fp32/fp16 allreduce, broadcast, allgather, barrier |
 | 22 | `test_diloco_gloo_fork.c` | Multi-rank DiLoCo over GLOO with forked localhost ranks |
 | 23 | `test_diloco_sparse_fork.c` | TOPK sparse DiLoCo over GLOO; validates sparse wire-byte reduction |
-| 24 | `test_gloo_ring_fork.c` | Four forked ranks with `TC_GLOO_RING=1`; direct TCP ring fp32 SUM |
+| 24 | `test_gloo_ring_fork.c` | Four forked ranks with `TC_GLOO_RING=1`; direct TCP ring fp32 SUM plus forced-unreachable broker fallback |
 | 25 | `test_checkpoint.c` | CPU discard/realize checkpoint lifecycle; skips on Metal until handle-preserving MTLBuffer discard lands |
 | 26 | `test_buffer_pool.mm` | LIFO recycling, bucket size classes, concurrent allocate/free |
 | 27 | `python_basic` | The Python binding's `tests/test_basic.py` — full ABI surface exercised from ctypes |
 | 28 | `example_decode_step` | Native decode-step smoke using the installed C ABI |
 | 29 | `example_training_step` | Native training-step smoke using the installed C ABI |
+| 30 | `example_mesh_training_demo` | Single-rank mesh training demo smoke: RMSNorm, GEMM, softmax+CE, AdamW, DiLoCo outer sync |
 
 ## Tolerances
 

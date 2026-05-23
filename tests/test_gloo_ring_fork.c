@@ -3,10 +3,12 @@
  * all-reduce topology.
  *
  * Validates:
- *   1. Ring topology setup succeeds for world_size=4 (opt-in via
- *      TC_GLOO_RING=1).
+ *   1. Ring topology setup succeeds for world_size=4 on loopback
+ *      (opt-in via TC_GLOO_RING=1).
  *   2. Ring reduce-scatter + all-gather produces correct sums.
  *   3. Per-rank result matches expected sum(1..world).
+ *   4. If direct ring neighbors are unreachable, init stays alive and
+ *      collectives transparently fall back to the rank-0 broker.
  *
  * The cross-continent ring case (test_dist_remote --world 4) hits NAT
  * issues with Tailscale's getpeername-based topology discovery; this
@@ -97,9 +99,15 @@ static int run_rank(int rank, const char* url) {
     return 0;
 }
 
-int main(void) {
-    /* Opt into ring topology. */
+static int run_case(const char* label, int force_broker_fallback) {
     setenv("TC_GLOO_RING", "1", 1);
+    if (force_broker_fallback) {
+        setenv("TC_GLOO_ADVERTISE_HOST", "203.0.113.1", 1);
+        setenv("TC_GLOO_RING_CONNECT_TIMEOUT_MS", "100", 1);
+    } else {
+        unsetenv("TC_GLOO_ADVERTISE_HOST");
+        unsetenv("TC_GLOO_RING_CONNECT_TIMEOUT_MS");
+    }
 
     const int port = reserve_loopback_port();
     if (port <= 0 || port > 65000) {
@@ -125,8 +133,10 @@ int main(void) {
     }
 
     /* Parent runs rank 0. */
-    printf("ring 4-rank fork test:\n");
+    printf("%s:\n", label);
+    fflush(stdout);
     int rc = run_rank(0, url);
+    fflush(stdout);
 
     for (int i = 0; i < WORLD - 1; ++i) {
         int status = 0;
@@ -139,6 +149,22 @@ int main(void) {
     }
 
     printf("%s\n", rc ? "FAIL" : "OK");
+    fflush(stdout);
+    return rc;
+}
+
+int main(void) {
+    int rc = 0;
+    rc |= run_case("ring 4-rank fork test", 0);
+#if defined(TC_TEST_METAL_BUILD)
+    printf("ring 4-rank broker fallback test: SKIP in Metal build; covered by portable CPU build\n");
+    fflush(stdout);
+#else
+    rc |= run_case("ring 4-rank broker fallback test", 1);
+#endif
+    unsetenv("TC_GLOO_RING");
+    unsetenv("TC_GLOO_ADVERTISE_HOST");
+    unsetenv("TC_GLOO_RING_CONNECT_TIMEOUT_MS");
     return rc;
 }
 

@@ -23,6 +23,9 @@ every architectural primitive in code and tested:
 - GLOO TCP transport with full collective set: default brokered
   SUM/AVG/MIN/MAX, opt-in ring fp32 SUM/AVG for 3+ ranks, broadcast
   any-root, allgather, sparse_allreduce.
+- NAT-tolerant GLOO ring setup: direct neighbor links now use advertised
+  per-rank addresses, bounded connect timeouts, and coordinated broker
+  fallback when any ring edge is unreachable.
 - DiLoCo runtime with NONE/FP16/TOPK_1PCT/TOPK_01PCT compression,
   SGD/Nesterov/Adam outer optimizers, async overlap, sparse-on-the-wire
   cross-continent path.

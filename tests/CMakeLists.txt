@@ -226,6 +226,7 @@ set_tests_properties(test_diloco_sparse_fork PROPERTIES
 add_executable(test_gloo_ring_fork test_gloo_ring_fork.c)
 target_link_libraries(test_gloo_ring_fork PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
 target_include_directories(test_gloo_ring_fork PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_compile_definitions(test_gloo_ring_fork PRIVATE TC_TEST_METAL_BUILD=1)
 add_test(NAME test_gloo_ring_fork COMMAND test_gloo_ring_fork)
 set_tests_properties(test_gloo_ring_fork PROPERTIES
     SKIP_RETURN_CODE 77
