@@ -203,12 +203,13 @@ namespace {
  *     bits[55: 0]  virtual address
  *     bits[61:56]  Z register slot (0..63)
  *   FMA32:
- *     bits[5:0]    x_offset (bytes within X register)
- *     bits[10:6]   y_offset (bytes within Y register)
- *     bits[20:16]  z_row_start (0..15 for fp32; Z has 64 rows of 64 bytes
+ *     bits[ 9: 0]  x_offset (bytes within X register)
+ *     bits[19:10]  y_offset (bytes within Y register)
+ *     bits[26:20]  z_row_start (0..15 for fp32; Z has 64 rows of 64 bytes
  *                  but a 16x16 fp32 outer product writes into 16 consecutive)
- *     bit [27]     1 = vector mode (broadcast X), 0 = matrix mode
- *     bit [29]     1 = vector mode (broadcast Y), 0 = matrix mode
+ *     bit [27]     1 = skip Z input (write x*y), 0 = accumulate x*y+z
+ *     bit [28]     1 = skip Y input
+ *     bit [29]     1 = skip X input
  *   For a full 16x16 outer product Z[0..15] = X[0] outer Y[0], operand = 0. */
 
 inline uint64_t amx_xy_op(const void* addr, int slot) {
@@ -243,14 +244,14 @@ inline uint64_t amx_z_op(const void* addr, int slot) {
  *   against a scalar reference.
  *
  * Algorithm:
- *   AMX_SET
- *   zero Z[0..15]  (16 rows of 64 bytes = 16 x 16 fp32 accumulator)
+ *   AMX_SET before entering the tile processor
  *   for k in [0, K):
- *     LDX  B_pack[k*16..k*16+15] into X[0]      (B's k-th row -> X)
- *     LDY  A_pack[k*16..k*16+15] into Y[0]      (A's k-th col -> Y)
- *     FMA32 0                                    (Z[i, j] += X[j] * Y[i])
+ *     LDX  B_pack[k*16..k*16+15] into X[slot]   (B's k-th row -> X)
+ *     LDY  A_pack[k*16..k*16+15] into Y[slot]   (A's k-th col -> Y)
+ *     FMA32 skip-Z for k=0, then FMA32 accumulate
+ *                                                    (Z[i, j] += X[j] * Y[i])
  *   for r in [0, 16):  STZ C_out + r*16, Z[r]   (write 16 rows back)
- *   AMX_CLR
+ *   leave AMX armed for the thread lifetime
  *
  * The AMX unit retires one FMA32 per cycle = 256 fp32 FMA = 512 fp32 ops/cycle.
  * At ~3.2 GHz cluster frequency that's ~1.6 TFLOPS per cluster. M2 Ultra has
@@ -266,13 +267,7 @@ inline uint64_t amx_z_op(const void* addr, int slot) {
  *
  * fp64 outer product uses every 8th slot, fp16 every 2nd. */
 static constexpr int kZStrideF32 = 4;
-
-inline void amx_zero_z_fp32() {
-    alignas(64) static const float zero[16] = {0};
-    for (int r = 0; r < 16; ++r) {
-        AMX_LDZ(amx_z_op(zero, r * kZStrideF32));
-    }
-}
+static constexpr uint64_t kFma32SkipZ = 1ull << 27;
 
 inline void amx_store_z_fp32(float* C, int ldc) {
     for (int r = 0; r < 16; ++r) {
@@ -280,19 +275,27 @@ inline void amx_store_z_fp32(float* C, int ldc) {
     }
 }
 
+inline uint64_t amx_fma32_op(int xy_slot, bool skip_z) {
+    const uint64_t offset = (uint64_t)xy_slot * 64ull;
+    return (skip_z ? kFma32SkipZ : 0ull) | (offset << 10) | offset;
+}
+
 /* Pure FMA loop - accumulates kc steps into the live Z accumulator without
- * zeroing or storing. Caller is responsible for AMX_SET, zeroing Z before
- * the first call for a given (i, j) tile, and store_z_fp32 after the last
- * call. Splitting the kernel this way lets us walk K in cache-friendly KC
- * chunks while keeping Z live across the inner loop. */
+ * storing. Caller is responsible for AMX_SET and store_z_fp32 after the last
+ * call. The first FMA for a given (i, j) tile sets FMA32's skip-Z bit, which
+ * writes x*y and avoids 16 LDZ-zero instructions per tile. Splitting the
+ * kernel this way lets us walk K in cache-friendly KC chunks while keeping Z
+ * live across the inner loop. */
 __attribute__((noinline))
 static void amx_fma32_accumulate(int kc,
                                  const float* __restrict A_pack,
-                                 const float* __restrict B_pack) {
+                                 const float* __restrict B_pack,
+                                 bool skip_z_on_first_fma) {
     for (int k = 0; k < kc; ++k) {
-        AMX_LDX(amx_xy_op(B_pack + k * 16, /*slot=*/ 0));   /* B row -> X */
-        AMX_LDY(amx_xy_op(A_pack + k * 16, /*slot=*/ 0));   /* A col -> Y */
-        AMX_FMA32(0);
+        const int slot = k & 3;
+        AMX_LDX(amx_xy_op(B_pack + k * 16, slot));   /* B row -> X */
+        AMX_LDY(amx_xy_op(A_pack + k * 16, slot));   /* A col -> Y */
+        AMX_FMA32(amx_fma32_op(slot, skip_z_on_first_fma && k == 0));
     }
 }
 
@@ -347,7 +350,7 @@ inline void pack_B_mega(const float* B, int ldb, int K, int N,
 }
 
 /* ----------------------------------------------------------------------------
- * Aligned heap allocator. AMX LDX/LDY/LDZ/STZ require 64-byte alignment.
+ * Aligned heap allocator. AMX LDX/LDY/STZ require 64-byte alignment.
  * --------------------------------------------------------------------------*/
 inline float* aligned_alloc_fp32(size_t n_floats) {
     void* p = nullptr;
@@ -440,11 +443,13 @@ static void amx_process_tile_strip(int i_start, int i_end,
         for (int j = 0; j < N; j += 16) {
             const float* B_panel = B_pack_mega + (size_t)(j / 16) * K * 16;
 
-            amx_zero_z_fp32();
+            bool first_k = true;
             for (int kp = 0; kp < K; kp += KC) {
                 const int kc = (kp + KC <= K) ? KC : (K - kp);
                 amx_fma32_accumulate(kc, A_panel + (size_t)kp * 16,
-                                          B_panel + (size_t)kp * 16);
+                                          B_panel + (size_t)kp * 16,
+                                          first_k);
+                first_k = false;
             }
             amx_store_z_fp32(C_tile, 16);
 
@@ -599,9 +604,17 @@ extern "C" TC_INTERNAL_SYMBOL int tc_amx_gemm_f32(int M, int N, int K,
                                                    float beta,
                                                    float* C, int ldc) {
     /* Session-1 capability gate. Sessions 2-3 will lift these. */
+    if (M < 0 || N < 0 || K < 0) return -1;
     if (alpha != 1.0f || beta != 0.0f) return -1;
     if (transpose_a || transpose_b) return -1;
     if ((M & 15) != 0 || (N & 15) != 0) return -1;
+    if (M == 0 || N == 0) return 0;
+    if (K == 0) {
+        for (int i = 0; i < M; ++i) {
+            std::memset(C + (size_t)i * ldc, 0, (size_t)N * sizeof(float));
+        }
+        return 0;
+    }
 
     /* Threading policy:
      *   - For M < 256: too small for parallel overhead to amortize. Pack

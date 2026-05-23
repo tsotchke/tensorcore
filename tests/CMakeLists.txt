@@ -10,11 +10,31 @@ if(NOT TC_ENABLE_METAL)
     add_test(NAME test_portable_cpu COMMAND test_portable_cpu)
     set_tests_properties(test_portable_cpu PROPERTIES TIMEOUT 120)
 
+    add_executable(test_amx_gemm test_amx_gemm.c)
+    target_link_libraries(test_amx_gemm PRIVATE tensorcore)
+    target_include_directories(test_amx_gemm PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    add_test(NAME test_amx_gemm COMMAND test_amx_gemm)
+    set_tests_properties(test_amx_gemm PROPERTIES
+        TIMEOUT 120
+        SKIP_RETURN_CODE 77
+    )
+
     add_executable(test_conv2d test_conv2d.c)
     target_link_libraries(test_conv2d PRIVATE tensorcore)
     target_include_directories(test_conv2d PRIVATE ${CMAKE_SOURCE_DIR}/include)
     add_test(NAME test_conv2d COMMAND test_conv2d)
     set_tests_properties(test_conv2d PROPERTIES TIMEOUT 120)
+
+    add_executable(test_training_kernels test_training_kernels.c)
+    target_link_libraries(test_training_kernels PRIVATE tensorcore)
+    target_include_directories(test_training_kernels PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    add_test(NAME test_training_kernels COMMAND test_training_kernels)
+    set_tests_properties(test_training_kernels PROPERTIES TIMEOUT 120)
+    if(TC_ENABLE_CUDA)
+        set_tests_properties(test_training_kernels PROPERTIES
+            ENVIRONMENT "TC_USE_CUDA_GEMM=1"
+        )
+    endif()
 
     # DiLoCo single-rank runtime smoke; runs everywhere since the runtime
     # is platform-independent (lives in lib/distributed/diloco.cpp).
@@ -114,6 +134,7 @@ endif()
 
 set(TC_TESTS
     test_device
+    test_amx_gemm
     test_gemm_f32
     test_gemm_f16
     test_gemm_bf16
@@ -143,6 +164,7 @@ foreach(t IN LISTS TC_TESTS)
         ENVIRONMENT "TC_METALLIB=${TC_METALLIB_PATH}"
     )
 endforeach()
+set_tests_properties(test_amx_gemm PROPERTIES SKIP_RETURN_CODE 77)
 
 # DiLoCo single-rank runtime smoke - same source as the CPU build's test,
 # runs on Apple too because the runtime is platform-independent.

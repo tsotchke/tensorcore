@@ -132,7 +132,9 @@ size_t      tc_buffer_size (const tc_buffer* buf);
 `tc_buffer_map` returns a CPU-addressable pointer with no copy. The buffer
 pool uses power-of-2 buckets and LIFO recycling. `tc_buffer_from_ptr`
 creates a wrapper around caller-owned memory; freeing the wrapper does not
-free the underlying allocation.
+free the underlying allocation. Metal builds use a no-copy `MTLBuffer` view
+when the pointer and byte count satisfy Metal's page-alignment constraints;
+unaligned Metal wrappers return `TC_ERR_INVALID_ARG`.
 
 ### Streams
 
@@ -851,10 +853,13 @@ plan.
 CUDA is the staged NVIDIA-native fast path. Default builds export
 deterministic unsupported stubs so SDK consumers and FFI generators can
 bind the surface while staying CUDA-free. Builds configured with
-`TC_ENABLE_CUDA=ON` expose device discovery and can route fp32/fp16 GEMM
-through cuBLAS when `TC_USE_CUDA_GEMM=1` is set. Runtime-allocated buffers
-use CUDA managed memory in that mode; externally wrapped host pointers use
-the staged-copy fallback.
+`TC_ENABLE_CUDA=ON` expose device discovery and can route supported
+fp32/fp16/bf16/int8 GEMM through cuBLAS when `TC_USE_CUDA_GEMM=1` is set.
+Runtime-allocated buffers use CUDA managed memory in that mode; externally
+wrapped host pointers use the staged-copy fallback. CUDA builds also compile
+managed-memory kernels for RMSNorm forward, LayerNorm forward, SwiGLU
+forward, softmax forward, and fp32-grad AdamW; host-only buffers fall back to
+the portable CPU implementations.
 
 ```c
 typedef struct {

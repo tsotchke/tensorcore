@@ -9,6 +9,7 @@
 #include "internal.h"
 
 #include <atomic>
+#include <cstdint>
 #include <cstring>
 #include <cstdlib>
 #include <cstdio>
@@ -311,14 +312,33 @@ extern "C" tc_status_t tc_buffer_alloc(tc_context* ctx, size_t bytes, tc_buffer*
 
 extern "C" tc_status_t tc_buffer_from_ptr(tc_context* ctx, void* ptr,
                                           size_t bytes, tc_buffer** out) {
-    /* Metal builds back tc_buffer with MTLBuffer. Wrapping an arbitrary
-     * host pointer with newBufferWithBytesNoCopy:length:options:deallocator:
-     * is possible but page-aligned-and-multiple-of-page-size constrained,
-     * and CPU-side ops would still need to copy out for GPU kernels.
-     * Left UNSUPPORTED for now — bindings that need zero-copy on the Metal
-     * build should use a different code path. */
-    (void)ctx; (void)ptr; (void)bytes; (void)out;
-    return TC_ERR_UNSUPPORTED_DTYPE;
+    if (!ctx || !ptr || !out || bytes == 0) return TC_ERR_INVALID_ARG;
+    *out = nullptr;
+
+    const size_t page = (size_t)NSPageSize();
+    const uintptr_t addr = (uintptr_t)ptr;
+    if (page == 0 || (addr % page) != 0 || (bytes % page) != 0) {
+        return TC_ERR_INVALID_ARG;
+    }
+
+    @autoreleasepool {
+        id<MTLBuffer> mtl =
+            [ctx->device newBufferWithBytesNoCopy:ptr
+                                           length:bytes
+                                          options:MTLResourceStorageModeShared
+                                      deallocator:nil];
+        if (!mtl) return TC_ERR_ALLOC;
+
+        tc_buffer* buf = new (std::nothrow) tc_buffer();
+        if (!buf) return TC_ERR_ALLOC;
+        buf->mtl = mtl;
+        buf->bytes = bytes;
+        buf->bucket_bytes = 0;
+        buf->owner = ctx;
+        buf->owns_buffer = false;
+        *out = buf;
+    }
+    return TC_OK;
 }
 
 extern "C" tc_status_t tc_buffer_validate(tc_context* ctx,
@@ -331,9 +351,13 @@ extern "C" tc_status_t tc_buffer_validate(tc_context* ctx,
 }
 
 extern "C" tc_status_t tc_buffer_free(tc_context* ctx, tc_buffer* buf) {
-    tc_status_t s = tc_buffer_validate(ctx, buf, 0);
-    if (s != TC_OK) return s;
-    tc_buffer_pool_free(ctx->buffer_pool, buf);
+    if (!ctx || !buf || buf->owner != ctx) return TC_ERR_INVALID_ARG;
+    if (buf->mtl && buf->owns_buffer) {
+        tc_buffer_pool_free(ctx->buffer_pool, buf);
+    } else {
+        buf->mtl = nil;
+        delete buf;
+    }
     return TC_OK;
 }
 

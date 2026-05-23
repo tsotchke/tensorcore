@@ -9,7 +9,8 @@
  *   1. tc_cuda_init() succeeds and reports a device.
  *   2. tc_buffer_alloc returns CUDA-managed memory when
  *      TC_USE_CUDA_GEMM=1 (writes from host code remain coherent).
- *   3. tc_gemm() with TC_USE_CUDA_GEMM=1 routes to cuBLAS for fp32 + fp16.
+ *   3. tc_gemm() with TC_USE_CUDA_GEMM=1 routes to cuBLAS for fp32, fp16,
+ *      bf16, and int8 when the device reports support.
  *   4. fp32 numerics: random-input identity (M=512, alpha=1, beta=0) error
  *      < 1e-3 vs CPU reference.
  *   5. Performance gate: fp32 4096^3 must exceed 15 TFLOPS on high-end
@@ -31,6 +32,16 @@ static double now(void) {
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
     return t.tv_sec + t.tv_nsec * 1e-9;
+}
+
+static uint16_t f32_to_bf16(float x) {
+    union { float f; uint32_t u; } v = {x};
+    return (uint16_t)(v.u >> 16);
+}
+
+static float bf16_to_f32(uint16_t b) {
+    union { uint32_t u; float f; } v = {(uint32_t)b << 16};
+    return v.f;
 }
 
 static int is_high_end_ampere_or_newer(const tc_cuda_device_info* info) {
@@ -263,6 +274,160 @@ int main(void) {
                                 "cublas_gemmex_fp16_tensorop_managed_fp16accum")) return 1;
         printf("  fp16 GEMM 4096^3 (fp16-accum): %.3f ms, %.2f TFLOPS  last=%s\n",
                dt * 1000.0, tflops, tc_cuda_last_kernel_name());
+        tc_buffer_free(ctx, A); tc_buffer_free(ctx, B); tc_buffer_free(ctx, C);
+    }
+
+    /* --- Correctness + perf: bf16 GEMM via tensor cores. --- */
+    unsetenv("TC_CUDA_FP16_ACCUM");   /* bf16 uses fp32 accum, no toggle. */
+    if (!info.supports_bf16) {
+        printf("  bf16 GEMM skipped: device reports no bf16 tensor core support\n");
+    } else {
+        {
+            const int M = 64, N = 64, K = 64;
+            tc_buffer *A, *B, *C;
+            if (tc_buffer_alloc(ctx, M*K*sizeof(uint16_t), &A) != TC_OK ||
+                tc_buffer_alloc(ctx, K*N*sizeof(uint16_t), &B) != TC_OK ||
+                tc_buffer_alloc(ctx, M*N*sizeof(uint16_t), &C) != TC_OK) {
+                fprintf(stderr, "bf16 correctness alloc failed\n");
+                return 1;
+            }
+            void *Ap, *Bp, *Cp;
+            if (tc_buffer_map(A, &Ap) != TC_OK ||
+                tc_buffer_map(B, &Bp) != TC_OK ||
+                tc_buffer_map(C, &Cp) != TC_OK) {
+                fprintf(stderr, "bf16 correctness map failed\n");
+                return 1;
+            }
+            uint16_t *a = (uint16_t*)Ap, *b = (uint16_t*)Bp, *c = (uint16_t*)Cp;
+            for (int i = 0; i < M*K; ++i) a[i] = 0;
+            for (int i = 0; i < M; ++i) a[i*K + i] = f32_to_bf16(1.0f);
+            for (int i = 0; i < K*N; ++i) b[i] = f32_to_bf16((float)((i % 17) - 8));
+            memset(c, 0, M*N*sizeof(uint16_t));
+
+            tc_gemm_desc d = {0};
+            d.M = M; d.N = N; d.K = K;
+            d.alpha = 1.0f; d.beta = 0.0f;
+            d.a_dtype = d.b_dtype = d.c_dtype = TC_DTYPE_BF16;
+            d.accum_dtype = TC_DTYPE_F32;
+            if (tc_gemm(ctx, &d, A, B, C) != TC_OK) {
+                fprintf(stderr, "tc_gemm bf16 correctness failed\n");
+                return 1;
+            }
+            if (expect_cuda_backend("bf16 identity",
+                                    "cublas_gemmex_bf16_tensorop_managed")) return 1;
+            double max_abs = 0.0;
+            for (int i = 0; i < M*N; ++i) {
+                const double e = fabs((double)bf16_to_f32(c[i]) - (double)bf16_to_f32(b[i]));
+                if (e > max_abs) max_abs = e;
+            }
+            printf("  identity GEMM 64^3 bf16 max_abs=%.2e %s\n", max_abs,
+                   max_abs == 0.0 ? "OK" : "FAIL");
+            if (max_abs != 0.0) return 1;
+            tc_buffer_free(ctx, A); tc_buffer_free(ctx, B); tc_buffer_free(ctx, C);
+        }
+
+        const int N = 4096;
+        tc_buffer *A, *B, *C;
+        if (tc_buffer_alloc(ctx, (size_t)N*N*sizeof(uint16_t), &A) != TC_OK ||
+            tc_buffer_alloc(ctx, (size_t)N*N*sizeof(uint16_t), &B) != TC_OK ||
+            tc_buffer_alloc(ctx, (size_t)N*N*sizeof(uint16_t), &C) != TC_OK) {
+            fprintf(stderr, "bf16 perf alloc failed\n");
+            return 1;
+        }
+        void *Ap, *Bp, *Cp;
+        if (tc_buffer_map(A, &Ap) != TC_OK ||
+            tc_buffer_map(B, &Bp) != TC_OK ||
+            tc_buffer_map(C, &Cp) != TC_OK) {
+            fprintf(stderr, "bf16 perf map failed\n");
+            return 1;
+        }
+        uint16_t *a = (uint16_t*)Ap, *b = (uint16_t*)Bp;
+        /* bf16 1.0 = 0x3F80 (sign=0, exp=127, mant=0). */
+        for (size_t i = 0; i < (size_t)N*N; ++i) { a[i] = 0x3F80; b[i] = 0x3F80; }
+
+        tc_gemm_desc d = {0};
+        d.M = N; d.N = N; d.K = N;
+        d.alpha = 1.0f; d.beta = 0.0f;
+        d.a_dtype = d.b_dtype = d.c_dtype = TC_DTYPE_BF16;
+        d.accum_dtype = TC_DTYPE_F32;
+        if (tc_gemm(ctx, &d, A, B, C) != TC_OK) {
+            fprintf(stderr, "tc_gemm bf16 warm failed\n");
+            return 1;
+        }
+        const double t0 = now();
+        for (int i = 0; i < 5; ++i) {
+            if (tc_gemm(ctx, &d, A, B, C) != TC_OK) {
+                fprintf(stderr, "tc_gemm bf16 perf failed\n");
+                return 1;
+            }
+        }
+        const double dt = (now() - t0) / 5.0;
+        const double tflops = 2.0 * N * N * N / dt / 1e12;
+        if (expect_cuda_backend("bf16 perf",
+                                "cublas_gemmex_bf16_tensorop_managed")) return 1;
+        printf("  bf16 GEMM 4096^3 (tensor cores): %.3f ms, %.2f TFLOPS  last=%s\n",
+               dt * 1000.0, tflops, tc_cuda_last_kernel_name());
+        tc_buffer_free(ctx, A); tc_buffer_free(ctx, B); tc_buffer_free(ctx, C);
+    }
+
+    /* --- Correctness + perf: int8 GEMM (int32 accumulator). --- */
+    if (!info.supports_int8_tensor_core) {
+        printf("  int8 GEMM skipped: device reports no int8 tensor core support\n");
+    } else {
+        const int N = 1024;   /* K must be multiple of 16 for int8 tensor cores. */
+        tc_buffer *A, *B, *C;
+        if (tc_buffer_alloc(ctx, (size_t)N*N*sizeof(int8_t), &A) != TC_OK ||
+            tc_buffer_alloc(ctx, (size_t)N*N*sizeof(int8_t), &B) != TC_OK ||
+            tc_buffer_alloc(ctx, (size_t)N*N*sizeof(int32_t), &C) != TC_OK) {
+            fprintf(stderr, "int8 perf alloc failed\n");
+            return 1;
+        }
+        void *Ap, *Bp, *Cp;
+        if (tc_buffer_map(A, &Ap) != TC_OK ||
+            tc_buffer_map(B, &Bp) != TC_OK ||
+            tc_buffer_map(C, &Cp) != TC_OK) {
+            fprintf(stderr, "int8 perf map failed\n");
+            return 1;
+        }
+        int8_t *a = (int8_t*)Ap, *b = (int8_t*)Bp;
+        /* Use a small constant so accumulators don't overflow int32. */
+        for (size_t i = 0; i < (size_t)N*N; ++i) { a[i] = 1; b[i] = 1; }
+
+        tc_gemm_desc d = {0};
+        d.M = N; d.N = N; d.K = N;
+        d.alpha = 1.0f; d.beta = 0.0f;
+        d.a_dtype = d.b_dtype = TC_DTYPE_I8;
+        d.c_dtype = TC_DTYPE_I32;
+        d.accum_dtype = TC_DTYPE_I32;
+        if (tc_gemm(ctx, &d, A, B, C) != TC_OK) {
+            fprintf(stderr, "tc_gemm int8 warm failed\n");
+            return 1;
+        }
+        if (expect_cuda_backend("int8 correctness",
+                                "cublas_gemmex_i8_tensorop_managed")) return 1;
+        /* Verify: A = B = ones → C[i,j] = K = 1024. */
+        int32_t* c = (int32_t*)Cp;
+        for (size_t i = 0; i < (size_t)N*N; ++i) {
+            if (c[i] != N) {
+                fprintf(stderr, "int8 mismatch at %zu: got %d, expected %d\n",
+                        i, c[i], N);
+                return 1;
+            }
+        }
+        const double t0 = now();
+        for (int i = 0; i < 5; ++i) {
+            if (tc_gemm(ctx, &d, A, B, C) != TC_OK) {
+                fprintf(stderr, "tc_gemm int8 perf failed\n");
+                return 1;
+            }
+        }
+        const double dt = (now() - t0) / 5.0;
+        /* Note: int8 ops have different "tops" definition; report ops/sec. */
+        const double tops = 2.0 * N * N * N / dt / 1e12;
+        if (expect_cuda_backend("int8 perf",
+                                "cublas_gemmex_i8_tensorop_managed")) return 1;
+        printf("  int8 GEMM 1024^3: %.3f ms, %.2f TOPS, sums=%d  last=%s\n",
+               dt * 1000.0, tops, c[0], tc_cuda_last_kernel_name());
         tc_buffer_free(ctx, A); tc_buffer_free(ctx, B); tc_buffer_free(ctx, C);
     }
 

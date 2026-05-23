@@ -105,6 +105,7 @@ extern "C" tc_status_t tc_buffer_pool_alloc(TCBufferPool* p, size_t bytes,
     tb->bytes        = bytes;
     tb->bucket_bytes = bytes_for_bucket(b);
     tb->owner        = nullptr;   /* set by tc_buffer_alloc wrapper */
+    tb->owns_buffer  = true;
     *out = tb;
     return TC_OK;
 }

@@ -4,13 +4,13 @@
  * `set_default_matmul()` dispatcher hook for torch.matmul.
  *
  * v0.1 scope:
- *   - fp32 only (matches the AMX backend's session-1.5 support).
+ *   - fp32 and bf16 2-D matmul.
  *   - 2-D inputs, no batching, no transpose (caller transposes upstream).
  *   - CPU tensors only — Apple unified memory means tensorcore's CPU
  *     backend reads from the same physical RAM PyTorch is using.
- *     Uses `tc_buffer_from_ptr` to wrap PyTorch's allocator output
- *     in a zero-copy tc_buffer view, eliminating the alloc-and-memcpy
- *     that dominated v0.1 perf at small sizes.
+ *     Uses `tc_buffer_from_ptr` when the runtime can wrap PyTorch's
+ *     allocator output directly, with an alloc-and-copy fallback for
+ *     runtimes that require stricter wrapper alignment.
  *
  * Backend selection is honored via the same env vars as the rest of
  * tensorcore: `TC_USE_AMX_GEMM=1` picks the reverse-engineered AMX
@@ -113,16 +113,37 @@ at::Tensor tc_matmul_fp32(const at::Tensor& A, const at::Tensor& B) {
 
     ensure_ctx();
 
-    /* Zero-copy wrap: tc_buffer_from_ptr returns a tc_buffer that aliases
-     * the PyTorch tensor's data buffer (and the output tensor's data
-     * buffer for C). Apple unified memory makes this trivially correct.
-     * Lifetime: A_c, B_c, and `out` outlive the GEMM call (synchronous),
-     * so the wrapped pointers stay valid. */
+    /* Prefer zero-copy tc_buffer_from_ptr when the runtime accepts the
+     * pointer. Metal builds require page-aligned no-copy wrappers, so fall
+     * back to alloc+memcpy for ordinary PyTorch allocator outputs. */
     tc_buffer *bA = nullptr, *bB = nullptr, *bC = nullptr;
+    bool c_direct = false;
     auto cleanup = [&]() {
         if (bA) tc_buffer_free(g_ctx, bA);
         if (bB) tc_buffer_free(g_ctx, bB);
         if (bC) tc_buffer_free(g_ctx, bC);
+    };
+
+    auto make_input_buffer = [&](const void* src, size_t bytes,
+                                 tc_buffer** out_buf) -> bool {
+        if (tc_buffer_from_ptr(g_ctx, const_cast<void*>(src), bytes, out_buf) == TC_OK) {
+            return true;
+        }
+        if (tc_buffer_alloc(g_ctx, bytes, out_buf) != TC_OK) return false;
+        void* dst = nullptr;
+        if (tc_buffer_map(*out_buf, &dst) != TC_OK || !dst) return false;
+        std::memcpy(dst, src, bytes);
+        return true;
+    };
+
+    auto make_output_buffer = [&](void* dst, size_t bytes,
+                                  tc_buffer** out_buf, bool* direct) -> bool {
+        if (tc_buffer_from_ptr(g_ctx, dst, bytes, out_buf) == TC_OK) {
+            *direct = true;
+            return true;
+        }
+        *direct = false;
+        return tc_buffer_alloc(g_ctx, bytes, out_buf) == TC_OK;
     };
 
     const size_t bytes_a = static_cast<size_t>(M) * K * elem;
@@ -131,12 +152,11 @@ at::Tensor tc_matmul_fp32(const at::Tensor& A, const at::Tensor& B) {
 
     auto out = torch::empty({M, N}, A_c.options());
 
-    if (tc_buffer_from_ptr(g_ctx, A_c.data_ptr(), bytes_a, &bA) != TC_OK ||
-        tc_buffer_from_ptr(g_ctx, B_c.data_ptr(), bytes_b, &bB) != TC_OK ||
-        tc_buffer_from_ptr(g_ctx, out.data_ptr(),  bytes_c, &bC) != TC_OK) {
+    if (!make_input_buffer(A_c.data_ptr(), bytes_a, &bA) ||
+        !make_input_buffer(B_c.data_ptr(), bytes_b, &bB) ||
+        !make_output_buffer(out.data_ptr(), bytes_c, &bC, &c_direct)) {
         cleanup();
-        throw std::runtime_error("tc_buffer_from_ptr failed (build against "
-                                 "tensorcore with the from_ptr API)");
+        throw std::runtime_error("tensorcore PyTorch bridge buffer setup failed");
     }
 
     tc_gemm_desc desc{};
@@ -161,7 +181,15 @@ at::Tensor tc_matmul_fp32(const at::Tensor& A, const at::Tensor& B) {
             std::to_string(static_cast<int>(rc)));
     }
 
-    /* C was written directly into `out.data_ptr` — no copy needed. */
+    if (!c_direct) {
+        void* cp = nullptr;
+        if (tc_buffer_map(bC, &cp) != TC_OK || !cp) {
+            cleanup();
+            throw std::runtime_error("tensorcore PyTorch bridge output map failed");
+        }
+        std::memcpy(out.data_ptr(), cp, bytes_c);
+    }
+
     cleanup();
     return out;
 }
@@ -223,12 +251,12 @@ TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     register_privateuse1_name();
     m.def("matmul", &tc_matmul_fp32,
-          "tc_matmul(A: Tensor[fp32, MxK], B: Tensor[fp32, KxN]) -> Tensor[fp32, MxN]");
+          "tc_matmul(A: Tensor[fp32|bf16, MxK], B: Tensor[fp32|bf16, KxN]) -> Tensor[MxN]");
     m.def("set_default_matmul", &tc_set_default_matmul,
           py::arg("enabled") = true,
           "Enable or disable the opt-in torch.matmul dispatcher hook; returns the previous state");
     m.def("default_matmul_enabled", &tc_default_matmul_enabled,
-          "Return whether torch.matmul is currently routed through tensorcore for eligible fp32 CPU matrices");
+          "Return whether torch.matmul is currently routed through tensorcore for eligible fp32/bf16 CPU matrices");
     m.def("privateuse1_backend_name", &tc_privateuse1_backend_name,
           "Return the registered PrivateUse1 backend name used by tensorcore");
     m.def("last_backend_name", &tc_last_backend_name,

@@ -236,8 +236,10 @@ See `make help` for the full menu.
   fp16 GEMM TFLOPS against MLX, install separately:
   `pip install mlx`.
 - **PyTorch / TensorFlow.** Tensorcore's core build only needs the C ABI.
-  An experimental PyTorch bridge lives in `bindings/pytorch` for zero-copy
-  fp32 CPU matmul and opt-in `torch.matmul` dispatch experiments.
+  An experimental PyTorch bridge lives in `bindings/pytorch` for fp32/bf16
+  CPU matmul and opt-in `torch.matmul` dispatch experiments. It uses
+  zero-copy tensor wrappers when the runtime accepts the tensor pointer and
+  falls back to staged buffers otherwise.
 - **CUDA.** Obviously.
 - **Real GGUF model.** The bench harness uses synthetic Q4_0 weights;
   full inference against a real GGUF is a v0.2 deliverable.

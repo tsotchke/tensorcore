@@ -119,10 +119,13 @@ Configures a Linux CUDA build with `TC_ENABLE_CUDA=ON`, runs its CTest
 suite, then runs fp32 and fp16 Python GEMM smokes with
 `TC_USE_CUDA_GEMM=1`. When `TC_ENABLE_CUDA=ON`, CTest also includes
 `test_cuda_gemm`, which asserts managed-memory cuBLAS dispatch and applies
-a 4096^3 fp32 perf gate on high-end Ampere+ devices. The Python smoke
-asserts numerical output, `backend=cuda`, and the expected managed-memory
-cuBLAS kernel names. It requires a visible NVIDIA GPU and CUDA Toolkit
-with `CUDA::cudart` plus `CUDA::cublas`.
+a 4096^3 fp32 perf gate on high-end Ampere+ devices. On CUDA devices that
+report support, the CTest path also covers bf16/fp32-accum and int8/i32-accum
+cuBLAS GEMM plus managed-memory RMSNorm/LayerNorm/SwiGLU/softmax/AdamW
+training dispatch. The
+Python smoke asserts numerical output, `backend=cuda`, and the expected
+managed-memory cuBLAS kernel names. It requires a visible NVIDIA GPU and CUDA
+Toolkit with `CUDA::cudart` plus `CUDA::cublas`.
 
 ```sh
 TC_CUDA_BUILD_DIR=build-cuda scripts/ci_cuda_smoke.sh

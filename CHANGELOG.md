@@ -100,7 +100,9 @@ every architectural primitive in code and tested:
   M>=256, with `TC_AMX_THREADS=1` preserving the single-worker path for A/B
   checks. The worker pool is guarded for concurrent callers and reports
   worker allocation failures back to the GEMM fallback path.
-  Local smokes validate 32³ and 256³ output; CBLAS remains the default path.
+  The FMA loop now uses AMX FMA32 skip-Z instead of zero-loading each tile,
+  handles K==0 explicitly, and has a direct `test_amx_gemm` regression test;
+  CBLAS remains the default path.
 
 ### Heterogeneous-mesh substrate
 
@@ -124,8 +126,13 @@ every architectural primitive in code and tested:
   CUDA managed memory in that mode, while wrapped host pointers use the
   staged fallback. `scripts/ci_cuda_smoke.sh` and `test_cuda_gemm` cover
   fp32/fp16 GEMM on CUDA hosts, including a 4096^3 managed-memory perf
-  gate on high-end Ampere+ devices. Default builds return deterministic unsupported statuses
-  until `TC_ENABLE_CUDA` is wired to a CUDA toolchain.
+  gate on high-end Ampere+ devices. CUDA builds also route bf16/fp32-accum
+  and int8/i32-accum GEMM through cuBLAS when the device reports support,
+  and compile managed-memory CUDA kernels for RMSNorm forward, LayerNorm
+  forward, SwiGLU forward, softmax forward, and fp32-grad AdamW with CPU
+  fallback for host-only buffers.
+  Default builds return deterministic unsupported statuses until
+  `TC_ENABLE_CUDA` is wired to a CUDA toolchain.
 - `Add opt-in CUDA/HIP CMake detection`: `TC_ENABLE_CUDA=ON` now enables
   the direct CUDA scaffolding only when CMake finds `CUDA::cudart` and
   `CUDA::cublas`; `TC_ENABLE_HIP=ON` requires HIP runtime plus hipBLAS
@@ -147,16 +154,18 @@ every architectural primitive in code and tested:
   path remains the default for NAT-hostile multi-host deployments, while
   `test_gloo_ring_fork` covers the ring path in default and portable CTest.
 - `Add opt-in PyTorch matmul dispatcher hook`: `bindings/pytorch` can now
-  route eligible fp32 CPU `torch.matmul` calls through tensorcore when
-  `tensorcore_torch.set_default_matmul(True)` is enabled, while unsupported
-  shapes and dtypes fall back to ATen.
+  route eligible fp32/bf16 CPU `torch.matmul` calls through tensorcore when
+  `tensorcore_torch.set_default_matmul(True)` is enabled. The bridge uses
+  zero-copy buffer wrappers when alignment permits and staged buffers
+  otherwise, while unsupported shapes and dtypes fall back to ATen.
 - `Add memory-tier public ABI`: `include/tensorcore/memory_tier.h` and
   `lib/core/memory_tier_stub.cpp` expose buffer tier hints, async
   promote/demote entry points, and usage accounting. The shipped baseline
   is intentionally L0-only until L1-L4 hosting lands.
 - `Finish zero-copy host-buffer wrapping`: `tc_buffer_from_ptr` is now in
   the exported ABI, bound in Python, documented, and covered by portable
-  C/Python smokes.
+  C/Python smokes. Metal builds now expose the same map/free wrapper
+  contract for page-aligned no-copy `MTLBuffer` views.
 - `Implement portable CPU activation checkpointing`: `tc_checkpoint_discard`
   now frees owned CPU buffer storage while preserving the handle,
   `tc_checkpoint_realize` reallocates and invokes the registered recompute

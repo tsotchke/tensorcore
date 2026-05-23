@@ -55,6 +55,7 @@ struct tc_buffer {
     size_t                 bytes;
     size_t                 bucket_bytes;   /* 0 if not pool-owned       */
     struct tc_context*     owner;
+    bool                   owns_buffer;    /* false for no-copy wrappers */
 };
 
 struct tc_stream {

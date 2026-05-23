@@ -69,10 +69,10 @@ size_t      tc_buffer_size (const tc_buffer* buf);
  *
  * Constraints:
  *   * `ptr` must remain valid for the lifetime of the returned tc_buffer.
- *   * On Apple Silicon CPU backends this is unconditionally zero-copy
- *     (unified memory). On Metal builds the returned buffer is host-only
- *     and ops requiring an MTLBuffer-backed view will return
- *     TC_ERR_UNSUPPORTED — host->device handoff requires a real alloc.
+ *   * On portable CPU backends this is unconditionally zero-copy.
+ *   * On Metal builds this wraps the memory with
+ *     newBufferWithBytesNoCopy; `ptr` must be page-aligned and `bytes`
+ *     must be a multiple of the page size.
  *
  * Returns TC_ERR_INVALID_ARG if any pointer is null. */
 tc_status_t tc_buffer_from_ptr(tc_context* ctx, void* ptr, size_t bytes,

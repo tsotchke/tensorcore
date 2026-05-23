@@ -224,7 +224,8 @@ Validated working state for this exact deployment:
 - On Apple: Metal (always, when `TC_ENABLE_METAL=ON`).
 - On Linux: CPU. If `TC_ENABLE_CUDA=ON` was set at build time, `tc_cuda_init`
   can be called explicitly to attach an NVIDIA device and
-  `TC_USE_CUDA_GEMM=1` opts fp32/fp16 GEMM into cuBLAS.
+  `TC_USE_CUDA_GEMM=1` opts supported fp32/fp16/bf16/int8 GEMM calls into
+  cuBLAS.
 
 The substrate doesn't currently auto-route compute to the fastest
 available backend at `tc_init` time - that's a v0.2 feature. Today, the
@@ -312,7 +313,11 @@ network issue.
   host all in one DiLoCo run)
 - Direct CUDA backend init + device introspection (RTX 3090 validated)
 - Opt-in CUDA GEMM with managed-memory tc_buffer allocations
-  (`TC_USE_CUDA_GEMM=1`, RTX 3090 validated)
+  (`TC_USE_CUDA_GEMM=1`, RTX 3090 validated for fp32/fp16; bf16/int8 are
+  gated by CUDA device capability)
+- Managed-memory CUDA training dispatch for RMSNorm forward, LayerNorm
+  forward, SwiGLU forward, softmax forward, and fp32-grad AdamW, with
+  host-buffer fallback to portable CPU kernels
 
 **Coming, not blocking:**
 - CUDA GEMM default selection without `TC_USE_CUDA_GEMM=1`; the opt-in

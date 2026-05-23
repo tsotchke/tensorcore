@@ -66,8 +66,11 @@ static double rms_scaled_f32(const float* got, const float* ref, int n) {
 
 static int backend_is_compute(const char* op) {
     const tc_backend_t b = tc_last_backend();
-    if (b == TC_BACKEND_METAL_COMPUTE || b == TC_BACKEND_PORTABLE_CPU) return 1;
-    fprintf(stderr, "%s backend was %s, expected metal_compute or portable_cpu\n",
+    if (b == TC_BACKEND_METAL_COMPUTE || b == TC_BACKEND_PORTABLE_CPU ||
+        b == TC_BACKEND_CUDA) {
+        return 1;
+    }
+    fprintf(stderr, "%s backend was %s, expected metal_compute, portable_cpu, or cuda\n",
             op, tc_backend_name(b));
     return 0;
 }
@@ -240,12 +243,15 @@ static int test_swiglu(tc_context* ctx) {
         gf[i] = g; uf[i] = u;
         gp[i] = f32_to_f16(g); up[i] = f32_to_f16(u);
         doutp[i] = f32_to_f16(dz);
-        ref[i] = (float)((double)g / (1.0 + exp(-(double)g)) * (double)u);
         const double gq = f16_to_f32(gp[i]);
         const double uq = f16_to_f32(up[i]);
         const double dzq = f16_to_f32(doutp[i]);
         const double sig = 1.0 / (1.0 + exp(-gq));
         const double silu_g = gq * sig;
+        /* Forward ref uses the fp16-roundtripped input to match the actual
+         * kernel's input (avoids tolerance violation from f32 vs f16 silu
+         * input mismatch on x86 + OpenMP). */
+        ref[i] = (float)(silu_g * uq);
         const double d_silu = sig * (1.0 + gq * (1.0 - sig));
         dgref[i] = (float)(dzq * uq * d_silu);
         duref[i] = (float)(dzq * silu_g);

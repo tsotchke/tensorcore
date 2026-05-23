@@ -40,6 +40,26 @@
 #include <omp.h>
 #endif
 
+#if defined(TC_ENABLE_CUDA)
+/* CUDA training kernels live in lib/cuda/training.cu. Hidden visibility,
+ * called from public ops in this file when TC_USE_CUDA_GEMM=1. */
+extern "C" int tc_cuda_rmsnorm_forward(const void* X, const void* gamma,
+                                        void* Y, void* rstd,
+                                        int N, int D, float eps);
+extern "C" int tc_cuda_adamw_step_fp32(void* params, const void* grads,
+                                        void* m, void* v, int n,
+                                        float lr, float b1, float b2,
+                                        float eps, float wd,
+                                        float bc1, float bc2);
+extern "C" int tc_cuda_swiglu_forward(const void* gate, const void* up,
+                                       void* out, int n_elements);
+extern "C" int tc_cuda_layernorm_forward(const void* X, const void* gamma,
+                                          const void* beta,
+                                          void* Y, void* mean, void* rstd,
+                                          int N, int D, float eps);
+extern "C" int tc_cuda_softmax_forward(const void* X, void* Y, int N, int D);
+#endif
+
 namespace {
 
 constexpr float kSiluClampLo = -50.0f;
@@ -61,6 +81,13 @@ inline float dsilu_scalar(float x) {
 inline tc_status_t validate_pointwise_buf(tc_context* ctx, const tc_buffer* b, size_t bytes) {
     return tc_buffer_validate(ctx, b, bytes);
 }
+
+#if defined(TC_ENABLE_CUDA)
+bool cuda_training_enabled() {
+    const char* prefer_cuda = std::getenv("TC_USE_CUDA_GEMM");
+    return prefer_cuda && prefer_cuda[0] == '1';
+}
+#endif
 
 }  // namespace
 
@@ -96,6 +123,16 @@ extern "C" tc_status_t tc_rmsnorm_forward(tc_context* ctx,
     const uint16_t* g_data = (const uint16_t*)gp;
     uint16_t* y_data = (uint16_t*)Yp;
     float* rstd_data = (float*)rp;
+
+#if defined(TC_ENABLE_CUDA)
+    if (cuda_training_enabled()) {
+        const int cuda_rc = tc_cuda_rmsnorm_forward(Xp, gp, Yp, rp, N, D, eps);
+        if (cuda_rc == 0) {
+            return tc_record_dispatch("tc_rmsnorm_forward", TC_BACKEND_CUDA, TC_OK);
+        }
+        if (cuda_rc < 0) return TC_ERR_INTERNAL;
+    }
+#endif
 
 #if defined(_OPENMP)
     #pragma omp parallel for schedule(static) if (N > 1)
@@ -228,6 +265,16 @@ extern "C" tc_status_t tc_layernorm_forward(tc_context* ctx,
     tc_buffer_map(Y, &Yp);
     tc_buffer_map(mean_out, &mp);
     tc_buffer_map(rstd_out, &rp);
+
+#if defined(TC_ENABLE_CUDA)
+    if (cuda_training_enabled()) {
+        const int rc = tc_cuda_layernorm_forward(Xp, gp, bp, Yp, mp, rp, N, D, eps);
+        if (rc == 0) {
+            return tc_record_dispatch("tc_layernorm_forward", TC_BACKEND_CUDA, TC_OK);
+        }
+        if (rc < 0) return TC_ERR_INTERNAL;
+    }
+#endif
 
     const uint16_t* x_data = (const uint16_t*)Xp;
     const uint16_t* g_data = (const uint16_t*)gp;
@@ -437,6 +484,15 @@ extern "C" tc_status_t tc_swiglu_forward(tc_context* ctx,
     const uint16_t* gd = (const uint16_t*)gp;
     const uint16_t* ud = (const uint16_t*)up_p;
     uint16_t* od = (uint16_t*)op;
+#if defined(TC_ENABLE_CUDA)
+    if (cuda_training_enabled()) {
+        const int cuda_rc = tc_cuda_swiglu_forward(gp, up_p, op, n);
+        if (cuda_rc == 0) {
+            return tc_record_dispatch("tc_swiglu_forward", TC_BACKEND_CUDA, TC_OK);
+        }
+        if (cuda_rc < 0) return TC_ERR_INTERNAL;
+    }
+#endif
 #if defined(_OPENMP)
     #pragma omp parallel for schedule(static)
 #endif
@@ -493,6 +549,17 @@ extern "C" tc_status_t tc_softmax_forward(tc_context* ctx,
     void *Xp, *Yp;
     tc_buffer_map((tc_buffer*)X, &Xp);
     tc_buffer_map(Y, &Yp);
+
+#if defined(TC_ENABLE_CUDA)
+    if (cuda_training_enabled()) {
+        const int rc = tc_cuda_softmax_forward(Xp, Yp, N, D);
+        if (rc == 0) {
+            return tc_record_dispatch("tc_softmax_forward", TC_BACKEND_CUDA, TC_OK);
+        }
+        if (rc < 0) return TC_ERR_INTERNAL;
+    }
+#endif
+
     const uint16_t* xd = (const uint16_t*)Xp;
     uint16_t* yd = (uint16_t*)Yp;
 #if defined(_OPENMP)
@@ -580,9 +647,23 @@ extern "C" tc_status_t tc_adamw_step(tc_context* ctx,
     tc_buffer_map(m_fp32, &mp);
     tc_buffer_map(v_fp32, &vp);
     tc_buffer_map((tc_buffer*)grads, &gp);
+
     float* p = (float*)pp;
     float* m = (float*)mp;
     float* v = (float*)vp;
+
+#if defined(TC_ENABLE_CUDA)
+    /* CUDA dispatch for the fp32-grad path (most common in HPC / mixed
+     * precision with fp32 master gradients). */
+    if (cuda_training_enabled() && grad_dtype == TC_DTYPE_F32) {
+        const int cuda_rc = tc_cuda_adamw_step_fp32(
+            pp, gp, mp, vp, n, lr, beta1, beta2, eps, wd, bc1, bc2);
+        if (cuda_rc == 0) {
+            return tc_record_dispatch("tc_adamw_step", TC_BACKEND_CUDA, TC_OK);
+        }
+        if (cuda_rc < 0) return TC_ERR_INTERNAL;
+    }
+#endif
 
     /* Two grad-dtype paths: fp16 (the mixed-precision case) and fp32. */
     if (grad_dtype == TC_DTYPE_F32) {

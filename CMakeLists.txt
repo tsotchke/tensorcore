@@ -44,9 +44,17 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-add_compile_options(
-    -Wall -Wextra -Wpedantic -Wno-gnu-zero-variadic-macro-arguments
+set(TC_HOST_WARNING_FLAGS
+    -Wall -Wextra -Wpedantic
 )
+if(CMAKE_C_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    list(APPEND TC_HOST_WARNING_FLAGS -Wno-gnu-zero-variadic-macro-arguments)
+endif()
+foreach(_tc_lang C CXX OBJC OBJCXX)
+    foreach(_tc_flag IN LISTS TC_HOST_WARNING_FLAGS)
+        add_compile_options($<$<COMPILE_LANGUAGE:${_tc_lang}>:${_tc_flag}>)
+    endforeach()
+endforeach()
 add_compile_options($<$<COMPILE_LANGUAGE:OBJC>:-fobjc-arc>)
 add_compile_options($<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
 add_compile_options($<$<CONFIG:Release>:-O3>)
@@ -71,6 +79,9 @@ set(TC_HIP_LINK_LIBS)
 if(TC_ENABLE_CUDA)
     find_package(CUDAToolkit QUIET)
     if(CUDAToolkit_FOUND AND TARGET CUDA::cudart AND TARGET CUDA::cublas)
+        enable_language(CUDA)
+        set(CMAKE_CUDA_STANDARD 17)
+        set(CMAKE_CUDA_STANDARD_REQUIRED ON)
         message(STATUS "tensorcore: CUDA backend enabled (CUDA ${CUDAToolkit_VERSION})")
         list(APPEND TC_CUDA_LINK_LIBS CUDA::cudart CUDA::cublas)
         add_compile_definitions(TC_ENABLE_CUDA=1)
@@ -339,6 +350,9 @@ set(TC_COMMON_SOURCES
     lib/core/memory_tier_stub.cpp
     lib/core/checkpoint_stub.cpp
 )
+if(TC_ENABLE_CUDA)
+    list(APPEND TC_COMMON_SOURCES lib/cuda/training.cu)
+endif()
 
 if(TC_ENABLE_METAL)
     set(TC_SOURCES
