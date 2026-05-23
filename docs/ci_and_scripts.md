@@ -152,6 +152,21 @@ the Python AMX opt-in path on local Apple-Silicon verification machines;
 set `TC_RUN_AMX_GEMM_TEST=1` when running the direct C AMX regressions on
 known-good local hardware.
 
+### `run_live_mesh_smoke.sh`
+
+Runs the operational four-rank mesh smoke across Atlas, Enki, old-donkey,
+and cosbox. With `TC_MESH_PREPARE=1`, it uploads the local portable CPU
+rank binary to Enki, archives the current committed checkout to the Linux
+nodes, builds their portable `test_dist_remote` target, launches all four
+ranks, and verifies per-rank logs. The default `TC_MESH_TEST=all` covers
+direct GLOO ring fp32 SUM and the DiLoCo sparse TOPK outer-step path.
+
+```sh
+TC_MESH_PREPARE=1 scripts/run_live_mesh_smoke.sh
+TC_MESH_TEST=allreduce scripts/run_live_mesh_smoke.sh   # transport-only
+TC_MESH_TEST=diloco scripts/run_live_mesh_smoke.sh      # training-sync only
+```
+
 ### `ci_cuda_smoke.sh`
 
 Configures a Linux CUDA build with `TC_ENABLE_CUDA=ON`, runs its CTest

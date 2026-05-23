@@ -202,6 +202,21 @@ For a short WAN ring proof, keep the same rank launch pattern but add
 --iters 2`. The trace must show `direct_ring=enabled` and
 `allreduce_f32_sum route=ring` on every rank.
 
+For the maintained one-command path, run:
+
+```sh
+TC_MESH_PREPARE=1 scripts/run_live_mesh_smoke.sh
+```
+
+That archives the current committed checkout to old-donkey and cosbox,
+uploads the portable CPU rank binary to Enki, builds the remote
+`test_dist_remote` targets, launches all four ranks, stores per-rank logs under
+`$TMPDIR/tensorcore-live-mesh-*`, and verifies that every rank reports OK.
+With the default `TC_MESH_TEST=all`, the smoke covers both direct-ring
+fp32 SUM and the DiLoCo sparse TOPK outer-step path. Set
+`TC_MESH_TEST=allreduce` for a short transport-only run, or
+`TC_MESH_TEST=diloco` for training-sync traffic only.
+
 ### 4-rank reference deployment
 
 Launch rank 0 first (must start listening before others try to connect):
@@ -232,6 +247,11 @@ Validated working state for this exact deployment:
   --iters 2`.
 - Rank 0 rendezvous: 14.1 sec waiting for three WAN peers. Timed 0.25 MB
   fp32 SUM allreduce was 835-925 ms/iter across the Alaska relay leg.
+- `scripts/run_live_mesh_smoke.sh` was validated on `2026-05-23` with
+  `TC_MESH_PREPARE=1 TC_MESH_TEST=all`: the script rebuilt the Linux rank
+  binaries from the current checkout, launched all four ranks, verified
+  direct-ring allreduce logs, and completed DiLoCo TOPK outer steps with
+  `bandwidth/step=528.0 bytes` on every rank.
 - Earlier full DiLoCo proof: 3 outer x 5 inner across all four ranks in
   4-17 sec depending on which network leg is slowest, with all ranks
   converging to the same theta and bit-correct sum verified.
@@ -385,4 +405,9 @@ tests/
                           rank N connects; works on real network)
     test_diloco_*.c       fork-based DiLoCo tests (single host)
     test_gloo_fork.c      collective primitives over real TCP
+
+scripts/
+    run_live_mesh_smoke.sh
+                          four-rank Atlas/Enki/old-donkey/cosbox live
+                          mesh orchestration and log verification
 ```
