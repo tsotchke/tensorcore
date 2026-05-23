@@ -428,6 +428,13 @@ static void amx_process_tile_strip(int i_start, int i_end,
     alignas(64) float C_tile[16 * 16];
     constexpr int KC = 256;
 
+    /* Note: direct STZ-to-C (when C base + ldc are aligned) was measured
+     * here and REGRESSED throughput by ~30 % at 4096³ on M2 Ultra. AMX_STZ
+     * to non-cached memory waits at each hierarchy level; STZ to a hot L1
+     * stack buffer then memcpy-ing wins despite the extra write. Leaving
+     * the indirect path as the default until we have a benchmark showing
+     * the direct path winning. */
+
     for (int i = i_start; i < i_end; i += 16) {
         const float* A_panel = A_pack_mega + (size_t)(i / 16) * K * 16;
         for (int j = 0; j < N; j += 16) {
