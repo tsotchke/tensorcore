@@ -140,11 +140,11 @@ kernel void tc_quantize_q4_0(
     device       uchar*   Wq       [[buffer(1)]],   /* Q4_0 packed output */
     constant uint& N              [[buffer(2)]],
     constant uint& K              [[buffer(3)]],
-    uint2 gid                      [[thread_position_in_grid]],
+    uint2 tgid                     [[threadgroup_position_in_grid]],
     uint  lane                     [[thread_index_in_simdgroup]])
 {
-    const uint n = gid.y;
-    const uint b = gid.x;        /* block index along K */
+    const uint n = tgid.y;
+    const uint b = tgid.x;       /* block index along K */
     if (n >= N) return;
     const uint nblocks = K / QK4;
     if (b >= nblocks) return;
@@ -188,11 +188,11 @@ kernel void tc_quantize_q8_0(
     device       uchar*   Wq       [[buffer(1)]],   /* Q8_0 packed output */
     constant uint& N              [[buffer(2)]],
     constant uint& K              [[buffer(3)]],
-    uint2 gid                      [[thread_position_in_grid]],
+    uint2 tgid                     [[threadgroup_position_in_grid]],
     uint  lane                     [[thread_index_in_simdgroup]])
 {
-    const uint n = gid.y;
-    const uint b = gid.x;
+    const uint n = tgid.y;
+    const uint b = tgid.x;
     if (n >= N) return;
     const uint nblocks = K / QK4;
     if (b >= nblocks) return;

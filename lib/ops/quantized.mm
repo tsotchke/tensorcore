@@ -67,6 +67,23 @@ tc_status_t validate_gemv_quantized_buffers(tc_context* ctx,
     return tc_buffer_validate(ctx, Y, y_bytes);
 }
 
+tc_status_t validate_fused_rmsnorm_gemv_quantized_buffers(tc_context* ctx,
+                                                          const tc_buffer* X,
+                                                          const tc_buffer* gamma,
+                                                          const tc_buffer* W_quant,
+                                                          tc_buffer* Y,
+                                                          tc_quant_t fmt,
+                                                          int M,
+                                                          int N,
+                                                          int K) {
+    tc_status_t s = validate_gemv_quantized_buffers(ctx, X, W_quant, Y, fmt, M, N, K);
+    if (s != TC_OK) return s;
+
+    size_t gamma_bytes = 0;
+    if (!fp16_matrix_bytes(1, K, &gamma_bytes)) return TC_ERR_INVALID_ARG;
+    return tc_buffer_validate(ctx, gamma, gamma_bytes);
+}
+
 } /* namespace */
 
 extern "C" size_t tc_quantized_size(tc_quant_t fmt, int N, int K) {
@@ -112,8 +129,8 @@ extern "C" tc_status_t tc_quantize_weights(tc_context* ctx,
         [enc setBuffer:W_quant->mtl  offset:0 atIndex:1];
         [enc setBytes:&N_u length:sizeof(N_u) atIndex:2];
         [enc setBytes:&K_u length:sizeof(K_u) atIndex:3];
-        [enc dispatchThreads:MTLSizeMake(nblocks, N_u, 1)
-          threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
+        [enc dispatchThreadgroups:MTLSizeMake(nblocks, N_u, 1)
+            threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
         [enc endEncoding];
         [cmd commit];
         [cmd waitUntilCompleted];
@@ -217,4 +234,38 @@ extern "C" tc_status_t tc_gemv_quantized(tc_context* ctx,
         }
     }
     return tc_record_dispatch("tc_gemv_quantized", TC_BACKEND_METAL_COMPUTE, TC_OK);
+}
+
+extern "C" tc_status_t tc_fused_rmsnorm_gemv_quantized(tc_context* ctx,
+                                                       const tc_buffer* X,
+                                                       const tc_buffer* gamma,
+                                                       const tc_buffer* W_quant,
+                                                       tc_buffer* Y,
+                                                       tc_quant_t fmt,
+                                                       int M,
+                                                       int N,
+                                                       int K,
+                                                       float eps) {
+    if (!ctx) return TC_ERR_NOT_INITIALIZED;
+    if (!X || !gamma || !W_quant || !Y || M <= 0 || N <= 0 || K <= 0 || K % 32 != 0)
+        return TC_ERR_INVALID_ARG;
+
+    tc_status_t s = validate_fused_rmsnorm_gemv_quantized_buffers(
+        ctx, X, gamma, W_quant, Y, fmt, M, N, K);
+    if (s != TC_OK) return s;
+
+    tc_buffer* X_norm = NULL;
+    tc_buffer* rstd = NULL;
+    s = tc_buffer_alloc(ctx, (size_t)M * K * sizeof(uint16_t), &X_norm);
+    if (s != TC_OK) goto cleanup;
+    s = tc_buffer_alloc(ctx, (size_t)M * sizeof(float), &rstd);
+    if (s != TC_OK) goto cleanup;
+
+    s = tc_rmsnorm_forward(ctx, X, gamma, X_norm, rstd, M, K, eps);
+    if (s == TC_OK) s = tc_gemv_quantized(ctx, X_norm, W_quant, Y, fmt, M, N, K);
+
+cleanup:
+    if (rstd) tc_buffer_free(ctx, rstd);
+    if (X_norm) tc_buffer_free(ctx, X_norm);
+    return tc_record_dispatch("tc_fused_rmsnorm_gemv_quantized", TC_BACKEND_METAL_COMPUTE, s);
 }

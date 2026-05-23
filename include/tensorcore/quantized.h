@@ -46,6 +46,25 @@ tc_status_t tc_gemv_quantized(tc_context* ctx,
                               tc_quant_t       fmt,
                               int M, int N, int K);
 
+/* Fused RMSNorm + quantized GEMV:
+ *
+ *   X_norm = RMSNorm(X, gamma)
+ *   Y[M, N] = X_norm[M, K] @ W_quant[N, K]^T
+ *
+ * X/gamma/Y are fp16; W_quant is Q4_0 or Q8_0. This is the token-decode
+ * primitive for GGUF/qLLM/Kimi paths that project a normalized hidden state
+ * through quantized weights without each runtime hand-rolling its own norm
+ * and dequant loop.
+ */
+tc_status_t tc_fused_rmsnorm_gemv_quantized(tc_context* ctx,
+                                            const tc_buffer* X,
+                                            const tc_buffer* gamma,
+                                            const tc_buffer* W_quant,
+                                            tc_buffer*       Y,
+                                            tc_quant_t       fmt,
+                                            int M, int N, int K,
+                                            float eps);
+
 /* Async variant: encodes into the provided stream without sync. Caller must
  * call tc_stream_sync afterwards. The async path keeps a single command buffer
  * open across calls, avoiding a per-GEMV command-buffer round trip. */

@@ -90,6 +90,22 @@ quantized. The kernel is optimized for `M ≤ 4`; larger `M` routes through
 dequant + `tc_gemm` in a future pass (today returns `TC_ERR_INVALID_SHAPE`
 for `M > 4`).
 
+### Fused RMSNorm + quantized GEMV
+
+```c
+tc_buffer* X = ...;        /* [M, K] fp16 hidden state         */
+tc_buffer* gamma = ...;    /* [K] fp16 RMSNorm scale           */
+tc_buffer* Y = ...;        /* [M, N] fp16 output               */
+
+tc_fused_rmsnorm_gemv_quantized(ctx, X, gamma, W_q4, Y,
+                                TC_QUANT_Q4_0, M, N, K, 1e-5f);
+```
+
+This is the reusable decode primitive for final token heads and any
+projection that consumes a normalized hidden state with GGUF/qLLM-style
+quantized weights. Runtimes should call this instead of hand-rolling
+RMSNorm, temporary normalized buffers, and per-format dequant loops.
+
 ### Async
 
 ```c

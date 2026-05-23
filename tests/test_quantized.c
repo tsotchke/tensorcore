@@ -258,6 +258,91 @@ cleanup:
     return rc;
 }
 
+static int run_fused_rmsnorm_quantized_case(tc_context* ctx, tc_quant_t fmt, int M, int N, int K) {
+    const char* name = (fmt == TC_QUANT_Q4_0) ? "q4_0" : "q8_0";
+    const size_t q_bytes = tc_quantized_size(fmt, N, K);
+    const float eps = 1e-5f;
+
+    tc_buffer *Xb = NULL, *gb = NULL, *Wfp16 = NULL, *Wq = NULL;
+    tc_buffer *Yf = NULL, *Ys = NULL, *Xn = NULL, *rstd = NULL;
+    tc_status_t s = TC_OK;
+    int rc = 5;
+
+    if (tc_buffer_alloc(ctx, M*K*2, &Xb) != TC_OK ||
+        tc_buffer_alloc(ctx, K*2, &gb) != TC_OK ||
+        tc_buffer_alloc(ctx, N*K*2, &Wfp16) != TC_OK ||
+        tc_buffer_alloc(ctx, q_bytes, &Wq) != TC_OK ||
+        tc_buffer_alloc(ctx, M*N*2, &Yf) != TC_OK ||
+        tc_buffer_alloc(ctx, M*N*2, &Ys) != TC_OK ||
+        tc_buffer_alloc(ctx, M*K*2, &Xn) != TC_OK ||
+        tc_buffer_alloc(ctx, M*4, &rstd) != TC_OK) {
+        fprintf(stderr, "buffer alloc failed\n");
+        rc = 2;
+        goto cleanup;
+    }
+
+    uint16_t *Xp, *gp, *Wp, *Yfp, *Ysp;
+    if (tc_buffer_map(Xb, (void**)&Xp) != TC_OK ||
+        tc_buffer_map(gb, (void**)&gp) != TC_OK ||
+        tc_buffer_map(Wfp16, (void**)&Wp) != TC_OK ||
+        tc_buffer_map(Yf, (void**)&Yfp) != TC_OK ||
+        tc_buffer_map(Ys, (void**)&Ysp) != TC_OK) {
+        fprintf(stderr, "buffer map failed\n");
+        rc = 2;
+        goto cleanup;
+    }
+
+    srand(fmt == TC_QUANT_Q4_0 ? 0x4F : 0x8F);
+    for (int i = 0; i < M*K; ++i) Xp[i] = f32_to_f16(((float)rand()/RAND_MAX - 0.5f));
+    for (int i = 0; i < K; ++i) gp[i] = f32_to_f16(0.5f + (float)rand()/RAND_MAX);
+    for (int i = 0; i < N*K; ++i) Wp[i] = f32_to_f16(((float)rand()/RAND_MAX - 0.5f) * 0.1f);
+
+    s = tc_quantize_weights(ctx, Wfp16, Wq, fmt, N, K);
+    if (s != TC_OK) { fprintf(stderr, "quantize fused %s: %s\n", name, tc_status_string(s)); rc = 2; goto cleanup; }
+
+    s = tc_fused_rmsnorm_gemv_quantized(ctx, Xb, gb, Wq, Yf, fmt, M, N, K, eps);
+    if (s != TC_OK) { fprintf(stderr, "fused rmsnorm %s: %s\n", name, tc_status_string(s)); rc = 3; goto cleanup; }
+    if (!backend_is_compute("fused rmsnorm quantized")) { rc = 3; goto cleanup; }
+
+    s = tc_rmsnorm_forward(ctx, Xb, gb, Xn, rstd, M, K, eps);
+    if (s != TC_OK) { fprintf(stderr, "rmsnorm separate %s: %s\n", name, tc_status_string(s)); rc = 4; goto cleanup; }
+    s = tc_gemv_quantized(ctx, Xn, Wq, Ys, fmt, M, N, K);
+    if (s != TC_OK) { fprintf(stderr, "gemv separate %s: %s\n", name, tc_status_string(s)); rc = 4; goto cleanup; }
+
+    double se = 0, sr = 0, max_abs = 0;
+    int nonfinite = 0;
+    for (int i = 0; i < M*N; ++i) {
+        float a = f16_to_f32(Yfp[i]);
+        float b = f16_to_f32(Ysp[i]);
+        if (!isfinite(a) || !isfinite(b)) {
+            if (nonfinite < 4) {
+                fprintf(stderr, "  nonfinite %s[%d]: fused=0x%04x separate=0x%04x\n",
+                        name, i, Yfp[i], Ysp[i]);
+            }
+            nonfinite++;
+        }
+        double e = fabs((double)a - (double)b);
+        se += e * e; sr += (double)b * b;
+        if (e > max_abs) max_abs = e;
+    }
+    const double scaled = sqrt(se / (M*N)) / (sqrt(sr / (M*N)) + 1e-9);
+    printf("  fused_rmsnorm_%s_gemv M=%d N=%d K=%d max_abs=%.3e  rms_scaled=%.3e  %s\n",
+           name, M, N, K, max_abs, scaled, (scaled < 5e-3) ? "OK" : "FAIL");
+
+    rc = (scaled < 5e-3) ? 0 : 5;
+
+cleanup:
+    if (Xb) tc_buffer_free(ctx, Xb);
+    if (gb) tc_buffer_free(ctx, gb);
+    if (Wfp16) tc_buffer_free(ctx, Wfp16);
+    if (Wq) tc_buffer_free(ctx, Wq);
+    if (Yf) tc_buffer_free(ctx, Yf);
+    if (Ys) tc_buffer_free(ctx, Ys);
+    if (Xn) tc_buffer_free(ctx, Xn);
+    if (rstd) tc_buffer_free(ctx, rstd);
+    return rc;
+}
+
 int main(void) {
     tc_context* ctx = NULL;
     tc_status_t s = tc_init(&ctx);
@@ -269,6 +354,8 @@ int main(void) {
     int rc = run_q4_case(ctx, 1, 128, 256);
     if (rc == 0) rc = run_q4_case(ctx, 1, 130, 256);
     if (rc == 0) rc = run_q8_case(ctx, 1, 129, 256);
+    if (rc == 0) rc = run_fused_rmsnorm_quantized_case(ctx, TC_QUANT_Q4_0, 1, 97, 256);
+    if (rc == 0) rc = run_fused_rmsnorm_quantized_case(ctx, TC_QUANT_Q8_0, 1, 96, 256);
     if (rc == 0) {
         const size_t invalid = tc_quantized_size((tc_quant_t)99, 128, 256);
         printf("  invalid quant size: %zu %s\n", invalid, (invalid == 0) ? "OK" : "FAIL");
