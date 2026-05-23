@@ -146,7 +146,7 @@ named dtypes.
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 
-ctest --test-dir build --output-on-failure          # 30/30
+ctest --test-dir build --output-on-failure          # 31/31
 ./build/bench/bench_gemm                             # TFLOPS sweep
 ./build/bench/bench_attention                        # FlashAttention TFLOPS
 ./build/bench/bench_inference_7b                     # Q4_0 7B decode harness
@@ -154,6 +154,7 @@ ctest --test-dir build --output-on-failure          # 30/30
 ./build/examples/gguf_inspect model.gguf             # inspect a GGUF file
 ./build/examples/gguf_inspect model.gguf --load-supported
 ./build/examples/mesh_training_demo --inner 2 --outer 1
+./build/examples/mesh_training_demo --inner 2 --outer 1 --checkpoint
 ```
 
 On M3 Max, fp16 simdgroup_matrix GEMM should land within ~10% of MLX's
@@ -228,7 +229,8 @@ tensorcore/
   early-exit pruning, split-K).
 - **Full mixed-precision training loop test** (small transformer block,
   matched against PyTorch-MPS gradients).
-- **CUDA default selection and broader mixed-precision training evidence.**
+- **Broader CUDA mixed-precision training evidence across full transformer
+  loops and multi-host mesh runs.**
 - **M ≥ 4 quantized GEMV** so prefill works at scale.
 
 The honest "compete-with-NVIDIA" picture, the per-watt advantage, and the

@@ -17,7 +17,7 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
 | `gguf_inspect.c` | Open a GGUF file, walk tensors, dump metadata, optionally copy a tensor into a `tc_buffer` | <1s |
 | `decode_step.c` | One full synthetic Llama decode step end-to-end (RMSnorm + Q4_0 GEMVs + RoPE + FlashAttention + SwiGLU + residual) | ~30ms / 2 layers |
 | `training_step.c` | One full training iteration: RMSnorm + Linear + softmax forward, backward through softmax+CE / Linear / RMSnorm, AdamW on weights + gamma | ~10ms / step |
-| `mesh_training_demo.c` | Split-rank training loop with RMSNorm, GEMM, softmax+CE, AdamW, DiLoCo outer sync, and GLOO rendezvous flags | ~10ms single-rank; network-dependent multi-rank |
+| `mesh_training_demo.c` | Split-rank training loop with RMSNorm, GEMM, softmax+CE, activation checkpointing, AdamW, DiLoCo outer sync, and GLOO rendezvous flags | ~10ms single-rank; network-dependent multi-rank |
 | `native_sdk_consumer/` | Standalone C and C++ consumers for an installed native SDK, shared/static CMake targets, and pkg-config smoke source | build-only |
 
 ## `hello_gemm.c` (60 lines)
@@ -110,15 +110,18 @@ training shard:
 1. `tc_rmsnorm_forward`.
 2. `tc_gemm` for the linear projection.
 3. `tc_softmax_forward` plus host cross-entropy gradient.
-4. `tc_gemm` backward for `dW` and `dX`.
-5. `tc_rmsnorm_backward`.
-6. `tc_adamw_step` on fp32 master weights and gamma.
-7. `tc_diloco_step` / `tc_diloco_apply_outer` for outer synchronization.
+4. Optional `tc_checkpoint_discard` / `tc_checkpoint_realize` around
+   `X_norm` recomputation.
+5. `tc_gemm` backward for `dW` and `dX`.
+6. `tc_rmsnorm_backward`.
+7. `tc_adamw_step` on fp32 master weights and gamma.
+8. `tc_diloco_step` / `tc_diloco_apply_outer` for outer synchronization.
 
 Single-rank smoke:
 
 ```sh
 ./build/examples/mesh_training_demo --inner 2 --outer 1
+./build/examples/mesh_training_demo --inner 2 --outer 1 --checkpoint
 ```
 
 Two or more ranks use the same executable with one process per host:
@@ -130,7 +133,8 @@ Two or more ranks use the same executable with one process per host:
 
 Output reports rendezvous time, per-outer loss, DiLoCo bytes sent, final
 outer-step count, and elapsed wall time. The single-rank mode is also
-registered as `example_mesh_training_demo` in CTest.
+registered as `example_mesh_training_demo` in CTest; the checkpointed
+variant is registered as `example_mesh_training_demo_checkpoint`.
 
 ## `native_sdk_consumer/`
 

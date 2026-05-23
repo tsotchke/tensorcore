@@ -3,6 +3,7 @@
  *
  * Single-rank mode:
  *     ./build/examples/mesh_training_demo
+ *     ./build/examples/mesh_training_demo --checkpoint
  *
  * Multi-rank mode, one process per host:
  *     ./mesh_training_demo --rank 0 --world 4 --url tcp://100.x.y.z:9100
@@ -18,6 +19,7 @@
  */
 
 #include "tensorcore/tensorcore.h"
+#include "tensorcore/checkpoint.h"
 #include "tensorcore/diloco.h"
 #include "tensorcore/distributed.h"
 
@@ -65,6 +67,19 @@ typedef struct DemoState {
     tc_buffer* g_v;
     int targets[BATCH];
 } DemoState;
+
+typedef struct XNormCheckpointData {
+    tc_context* ctx;
+    DemoState* st;
+} XNormCheckpointData;
+
+typedef struct CheckpointPlan {
+    bool enabled;
+    tc_checkpoint_id x_norm_id;
+    uint64_t discard_events;
+    uint64_t realize_events;
+    uint64_t peak_bytes_discarded;
+} CheckpointPlan;
 
 static double now_seconds(void) {
     struct timespec t;
@@ -175,6 +190,34 @@ static float loss_and_dlogits(tc_buffer* probs, const int* targets,
     return loss / (float)BATCH;
 }
 
+static tc_status_t recompute_x_norm(void* user_data) {
+    XNormCheckpointData* data = (XNormCheckpointData*)user_data;
+    if (!data || !data->ctx || !data->st) return TC_ERR_INVALID_ARG;
+    DemoState* st = data->st;
+    return tc_rmsnorm_forward(data->ctx, st->X, st->gamma, st->X_norm,
+                              st->rstd, BATCH, IN_DIM, RMS_EPS);
+}
+
+static int checkpoint_discard_x_norm(CheckpointPlan* plan) {
+    if (!plan || !plan->enabled) return 0;
+    const tc_status_t s = tc_checkpoint_discard(plan->x_norm_id);
+    if (s != TC_OK || tc_checkpoint_is_resident(plan->x_norm_id)) return 1;
+    ++plan->discard_events;
+    const uint64_t discarded = tc_checkpoint_total_bytes_discarded();
+    if (discarded > plan->peak_bytes_discarded) {
+        plan->peak_bytes_discarded = discarded;
+    }
+    return 0;
+}
+
+static int checkpoint_realize_x_norm(CheckpointPlan* plan) {
+    if (!plan || !plan->enabled) return 0;
+    const tc_status_t s = tc_checkpoint_realize(plan->x_norm_id);
+    if (s != TC_OK || !tc_checkpoint_is_resident(plan->x_norm_id)) return 1;
+    ++plan->realize_events;
+    return 0;
+}
+
 static int demo_alloc(tc_context* ctx, DemoState* st) {
     int rc = 0;
     rc |= alloc_fp16(ctx, BATCH * IN_DIM, &st->X);
@@ -227,7 +270,8 @@ static void demo_free(tc_context* ctx, DemoState* st) {
     tc_buffer_free(ctx, st->g_m); tc_buffer_free(ctx, st->g_v);
 }
 
-static int run_inner_step(tc_context* ctx, DemoState* st, int step,
+static int run_inner_step(tc_context* ctx, DemoState* st, CheckpointPlan* checkpoint,
+                          int step,
                           float* out_loss) {
     tc_status_t s = tc_rmsnorm_forward(ctx, st->X, st->gamma, st->X_norm,
                                        st->rstd, BATCH, IN_DIM, RMS_EPS);
@@ -242,12 +286,14 @@ static int run_inner_step(tc_context* ctx, DemoState* st, int step,
     if (tc_softmax_forward(ctx, st->logits, st->probs, BATCH, OUT_DIM) != TC_OK) return 3;
     *out_loss = loss_and_dlogits(st->probs, st->targets, st->dlogits);
     if (!isfinite(*out_loss)) return 4;
+    if (checkpoint_discard_x_norm(checkpoint)) return 10;
 
     tc_gemm_desc dW = {0};
     dW.M = IN_DIM; dW.N = OUT_DIM; dW.K = BATCH;
     dW.a_dtype = TC_DTYPE_F16; dW.b_dtype = TC_DTYPE_F16;
     dW.c_dtype = TC_DTYPE_F16; dW.accum_dtype = TC_DTYPE_F32;
     dW.alpha = 1.0f; dW.beta = 0.0f; dW.transpose_a = true;
+    if (checkpoint_realize_x_norm(checkpoint)) return 11;
     if (tc_gemm(ctx, &dW, st->X_norm, st->dlogits, st->dW) != TC_OK) return 5;
 
     tc_gemm_desc dX = {0};
@@ -279,7 +325,7 @@ static int run_inner_step(tc_context* ctx, DemoState* st, int step,
 static void usage(const char* argv0) {
     fprintf(stderr,
             "Usage: %s [--rank R --world W --url tcp://host:port] "
-            "[--inner K] [--outer O]\n",
+            "[--inner K] [--outer O] [--checkpoint]\n",
             argv0);
 }
 
@@ -288,6 +334,7 @@ int main(int argc, char** argv) {
     int world = 1;
     int inner_steps = DEFAULT_INNER_STEPS;
     int outer_steps = DEFAULT_OUTER_STEPS;
+    bool use_checkpoint = false;
     const char* url = NULL;
 
     for (int i = 1; i < argc; ++i) {
@@ -296,6 +343,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--url") && i + 1 < argc) url = argv[++i];
         else if (!strcmp(argv[i], "--inner") && i + 1 < argc) inner_steps = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--outer") && i + 1 < argc) outer_steps = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--checkpoint")) use_checkpoint = true;
         else { usage(argv[0]); return 2; }
     }
     if (rank < 0 || world <= 0 || rank >= world || inner_steps <= 0 || outer_steps <= 0) {
@@ -335,6 +383,22 @@ int main(int argc, char** argv) {
     }
     demo_init(&st, rank);
 
+    XNormCheckpointData checkpoint_data = {ctx, &st};
+    CheckpointPlan checkpoint;
+    memset(&checkpoint, 0, sizeof(checkpoint));
+    if (use_checkpoint) {
+        if (tc_checkpoint_register(st.X_norm, recompute_x_norm,
+                                   &checkpoint_data,
+                                   &checkpoint.x_norm_id) != TC_OK) {
+            fprintf(stderr, "[rank %d] checkpoint setup failed\n", rank);
+            demo_free(ctx, &st);
+            tc_dist_finalize(dist);
+            tc_shutdown(ctx);
+            return 1;
+        }
+        checkpoint.enabled = true;
+    }
+
     tc_diloco_config cfg;
     memset(&cfg, 0, sizeof(cfg));
     cfg.inner_steps = inner_steps;
@@ -349,6 +413,7 @@ int main(int argc, char** argv) {
         tc_diloco_add_parameter(dilo, "rmsnorm.gamma", st.g_fp32,
                                 IN_DIM, TC_DTYPE_F32) != TC_OK) {
         fprintf(stderr, "[rank %d] DiLoCo setup failed\n", rank);
+        if (checkpoint.x_norm_id) tc_checkpoint_unregister(checkpoint.x_norm_id);
         demo_free(ctx, &st);
         tc_dist_finalize(dist);
         tc_shutdown(ctx);
@@ -364,7 +429,8 @@ int main(int argc, char** argv) {
         for (int inner = 0; inner < inner_steps; ++inner) {
             ++global_step;
             float loss = 0.0f;
-            const int step_rc = run_inner_step(ctx, &st, global_step, &loss);
+            const int step_rc = run_inner_step(ctx, &st, &checkpoint,
+                                               global_step, &loss);
             if (step_rc) {
                 fprintf(stderr, "[rank %d] inner step failed at op %d\n", rank, step_rc);
                 rc = 1;
@@ -400,8 +466,18 @@ int main(int argc, char** argv) {
            "outer_steps=%llu elapsed=%.3fs\n",
            rank, rc ? "FAIL" : "OK", first_loss, last_loss,
            (unsigned long long)tc_diloco_outer_steps_completed(dilo), elapsed);
+    if (checkpoint.enabled) {
+        printf("[rank %d] checkpoint x_norm discards=%llu realizes=%llu "
+               "peak_discarded=%llu final_discarded=%llu\n",
+               rank,
+               (unsigned long long)checkpoint.discard_events,
+               (unsigned long long)checkpoint.realize_events,
+               (unsigned long long)checkpoint.peak_bytes_discarded,
+               (unsigned long long)tc_checkpoint_total_bytes_discarded());
+    }
 
     tc_diloco_finalize(dilo);
+    if (checkpoint.x_norm_id) tc_checkpoint_unregister(checkpoint.x_norm_id);
     demo_free(ctx, &st);
     tc_dist_finalize(dist);
     tc_shutdown(ctx);

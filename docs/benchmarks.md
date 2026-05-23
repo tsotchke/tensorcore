@@ -149,8 +149,8 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-30/30 should pass on Apple M2 Ultra in roughly 5-15 s. The default CTest
-suite is 27 library/package tests plus three executable example smokes:
+31/31 should pass on Apple M2 Ultra in roughly 5-15 s. The default CTest
+suite is 27 library/package tests plus four executable example smokes:
 
 ```
 test_device, test_gemm_f32, test_gemm_f16, test_gemm_bf16, test_gemm_i8
@@ -162,8 +162,9 @@ test_tensorops_runtime, test_diloco, test_sparse_compress
 test_gloo_fork, test_diloco_gloo_fork, test_diloco_sparse_fork
 test_gloo_ring_fork, test_checkpoint, test_buffer_pool, python_basic
 example_decode_step, example_training_step, example_mesh_training_demo
+example_mesh_training_demo_checkpoint
 
-100% tests passed, 0 tests failed out of 30
+100% tests passed, 0 tests failed out of 31
 ```
 
 ### GEMM TFLOPS

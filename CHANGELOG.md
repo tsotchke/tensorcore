@@ -37,6 +37,10 @@ every architectural primitive in code and tested:
   RMSNorm, GEMM, softmax+CE, AdamW, and DiLoCo outer synchronization;
   registered as a single-rank CTest smoke and parameterized for GLOO
   multi-host rendezvous.
+- Mesh training activation checkpoint mode: `mesh_training_demo
+  --checkpoint` now discards `X_norm` after the forward projection,
+  realizes it through the RMSNorm recompute callback before the `dW`
+  backward GEMM, and has a dedicated CTest smoke.
 - Experimental PyTorch bridge with zero-copy fp32 CPU matmul and an opt-in
   `torch.matmul` dispatcher hook.
 

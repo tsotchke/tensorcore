@@ -113,9 +113,12 @@ tc_adamw_step(ctx,
 
 On a 7B-class model at batch 4, sequence 2048, this is ~6 GB of
 activation memory before checkpointing. tensorcore now exposes the
-buffer-level discard/realize primitive on CPU and Metal; the remaining
-higher-level training work is deciding which layer inputs to save and
-which intermediates to recompute for a given mesh memory budget.
+buffer-level discard/realize primitive on CPU and Metal, and
+`examples/mesh_training_demo.c --checkpoint` exercises the concrete
+RMSNorm activation pattern: discard `x_norm` after the forward projection
+and realize it before the backward `dW` GEMM. The remaining higher-level
+training work is choosing checkpoint intervals across full transformer
+stacks for a given mesh memory budget.
 
 ## Mixed-precision recipe
 
@@ -177,8 +180,10 @@ See [distributed.md](distributed.md) for the ZeRO-1/2/3 plan.
 
 Honest list:
 
-- **Activation checkpointing.** Save inputs only, recompute everything
-  else. v0.6 ships the integrated kernel-level support.
+- **Checkpoint policy planner.** The buffer primitive and mesh-demo
+  recompute path are present; large-model training still needs an
+  automatic policy for which layer inputs to save and which intermediates
+  to recompute under a target memory budget.
 - **Sequence parallelism / tensor parallelism.** v0.6 — for now, data
   parallelism + ZeRO-2 is the path.
 - **bf16 native training kernels.** Today, training kernels are fp16 IO;

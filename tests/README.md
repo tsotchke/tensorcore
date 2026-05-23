@@ -68,6 +68,7 @@ regression runs unconditionally and does not execute raw AMX instructions.
 | 28 | `example_decode_step` | Native decode-step smoke using the installed C ABI |
 | 29 | `example_training_step` | Native training-step smoke using the installed C ABI |
 | 30 | `example_mesh_training_demo` | Single-rank mesh training demo smoke: RMSNorm, GEMM, softmax+CE, AdamW, DiLoCo outer sync |
+| 31 | `example_mesh_training_demo_checkpoint` | Same mesh training demo with `X_norm` activation discard/realize around the backward GEMM |
 
 ## Tolerances
 
