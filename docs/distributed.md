@@ -81,7 +81,9 @@ builds. Slower than the future TB5/JACCL backend but works between any
 networked hosts. The current in-tree transport uses `gloo+tcp://host:port`
 rendezvous, rank-0 broker collectives by default, and optional direct ring
 neighbor sockets for `world_size >= 3` fp32 SUM when `TC_GLOO_RING=1` is
-set. Direct ring setup is opportunistic: ranks advertise their reachable
+set. The broker rendezvous path accepts IPv4 hosts, DNS names, and
+bracketed IPv6 literals such as `tcp://[fd00::10]:29500`. Direct ring setup
+is still IPv4-oriented and opportunistic: ranks advertise their reachable
 IPv4 address, try bounded neighbor connects, and coordinate fallback over
 the rendezvous sockets if any direct edge is blocked by NAT/firewall
 policy. Set `TC_GLOO_TRACE=1` to confirm whether a run selected
@@ -126,6 +128,8 @@ substrate:
 - `"tb5://192.168.42.0/cluster"` — TB5 ring; rank 0 advertises on a
   bridge IP, others connect.
 - `"gloo+tcp://host0:port"` or `"tcp://host0:port"` — GLOO TCP rendezvous.
+- `"tcp://[ipv6-literal]:port"` — GLOO TCP rendezvous over IPv6. Brackets
+  are required because colons are part of the address.
 
 `single://` is always functional. `gloo+tcp://` is functional in default
 Apple and portable CPU builds when all ranks can reach rank 0's host and

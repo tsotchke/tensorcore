@@ -116,15 +116,29 @@ bool parse_rendezvous(const std::string& url, std::string* host, uint16_t* port)
         return false;
     }
     const std::string body = url.substr(prefix_len);
-    const auto colon = body.rfind(':');
-    if (colon == std::string::npos) return false;
-    *host = body.substr(0, colon);
+    std::string port_str;
+    if (!body.empty() && body[0] == '[') {
+        const auto close = body.find(']');
+        if (close == std::string::npos || close + 1 >= body.size() || body[close + 1] != ':') {
+            return false;
+        }
+        *host = body.substr(1, close - 1);
+        port_str = body.substr(close + 2);
+    } else {
+        const auto colon = body.rfind(':');
+        if (colon == std::string::npos) return false;
+        *host = body.substr(0, colon);
+        port_str = body.substr(colon + 1);
+    }
     char* end = nullptr;
-    const std::string port_str = body.substr(colon + 1);
     const long parsed = std::strtol(port_str.c_str(), &end, 10);
     if (!end || *end != '\0' || parsed <= 0 || parsed > 65535) return false;
     *port = (uint16_t)parsed;
     return !host->empty();
+}
+
+bool host_looks_ipv6(const std::string& host) {
+    return host.find(':') != std::string::npos;
 }
 
 bool write_all(int fd, const void* data, size_t bytes) {
@@ -159,24 +173,36 @@ bool checked_f32_bytes(size_t n, size_t* out) {
     return checked_mul_size(n, sizeof(float), out);
 }
 
-int tcp_listen(uint16_t port, std::string* out_host) {
-    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+int tcp_listen(uint16_t port, const std::string& rendezvous_host, std::string* out_host) {
+    const int family = host_looks_ipv6(rendezvous_host) ? AF_INET6 : AF_INET;
+    int fd = ::socket(family, SOCK_STREAM, 0);
     if (fd < 0) return -1;
     int yes = 1;
     ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-    sockaddr_in addr = {};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    if (::bind(fd, (sockaddr*)&addr, sizeof(addr)) < 0) { ::close(fd); return -1; }
+    if (family == AF_INET6) {
+        int v6only = 1;
+        (void)::setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only));
+        sockaddr_in6 addr6 = {};
+        addr6.sin6_family = AF_INET6;
+        addr6.sin6_port = htons(port);
+        addr6.sin6_addr = in6addr_any;
+        if (::bind(fd, (sockaddr*)&addr6, sizeof(addr6)) < 0) { ::close(fd); return -1; }
+        if (out_host) *out_host = "::";
+    } else {
+        sockaddr_in addr = {};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(port);
+        addr.sin_addr.s_addr = htonl(INADDR_ANY);
+        if (::bind(fd, (sockaddr*)&addr, sizeof(addr)) < 0) { ::close(fd); return -1; }
+        if (out_host) *out_host = "0.0.0.0";
+    }
     if (::listen(fd, 64) < 0) { ::close(fd); return -1; }
-    if (out_host) *out_host = "0.0.0.0";
     return fd;
 }
 
 int tcp_connect(const std::string& host, uint16_t port) {
     addrinfo hints = {};
-    hints.ai_family = AF_INET;
+    hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     addrinfo* res = nullptr;
     char port_str[16];
@@ -185,17 +211,21 @@ int tcp_connect(const std::string& host, uint16_t port) {
 
     /* Retry on transient failures (rank 0 may not be listening yet). */
     for (int retries = 30; retries >= 0; --retries) {
-        int fd = ::socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-        if (fd < 0) { ::freeaddrinfo(res); return -1; }
-        int yes = 1;
-        ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
-        if (::connect(fd, res->ai_addr, res->ai_addrlen) == 0) {
-            ::freeaddrinfo(res);
-            return fd;
+        int saved_errno = 0;
+        for (addrinfo* ai = res; ai; ai = ai->ai_next) {
+            int fd = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+            if (fd < 0) { saved_errno = errno; continue; }
+            int yes = 1;
+            ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
+            if (::connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) {
+                ::freeaddrinfo(res);
+                return fd;
+            }
+            saved_errno = errno;
+            ::close(fd);
         }
-        const int saved_errno = errno;
-        ::close(fd);
-        if ((saved_errno == ECONNREFUSED || saved_errno == EHOSTUNREACH) && retries > 0) {
+        if ((saved_errno == ECONNREFUSED || saved_errno == EHOSTUNREACH ||
+             saved_errno == ENETUNREACH || saved_errno == ETIMEDOUT) && retries > 0) {
             usleep(100 * 1000);
             continue;
         }
@@ -208,57 +238,58 @@ int tcp_connect(const std::string& host, uint16_t port) {
 
 int tcp_connect_timeout(const std::string& host, uint16_t port, int timeout_ms) {
     addrinfo hints = {};
-    hints.ai_family = AF_INET;
+    hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     addrinfo* res = nullptr;
     char port_str[16];
     std::snprintf(port_str, sizeof(port_str), "%u", port);
     if (::getaddrinfo(host.c_str(), port_str, &hints, &res) != 0 || !res) return -1;
 
-    int fd = ::socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (fd < 0) { ::freeaddrinfo(res); return -1; }
-    int yes = 1;
-    ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
+    for (addrinfo* ai = res; ai; ai = ai->ai_next) {
+        int fd = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (fd < 0) continue;
+        int yes = 1;
+        ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
 
-    const int flags = ::fcntl(fd, F_GETFL, 0);
-    if (flags >= 0) (void)::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-    int rc = ::connect(fd, res->ai_addr, res->ai_addrlen);
-    if (rc == 0) {
+        const int flags = ::fcntl(fd, F_GETFL, 0);
+        if (flags >= 0) (void)::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+        int rc = ::connect(fd, ai->ai_addr, ai->ai_addrlen);
+        if (rc == 0) {
+            if (flags >= 0) (void)::fcntl(fd, F_SETFL, flags);
+            ::freeaddrinfo(res);
+            return fd;
+        }
+        if (errno != EINPROGRESS) {
+            ::close(fd);
+            continue;
+        }
+
+        timeval tv = {};
+        tv.tv_sec = timeout_ms / 1000;
+        tv.tv_usec = (timeout_ms % 1000) * 1000;
+        fd_set wfds;
+        FD_ZERO(&wfds);
+        FD_SET(fd, &wfds);
+        do {
+            rc = ::select(fd + 1, nullptr, &wfds, nullptr, &tv);
+        } while (rc < 0 && errno == EINTR);
+        if (rc <= 0) {
+            ::close(fd);
+            continue;
+        }
+
+        int so_error = 0;
+        socklen_t len = sizeof(so_error);
+        if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &len) != 0 || so_error != 0) {
+            ::close(fd);
+            continue;
+        }
         if (flags >= 0) (void)::fcntl(fd, F_SETFL, flags);
         ::freeaddrinfo(res);
         return fd;
     }
-    if (errno != EINPROGRESS) {
-        ::close(fd);
-        ::freeaddrinfo(res);
-        return -1;
-    }
-
-    timeval tv = {};
-    tv.tv_sec = timeout_ms / 1000;
-    tv.tv_usec = (timeout_ms % 1000) * 1000;
-    fd_set wfds;
-    FD_ZERO(&wfds);
-    FD_SET(fd, &wfds);
-    do {
-        rc = ::select(fd + 1, nullptr, &wfds, nullptr, &tv);
-    } while (rc < 0 && errno == EINTR);
-    if (rc <= 0) {
-        ::close(fd);
-        ::freeaddrinfo(res);
-        return -1;
-    }
-
-    int so_error = 0;
-    socklen_t len = sizeof(so_error);
-    if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &len) != 0 || so_error != 0) {
-        ::close(fd);
-        ::freeaddrinfo(res);
-        return -1;
-    }
-    if (flags >= 0) (void)::fcntl(fd, F_SETFL, flags);
     ::freeaddrinfo(res);
-    return fd;
+    return -1;
 }
 
 bool resolve_ipv4_host_n(const std::string& host, uint32_t* out) {
@@ -314,7 +345,7 @@ int accept_with_timeout(int listen_fd, int timeout_ms) {
     } while (rc < 0 && errno == EINTR);
     if (rc <= 0) return -1;
 
-    sockaddr_in peer_addr = {};
+    sockaddr_storage peer_addr = {};
     socklen_t alen = sizeof(peer_addr);
     return ::accept(listen_fd, (sockaddr*)&peer_addr, &alen);
 }
@@ -405,7 +436,10 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
     if (world_size < 1 || rank < 0 || rank >= world_size || !rendezvous_url) return nullptr;
     std::string host;
     uint16_t port = 0;
-    if (!parse_rendezvous(rendezvous_url, &host, &port)) return nullptr;
+    if (!parse_rendezvous(rendezvous_url, &host, &port)) {
+        gloo_trace(rank, "init=parse_failed url=%s", rendezvous_url);
+        return nullptr;
+    }
 
     auto* s = new (std::nothrow) GlooState();
     if (!s) return nullptr;
@@ -413,19 +447,30 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
 
     if (rank == 0) {
         /* Listen + accept all others. */
-        s->rendez_listen_fd = tcp_listen(port, &s->self_host);
-        if (s->rendez_listen_fd < 0) { close_gloo_state(s); return nullptr; }
+        s->rendez_listen_fd = tcp_listen(port, host, &s->self_host);
+        if (s->rendez_listen_fd < 0) {
+            gloo_trace(rank, "init=listen_failed host=%s port=%u errno=%d", host.c_str(), port, errno);
+            close_gloo_state(s);
+            return nullptr;
+        }
+        gloo_trace(rank, "init=listening host=%s port=%u family=%s",
+                   host.c_str(), port, host_looks_ipv6(host) ? "ipv6" : "ipv4");
         for (int r = 1; r < world_size; ++r) {
-            sockaddr_in peer_addr = {};
+            sockaddr_storage peer_addr = {};
             socklen_t alen = sizeof(peer_addr);
             int fd = ::accept(s->rendez_listen_fd, (sockaddr*)&peer_addr, &alen);
-            if (fd < 0) { close_gloo_state(s); return nullptr; }
+            if (fd < 0) {
+                gloo_trace(rank, "init=accept_failed errno=%d", errno);
+                close_gloo_state(s);
+                return nullptr;
+            }
             /* First message from peer: its rank (uint32 LE). */
             uint32_t peer_rank = 0;
             if (!read_all(fd, &peer_rank, 4) ||
                 peer_rank == 0 ||
                 peer_rank >= (uint32_t)world_size ||
                 s->peer_conns[peer_rank] >= 0) {
+                gloo_trace(rank, "init=peer_rank_failed peer_rank=%u", peer_rank);
                 ::close(fd); close_gloo_state(s); return nullptr;
             }
             int yes = 1;
@@ -435,9 +480,16 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
     } else {
         /* Connect to rank 0. */
         int fd = tcp_connect(host, port);
-        if (fd < 0) { close_gloo_state(s); return nullptr; }
+        if (fd < 0) {
+            gloo_trace(rank, "init=connect_failed host=%s port=%u errno=%d", host.c_str(), port, errno);
+            close_gloo_state(s);
+            return nullptr;
+        }
         uint32_t self_rank = (uint32_t)rank;
-        if (!write_all(fd, &self_rank, 4)) { ::close(fd); close_gloo_state(s); return nullptr; }
+        if (!write_all(fd, &self_rank, 4)) {
+            gloo_trace(rank, "init=write_rank_failed errno=%d", errno);
+            ::close(fd); close_gloo_state(s); return nullptr;
+        }
         s->rendez_conn_fd = fd;
         s->peer_conns[0] = fd;
     }
@@ -493,7 +545,7 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
     for (int attempt = 0; attempt < 64; ++attempt) {
         my_ring_port = (uint16_t)(ring_port_base + rank + attempt * world_size);
         std::string ignored;
-        my_ring_listen = tcp_listen(my_ring_port, &ignored);
+        my_ring_listen = tcp_listen(my_ring_port, host, &ignored);
         if (my_ring_listen >= 0) break;
     }
     if (my_ring_listen < 0) my_ring_port = 0;
