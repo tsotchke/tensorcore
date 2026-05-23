@@ -194,6 +194,13 @@ at::Tensor tc_matmul_fp32(const at::Tensor& A, const at::Tensor& B) {
     return out;
 }
 
+at::Tensor tc_matmul_bf16(const at::Tensor& A, const at::Tensor& B) {
+    TORCH_CHECK(A.dtype() == torch::kBFloat16 && B.dtype() == torch::kBFloat16,
+                "tc_matmul_bf16 requires both inputs to be torch.bfloat16; got ",
+                A.dtype(), " and ", B.dtype());
+    return tc_matmul_fp32(A, B);
+}
+
 const char* tc_last_backend_name() {
     return tc_backend_name(tc_last_backend());
 }
@@ -252,6 +259,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     register_privateuse1_name();
     m.def("matmul", &tc_matmul_fp32,
           "tc_matmul(A: Tensor[fp32|bf16, MxK], B: Tensor[fp32|bf16, KxN]) -> Tensor[MxN]");
+    m.def("matmul_bf16", &tc_matmul_bf16,
+          "tc_matmul_bf16(A: Tensor[bf16, MxK], B: Tensor[bf16, KxN]) -> Tensor[bf16, MxN]");
     m.def("set_default_matmul", &tc_set_default_matmul,
           py::arg("enabled") = true,
           "Enable or disable the opt-in torch.matmul dispatcher hook; returns the previous state");
