@@ -20,6 +20,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <new>
 #include <string>
 
@@ -174,6 +175,28 @@ inline uint16_t gloo_f32_to_f16(float v) {
     return (uint16_t)(sign | ((uint32_t)half_exp << 10) | (rounded >> 13));
 }
 
+bool checked_collective_bytes(size_t num_elements, tc_dtype_t dtype, size_t* out_bytes) {
+    if (!out_bytes) return false;
+    const size_t elem = tc_dtype_size(dtype);
+    if (elem == 0) return false;
+    if (num_elements != 0 && elem > std::numeric_limits<size_t>::max() / num_elements) {
+        return false;
+    }
+    *out_bytes = num_elements * elem;
+    return true;
+}
+
+bool checked_world_bytes(int world_size, size_t bytes_per_rank, size_t* out_total) {
+    if (!out_total || world_size <= 0) return false;
+    const size_t world = (size_t)world_size;
+    if (bytes_per_rank != 0 &&
+        world > std::numeric_limits<size_t>::max() / bytes_per_rank) {
+        return false;
+    }
+    *out_total = world * bytes_per_rank;
+    return true;
+}
+
 }  // namespace
 
 extern "C" tc_status_t tc_allreduce(tc_dist_ctx* d,
@@ -181,8 +204,9 @@ extern "C" tc_status_t tc_allreduce(tc_dist_ctx* d,
                                     size_t num_elements,
                                     tc_dtype_t dtype,
                                     tc_reduce_op_t op) {
-    if (!d || !buf || num_elements == 0 || tc_dtype_size(dtype) == 0) return TC_ERR_INVALID_ARG;
-    const size_t bytes = num_elements * tc_dtype_size(dtype);
+    if (!d || !buf || num_elements == 0) return TC_ERR_INVALID_ARG;
+    size_t bytes = 0;
+    if (!checked_collective_bytes(num_elements, dtype, &bytes)) return TC_ERR_INVALID_ARG;
     tc_status_t s = tc_buffer_validate(d->tc, buf, bytes);
     if (s != TC_OK) return s;
     if (d->backend == TC_DIST_SINGLE) {
@@ -242,7 +266,8 @@ extern "C" tc_status_t tc_broadcast(tc_dist_ctx* d,
     if (!d || !buf || root < 0 || root >= d->world_size || tc_dtype_size(dtype) == 0) {
         return TC_ERR_INVALID_ARG;
     }
-    const size_t bytes = num_elements * tc_dtype_size(dtype);
+    size_t bytes = 0;
+    if (!checked_collective_bytes(num_elements, dtype, &bytes)) return TC_ERR_INVALID_ARG;
     tc_status_t s = tc_buffer_validate(d->tc, buf, bytes);
     if (s != TC_OK) return s;
     if (d->backend == TC_DIST_SINGLE) {
@@ -269,7 +294,10 @@ extern "C" tc_status_t tc_allgather(tc_dist_ctx* d,
     if (!d || !in || !out || num_elements_per_rank == 0 || tc_dtype_size(dtype) == 0) {
         return TC_ERR_INVALID_ARG;
     }
-    const size_t bytes = num_elements_per_rank * tc_dtype_size(dtype);
+    size_t bytes = 0;
+    if (!checked_collective_bytes(num_elements_per_rank, dtype, &bytes)) {
+        return TC_ERR_INVALID_ARG;
+    }
     if (bytes == 0) return TC_ERR_INVALID_ARG;
 
     if (d->backend == TC_DIST_SINGLE) {
@@ -290,7 +318,8 @@ extern "C" tc_status_t tc_allgather(tc_dist_ctx* d,
         /* Validate sizes: `in` is one rank's slice, `out` is world_size * slice. */
         tc_status_t s = tc_buffer_validate(d->tc, in, bytes);
         if (s != TC_OK) return s;
-        const size_t total = (size_t)d->world_size * bytes;
+        size_t total = 0;
+        if (!checked_world_bytes(d->world_size, bytes, &total)) return TC_ERR_INVALID_ARG;
         s = tc_buffer_validate(d->tc, out, total);
         if (s != TC_OK) return s;
         void* src = nullptr;

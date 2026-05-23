@@ -752,6 +752,38 @@ static int run_buffer_from_ptr(tc_context* ctx) {
     return rc;
 }
 
+static int run_distributed_overflow_guards(tc_context* ctx) {
+    int rc = 0;
+    tc_dist_ctx* dist = NULL;
+    tc_buffer* in = NULL;
+    tc_buffer* out = NULL;
+    const size_t overflow_f32 = SIZE_MAX / sizeof(float) + 1u;
+
+    rc |= expect_status("dist overflow init",
+                        tc_dist_init(ctx, TC_DIST_SINGLE, 1, 0, "single://overflow", &dist),
+                        TC_OK);
+    if (rc) return rc;
+    rc |= expect_status("dist overflow input alloc", tc_buffer_alloc(ctx, 16, &in), TC_OK);
+    rc |= expect_status("dist overflow output alloc", tc_buffer_alloc(ctx, 16, &out), TC_OK);
+    if (rc) goto done;
+
+    rc |= expect_status("allreduce byte overflow rejects",
+                        tc_allreduce(dist, in, overflow_f32, TC_DTYPE_F32, TC_REDUCE_SUM),
+                        TC_ERR_INVALID_ARG);
+    rc |= expect_status("broadcast byte overflow rejects",
+                        tc_broadcast(dist, in, overflow_f32, TC_DTYPE_F32, 0),
+                        TC_ERR_INVALID_ARG);
+    rc |= expect_status("allgather byte overflow rejects",
+                        tc_allgather(dist, in, out, overflow_f32, TC_DTYPE_F32),
+                        TC_ERR_INVALID_ARG);
+
+done:
+    if (out) tc_buffer_free(ctx, out);
+    if (in) tc_buffer_free(ctx, in);
+    if (dist) tc_dist_finalize(dist);
+    return rc;
+}
+
 static int run_checkpoint_stubs(tc_context* ctx) {
     int rc = 0;
     int calls = 0;
@@ -883,6 +915,7 @@ int main(void) {
     rc |= run_conv2d_forward(ctx);
     rc |= run_memory_tier_stubs(ctx);
     rc |= run_buffer_from_ptr(ctx);
+    rc |= run_distributed_overflow_guards(ctx);
     rc |= run_checkpoint_stubs(ctx);
     rc |= run_future_backend_stubs(ctx);
     rc |= expect_status("attention NULL desc rejects",
