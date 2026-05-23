@@ -84,8 +84,6 @@ int main(void) {
     /* Discard. */
     tc_status_t s = tc_checkpoint_discard(id);
     if (s != TC_OK) {
-        /* Metal build deliberately stubs storage discard as UNSUPPORTED_FAMILY.
-         * Treat as skip on platforms without CPU buffer storage. */
         if (s == TC_ERR_UNSUPPORTED_FAMILY) {
             printf("[skip] tc_buffer_discard_storage not implemented on this backend\n");
             tc_checkpoint_unregister(id);

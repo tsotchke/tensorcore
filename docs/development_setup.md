@@ -46,10 +46,10 @@ cmake --build build -j8
 ctest --test-dir build --output-on-failure
 ```
 
-Expected: **24/24 tests pass** in roughly 5-15 seconds on a local Apple
+Expected: **30/30 tests pass** in roughly 5-15 seconds on a local Apple
 build.
 
-If `ctest` shows fewer than 24 tests, your Python or NumPy may not be
+If `ctest` shows fewer than 30 tests, your Python or NumPy may not be
 visible to CMake -- `python_basic` skips, dropping the count by one.
 
 ### 5. Quick smoke

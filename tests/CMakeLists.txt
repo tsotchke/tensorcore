@@ -115,7 +115,6 @@ if(NOT TC_ENABLE_METAL)
     target_include_directories(test_checkpoint PRIVATE ${CMAKE_SOURCE_DIR}/include)
     add_test(NAME test_checkpoint COMMAND test_checkpoint)
     set_tests_properties(test_checkpoint PROPERTIES
-        SKIP_RETURN_CODE 77
         TIMEOUT 30
     )
 
@@ -233,15 +232,13 @@ set_tests_properties(test_gloo_ring_fork PROPERTIES
     TIMEOUT 60
 )
 
-# Activation checkpointing: discard frees storage, realize re-allocs +
-# invokes user callback. Metal build returns 77 (skip) since storage
-# discard requires buffer-pool refactor; CPU build runs the full cycle.
+# Activation checkpointing: discard frees storage while preserving the
+# tc_buffer handle, then realize re-allocs + invokes user callback.
 add_executable(test_checkpoint test_checkpoint.c)
 target_link_libraries(test_checkpoint PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
 target_include_directories(test_checkpoint PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME test_checkpoint COMMAND test_checkpoint)
 set_tests_properties(test_checkpoint PROPERTIES
-    SKIP_RETURN_CODE 77
     TIMEOUT 30
 )
 

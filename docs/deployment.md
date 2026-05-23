@@ -334,9 +334,9 @@ network issue.
 - Auto-select backend in `tc_init` (`Metal>CUDA>HIP>CPU` priority)
 - Broader CUDA allocator policy for default no-copy GEMM without an env
   flag.
-- Metal activation-checkpoint storage discard; the portable CPU
-  discard/realize path is implemented, while Metal still needs
-  handle-preserving `MTLBuffer` detach.
+- Larger-network activation-checkpoint policy: the buffer-level CPU/Metal
+  discard/realize primitive is implemented; framework-level scheduling
+  still needs mesh-aware placement and recompute heuristics.
 - AVX2 GEMM multi-thread (single-thread 40 GFLOPS shipped; multi-thread
   needs BLIS-style 5-loop)
 - Thunderbolt 4 link validation between two Macs (cable-dependent)

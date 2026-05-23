@@ -189,11 +189,10 @@ tc_status_t tc_memory_tier_usage(tc_context* ctx,
 ## Activation Checkpointing — `checkpoint.h`
 
 The checkpoint ABI provides buffer-level hooks for frameworks that trade
-activation memory for recompute. The portable CPU runtime frees owned
-buffer storage on `discard`, keeps the handle valid but unmapped, and
-reallocates storage before invoking the registered recompute callback on
-`realize`. Metal currently returns `TC_ERR_UNSUPPORTED_FAMILY` for storage
-discard until a handle-preserving `MTLBuffer` detach path lands.
+activation memory for recompute. The CPU and Metal runtimes free owned
+buffer storage on `discard`, keep the handle valid but unmapped, and
+reallocate storage before invoking the registered recompute callback on
+`realize`.
 
 ```c
 typedef uint64_t tc_checkpoint_id;

@@ -239,8 +239,8 @@ the chip doesn't support the path being tested:
 | `test_sparse_compress` | always runs (host-side sparse pack/unpack) |
 | `test_tensorops_runtime` | skips politely until Metal 4 TensorOps is available |
 
-The default Apple suite is **24 tests** at this checkpoint: 22
-correctness/Python tests plus the two native example smokes. It takes
+The default Apple suite is **30 tests** at this checkpoint: 27
+correctness/Python tests plus three native example smokes. It takes
 ~5-15 seconds on a local Apple workstation.
 
 ## What family you're running on, the lazy way

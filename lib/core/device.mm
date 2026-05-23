@@ -374,20 +374,29 @@ extern "C" size_t tc_buffer_size(const tc_buffer* buf) {
 
 /* Activation-checkpointing storage primitives for the Metal build.
  *
- * The CPU backend can discard storage while keeping the tc_buffer handle
- * alive. The current Metal buffer-pool API frees the handle together with
- * its MTLBuffer, so a true Metal discard needs a handle-preserving detach
- * path first. Until then, fail without mutating buf; callers can treat this
- * as unsupported and keep the original buffer valid. */
+ * Keep the public tc_buffer handle stable while releasing/recreating the
+ * underlying MTLBuffer. We intentionally do not return discarded storage to
+ * the pool: checkpoint discard is meant to lower resident activation memory,
+ * not keep the MTLBuffer cached for fast reuse. */
 extern "C" TC_INTERNAL_SYMBOL tc_status_t tc_buffer_discard_storage(tc_buffer* buf) {
     if (!buf || !buf->owner) return TC_ERR_INVALID_ARG;
-    return TC_ERR_UNSUPPORTED_FAMILY;
+    if (!buf->owns_buffer) return TC_ERR_INVALID_ARG;
+    if (!buf->mtl) return TC_OK;
+    buf->mtl = nil;
+    return TC_OK;
 }
 
 extern "C" TC_INTERNAL_SYMBOL tc_status_t tc_buffer_reallocate_storage(tc_buffer* buf) {
     if (!buf || !buf->owner || buf->bytes == 0) return TC_ERR_INVALID_ARG;
     if (buf->mtl) return TC_OK;
-    return TC_ERR_UNSUPPORTED_FAMILY;
+    if (!buf->owns_buffer) return TC_ERR_INVALID_ARG;
+    const size_t alloc_bytes = buf->bucket_bytes ? buf->bucket_bytes : buf->bytes;
+    id<MTLBuffer> mtl = [buf->owner->device newBufferWithLength:alloc_bytes
+                                                        options:MTLResourceStorageModeShared];
+    if (!mtl) return TC_ERR_ALLOC;
+    buf->mtl = mtl;
+    if (!buf->bucket_bytes) buf->bucket_bytes = alloc_bytes;
+    return TC_OK;
 }
 
 extern "C" TC_INTERNAL_SYMBOL int tc_buffer_is_discarded(const tc_buffer* buf) {

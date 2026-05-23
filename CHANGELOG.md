@@ -202,8 +202,11 @@ every architectural primitive in code and tested:
 - `Implement portable CPU activation checkpointing`: `tc_checkpoint_discard`
   now frees owned CPU buffer storage while preserving the handle,
   `tc_checkpoint_realize` reallocates and invokes the registered recompute
-  callback, and `test_checkpoint` validates the lifecycle. Metal reports
-  unsupported until handle-preserving `MTLBuffer` discard lands.
+  callback, and `test_checkpoint` validates the lifecycle.
+- `Add Metal activation checkpoint storage detach`: Metal buffers now
+  release and recreate the underlying `MTLBuffer` while preserving the
+  public `tc_buffer` handle, so `test_checkpoint` runs in the default
+  Apple suite instead of skipping.
 - `Document cross-continent training topology`: `docs/diloco.md` explains
   the DiLoCo algorithm, compression choices, and the two-site bandwidth
   budgeting model.

@@ -112,10 +112,10 @@ tc_adamw_step(ctx,
 | layer inputs `x` | `[B, S, D]` fp16 | residual through layers |
 
 On a 7B-class model at batch 4, sequence 2048, this is ~6 GB of
-activation memory before checkpointing. Activation checkpointing (only
-saving inputs to each layer, recomputing intermediates on the backward
-pass) is the v0.6 work; for v0.1-v0.2 we expect you to fit the
-activations in unified memory.
+activation memory before checkpointing. tensorcore now exposes the
+buffer-level discard/realize primitive on CPU and Metal; the remaining
+higher-level training work is deciding which layer inputs to save and
+which intermediates to recompute for a given mesh memory budget.
 
 ## Mixed-precision recipe
 
