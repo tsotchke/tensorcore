@@ -3,8 +3,8 @@
  * all-reduce topology.
  *
  * Validates:
- *   1. Ring topology setup succeeds for world_size=4 on loopback
- *      (opt-in via TC_GLOO_RING=1).
+ *   1. Ring topology setup succeeds for world_size=4 on IPv4 and IPv6
+ *      loopback (opt-in via TC_GLOO_RING=1).
  *   2. Ring reduce-scatter + all-gather produces correct sums.
  *   3. Per-rank result matches expected sum(1..world).
  *   4. If direct ring neighbors are unreachable, init stays alive and
@@ -57,6 +57,30 @@ static int reserve_loopback_port(void) {
     return port;
 }
 
+static int reserve_loopback_port_ipv6(void) {
+    int fd = socket(AF_INET6, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    int v6only = 1;
+    (void)setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only));
+    struct sockaddr_in6 addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin6_family = AF_INET6;
+    addr.sin6_addr = in6addr_loopback;
+    addr.sin6_port = 0;
+    if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+        close(fd);
+        return -1;
+    }
+    socklen_t len = sizeof(addr);
+    if (getsockname(fd, (struct sockaddr*)&addr, &len) != 0) {
+        close(fd);
+        return -1;
+    }
+    const int port = (int)ntohs(addr.sin6_port);
+    close(fd);
+    return port;
+}
+
 static int run_rank(int rank, const char* url) {
     tc_context* ctx = NULL;
     if (tc_init(&ctx) != TC_OK) return 1;
@@ -99,7 +123,7 @@ static int run_rank(int rank, const char* url) {
     return 0;
 }
 
-static int run_case(const char* label, int force_broker_fallback) {
+static int run_case(const char* label, const char* url, int force_broker_fallback) {
     setenv("TC_GLOO_RING", "1", 1);
     if (force_broker_fallback) {
         setenv("TC_GLOO_ADVERTISE_HOST", "203.0.113.1", 1);
@@ -109,41 +133,32 @@ static int run_case(const char* label, int force_broker_fallback) {
         unsetenv("TC_GLOO_RING_CONNECT_TIMEOUT_MS");
     }
 
-    const int port = reserve_loopback_port();
-    if (port <= 0 || port > 65000) {
-        fprintf(stderr, "gloo_ring_fork: SKIP: no suitable loopback port\n");
-        return 77;
-    }
-    char url[64];
-    snprintf(url, sizeof(url), "tcp://127.0.0.1:%d", port);
+    printf("%s:\n", label);
+    fflush(stdout);
 
-    pid_t children[WORLD - 1];
-    for (int r = 1; r < WORLD; ++r) {
+    pid_t children[WORLD];
+    for (int r = 0; r < WORLD; ++r) {
         pid_t pid = fork();
         if (pid < 0) {
             perror("fork");
             return 1;
         }
         if (pid == 0) {
-            /* Child: small delay to let rank 0 begin listening. */
-            usleep(r * 100 * 1000);   /* stagger 100 ms per rank */
+            /* Small delay to let rank 0 begin listening. */
+            if (r > 0) usleep(r * 100 * 1000);   /* stagger 100 ms per rank */
             exit(run_rank(r, url));
         }
-        children[r - 1] = pid;
+        children[r] = pid;
     }
 
-    /* Parent runs rank 0. */
-    printf("%s:\n", label);
-    fflush(stdout);
-    int rc = run_rank(0, url);
-    fflush(stdout);
-
-    for (int i = 0; i < WORLD - 1; ++i) {
+    int rc = 0;
+    for (int i = 0; i < WORLD; ++i) {
         int status = 0;
         waitpid(children[i], &status, 0);
         if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+            const int code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
             fprintf(stderr, "child rank %d failed (status=%d)\n",
-                    i + 1, WEXITSTATUS(status));
+                    i, code);
             rc = 1;
         }
     }
@@ -155,13 +170,49 @@ static int run_case(const char* label, int force_broker_fallback) {
 
 int main(void) {
     int rc = 0;
-    rc |= run_case("ring 4-rank fork test", 0);
+    const int port4 = reserve_loopback_port();
+    if (port4 <= 0 || port4 > 65000) {
+        fprintf(stderr, "gloo_ring_fork: SKIP: no suitable IPv4 loopback port\n");
+        return 77;
+    }
+    char url4[96];
+    snprintf(url4, sizeof(url4), "tcp://127.0.0.1:%d", port4);
+    rc |= run_case("ring 4-rank fork test ipv4", url4, 0);
 #if defined(TC_TEST_METAL_BUILD)
     printf("ring 4-rank broker fallback test: SKIP in Metal build; covered by portable CPU build\n");
     fflush(stdout);
 #else
-    rc |= run_case("ring 4-rank broker fallback test", 1);
+    const int fallback_port4 = reserve_loopback_port();
+    if (fallback_port4 <= 0 || fallback_port4 > 65000) {
+        fprintf(stderr, "gloo_ring_fork: SKIP: no suitable IPv4 fallback port\n");
+        return 77;
+    }
+    char fallback_url4[96];
+    snprintf(fallback_url4, sizeof(fallback_url4), "tcp://127.0.0.1:%d", fallback_port4);
+    rc |= run_case("ring 4-rank broker fallback test ipv4", fallback_url4, 1);
 #endif
+
+    const int port6 = reserve_loopback_port_ipv6();
+    if (port6 <= 0 || port6 > 65000) {
+        printf("ring 4-rank fork test ipv6: SKIP: no IPv6 loopback port\n");
+    } else {
+        char url6[96];
+        snprintf(url6, sizeof(url6), "tcp://[::1]:%d", port6);
+        rc |= run_case("ring 4-rank fork test ipv6", url6, 0);
+#if defined(TC_TEST_METAL_BUILD)
+        printf("ring 4-rank broker fallback test ipv6: SKIP in Metal build; covered by portable CPU build\n");
+        fflush(stdout);
+#else
+        const int fallback_port6 = reserve_loopback_port_ipv6();
+        if (fallback_port6 <= 0 || fallback_port6 > 65000) {
+            printf("ring 4-rank broker fallback test ipv6: SKIP: no IPv6 loopback port\n");
+        } else {
+            char fallback_url6[96];
+            snprintf(fallback_url6, sizeof(fallback_url6), "tcp://[::1]:%d", fallback_port6);
+            rc |= run_case("ring 4-rank broker fallback test ipv6", fallback_url6, 1);
+        }
+#endif
+    }
     unsetenv("TC_GLOO_RING");
     unsetenv("TC_GLOO_ADVERTISE_HOST");
     unsetenv("TC_GLOO_RING_CONNECT_TIMEOUT_MS");

@@ -65,7 +65,7 @@ regression runs unconditionally and does not execute raw AMX instructions.
 | 21 | `test_gloo_fork.c` | Four forked ranks over broker GLOO TCP; IPv4 and bracketed IPv6 rendezvous, fp32/fp16 allreduce, broadcast, allgather, barrier |
 | 22 | `test_diloco_gloo_fork.c` | Multi-rank DiLoCo over GLOO with forked localhost ranks |
 | 23 | `test_diloco_sparse_fork.c` | TOPK sparse DiLoCo over GLOO; validates sparse wire-byte reduction |
-| 24 | `test_gloo_ring_fork.c` | Four forked ranks with `TC_GLOO_RING=1`; direct TCP ring fp32 SUM plus forced-unreachable broker fallback |
+| 24 | `test_gloo_ring_fork.c` | Four forked ranks with `TC_GLOO_RING=1`; IPv4/bracketed-IPv6 direct TCP ring fp32 SUM plus forced-unreachable broker fallback |
 | 25 | `test_checkpoint.c` | CPU/Metal discard/realize checkpoint lifecycle with handle-preserving storage detach |
 | 26 | `test_buffer_pool.mm` | LIFO recycling, bucket size classes, concurrent allocate/free |
 | 27 | `python_basic` | The Python binding's `tests/test_basic.py` — full ABI surface exercised from ctypes |

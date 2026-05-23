@@ -252,9 +252,11 @@ default after CUDA initialization, and HIP remains behind `tc_hip_init`.
 The rank-0 broker is the default because it only requires peers to reach
 the rendezvous host. Set `TC_GLOO_RING=1` to enable direct rank-to-rank
 ring sockets for fp32 SUM on networks where every rank can reach its ring
-neighbors. If a direct neighbor cannot be reached, all ranks now
-coordinate over the rendezvous sockets and fall back to the broker path
-instead of failing `tc_dist_init`.
+neighbors. Ring rendezvous supports both IPv4 and bracketed IPv6 URLs,
+for example `gloo+tcp://127.0.0.1:9000` and
+`gloo+tcp://[fd7a:115c:a1e0::1]:9000`. If a direct neighbor cannot be
+reached, all ranks coordinate over the rendezvous sockets and fall back
+to the broker path instead of failing `tc_dist_init`.
 
 For Tailscale or other overlay networks, `TC_GLOO_ADVERTISE_HOST` can be
 set per rank to the address peers should dial for direct ring links. If

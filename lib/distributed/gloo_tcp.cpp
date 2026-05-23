@@ -14,8 +14,8 @@
  *   Collectives:
  *
  *     allreduce  = rank-0 brokered reduction + broadcast by default,
- *                  opt-in ring reduce-scatter + all-gather for fp32 SUM
- *                  at >=3 ranks when TC_GLOO_RING=1.
+ *                  opt-in IPv4/IPv6 ring reduce-scatter + all-gather for
+ *                  fp32 SUM at >=3 ranks when TC_GLOO_RING=1.
  *     broadcast  = rank-0 brokered bitwise replication from any root.
  *     allgather  = rank-0 brokered gather + broadcast.
  *     barrier    = rank-0 brokered byte exchange.
@@ -85,7 +85,8 @@ struct GlooState {
 
 struct RingPeerInfo {
     uint16_t port;
-    uint32_t host_n;   /* IPv4 address in network byte order */
+    uint16_t family;   /* AF_INET or AF_INET6 */
+    uint8_t  addr[16]; /* network-order IPv4 in addr[0..3], IPv6 in addr[0..15] */
 };
 
 bool gloo_trace_enabled(void) {
@@ -292,34 +293,83 @@ int tcp_connect_timeout(const std::string& host, uint16_t port, int timeout_ms) 
     return -1;
 }
 
-bool resolve_ipv4_host_n(const std::string& host, uint32_t* out) {
+bool peer_addr_valid(const RingPeerInfo& p) {
+    if (p.family == AF_INET) {
+        uint32_t v4 = 0;
+        std::memcpy(&v4, p.addr, sizeof(v4));
+        return v4 != 0 && v4 != htonl(INADDR_ANY);
+    }
+    if (p.family == AF_INET6) {
+        in6_addr v6 = {};
+        std::memcpy(&v6, p.addr, sizeof(v6));
+        return !IN6_IS_ADDR_UNSPECIFIED(&v6);
+    }
+    return false;
+}
+
+bool store_sockaddr_peer(const sockaddr_storage& ss, RingPeerInfo* out) {
+    if (!out) return false;
+    if (ss.ss_family == AF_INET) {
+        const sockaddr_in* addr = (const sockaddr_in*)&ss;
+        out->family = AF_INET;
+        std::memset(out->addr, 0, sizeof(out->addr));
+        std::memcpy(out->addr, &addr->sin_addr.s_addr, sizeof(addr->sin_addr.s_addr));
+        return peer_addr_valid(*out);
+    }
+    if (ss.ss_family == AF_INET6) {
+        const sockaddr_in6* addr = (const sockaddr_in6*)&ss;
+        out->family = AF_INET6;
+        std::memcpy(out->addr, &addr->sin6_addr, sizeof(addr->sin6_addr));
+        return peer_addr_valid(*out);
+    }
+    return false;
+}
+
+bool resolve_host_peer(const std::string& host, RingPeerInfo* out) {
     if (!out || host.empty()) return false;
     addrinfo hints = {};
-    hints.ai_family = AF_INET;
+    hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     addrinfo* res = nullptr;
     if (::getaddrinfo(host.c_str(), nullptr, &hints, &res) != 0 || !res) return false;
-    const sockaddr_in* addr = (const sockaddr_in*)res->ai_addr;
-    *out = addr->sin_addr.s_addr;
+    bool ok = false;
+    for (addrinfo* ai = res; ai; ai = ai->ai_next) {
+        sockaddr_storage ss = {};
+        if (ai->ai_addrlen > sizeof(ss)) continue;
+        std::memcpy(&ss, ai->ai_addr, ai->ai_addrlen);
+        if (store_sockaddr_peer(ss, out)) { ok = true; break; }
+    }
     ::freeaddrinfo(res);
-    return true;
+    return ok;
 }
 
-uint32_t advertised_host_n(int rank, int rendez_fd, const std::string& rendezvous_host) {
-    const char* env = std::getenv("TC_GLOO_ADVERTISE_HOST");
-    uint32_t out = 0;
-    if (env && env[0] && resolve_ipv4_host_n(env, &out)) return out;
-    if (rank == 0 && resolve_ipv4_host_n(rendezvous_host, &out)) return out;
+bool endpoint_from_fd(int fd, bool peer, RingPeerInfo* out) {
+    if (fd < 0 || !out) return false;
+    sockaddr_storage ss = {};
+    socklen_t alen = sizeof(ss);
+    const int rc = peer
+        ? ::getpeername(fd, (sockaddr*)&ss, &alen)
+        : ::getsockname(fd, (sockaddr*)&ss, &alen);
+    return rc == 0 && store_sockaddr_peer(ss, out);
+}
 
-    if (rendez_fd >= 0) {
-        sockaddr_in addr = {};
-        socklen_t alen = sizeof(addr);
-        if (::getsockname(rendez_fd, (sockaddr*)&addr, &alen) == 0 &&
-            addr.sin_addr.s_addr != htonl(INADDR_ANY)) {
-            return addr.sin_addr.s_addr;
-        }
+RingPeerInfo advertised_peer_info(int rank, int rendez_fd, const std::string& rendezvous_host) {
+    const char* env = std::getenv("TC_GLOO_ADVERTISE_HOST");
+    RingPeerInfo out = {};
+    if (env && env[0] && resolve_host_peer(env, &out)) return out;
+    if (rank == 0 && resolve_host_peer(rendezvous_host, &out)) return out;
+    if (endpoint_from_fd(rendez_fd, false, &out)) return out;
+    return out;
+}
+
+std::string peer_addr_string(const RingPeerInfo& peer) {
+    char buf[INET6_ADDRSTRLEN] = {};
+    if (peer.family == AF_INET) {
+        if (::inet_ntop(AF_INET, peer.addr, buf, sizeof(buf))) return std::string(buf);
+    } else if (peer.family == AF_INET6) {
+        if (::inet_ntop(AF_INET6, peer.addr, buf, sizeof(buf))) return std::string(buf);
     }
-    return 0;
+    return std::string();
 }
 
 int ring_connect_timeout_ms(void) {
@@ -569,28 +619,29 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
     /* --- Phase B: each rank > 0 reports (port) to rank 0; rank 0
      *              collects + broadcasts the table. ----- */
     std::vector<RingPeerInfo> peers((size_t)world_size);
-    std::vector<uint32_t> hosts_n((size_t)world_size, 0);   /* peer IPs as seen by rank 0 */
     if (rank == 0) {
         peers[0].port = my_ring_port;
-        peers[0].host_n = advertised_host_n(rank, s->rendez_listen_fd, host);
-        hosts_n[0] = peers[0].host_n;
+        RingPeerInfo self = advertised_peer_info(rank, s->rendez_listen_fd, host);
+        peers[0].family = self.family;
+        std::memcpy(peers[0].addr, self.addr, sizeof(peers[0].addr));
         /* Read each peer's chosen port. Resolve their address from the
          * peer_conns[r] socket using getpeername. */
         for (int r = 1; r < world_size; ++r) {
             RingPeerInfo pr = {};
             if (!read_all(s->peer_conns[r], &pr, sizeof(pr))) return broker_fallback();
             peers[r] = pr;
-            sockaddr_in addr = {};
-            socklen_t alen = sizeof(addr);
-            if (::getpeername(s->peer_conns[r], (sockaddr*)&addr, &alen) < 0) {
+            RingPeerInfo observed = {};
+            if (!endpoint_from_fd(s->peer_conns[r], true, &observed)) {
                 return broker_fallback();
             }
-            hosts_n[r] = pr.host_n ? pr.host_n : addr.sin_addr.s_addr;
-            peers[r].host_n = hosts_n[r];
+            if (!peer_addr_valid(peers[r])) {
+                peers[r].family = observed.family;
+                std::memcpy(peers[r].addr, observed.addr, sizeof(peers[r].addr));
+            }
         }
         uint8_t topology_ok = 1;
         for (int r = 0; r < world_size; ++r) {
-            if (peers[r].port == 0 || peers[r].host_n == 0) topology_ok = 0;
+            if (peers[r].port == 0 || !peer_addr_valid(peers[r])) topology_ok = 0;
         }
         for (int r = 1; r < world_size; ++r) {
             if (!write_all(s->peer_conns[r], &topology_ok, 1)) return broker_fallback();
@@ -600,9 +651,7 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
         /* Broadcast the table. */
         for (int r = 1; r < world_size; ++r) {
             if (!write_all(s->peer_conns[r], peers.data(),
-                           peers.size() * sizeof(RingPeerInfo)) ||
-                !write_all(s->peer_conns[r], hosts_n.data(),
-                           hosts_n.size() * sizeof(uint32_t))) {
+                           peers.size() * sizeof(RingPeerInfo))) {
                 return broker_fallback();
             }
         }
@@ -612,7 +661,9 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
          * reachable 100.x address, avoiding rank-0's NAT-observed source. */
         RingPeerInfo me = {};
         me.port = my_ring_port;
-        me.host_n = advertised_host_n(rank, s->peer_conns[0], host);
+        RingPeerInfo self = advertised_peer_info(rank, s->peer_conns[0], host);
+        me.family = self.family;
+        std::memcpy(me.addr, self.addr, sizeof(me.addr));
         if (!write_all(s->peer_conns[0], &me, sizeof(me))) {
             return broker_fallback();
         }
@@ -622,9 +673,7 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
         }
         if (!topology_ok) return broker_fallback();
         if (!read_all(s->peer_conns[0], peers.data(),
-                      peers.size() * sizeof(RingPeerInfo)) ||
-            !read_all(s->peer_conns[0], hosts_n.data(),
-                      hosts_n.size() * sizeof(uint32_t))) {
+                      peers.size() * sizeof(RingPeerInfo))) {
             return broker_fallback();
         }
     }
@@ -638,14 +687,10 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
      * ------------------------------------------------------------------ */
     const int next_rank = (rank + 1) % world_size;
 
-    auto resolve_host = [&](int r) -> std::string {
-        in_addr a; a.s_addr = hosts_n[r];
-        return std::string(inet_ntoa(a));
-    };
-
     const int timeout_ms = ring_connect_timeout_ms();
     bool direct_ok = true;
-    s->next_fd = tcp_connect_timeout(resolve_host(next_rank), peers[next_rank].port, timeout_ms);
+    const std::string next_host = peer_addr_string(peers[next_rank]);
+    s->next_fd = tcp_connect_timeout(next_host, peers[next_rank].port, timeout_ms);
     if (s->next_fd < 0) direct_ok = false;
     if (my_ring_listen >= 0) {
         s->prev_fd = accept_with_timeout(my_ring_listen, timeout_ms);
@@ -679,7 +724,7 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
     if (my_ring_listen >= 0) ::close(my_ring_listen);
 
     gloo_trace(rank, "direct_ring=enabled next_rank=%d next=%s:%u timeout_ms=%d",
-               next_rank, resolve_host(next_rank).c_str(), peers[next_rank].port,
+               next_rank, next_host.c_str(), peers[next_rank].port,
                timeout_ms);
     return s;
 }
