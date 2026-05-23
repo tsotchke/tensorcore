@@ -53,8 +53,9 @@ every architectural primitive in code and tested:
   --checkpoint` now discards `X_norm` after the forward projection,
   realizes it through the RMSNorm recompute callback before the `dW`
   backward GEMM, and has a dedicated CTest smoke.
-- Experimental PyTorch bridge with zero-copy fp32 CPU matmul and an opt-in
-  `torch.matmul` dispatcher hook.
+- Experimental PyTorch bridge with zero-copy fp32 CPU matmul, an opt-in
+  `torch.matmul` dispatcher hook, and structured backend-state reporting
+  for the current PrivateUse1 shim versus future allocator/factory kernels.
 
 ### End-to-end validation matrix
 

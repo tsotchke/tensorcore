@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import sys
 import types
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 import torch
 
@@ -64,6 +64,18 @@ def _check_device(device: Any = None) -> int:
     if index != 0:
         raise ValueError("tensorcore exposes one logical PrivateUse1 device: tensorcore:0")
     return index
+
+
+def _torch_backend_module() -> Optional[types.ModuleType]:
+    module = getattr(torch, _BACKEND_NAME, None)
+    if isinstance(module, types.ModuleType):
+        return module
+    return None
+
+
+def _torch_backend_module_registered() -> bool:
+    module = _torch_backend_module()
+    return module is not None and sys.modules.get(f"torch.{_BACKEND_NAME}") is module
 
 
 def _new_backend_module() -> types.ModuleType:
@@ -115,6 +127,24 @@ def _new_backend_module() -> types.ModuleType:
     def supports_device_allocation() -> bool:
         return False
 
+    def backend_state() -> Dict[str, Any]:
+        owner = sys.modules.get("tensorcore_torch")
+        state = getattr(owner, "pytorch_backend_state", None)
+        if state is None:
+            return {
+                "backend_name": _BACKEND_NAME,
+                "registered": False,
+                "allocator_status": "initializing",
+            }
+        return state()
+
+    def backend_report() -> str:
+        owner = sys.modules.get("tensorcore_torch")
+        report = getattr(owner, "pytorch_backend_report", None)
+        if report is None:
+            return "tensorcore PyTorch backend initializing"
+        return report()
+
     module.is_available = is_available
     module.device_count = device_count
     module.current_device = current_device
@@ -127,6 +157,8 @@ def _new_backend_module() -> types.ModuleType:
     module.set_rng_state = set_rng_state
     module.get_amp_supported_dtype = get_amp_supported_dtype
     module.supports_device_allocation = supports_device_allocation
+    module.backend_state = backend_state
+    module.backend_report = backend_report
     return module
 
 
@@ -176,7 +208,9 @@ __all__ = [
     "matmul",
     "matmul_bf16",
     "privateuse1_backend_name",
+    "pytorch_backend_report",
     "pytorch_backend_registered",
+    "pytorch_backend_state",
     "set_default_matmul",
 ]
 
@@ -184,3 +218,86 @@ __all__ = [
 def pytorch_backend_registered() -> bool:
     """Return whether import registered ``torch.tensorcore`` in this process."""
     return _PYTORCH_BACKEND_REGISTERED
+
+
+def pytorch_backend_state() -> Dict[str, Any]:
+    """Return a structured snapshot of the tensorcore PyTorch bridge state.
+
+    This intentionally distinguishes the import-time PrivateUse1 registration
+    shim from a future full tensorcore tensor backend. Today matmul dispatch is
+    backed by the extension, while direct ``device="tensorcore"`` allocation
+    remains unavailable until allocator/storage/factory kernels land.
+    """
+    module = _torch_backend_module()
+    supports_device_allocation = False
+    is_available = False
+    device_count = 0
+    current_device: Optional[int] = None
+    amp_supported_dtypes: List[str] = []
+
+    if module is not None:
+        is_available_fn = getattr(module, "is_available", None)
+        device_count_fn = getattr(module, "device_count", None)
+        current_device_fn = getattr(module, "current_device", None)
+        allocation_fn = getattr(module, "supports_device_allocation", None)
+        amp_dtype_fn = getattr(module, "get_amp_supported_dtype", None)
+        try:
+            is_available = bool(is_available_fn()) if is_available_fn is not None else False
+            device_count = int(device_count_fn()) if device_count_fn is not None else 0
+            current_device = int(current_device_fn()) if current_device_fn is not None else None
+            supports_device_allocation = (
+                bool(allocation_fn()) if allocation_fn is not None else False
+            )
+            if amp_dtype_fn is not None:
+                amp_supported_dtypes = [str(dtype) for dtype in amp_dtype_fn()]
+        except Exception:
+            is_available = False
+            device_count = 0
+            current_device = None
+            supports_device_allocation = False
+            amp_supported_dtypes = []
+
+    allocator_status = "available" if supports_device_allocation else "not_implemented"
+    if not _PYTORCH_BACKEND_REGISTERED:
+        allocator_status = "unregistered"
+
+    return {
+        "backend_name": _BACKEND_NAME,
+        "privateuse1_backend_name": _privateuse1_backend_name(),
+        "extension_privateuse1_backend_name": privateuse1_backend_name(),
+        "registered": bool(_PYTORCH_BACKEND_REGISTERED),
+        "torch_module_registered": _torch_backend_module_registered(),
+        "generated_tensor_methods": hasattr(torch.Tensor, f"is_{_BACKEND_NAME}"),
+        "is_available": is_available,
+        "device_count": device_count,
+        "current_device": current_device,
+        "supports_device_allocation": supports_device_allocation,
+        "allocator_status": allocator_status,
+        "factory_kernels": supports_device_allocation,
+        "storage_kernels": supports_device_allocation,
+        "matmul_extension_loaded": callable(matmul),
+        "default_matmul_enabled": bool(default_matmul_enabled()),
+        "last_backend_name": last_backend_name(),
+        "amp_supported_dtypes": amp_supported_dtypes,
+    }
+
+
+def pytorch_backend_report() -> str:
+    """Return a compact human-readable tensorcore PyTorch backend report."""
+    state = pytorch_backend_state()
+    return (
+        "tensorcore PyTorch backend: "
+        f"registered={state['registered']} "
+        f"privateuse1={state['privateuse1_backend_name']} "
+        f"module={state['torch_module_registered']} "
+        f"tensor_methods={state['generated_tensor_methods']} "
+        f"allocation={state['allocator_status']} "
+        f"matmul_extension={state['matmul_extension_loaded']} "
+        f"default_matmul={state['default_matmul_enabled']} "
+        f"last_backend={state['last_backend_name']}"
+    )
+
+
+if _torch_backend_module_registered():
+    torch.tensorcore.backend_state = pytorch_backend_state
+    torch.tensorcore.backend_report = pytorch_backend_report

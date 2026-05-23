@@ -114,6 +114,11 @@ script force-builds `tensorcore_torch` against
 - `tensorcore_torch` package import registers PyTorch's PrivateUse1 backend
   name as `tensorcore`, installs `torch.tensorcore`, and generates the
   usual tensor helper methods
+- `tensorcore_torch.pytorch_backend_state()` and
+  `torch.tensorcore.backend_state()` report the same structured capability
+  snapshot: registered runtime shim, generated tensor helpers, matmul
+  extension loaded, and allocator/storage/factory kernels still marked
+  `not_implemented`
 - direct tensor allocation with `torch.empty(..., device="tensorcore")`
   remains unavailable unless `REQUIRE_PYTORCH_BACKEND=1` is set, because
   allocator/storage/factory kernels are a later backend step

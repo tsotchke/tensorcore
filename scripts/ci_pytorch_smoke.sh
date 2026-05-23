@@ -38,6 +38,7 @@ TENSORCORE_LIB_DIR="${TENSORCORE_LIB_DIR}" \
 REQUIRE_PYTORCH_BACKEND="${REQUIRE_PYTORCH_BACKEND}" \
 "${PYTHON_BIN}" - <<'PY'
 import os
+import json
 import sys
 import torch
 
@@ -78,6 +79,40 @@ if torch.device("tensorcore:0").index != 0:
     raise AssertionError("torch.device did not recognize tensorcore:0")
 if not hasattr(torch.Tensor, "is_tensorcore"):
     raise AssertionError("PrivateUse1 tensor helpers were not generated")
+
+state = tct.pytorch_backend_state()
+if state.get("backend_name") != "tensorcore":
+    raise AssertionError(f"unexpected backend state name: {state}")
+if state.get("privateuse1_backend_name") != "tensorcore":
+    raise AssertionError(f"unexpected PrivateUse1 state name: {state}")
+if state.get("extension_privateuse1_backend_name") != "tensorcore":
+    raise AssertionError(f"unexpected extension PrivateUse1 name: {state}")
+if state.get("registered") is not True:
+    raise AssertionError(f"backend state should report registered: {state}")
+if state.get("torch_module_registered") is not True:
+    raise AssertionError(f"backend state should report torch module registered: {state}")
+if state.get("generated_tensor_methods") is not True:
+    raise AssertionError(f"backend state should report generated tensor methods: {state}")
+if state.get("is_available") is not True:
+    raise AssertionError(f"backend state should report available runtime shim: {state}")
+if state.get("device_count") != 1 or state.get("current_device") != 0:
+    raise AssertionError(f"backend state device fields mismatch: {state}")
+if state.get("supports_device_allocation") is not False:
+    raise AssertionError(f"backend state should report allocation unsupported: {state}")
+if state.get("allocator_status") != "not_implemented":
+    raise AssertionError(f"backend state allocation status mismatch: {state}")
+if state.get("factory_kernels") is not False or state.get("storage_kernels") is not False:
+    raise AssertionError(f"backend state should report missing factory/storage kernels: {state}")
+if state.get("matmul_extension_loaded") is not True:
+    raise AssertionError(f"backend state should report matmul extension loaded: {state}")
+if torch.tensorcore.backend_state() != state:
+    raise AssertionError("torch.tensorcore.backend_state does not match package state")
+report = tct.pytorch_backend_report()
+if "allocation=not_implemented" not in report or "registered=True" not in report:
+    raise AssertionError(f"backend report missing expected fields: {report}")
+if torch.tensorcore.backend_report() != report:
+    raise AssertionError("torch.tensorcore.backend_report does not match package report")
+print("tensorcore PyTorch backend state:", json.dumps(state, sort_keys=True))
 
 
 def assert_close(actual, expected, *, rtol=1e-5, atol=1e-5):

@@ -247,10 +247,13 @@ See `make help` for the full menu.
   registers PyTorch's PrivateUse1 name as `tensorcore` and exposes a small
   `torch.tensorcore` runtime module, but direct tensor allocation on
   `device="tensorcore"` is intentionally unavailable until allocator /
-  storage / factory kernels land. When PyTorch is installed, run
+  storage / factory kernels land. Use
+  `tensorcore_torch.pytorch_backend_state()` or
+  `torch.tensorcore.backend_state()` to inspect that split explicitly from
+  training/deployment scripts. When PyTorch is installed, run
   `REQUIRE_PYTORCH=1 scripts/ci_pytorch_smoke.sh` to force-build the bridge
   and validate fp32/bf16, empty matmul, dispatcher, autograd fallback, and
-  PrivateUse1 registration behavior.
+  PrivateUse1 registration/backend-state behavior.
 - **CUDA.** Obviously.
 - **Real GGUF model.** The bench harness uses synthetic Q4_0 weights;
   full inference against a real GGUF is a v0.2 deliverable.
