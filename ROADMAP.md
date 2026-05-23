@@ -135,6 +135,9 @@ some still queued.
       softmax forward/backward, and fp32/fp16-gradient AdamW, with
       `test_training_kernels`, `test_e2e_training`, `training_step`, and
       `mesh_training_demo` registered for non-Metal CUDA CTest proof.
+      Revalidated on cosbox at `6382b98` (2026-05-23): CUDA build CTest
+      18/18 passed and the Python CUDA smoke dispatched fp32/fp16 GEMM to
+      cuBLAS managed-memory kernels on RTX 3090 cc=8.6.
 - [x] **chipStar 1.1 built on cosbox (RTX 3090 host)** — hipcc + libCHIP.so
       verified; HIP source compiles. Runtime test blocked on NVIDIA driver
       mismatch; restart-pending.

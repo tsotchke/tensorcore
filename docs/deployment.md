@@ -374,6 +374,9 @@ network issue.
 - Managed-memory CUDA training dispatch for RMSNorm forward/backward,
   LayerNorm forward, SwiGLU forward/backward, softmax forward/backward, and
   fp32/fp16-gradient AdamW, with host-buffer fallback to portable CPU kernels
+  (revalidated on cosbox at `6382b98`, 2026-05-23: CUDA build CTest
+  18/18 passed; Python CUDA smoke hit `cublas_sgemm_managed` and
+  `cublas_gemmex_fp16_tensorop_managed` on RTX 3090 cc=8.6)
 
 **Coming, not blocking:**
 - Larger-network activation-checkpoint policy: the buffer-level CPU/Metal

@@ -73,6 +73,7 @@ every architectural primitive in code and tested:
 | `tc_cuda_init` device introspection | RTX 3090 Ampere sm_8.6 | ✓ — fp16+bf16+int8_tc+tf32 |
 | `tc_gemm` via cuBLAS tensor cores | RTX 3090 4096³ fp16 | ✓ — **32.28 TFLOPS** fp32-accum / **60.42 TFLOPS** fp16-accum |
 | `tc_gemm` via cuBLAS sgemm | RTX 3090 4096³ fp32 | ✓ — 31.32 TFLOPS |
+| CUDA training CTest + Python smoke | cosbox RTX 3090 at `6382b98` | ✓ — 18/18 CTest; RMSNorm/SwiGLU/softmax backward + AdamW CUDA dispatch |
 
 ### Observability
 
