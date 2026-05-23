@@ -105,8 +105,8 @@ TC_INTERNAL_SYMBOL tc_status_t tc_buffer_validate(struct tc_context* ctx,
  *
  * Between discard and realloc, tc_buffer_map returns TC_ERR_INVALID_ARG.
  *
- * For the Metal build (lib/core/buffer_pool.mm), these are wired in a
- * follow-up; the CPU build implements them directly in device_cpu.cpp.
+ * CPU implements these in lib/core/device_cpu.cpp; Metal implements the
+ * same handle-preserving storage detach/reallocate path in lib/core/device.mm.
  *
  * Used by lib/core/checkpoint_stub.cpp to actually reclaim memory on
  * tc_checkpoint_discard rather than just toggling a flag. */
