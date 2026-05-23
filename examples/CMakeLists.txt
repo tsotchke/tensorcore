@@ -16,6 +16,11 @@ target_link_libraries(training_step PRIVATE tensorcore)
 target_include_directories(training_step PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(training_step PRIVATE "-lm")
 
+add_executable(mesh_training_demo mesh_training_demo.c)
+target_link_libraries(mesh_training_demo PRIVATE tensorcore)
+target_include_directories(mesh_training_demo PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(mesh_training_demo PRIVATE "-lm")
+
 # Register the assembly examples as CTest smoke tests so CI catches
 # regressions in the inference + training primitive sequences.
 if(TC_BUILD_TESTS AND TC_ENABLE_METAL)
@@ -30,4 +35,16 @@ if(TC_BUILD_TESTS AND TC_ENABLE_METAL)
         ENVIRONMENT "TC_METALLIB=${TC_METALLIB_PATH}"
         TIMEOUT 60
     )
+endif()
+
+if(TC_BUILD_TESTS)
+    add_test(NAME example_mesh_training_demo
+        COMMAND mesh_training_demo --inner 2 --outer 1
+    )
+    set_tests_properties(example_mesh_training_demo PROPERTIES TIMEOUT 60)
+    if(TC_ENABLE_METAL)
+        set_tests_properties(example_mesh_training_demo PROPERTIES
+            ENVIRONMENT "TC_METALLIB=${TC_METALLIB_PATH}"
+        )
+    endif()
 endif()

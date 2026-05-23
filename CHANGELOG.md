@@ -30,6 +30,10 @@ every architectural primitive in code and tested:
 - Cross-process test infrastructure (`test_diloco_gloo_fork`,
   `test_diloco_sparse_fork`, `test_dist_remote`) for forked, multi-rank,
   and cross-machine validation.
+- `examples/mesh_training_demo.c`: runnable split-rank training loop with
+  RMSNorm, GEMM, softmax+CE, AdamW, and DiLoCo outer synchronization;
+  registered as a single-rank CTest smoke and parameterized for GLOO
+  multi-host rendezvous.
 - Experimental PyTorch bridge with zero-copy fp32 CPU matmul and an opt-in
   `torch.matmul` dispatcher hook.
 

@@ -17,6 +17,7 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
 | `gguf_inspect.c` | Open a GGUF file, walk tensors, dump metadata, optionally copy a tensor into a `tc_buffer` | <1s |
 | `decode_step.c` | One full synthetic Llama decode step end-to-end (RMSnorm + Q4_0 GEMVs + RoPE + FlashAttention + SwiGLU + residual) | ~30ms / 2 layers |
 | `training_step.c` | One full training iteration: RMSnorm + Linear + softmax forward, backward through softmax+CE / Linear / RMSnorm, AdamW on weights + gamma | ~10ms / step |
+| `mesh_training_demo.c` | Split-rank training loop with RMSNorm, GEMM, softmax+CE, AdamW, DiLoCo outer sync, and GLOO rendezvous flags | ~10ms single-rank; network-dependent multi-rank |
 | `native_sdk_consumer/` | Standalone C and C++ consumers for an installed native SDK, shared/static CMake targets, and pkg-config smoke source | build-only |
 
 ## `hello_gemm.c` (60 lines)
@@ -101,6 +102,36 @@ step 15  loss=0.2549
 
 Loss decreases monotonically — the assembly is numerically correct.
 
+## `mesh_training_demo.c` (400 lines)
+
+Runnable end-to-end mesh training demo. Each process owns a small local
+training shard:
+
+1. `tc_rmsnorm_forward`.
+2. `tc_gemm` for the linear projection.
+3. `tc_softmax_forward` plus host cross-entropy gradient.
+4. `tc_gemm` backward for `dW` and `dX`.
+5. `tc_rmsnorm_backward`.
+6. `tc_adamw_step` on fp32 master weights and gamma.
+7. `tc_diloco_step` / `tc_diloco_apply_outer` for outer synchronization.
+
+Single-rank smoke:
+
+```sh
+./build/examples/mesh_training_demo --inner 2 --outer 1
+```
+
+Two or more ranks use the same executable with one process per host:
+
+```sh
+./mesh_training_demo --rank 0 --world 2 --url tcp://100.x.y.z:9100
+./mesh_training_demo --rank 1 --world 2 --url tcp://100.x.y.z:9100
+```
+
+Output reports rendezvous time, per-outer loss, DiLoCo bytes sent, final
+outer-step count, and elapsed wall time. The single-rank mode is also
+registered as `example_mesh_training_demo` in CTest.
+
 ## `native_sdk_consumer/`
 
 Out-of-tree consumer fixture for release artifacts and downstream
@@ -116,7 +147,8 @@ the current host.
 2. `gguf_inspect.c` — touches the GGUF reader.
 3. `decode_step.c` — inference assembly.
 4. `training_step.c` — training assembly.
-5. `native_sdk_consumer/` — proves an installed SDK works out of tree.
+5. `mesh_training_demo.c` — split-rank training + DiLoCo assembly.
+6. `native_sdk_consumer/` — proves an installed SDK works out of tree.
 
 Each example assumes you've read the corresponding doc:
 
@@ -124,6 +156,7 @@ Each example assumes you've read the corresponding doc:
 - `gguf_inspect` ↔ [../docs/gguf.md](../docs/gguf.md)
 - `decode_step` ↔ [../docs/inference.md](../docs/inference.md)
 - `training_step` ↔ [../docs/training_loop.md](../docs/training_loop.md) + [../docs/training_kernels.md](../docs/training_kernels.md)
+- `mesh_training_demo` ↔ [../docs/diloco.md](../docs/diloco.md) + [../docs/deployment.md](../docs/deployment.md)
 
 ## Extending
 

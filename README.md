@@ -146,13 +146,14 @@ named dtypes.
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 
-ctest --test-dir build --output-on-failure          # 24/24
+ctest --test-dir build --output-on-failure          # 30/30
 ./build/bench/bench_gemm                             # TFLOPS sweep
 ./build/bench/bench_attention                        # FlashAttention TFLOPS
 ./build/bench/bench_inference_7b                     # Q4_0 7B decode harness
 ./build/examples/hello_gemm                          # minimal C usage
 ./build/examples/gguf_inspect model.gguf             # inspect a GGUF file
 ./build/examples/gguf_inspect model.gguf --load-supported
+./build/examples/mesh_training_demo --inner 2 --outer 1
 ```
 
 On M3 Max, fp16 simdgroup_matrix GEMM should land within ~10% of MLX's
@@ -211,7 +212,7 @@ tensorcore/
 ├── cmake/                ← compile_metallib.cmake, tensorcoreConfig.cmake.in, .pc.in
 ├── tests/                ← CTest correctness, ABI, Python, and CPU-portability tests
 ├── bench/                ← TFLOPS / tok/s harness
-├── examples/             ← hello_gemm, gguf_inspect
+├── examples/             ← hello_gemm, gguf_inspect, decode/training demos
 ├── eshkol/               ← .esk bindings + FFI bridge for the Eshkol toolchain
 │                            (see [eshkol/bridge/INTEGRATION.md](eshkol/bridge/INTEGRATION.md)
 │                            for the drop-in steps)
@@ -248,8 +249,8 @@ silicon-bound vs software-bound axes are all in
 - **[SECURITY.md](SECURITY.md)** — threat model, supported versions,
   how to report a vulnerability.
 - **[examples/README.md](examples/README.md)** — what each compilable
-  example (`hello_gemm`, `gguf_inspect`, `decode_step`, `training_step`)
-  demonstrates.
+  example (`hello_gemm`, `gguf_inspect`, `decode_step`, `training_step`,
+  `mesh_training_demo`) demonstrates.
 - **[tests/README.md](tests/README.md)** — what each default and
   portable-CPU correctness test covers and the tolerance it enforces.
 - **[bench/README.md](bench/README.md)** — what each bench measures
