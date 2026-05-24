@@ -96,6 +96,9 @@ every architectural primitive in code and tested:
 - `Add per-rank remote PATH overrides for live mesh training`:
   `TC_MESH_RANK{1,2,3}_PATH` lets operators prepend host-specific
   toolchain directories during remote prepare and rank launch.
+- `Allow rank 1 Linux prepare in the live mesh launcher`:
+  `TC_MESH_RANK1_PREPARE=linux` builds Enki/rank 1 from the archived
+  checkout like the Linux ranks instead of copying the local Apple binary.
 - `Add operational evidence bundle validation`:
   `scripts/check_operational_evidence.py` validates release, SDK26, CUDA,
   HIP, PyTorch, and live-mesh artifacts together, with clean-current-head

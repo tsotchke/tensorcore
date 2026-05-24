@@ -246,6 +246,9 @@ managed-memory training path when available.
 If a remote rank needs non-default toolchain paths, set
 `TC_MESH_RANK1_PATH`, `TC_MESH_RANK2_PATH`, or `TC_MESH_RANK3_PATH`; the
 script prepends that value to `PATH` during remote prepare and rank launch.
+Rank 1 defaults to the historical copy-local path for Apple-to-Apple
+deployments. Set `TC_MESH_RANK1_PREPARE=linux` when rank 1 should be
+prepared like the Linux ranks from the current committed checkout.
 
 When the physical mesh is unavailable, the same script can run all ranks on
 the current host for regression evidence:
