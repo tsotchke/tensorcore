@@ -173,8 +173,8 @@ some still queued.
       `scripts/run_live_mesh_training_demo.sh` prepares and launches
       `examples/mesh_training_demo` across Atlas, Enki, old-donkey, and
       cosbox. Validated 2026-05-23 with direct-ring DiLoCo outer sync,
-      checkpoint counters on all four ranks, and cosbox rank 3 reporting
-      `backend=cuda`.
+      a 5 outer-step live soak, 40 checkpoint discard/realize cycles on
+      all four ranks, and cosbox rank 3 reporting `backend=cuda`.
 
 ### v0.1 — Foundation (shipped this checkpoint)
 - [x] CMake + metallib precompile + cross-family runtime detect

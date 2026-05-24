@@ -75,7 +75,7 @@ every architectural primitive in code and tested:
 | Atlas ↔ old-donkey (Tailscale, cross-continent) | Mac + Linux Xeon | ✓ — 1.4 s for 3 outer steps |
 | Atlas ↔ cosbox (Tailscale, CUDA-built) | Mac + RTX 3090 host | ✓ — TC_ENABLE_CUDA validated |
 | **4-rank cross-continent: Atlas + Enki + old-donkey + cosbox** | **Mac×2 + Linux×2, two continents** | **✓ — first 4-way mesh** |
-| `mesh_training_demo` live 4-rank | Atlas + Enki + old-donkey + cosbox | ✓ — direct-ring DiLoCo outer sync + activation checkpointing; cosbox rank 3 used CUDA |
+| `mesh_training_demo` live 4-rank | Atlas + Enki + old-donkey + cosbox | ✓ — direct-ring DiLoCo outer sync + activation checkpointing; 5 outer-step soak completed; cosbox rank 3 used CUDA |
 | `tc_cuda_init` device introspection | RTX 3090 Ampere sm_8.6 | ✓ — fp16+bf16+int8_tc+tf32 |
 | `tc_gemm` via cuBLAS tensor cores | RTX 3090 4096³ fp16 | ✓ — **32.28 TFLOPS** fp32-accum / **60.42 TFLOPS** fp16-accum |
 | `tc_gemm` via cuBLAS sgemm | RTX 3090 4096³ fp32 | ✓ — 31.32 TFLOPS |

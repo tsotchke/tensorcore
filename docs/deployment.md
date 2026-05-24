@@ -236,11 +236,14 @@ Validated on 2026-05-23 with:
 ```sh
 TC_MESH_PREPARE=1 TC_MESH_TRAINING_INNER=2 TC_MESH_TRAINING_OUTER=1 \
   scripts/run_live_mesh_training_demo.sh
+TC_MESH_TRAINING_INNER=8 TC_MESH_TRAINING_OUTER=5 \
+  scripts/run_live_mesh_training_demo.sh
 ```
 
-All four ranks reported direct-ring all-reduce, completed the outer step,
-and emitted activation-checkpoint counters; cosbox rank 3 reported
-`backend=cuda`.
+All four ranks reported direct-ring all-reduce, completed the requested
+outer steps, and emitted activation-checkpoint counters. The longer soak
+completed five outer steps with 40 checkpoint discard/realize cycles per
+rank; cosbox rank 3 reported `backend=cuda` throughout.
 
 ### 4-rank reference deployment
 
