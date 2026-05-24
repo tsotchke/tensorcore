@@ -61,6 +61,48 @@ def base_evidence() -> dict[str, Any]:
             "ring_enabled": True,
             "rank3_cuda_requested": True,
             "local_only": False,
+            "rank_launch": [
+                {
+                    "rank": 0,
+                    "host": "atlas",
+                    "directory": "/repo",
+                    "binary": "/repo/build/examples/mesh_training_demo",
+                    "prepare_mode": "local-build",
+                    "prepared_this_run": False,
+                    "path_prefix_set": False,
+                    "cuda_requested": False,
+                },
+                {
+                    "rank": 1,
+                    "host": "enki",
+                    "directory": "/tmp/tensorcore-live-mesh-training",
+                    "binary": "/tmp/tensorcore-live-mesh-training/build/examples/mesh_training_demo",
+                    "prepare_mode": "source",
+                    "prepared_this_run": True,
+                    "path_prefix_set": True,
+                    "cuda_requested": False,
+                },
+                {
+                    "rank": 2,
+                    "host": "old-donkey",
+                    "directory": "/tmp/tensorcore-live-mesh-training",
+                    "binary": "/tmp/tensorcore-live-mesh-training/build/examples/mesh_training_demo",
+                    "prepare_mode": "source",
+                    "prepared_this_run": True,
+                    "path_prefix_set": True,
+                    "cuda_requested": False,
+                },
+                {
+                    "rank": 3,
+                    "host": "cosbox",
+                    "directory": "/tmp/tensorcore-live-mesh-training",
+                    "binary": "/tmp/tensorcore-live-mesh-training/build/examples/mesh_training_demo",
+                    "prepare_mode": "source",
+                    "prepared_this_run": True,
+                    "path_prefix_set": True,
+                    "cuda_requested": True,
+                },
+            ],
         },
         "summary": {
             "passed": True,
@@ -136,6 +178,22 @@ def main() -> int:
         raise AssertionError(local_only_result.stderr or local_only_result.stdout)
 
     assert_fails(good, "run.local_only must be true", "--require-local-only")
+
+    source_prepared_result = run_checker(
+        good,
+        "--min-outer-steps", "5",
+        "--require-direct-ring",
+        "--require-checkpoint",
+        "--require-cuda-rank3",
+        "--require-rank1-source-prepare",
+    )
+    if source_prepared_result.returncode != 0:
+        raise AssertionError(source_prepared_result.stderr or source_prepared_result.stdout)
+
+    copied_rank1 = copy.deepcopy(good)
+    copied_rank1["run"]["rank_launch"][1]["prepare_mode"] = "copy-local"
+    assert_fails(copied_rank1, "rank 1 must be source-prepared",
+                 "--require-rank1-source-prepare")
 
     no_cuda = copy.deepcopy(good)
     no_cuda["summary"]["cuda_ranks"] = []

@@ -283,7 +283,7 @@ TC_MESH_TRAINING_INNER=8 TC_MESH_TRAINING_OUTER=5 \
   scripts/run_live_mesh_training_demo.sh
 python3 scripts/check_live_mesh_training_evidence.py /tmp/live-mesh-training.json \
   --min-outer-steps 5 --require-direct-ring --require-checkpoint \
-  --require-cuda-rank3
+  --require-cuda-rank3 --require-rank1-source-prepare
 ```
 
 When pairing the live run with release, SDK26, and accelerator smoke
@@ -301,7 +301,8 @@ python3 scripts/check_operational_evidence.py \
   --require-release-clean-head --require-sdk26-clean-head \
   --require-cuda-clean-head --require-pytorch-clean-head \
   --require-live-clean-head --min-live-outer-steps 5 \
-  --require-direct-ring --require-checkpoint --require-cuda-rank3
+  --require-direct-ring --require-checkpoint --require-cuda-rank3 \
+  --require-rank1-source-prepare
 ```
 
 ### 4-rank reference deployment

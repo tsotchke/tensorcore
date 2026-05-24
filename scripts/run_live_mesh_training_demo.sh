@@ -284,7 +284,11 @@ write_evidence() {
     fi
     python3 - "$ROOT" "$log_dir" "$path" "$status" "$world" "$url" \
         "$inner_steps" "$outer_steps" "$checkpoint" "$ring" "$trace" \
-        "$timeout_ms" "$prepare" "$rank3_cuda" "$local_only" <<'PY'
+        "$timeout_ms" "$prepare" "$rank3_cuda" "$local_only" \
+        "$rank0_host" "$rank0_bin" \
+        "$rank1_prepare" "$rank1_ssh" "$rank1_dir" "$rank1_bin" "$rank1_path" \
+        "$rank2_ssh" "$rank2_dir" "$rank2_bin" "$rank2_path" \
+        "$rank3_ssh" "$rank3_dir" "$rank3_bin" "$rank3_path" <<'PY'
 import json
 import pathlib
 import re
@@ -306,6 +310,23 @@ timeout_ms = int(sys.argv[12])
 prepare = sys.argv[13] == "1"
 rank3_cuda = sys.argv[14] == "1"
 local_only = sys.argv[15] == "1"
+(
+    rank0_host,
+    rank0_bin,
+    rank1_prepare,
+    rank1_ssh,
+    rank1_dir,
+    rank1_bin,
+    rank1_path,
+    rank2_ssh,
+    rank2_dir,
+    rank2_bin,
+    rank2_path,
+    rank3_ssh,
+    rank3_dir,
+    rank3_bin,
+    rank3_path,
+) = sys.argv[16:31]
 
 patterns = {
     "direct": re.compile(
@@ -408,6 +429,65 @@ all_requested_outer_steps = all(
     rank.get("outer_steps_completed") == outer_steps for rank in rank_list
 )
 
+prepared_this_run = prepare and not local_only
+if local_only:
+    rank_launch = [
+        {
+            "rank": rank,
+            "host": rank0_host,
+            "directory": str(root),
+            "binary": rank0_bin,
+            "prepare_mode": "local-only",
+            "prepared_this_run": False,
+            "path_prefix_set": False,
+            "cuda_requested": False,
+        }
+        for rank in range(world)
+    ]
+else:
+    rank_launch = [
+        {
+            "rank": 0,
+            "host": rank0_host,
+            "directory": str(root),
+            "binary": rank0_bin,
+            "prepare_mode": "local-build",
+            "prepared_this_run": False,
+            "path_prefix_set": False,
+            "cuda_requested": False,
+        },
+        {
+            "rank": 1,
+            "host": rank1_ssh,
+            "directory": rank1_dir,
+            "binary": rank1_bin,
+            "prepare_mode": "source" if rank1_prepare == "linux" else "copy-local",
+            "prepared_this_run": prepared_this_run,
+            "path_prefix_set": bool(rank1_path),
+            "cuda_requested": False,
+        },
+        {
+            "rank": 2,
+            "host": rank2_ssh,
+            "directory": rank2_dir,
+            "binary": rank2_bin,
+            "prepare_mode": "source",
+            "prepared_this_run": prepared_this_run,
+            "path_prefix_set": bool(rank2_path),
+            "cuda_requested": False,
+        },
+        {
+            "rank": 3,
+            "host": rank3_ssh,
+            "directory": rank3_dir,
+            "binary": rank3_bin,
+            "prepare_mode": "source",
+            "prepared_this_run": prepared_this_run,
+            "path_prefix_set": bool(rank3_path),
+            "cuda_requested": rank3_cuda,
+        },
+    ]
+
 def git_value(*args: str) -> str:
     try:
         result = subprocess.run(
@@ -443,6 +523,7 @@ evidence = {
         "prepare": prepare,
         "rank3_cuda_requested": rank3_cuda,
         "local_only": local_only,
+        "rank_launch": rank_launch,
     },
     "summary": {
         "passed": status == "passed",

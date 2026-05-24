@@ -24,6 +24,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--require-checkpoint", action="store_true")
     parser.add_argument("--require-cuda-rank3", action="store_true")
     parser.add_argument("--require-local-only", action="store_true")
+    parser.add_argument("--require-rank1-source-prepare", action="store_true")
     return parser.parse_args()
 
 
@@ -58,6 +59,19 @@ def main() -> int:
             f"ranks must contain {args.world} entries")
     if args.require_local_only:
         require(errors, run.get("local_only") is True, "run.local_only must be true")
+    if args.require_rank1_source_prepare:
+        rank_launch = run.get("rank_launch", [])
+        rank1 = next(
+            (
+                item for item in rank_launch
+                if isinstance(item, dict) and item.get("rank") == 1
+            ),
+            {},
+        )
+        require(errors, rank1.get("prepare_mode") == "source",
+                "rank 1 must be source-prepared")
+        require(errors, rank1.get("prepared_this_run") is True,
+                "rank 1 must be prepared in this run")
 
     require(errors, summary.get("passed") is True, "summary.passed must be true")
     require(errors, summary.get("all_ranks_passed") is True,

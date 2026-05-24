@@ -230,14 +230,17 @@ TC_GLOO_ADVERTISE_HOSTS=100.96.130.16,100.111.56.36,100.121.14.68,100.86.83.35 \
   scripts/run_live_mesh_training_demo.sh
 python3 scripts/check_live_mesh_training_evidence.py /tmp/live-mesh-training.json \
   --require-direct-ring --require-checkpoint --require-cuda-rank3
+python3 scripts/check_live_mesh_training_evidence.py /tmp/live-mesh-training.json \
+  --require-direct-ring --require-checkpoint --require-cuda-rank3 \
+  --require-rank1-source-prepare
 python3 scripts/check_live_mesh_training_evidence.py /tmp/live-mesh-training-local.json \
   --require-direct-ring --require-checkpoint --require-local-only
 ```
 
 The optional evidence JSON uses schema
 `tensorcore.live_mesh_training.evidence.v1` and records per-rank rendezvous,
-outer-step losses, selected backend, direct-ring route counts, and checkpoint
-discard/realize counters.
+outer-step losses, selected backend, direct-ring route counts, checkpoint
+discard/realize counters, and per-rank launch/prepare metadata.
 
 ### `check_live_mesh_training_evidence.py`
 
@@ -246,6 +249,8 @@ Validates the JSON artifact emitted by `run_live_mesh_training_demo.sh` via
 `--require-direct-ring`, `--require-checkpoint`, and
 `--require-cuda-rank3` to enforce the operational contract for a live run.
 Use `--require-local-only` for the localhost multi-rank regression mode.
+Use `--require-rank1-source-prepare` when the evidence must prove rank 1
+was prepared from the archived checkout during that run.
 
 ### `check_operational_evidence.py`
 

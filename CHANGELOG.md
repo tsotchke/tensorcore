@@ -99,6 +99,9 @@ every architectural primitive in code and tested:
 - `Allow rank 1 Linux prepare in the live mesh launcher`:
   `TC_MESH_RANK1_PREPARE=linux` builds Enki/rank 1 from the archived
   checkout like the Linux ranks instead of copying the local Apple binary.
+- `Record live mesh launch topology in evidence`: live training evidence now
+  includes per-rank launch/prepare metadata, and the checker can require
+  rank 1 source preparation with `--require-rank1-source-prepare`.
 - `Add operational evidence bundle validation`:
   `scripts/check_operational_evidence.py` validates release, SDK26, CUDA,
   HIP, PyTorch, and live-mesh artifacts together, with clean-current-head
