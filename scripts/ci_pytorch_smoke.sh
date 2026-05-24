@@ -6,21 +6,84 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 TENSORCORE_LIB_DIR="${TENSORCORE_LIB_DIR:-${ROOT}/build-portable-cpu-current}"
 REQUIRE_PYTORCH="${REQUIRE_PYTORCH:-0}"
 REQUIRE_PYTORCH_BACKEND="${REQUIRE_PYTORCH_BACKEND:-0}"
+EVIDENCE_PATH="${TENSORCORE_PYTORCH_SMOKE_EVIDENCE_PATH:-}"
+
+write_skip_evidence() {
+    local status="$1"
+    local message="$2"
+    if [[ -z "${EVIDENCE_PATH}" ]]; then
+        return 0
+    fi
+    TC_ROOT="${ROOT}" \
+    TC_PYTORCH_EVIDENCE_PATH="${EVIDENCE_PATH}" \
+    TC_PYTORCH_STATUS="${status}" \
+    TC_PYTORCH_MESSAGE="${message}" \
+    TC_PYTORCH_REQUIRE="${REQUIRE_PYTORCH}" \
+    TC_PYTORCH_BACKEND_REQUIRE="${REQUIRE_PYTORCH_BACKEND}" \
+    TC_PYTORCH_LIB_DIR="${TENSORCORE_LIB_DIR}" \
+    "${PYTHON_BIN}" - <<'PY'
+import json
+import os
+import pathlib
+import subprocess
+
+
+def git_value(*args):
+    try:
+        return subprocess.check_output(
+            ["git", *args], cwd=os.environ["TC_ROOT"],
+            text=True, stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return None
+
+
+dirty = git_value("status", "--short")
+evidence = {
+    "schema_version": 1,
+    "git_head": git_value("rev-parse", "HEAD"),
+    "git_dirty": bool(dirty),
+    "require_pytorch": os.environ.get("TC_PYTORCH_REQUIRE") == "1",
+    "require_pytorch_backend": os.environ.get("TC_PYTORCH_BACKEND_REQUIRE") == "1",
+    "runtime_status": os.environ["TC_PYTORCH_STATUS"],
+    "message": os.environ["TC_PYTORCH_MESSAGE"],
+    "torch_version": None,
+    "tensorcore_lib_dir": os.environ.get("TC_PYTORCH_LIB_DIR"),
+    "backend_state": None,
+    "backend_report": None,
+    "matmul": {},
+    "direct_device_allocation": {
+        "available": False,
+        "error": None,
+    },
+}
+pathlib.Path(os.environ["TC_PYTORCH_EVIDENCE_PATH"]).write_text(
+    json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+PY
+}
 
 if ! "${PYTHON_BIN}" - <<'PY' >/dev/null 2>&1
 import torch  # noqa: F401
 PY
 then
     if [[ "${REQUIRE_PYTORCH}" == "1" ]]; then
+        write_skip_evidence "skipped_torch_unavailable" \
+            "PyTorch is required but is not importable"
         echo "PyTorch is required but is not importable with ${PYTHON_BIN}" >&2
         exit 1
     fi
+    write_skip_evidence "skipped_torch_unavailable" \
+        "PyTorch is not importable"
     echo "PyTorch not importable with ${PYTHON_BIN}; skipping PyTorch bridge smoke"
     exit 0
 fi
 
 if [[ ! -f "${TENSORCORE_LIB_DIR}/libtensorcore.dylib" &&
       ! -f "${TENSORCORE_LIB_DIR}/libtensorcore.so" ]]; then
+    write_skip_evidence "skipped_native_lib_missing" \
+        "No libtensorcore shared library was found in TENSORCORE_LIB_DIR"
     echo "No libtensorcore.{dylib,so} in ${TENSORCORE_LIB_DIR}" >&2
     echo "Build tensorcore first or set TENSORCORE_LIB_DIR." >&2
     exit 1
@@ -35,12 +98,61 @@ TENSORCORE_LIB_DIR="$(cd "${TENSORCORE_LIB_DIR}" && pwd)"
 
 PYTHONPATH="${ROOT}/bindings/pytorch:${ROOT}/python${PYTHONPATH:+:${PYTHONPATH}}" \
 TENSORCORE_LIB_DIR="${TENSORCORE_LIB_DIR}" \
+TC_ROOT="${ROOT}" \
+TC_PYTORCH_EVIDENCE_PATH="${EVIDENCE_PATH}" \
+REQUIRE_PYTORCH="${REQUIRE_PYTORCH}" \
 REQUIRE_PYTORCH_BACKEND="${REQUIRE_PYTORCH_BACKEND}" \
 "${PYTHON_BIN}" - <<'PY'
 import os
 import json
+import pathlib
+import subprocess
 import sys
 import torch
+
+
+def git_value(*args):
+    try:
+        return subprocess.check_output(
+            ["git", *args], cwd=os.environ["TC_ROOT"],
+            text=True, stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return None
+
+
+def base_evidence():
+    dirty = git_value("status", "--short")
+    return {
+        "schema_version": 1,
+        "git_head": git_value("rev-parse", "HEAD"),
+        "git_dirty": bool(dirty),
+        "require_pytorch": os.environ.get("REQUIRE_PYTORCH") == "1",
+        "require_pytorch_backend": os.environ.get("REQUIRE_PYTORCH_BACKEND") == "1",
+        "runtime_status": "not_run",
+        "message": None,
+        "torch_version": getattr(torch, "__version__", None),
+        "tensorcore_lib_dir": os.environ.get("TENSORCORE_LIB_DIR"),
+        "backend_state": None,
+        "backend_report": None,
+        "matmul": {},
+        "direct_device_allocation": {
+            "available": False,
+            "error": None,
+        },
+    }
+
+
+def write_evidence(evidence):
+    path = os.environ.get("TC_PYTORCH_EVIDENCE_PATH")
+    if path:
+        pathlib.Path(path).write_text(
+            json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+
+evidence = base_evidence()
 
 # Pre-initialize the C ABI through the ctypes wrapper before importing the
 # PyTorch bridge. The extension must tolerate tc_init returning
@@ -158,6 +270,7 @@ out = tct.matmul(A, B)
 assert_close(out, expected)
 if tct.last_backend_name() != "portable_cpu":
     raise AssertionError(f"unexpected backend after fp32 matmul: {tct.last_backend_name()}")
+fp32_backend = tct.last_backend_name()
 
 A_nc = torch.randn(3, 8, dtype=torch.float32)[:, ::2]
 B_nc = torch.randn(10, 4, dtype=torch.float32).t()
@@ -205,6 +318,7 @@ backend_required = os.environ.get("REQUIRE_PYTORCH_BACKEND") == "1"
 try:
     allocated = torch.empty((1,), device="tensorcore")
 except Exception as exc:
+    allocation_error = str(exc)
     if backend_required:
         raise AssertionError(
             "torch.empty(device='tensorcore') failed; full tensorcore device "
@@ -214,9 +328,34 @@ except Exception as exc:
         "torch.empty(device='tensorcore') unavailable as expected without "
         "PrivateUse1 allocator/storage/factory kernels"
     )
+    allocation_available = False
 else:
     if allocated.device.type != "tensorcore":
         raise AssertionError(f"unexpected allocated device: {allocated.device}")
+    allocation_error = None
+    allocation_available = True
+
+evidence.update({
+    "runtime_status": "passed",
+    "message": "tensorcore PyTorch bridge smoke OK",
+    "backend_state": state,
+    "backend_report": report,
+    "matmul": {
+        "fp32_eligibility_reason": elig.get("reason"),
+        "fp32_backend": fp32_backend,
+        "bf16_checked": True,
+        "noncontiguous_checked": True,
+        "degenerate_checked": True,
+        "error_paths_checked": True,
+        "default_matmul_dispatch_checked": True,
+        "autograd_fallback_checked": True,
+    },
+    "direct_device_allocation": {
+        "available": allocation_available,
+        "error": allocation_error,
+    },
+})
+write_evidence(evidence)
 
 print("tensorcore PyTorch bridge smoke OK")
 PY

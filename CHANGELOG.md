@@ -139,6 +139,11 @@ every architectural primitive in code and tested:
   ctypes C ABI before importing the extension, covering the
   `TC_ERR_ALREADY_INITIALIZED` path that appears in mixed Python
   integrations.
+- `Emit PyTorch bridge smoke evidence`: `scripts/ci_pytorch_smoke.sh`
+  writes optional JSON via `TENSORCORE_PYTORCH_SMOKE_EVIDENCE_PATH`, and
+  `scripts/check_pytorch_smoke_evidence.py` validates pass/skip state,
+  backend registration, matmul dispatch coverage, and direct
+  `device="tensorcore"` allocation status for node-health automation.
 - `Harden distributed collective validation`: Apple and portable GLOO
   collectives now check byte-count and allgather total-size overflow before
   buffer validation, and the hidden GLOO transport checks its own send/recv

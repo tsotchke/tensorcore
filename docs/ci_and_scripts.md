@@ -129,6 +129,14 @@ script force-builds `tensorcore_torch` against
 
 If PyTorch is not importable, the script skips by default. Set
 `REQUIRE_PYTORCH=1` to make that a hard failure.
+Set `TENSORCORE_PYTORCH_SMOKE_EVIDENCE_PATH=/tmp/pytorch.json` to emit a
+machine-readable node-health artifact with the skip/pass status, torch
+version, backend state, matmul checks, and direct device-allocation status.
+Validate it with:
+
+```sh
+python3 scripts/check_pytorch_smoke_evidence.py /tmp/pytorch.json
+```
 
 Run locally:
 
