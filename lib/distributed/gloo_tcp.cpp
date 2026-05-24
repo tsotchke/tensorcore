@@ -354,9 +354,43 @@ bool endpoint_from_fd(int fd, bool peer, RingPeerInfo* out) {
 }
 
 RingPeerInfo advertised_peer_info(int rank, int rendez_fd, const std::string& rendezvous_host) {
-    const char* env = std::getenv("TC_GLOO_ADVERTISE_HOST");
     RingPeerInfo out = {};
-    if (env && env[0] && resolve_host_peer(env, &out)) return out;
+    auto trim = [](const std::string& s) -> std::string {
+        size_t first = 0;
+        while (first < s.size() && (s[first] == ' ' || s[first] == '\t' ||
+                                    s[first] == '\n' || s[first] == '\r')) {
+            ++first;
+        }
+        size_t last = s.size();
+        while (last > first && (s[last - 1] == ' ' || s[last - 1] == '\t' ||
+                                s[last - 1] == '\n' || s[last - 1] == '\r')) {
+            --last;
+        }
+        return s.substr(first, last - first);
+    };
+    auto ranked_advertise_host = [&]() -> std::string {
+        const char* hosts_env = std::getenv("TC_GLOO_ADVERTISE_HOSTS");
+        if (hosts_env && hosts_env[0]) {
+            const std::string hosts(hosts_env);
+            size_t start = 0;
+            int index = 0;
+            while (start <= hosts.size()) {
+                const size_t comma = hosts.find(',', start);
+                const size_t end = (comma == std::string::npos) ? hosts.size() : comma;
+                if (index == rank) return trim(hosts.substr(start, end - start));
+                if (comma == std::string::npos) break;
+                start = comma + 1;
+                ++index;
+            }
+        }
+        const char* env = std::getenv("TC_GLOO_ADVERTISE_HOST");
+        return (env && env[0]) ? std::string(env) : std::string();
+    };
+    const std::string advertised = ranked_advertise_host();
+    if (!advertised.empty()) {
+        if (resolve_host_peer(advertised, &out)) return out;
+        gloo_trace(rank, "advertise_host_unresolved host=%s", advertised.c_str());
+    }
     if (rank == 0 && resolve_host_peer(rendezvous_host, &out)) return out;
     if (endpoint_from_fd(rendez_fd, false, &out)) return out;
     return out;

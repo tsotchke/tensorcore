@@ -352,13 +352,16 @@ for example `gloo+tcp://127.0.0.1:9000` and
 reached, all ranks coordinate over the rendezvous sockets and fall back
 to the broker path instead of failing `tc_dist_init`.
 
-For Tailscale or other overlay networks, `TC_GLOO_ADVERTISE_HOST` can be
-set per rank to the address peers should dial for direct ring links. If
-unset, each rank reports the local address selected for the rendezvous
-connection. `TC_GLOO_RING_CONNECT_TIMEOUT_MS` bounds direct-ring connect
-attempts before fallback, and `TC_GLOO_NO_RING=1` forces broker dispatch
-if you need to debug a ring-capable build. Set `TC_GLOO_TRACE=1` to log
-whether each rank enabled the direct ring or coordinated broker fallback.
+For Tailscale or other overlay networks, `TC_GLOO_ADVERTISE_HOSTS` can be
+set to a comma-separated rank-indexed list such as
+`100.96.130.16,100.111.56.36,100.121.14.68,100.86.83.35`. Individual
+ranks can also set `TC_GLOO_ADVERTISE_HOST` to the address peers should
+dial for direct ring links. If unset, each rank reports the local address
+selected for the rendezvous connection.
+`TC_GLOO_RING_CONNECT_TIMEOUT_MS` bounds direct-ring connect attempts
+before fallback, and `TC_GLOO_NO_RING=1` forces broker dispatch if you
+need to debug a ring-capable build. Set `TC_GLOO_TRACE=1` to log whether
+each rank enabled the direct ring or coordinated broker fallback.
 
 ## 6. DiLoCo configuration
 

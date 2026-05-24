@@ -72,6 +72,10 @@ every architectural primitive in code and tested:
   ring, DiLoCo, checkpoint, and evidence parser path. The evidence checker
   now has `--require-local-only` for regression gates when the physical
   mesh is intermittent.
+- `Add rank-indexed GLOO ring advertise hosts`: `TC_GLOO_ADVERTISE_HOSTS`
+  accepts a comma-separated rank list for direct-ring neighbor dialing on
+  Tailscale/NAT overlays, while preserving coordinated broker fallback
+  when any ring edge is unreachable.
 - Mesh training activation checkpoint mode: `mesh_training_demo
   --checkpoint` now discards `X_norm` after the forward projection,
   realizes it through the RMSNorm recompute callback before the `dW`

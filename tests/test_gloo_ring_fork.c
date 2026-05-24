@@ -123,10 +123,17 @@ static int run_rank(int rank, const char* url) {
     return 0;
 }
 
-static int run_case(const char* label, const char* url, int force_broker_fallback) {
+static int run_case(const char* label,
+                    const char* url,
+                    int force_broker_fallback,
+                    const char* advertise_hosts) {
     setenv("TC_GLOO_RING", "1", 1);
+    if (advertise_hosts && advertise_hosts[0]) {
+        setenv("TC_GLOO_ADVERTISE_HOSTS", advertise_hosts, 1);
+    } else {
+        unsetenv("TC_GLOO_ADVERTISE_HOSTS");
+    }
     if (force_broker_fallback) {
-        setenv("TC_GLOO_ADVERTISE_HOST", "203.0.113.1", 1);
         setenv("TC_GLOO_RING_CONNECT_TIMEOUT_MS", "100", 1);
     } else {
         unsetenv("TC_GLOO_ADVERTISE_HOST");
@@ -177,7 +184,8 @@ int main(void) {
     }
     char url4[96];
     snprintf(url4, sizeof(url4), "tcp://127.0.0.1:%d", port4);
-    rc |= run_case("ring 4-rank fork test ipv4", url4, 0);
+    rc |= run_case("ring 4-rank fork test ipv4", url4, 0,
+                   "127.0.0.1,127.0.0.1,127.0.0.1,127.0.0.1");
 #if defined(TC_TEST_METAL_BUILD)
     printf("ring 4-rank broker fallback test: SKIP in Metal build; covered by portable CPU build\n");
     fflush(stdout);
@@ -189,7 +197,8 @@ int main(void) {
     }
     char fallback_url4[96];
     snprintf(fallback_url4, sizeof(fallback_url4), "tcp://127.0.0.1:%d", fallback_port4);
-    rc |= run_case("ring 4-rank broker fallback test ipv4", fallback_url4, 1);
+    rc |= run_case("ring 4-rank broker fallback test ipv4", fallback_url4, 1,
+                   "203.0.113.1,203.0.113.1,203.0.113.1,203.0.113.1");
 #endif
 
     const int port6 = reserve_loopback_port_ipv6();
@@ -198,7 +207,8 @@ int main(void) {
     } else {
         char url6[96];
         snprintf(url6, sizeof(url6), "tcp://[::1]:%d", port6);
-        rc |= run_case("ring 4-rank fork test ipv6", url6, 0);
+        rc |= run_case("ring 4-rank fork test ipv6", url6, 0,
+                       "::1,::1,::1,::1");
 #if defined(TC_TEST_METAL_BUILD)
         printf("ring 4-rank broker fallback test ipv6: SKIP in Metal build; covered by portable CPU build\n");
         fflush(stdout);
@@ -209,12 +219,14 @@ int main(void) {
         } else {
             char fallback_url6[96];
             snprintf(fallback_url6, sizeof(fallback_url6), "tcp://[::1]:%d", fallback_port6);
-            rc |= run_case("ring 4-rank broker fallback test ipv6", fallback_url6, 1);
+            rc |= run_case("ring 4-rank broker fallback test ipv6", fallback_url6, 1,
+                           "2001:db8::1,2001:db8::1,2001:db8::1,2001:db8::1");
         }
 #endif
     }
     unsetenv("TC_GLOO_RING");
     unsetenv("TC_GLOO_ADVERTISE_HOST");
+    unsetenv("TC_GLOO_ADVERTISE_HOSTS");
     unsetenv("TC_GLOO_RING_CONNECT_TIMEOUT_MS");
     return rc;
 }
