@@ -362,6 +362,8 @@ selected for the rendezvous connection.
 before fallback, and `TC_GLOO_NO_RING=1` forces broker dispatch if you
 need to debug a ring-capable build. Set `TC_GLOO_TRACE=1` to log whether
 each rank enabled the direct ring or coordinated broker fallback.
+`scripts/run_live_mesh_training_demo.sh` propagates
+`TC_GLOO_ADVERTISE_HOSTS` to every launched rank.
 
 ## 6. DiLoCo configuration
 

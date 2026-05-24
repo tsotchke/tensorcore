@@ -214,6 +214,9 @@ TC_MESH_LOCAL_ONLY=1 TC_MESH_TRAINING_OUTER=1 \
   TC_MESH_TRAINING_EVIDENCE_PATH=/tmp/live-mesh-training-local.json \
   scripts/run_live_mesh_training_demo.sh
 TC_MESH_TRAINING_EVIDENCE_PATH=/tmp/live-mesh-training.json scripts/run_live_mesh_training_demo.sh
+TC_GLOO_ADVERTISE_HOSTS=100.96.130.16,100.111.56.36,100.121.14.68,100.86.83.35 \
+  TC_MESH_TRAINING_EVIDENCE_PATH=/tmp/live-mesh-training.json \
+  scripts/run_live_mesh_training_demo.sh
 python3 scripts/check_live_mesh_training_evidence.py /tmp/live-mesh-training.json \
   --require-direct-ring --require-checkpoint --require-cuda-rank3
 python3 scripts/check_live_mesh_training_evidence.py /tmp/live-mesh-training-local.json \

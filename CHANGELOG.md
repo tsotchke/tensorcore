@@ -76,6 +76,9 @@ every architectural primitive in code and tested:
   accepts a comma-separated rank list for direct-ring neighbor dialing on
   Tailscale/NAT overlays, while preserving coordinated broker fallback
   when any ring edge is unreachable.
+- `Propagate GLOO advertised hosts in the live mesh launcher`:
+  `scripts/run_live_mesh_training_demo.sh` now passes
+  `TC_GLOO_ADVERTISE_HOSTS` through to all local and remote ranks.
 - Mesh training activation checkpoint mode: `mesh_training_demo
   --checkpoint` now discards `X_norm` after the forward projection,
   realizes it through the RMSNorm recompute callback before the `dW`

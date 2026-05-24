@@ -20,6 +20,7 @@ rank3_cuda="${TC_MESH_RANK3_CUDA:-1}"
 trace="${TC_MESH_TRACE:-1}"
 ring="${TC_MESH_RING:-1}"
 timeout_ms="${TC_MESH_RING_CONNECT_TIMEOUT_MS:-10000}"
+advertise_hosts="${TC_GLOO_ADVERTISE_HOSTS:-}"
 log_dir="${TC_MESH_LOG_DIR:-${TMPDIR:-/tmp}/tensorcore-live-mesh-training-$(date +%Y%m%d-%H%M%S)}"
 evidence_path="${TC_MESH_TRAINING_EVIDENCE_PATH:-}"
 
@@ -52,6 +53,7 @@ Environment:
   TC_MESH_RANK3_CUDA=$rank3_cuda
   TC_MESH_PREPARE=$prepare
   TC_MESH_PORT=<port>
+  TC_GLOO_ADVERTISE_HOSTS=<rank0,rank1,...>
   TC_MESH_LOG_DIR=$log_dir
   TC_MESH_TRAINING_EVIDENCE_PATH=<json>
 EOF
@@ -160,6 +162,9 @@ rank_env=(
     "TC_GLOO_TRACE=$trace"
     "TC_GLOO_RING_CONNECT_TIMEOUT_MS=$timeout_ms"
 )
+if [[ -n "$advertise_hosts" ]]; then
+    rank_env+=("TC_GLOO_ADVERTISE_HOSTS=$advertise_hosts")
+fi
 
 rank_args=(
     --world "$world"
@@ -193,7 +198,11 @@ run_remote_rank() {
     local bin="$3"
     local dir="$4"
     local log="$log_dir/rank${rank}.log"
-    local remote_cmd="cd '$dir' && TC_GLOO_RING='$ring' TC_GLOO_TRACE='$trace' TC_GLOO_RING_CONNECT_TIMEOUT_MS='$timeout_ms' LD_LIBRARY_PATH='$dir/build':\${LD_LIBRARY_PATH:-} '$bin' --rank '$rank' --world '$world' --url '$url' --inner '$inner_steps' --outer '$outer_steps'"
+    local remote_cmd="cd '$dir' && TC_GLOO_RING='$ring' TC_GLOO_TRACE='$trace' TC_GLOO_RING_CONNECT_TIMEOUT_MS='$timeout_ms'"
+    if [[ -n "$advertise_hosts" ]]; then
+        remote_cmd="$remote_cmd TC_GLOO_ADVERTISE_HOSTS='$advertise_hosts'"
+    fi
+    remote_cmd="$remote_cmd LD_LIBRARY_PATH='$dir/build':\${LD_LIBRARY_PATH:-} '$bin' --rank '$rank' --world '$world' --url '$url' --inner '$inner_steps' --outer '$outer_steps'"
     if [[ "$checkpoint" == "1" ]]; then
         remote_cmd="$remote_cmd --checkpoint"
     fi
