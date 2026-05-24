@@ -15,8 +15,9 @@
  *   unregister(id)        → drop from registry (buffer is NOT freed here;
  *                            caller still owns the handle).
  *
- * The realize path holds NO mutex during the user callback to avoid
- * deadlock if the callback calls back into the checkpoint API.
+ * The realize path holds only the entry's per-checkpoint mutex while the
+ * user callback runs. Same-id reentrancy is not supported; callbacks may
+ * still realize other checkpoint ids without contending on the registry.
  */
 
 #include "tensorcore/checkpoint.h"
@@ -24,6 +25,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 
@@ -38,7 +40,9 @@ struct CheckpointEntry {
     tc_buffer*                     buf;
     tc_checkpoint_recompute_fn     recompute_fn;
     void*                          user_data;
+    size_t                         bytes;
     bool                           resident;
+    std::mutex                     mutex;
 };
 
 std::mutex& registry_mutex() {
@@ -46,8 +50,10 @@ std::mutex& registry_mutex() {
     return m;
 }
 
-std::unordered_map<tc_checkpoint_id, CheckpointEntry>& registry() {
-    static std::unordered_map<tc_checkpoint_id, CheckpointEntry> r;
+using CheckpointEntryPtr = std::shared_ptr<CheckpointEntry>;
+
+std::unordered_map<tc_checkpoint_id, CheckpointEntryPtr>& registry() {
+    static std::unordered_map<tc_checkpoint_id, CheckpointEntryPtr> r;
     return r;
 }
 
@@ -61,6 +67,23 @@ std::atomic<uint64_t>& discarded_bytes() {
     return d;
 }
 
+std::atomic<uint64_t>& resident_count() {
+    static std::atomic<uint64_t> n{0};
+    return n;
+}
+
+std::atomic<uint64_t>& discarded_count() {
+    static std::atomic<uint64_t> n{0};
+    return n;
+}
+
+CheckpointEntryPtr lookup_entry(tc_checkpoint_id id) {
+    std::lock_guard<std::mutex> lk(registry_mutex());
+    auto it = registry().find(id);
+    if (it == registry().end()) return nullptr;
+    return it->second;
+}
+
 }  // namespace
 
 extern "C" TC_CHECKPOINT_API tc_status_t tc_checkpoint_register(tc_buffer* buf,
@@ -70,94 +93,93 @@ extern "C" TC_CHECKPOINT_API tc_status_t tc_checkpoint_register(tc_buffer* buf,
     if (!buf || !recompute_fn || !out_id) return TC_ERR_INVALID_ARG;
     std::lock_guard<std::mutex> lk(registry_mutex());
     for (const auto& kv : registry()) {
-        if (kv.second.buf == buf) return TC_ERR_INVALID_ARG;
+        if (kv.second->buf == buf) return TC_ERR_INVALID_ARG;
     }
     const tc_checkpoint_id id = next_id().fetch_add(1);
-    registry()[id] = CheckpointEntry{buf, recompute_fn, user_data, true};
+    auto entry = std::make_shared<CheckpointEntry>();
+    entry->buf = buf;
+    entry->recompute_fn = recompute_fn;
+    entry->user_data = user_data;
+    entry->bytes = tc_buffer_size(buf);
+    entry->resident = true;
+    registry()[id] = entry;
+    resident_count().fetch_add(1);
     *out_id = id;
     return TC_OK;
 }
 
 extern "C" TC_CHECKPOINT_API tc_status_t tc_checkpoint_discard(tc_checkpoint_id id) {
-    tc_buffer* buf = nullptr;
-    size_t bytes = 0;
-    {
-        std::lock_guard<std::mutex> lk(registry_mutex());
-        auto it = registry().find(id);
-        if (it == registry().end()) return TC_ERR_INVALID_ARG;
-        if (!it->second.resident) return TC_OK;
-        buf = it->second.buf;
-        bytes = tc_buffer_size(buf);
-        it->second.resident = false;
-    }
-    /* Actually free the buffer's underlying storage. The handle stays
-     * valid; tc_checkpoint_realize will re-allocate. Drop the registry
-     * lock first so the discard call can grab the buffer pool's lock
-     * without inversion. */
-    tc_status_t s = tc_buffer_discard_storage(buf);
-    if (s != TC_OK) {
-        /* Roll back the resident flag — we didn't actually free anything. */
-        std::lock_guard<std::mutex> lk(registry_mutex());
-        auto it = registry().find(id);
-        if (it != registry().end()) it->second.resident = true;
-        return s;
-    }
-    discarded_bytes().fetch_add(bytes);
+    CheckpointEntryPtr entry = lookup_entry(id);
+    if (!entry) return TC_ERR_INVALID_ARG;
+
+    std::lock_guard<std::mutex> lk(entry->mutex);
+    if (!entry->resident) return TC_OK;
+
+    /* Actually free the buffer's underlying storage. The handle stays valid;
+     * tc_checkpoint_realize will re-allocate. Only this checkpoint's mutex is
+     * held, so other checkpoints can still progress and callback dependency
+     * chains do not deadlock on the global registry. */
+    tc_status_t s = tc_buffer_discard_storage(entry->buf);
+    if (s != TC_OK) return s;
+
+    entry->resident = false;
+    discarded_bytes().fetch_add(entry->bytes);
+    resident_count().fetch_sub(1);
+    discarded_count().fetch_add(1);
     return TC_OK;
 }
 
 extern "C" TC_CHECKPOINT_API tc_status_t tc_checkpoint_realize(tc_checkpoint_id id) {
-    tc_checkpoint_recompute_fn fn = nullptr;
-    void* user_data = nullptr;
-    tc_buffer* buf = nullptr;
-    size_t bytes = 0;
-    {
-        std::lock_guard<std::mutex> lk(registry_mutex());
-        auto it = registry().find(id);
-        if (it == registry().end()) return TC_ERR_INVALID_ARG;
-        if (it->second.resident) return TC_OK;
-        fn = it->second.recompute_fn;
-        user_data = it->second.user_data;
-        buf = it->second.buf;
-        bytes = tc_buffer_size(buf);
-    }
+    CheckpointEntryPtr entry = lookup_entry(id);
+    if (!entry) return TC_ERR_INVALID_ARG;
+
+    std::lock_guard<std::mutex> lk(entry->mutex);
+    if (entry->resident) return TC_OK;
+
     /* Re-allocate buffer storage BEFORE the callback so the user's
      * recompute_fn can write into a valid buffer. */
-    tc_status_t s = tc_buffer_reallocate_storage(buf);
+    tc_status_t s = tc_buffer_reallocate_storage(entry->buf);
     if (s != TC_OK) return s;
-    s = fn(user_data);
+    s = entry->recompute_fn(entry->user_data);
     if (s != TC_OK) {
         /* Recompute failed — leave the buffer allocated but not marked
          * resident. Caller can retry realize or unregister. */
         return s;
     }
-    {
-        std::lock_guard<std::mutex> lk(registry_mutex());
-        auto it = registry().find(id);
-        if (it == registry().end()) return TC_ERR_INVALID_ARG;
-        if (!it->second.resident) {
-            it->second.resident = true;
-            discarded_bytes().fetch_sub(bytes);
-        }
-    }
+    entry->resident = true;
+    discarded_bytes().fetch_sub(entry->bytes);
+    discarded_count().fetch_sub(1);
+    resident_count().fetch_add(1);
     return TC_OK;
 }
 
 extern "C" TC_CHECKPOINT_API int tc_checkpoint_is_resident(tc_checkpoint_id id) {
-    std::lock_guard<std::mutex> lk(registry_mutex());
-    auto it = registry().find(id);
-    if (it == registry().end()) return 0;
-    return it->second.resident ? 1 : 0;
+    CheckpointEntryPtr entry = lookup_entry(id);
+    if (!entry) return 0;
+    std::lock_guard<std::mutex> lk(entry->mutex);
+    return entry->resident ? 1 : 0;
 }
 
 extern "C" TC_CHECKPOINT_API tc_status_t tc_checkpoint_unregister(tc_checkpoint_id id) {
-    std::lock_guard<std::mutex> lk(registry_mutex());
-    auto it = registry().find(id);
-    if (it == registry().end()) return TC_ERR_INVALID_ARG;
-    if (!it->second.resident) {
-        discarded_bytes().fetch_sub(tc_buffer_size(it->second.buf));
+    CheckpointEntryPtr entry = lookup_entry(id);
+    if (!entry) return TC_ERR_INVALID_ARG;
+
+    std::lock_guard<std::mutex> entry_lk(entry->mutex);
+    {
+        std::lock_guard<std::mutex> registry_lk(registry_mutex());
+        auto it = registry().find(id);
+        if (it == registry().end() || it->second.get() != entry.get()) {
+            return TC_ERR_INVALID_ARG;
+        }
+        registry().erase(it);
     }
-    registry().erase(it);
+
+    if (entry->resident) {
+        resident_count().fetch_sub(1);
+    } else {
+        discarded_bytes().fetch_sub(entry->bytes);
+        discarded_count().fetch_sub(1);
+    }
     return TC_OK;
 }
 
@@ -166,19 +188,9 @@ extern "C" TC_CHECKPOINT_API uint64_t tc_checkpoint_total_bytes_discarded(void) 
 }
 
 extern "C" TC_CHECKPOINT_API uint64_t tc_checkpoint_count_resident(void) {
-    std::lock_guard<std::mutex> lk(registry_mutex());
-    uint64_t n = 0;
-    for (const auto& [id, entry] : registry()) {
-        if (entry.resident) ++n;
-    }
-    return n;
+    return resident_count().load();
 }
 
 extern "C" TC_CHECKPOINT_API uint64_t tc_checkpoint_count_discarded(void) {
-    std::lock_guard<std::mutex> lk(registry_mutex());
-    uint64_t n = 0;
-    for (const auto& [id, entry] : registry()) {
-        if (!entry.resident) ++n;
-    }
-    return n;
+    return discarded_count().load();
 }

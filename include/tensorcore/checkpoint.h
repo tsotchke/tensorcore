@@ -65,9 +65,9 @@ typedef checkpoint_recompute_status_t (*tc_checkpoint_recompute_fn)(void* user_d
  * memory may be freed and re-allocated via discard/realize.
  *
  * The recompute_fn is called from inside tc_checkpoint_realize; it must
- * not call tc_checkpoint_realize on the same id (no reentrancy). It MAY
- * call realize on other ids (nested checkpoints are fine for ascending
- * dependency order).
+ * not call checkpoint APIs on the same id (no same-id reentrancy). It
+ * MAY call realize on other ids (nested checkpoints are fine for
+ * ascending dependency order).
  *
  * Returns TC_ERR_INVALID_ARG if buf or recompute_fn is null, or if buf
  * is already registered. */

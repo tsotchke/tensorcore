@@ -3,6 +3,8 @@
 # Metal tests link against tensorcore + Accelerate. CPU-only builds use the
 # portable smoke test and return before the Apple-specific test list.
 
+find_package(Threads REQUIRED)
+
 if(NOT TC_ENABLE_METAL)
     add_executable(test_portable_cpu test_portable_cpu.c)
     target_link_libraries(test_portable_cpu PRIVATE tensorcore)
@@ -122,6 +124,15 @@ if(NOT TC_ENABLE_METAL)
     target_include_directories(test_checkpoint PRIVATE ${CMAKE_SOURCE_DIR}/include)
     add_test(NAME test_checkpoint COMMAND test_checkpoint)
     set_tests_properties(test_checkpoint PROPERTIES
+        TIMEOUT 30
+    )
+
+    add_executable(test_checkpoint_concurrency test_checkpoint_concurrency.cpp)
+    target_link_libraries(test_checkpoint_concurrency PRIVATE tensorcore Threads::Threads)
+    target_include_directories(test_checkpoint_concurrency PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    add_test(NAME test_checkpoint_concurrency COMMAND test_checkpoint_concurrency)
+    set_tests_properties(test_checkpoint_concurrency PROPERTIES
+        SKIP_RETURN_CODE 77
         TIMEOUT 30
     )
 
@@ -272,6 +283,19 @@ target_link_libraries(test_checkpoint PRIVATE tensorcore ${ACCELERATE_FRAMEWORK}
 target_include_directories(test_checkpoint PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME test_checkpoint COMMAND test_checkpoint)
 set_tests_properties(test_checkpoint PROPERTIES
+    TIMEOUT 30
+)
+
+add_executable(test_checkpoint_concurrency test_checkpoint_concurrency.cpp)
+target_link_libraries(test_checkpoint_concurrency PRIVATE
+    tensorcore
+    ${ACCELERATE_FRAMEWORK}
+    Threads::Threads
+)
+target_include_directories(test_checkpoint_concurrency PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME test_checkpoint_concurrency COMMAND test_checkpoint_concurrency)
+set_tests_properties(test_checkpoint_concurrency PROPERTIES
+    SKIP_RETURN_CODE 77
     TIMEOUT 30
 )
 

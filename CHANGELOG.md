@@ -49,6 +49,10 @@ every architectural primitive in code and tested:
   SGD/Nesterov/Adam outer optimizers, async overlap, sparse-on-the-wire
   cross-continent path.
 - Memory-tier API (L0-L4) and activation checkpointing API.
+- Activation checkpointing now serializes same-id discard/realize/unregister
+  operations with per-checkpoint locks and atomic counters, with a dedicated
+  concurrency CTest covering one-callback realize fan-out and one-accounted
+  discard fan-out.
 - Cross-process test infrastructure (`test_diloco_gloo_fork`,
   `test_diloco_sparse_fork`, `test_dist_remote`) for forked, multi-rank,
   and cross-machine validation.
