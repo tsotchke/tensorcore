@@ -220,6 +220,28 @@ fp32 SUM and the DiLoCo sparse TOPK outer-step path. Set
 `TC_MESH_DILOCO_ELEMENTS` to scale the DiLoCo soak without changing the
 binary.
 
+For the full training-loop demo instead of the compact transport probe:
+
+```sh
+TC_MESH_PREPARE=1 scripts/run_live_mesh_training_demo.sh
+```
+
+That runs `examples/mesh_training_demo` across the same four ranks with
+DiLoCo outer sync and activation checkpointing enabled. cosbox is built
+with `TC_ENABLE_CUDA=ON` by default so the RTX 3090 rank uses the CUDA
+managed-memory training path when available.
+
+Validated on 2026-05-23 with:
+
+```sh
+TC_MESH_PREPARE=1 TC_MESH_TRAINING_INNER=2 TC_MESH_TRAINING_OUTER=1 \
+  scripts/run_live_mesh_training_demo.sh
+```
+
+All four ranks reported direct-ring all-reduce, completed the outer step,
+and emitted activation-checkpoint counters; cosbox rank 3 reported
+`backend=cuda`.
+
 ### 4-rank reference deployment
 
 Launch rank 0 first (must start listening before others try to connect):

@@ -177,6 +177,23 @@ TC_MESH_TEST=allreduce scripts/run_live_mesh_smoke.sh   # transport-only
 TC_MESH_TEST=diloco scripts/run_live_mesh_smoke.sh      # training-sync only
 ```
 
+### `run_live_mesh_training_demo.sh`
+
+Runs `examples/mesh_training_demo` across the same four-rank mesh: Atlas
+rank 0, Enki rank 1, old-donkey rank 2, and cosbox rank 3. This is the
+full demo loop rather than the compact transport probe: RMSNorm -> GEMM ->
+softmax+CE -> backward -> AdamW, with DiLoCo outer sync and activation
+checkpointing enabled by default. With `TC_MESH_PREPARE=1`, the script
+archives the current committed checkout to the Linux hosts, builds their
+`mesh_training_demo` target, copies the local Apple binary to Enki, and
+builds cosbox with `TC_ENABLE_CUDA=ON` unless `TC_MESH_RANK3_CUDA=0`.
+
+```sh
+TC_MESH_PREPARE=1 scripts/run_live_mesh_training_demo.sh
+TC_MESH_TRAINING_INNER=8 TC_MESH_TRAINING_OUTER=5 scripts/run_live_mesh_training_demo.sh
+TC_MESH_TRAINING_CHECKPOINT=0 scripts/run_live_mesh_training_demo.sh
+```
+
 ### `ci_cuda_smoke.sh`
 
 Configures a Linux CUDA build with `TC_ENABLE_CUDA=ON`, runs its CTest
