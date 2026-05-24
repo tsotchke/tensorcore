@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="${TC_CUDA_BUILD_DIR:-$ROOT/build-cuda}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+REQUIRE_CUDA="${REQUIRE_CUDA:-0}"
+EVIDENCE_PATH="${TENSORCORE_CUDA_SMOKE_EVIDENCE_PATH:-}"
 
 cmake -S "$ROOT" -B "$BUILD" \
     -DCMAKE_BUILD_TYPE=Release \
@@ -18,16 +20,65 @@ case "$(uname -s)" in
     *)      shared_lib="libtensorcore.so" ;;
 esac
 
+cuda_test_present=0
+ctest_list="$(ctest --test-dir "$BUILD" -N)"
+if printf '%s\n' "$ctest_list" | grep -q 'test_cuda_gemm'; then
+    cuda_test_present=1
+fi
+
+TC_CUDA_BUILD_ENABLED="$cuda_test_present" \
+TC_CUDA_REQUIRE="$REQUIRE_CUDA" \
+TC_CUDA_EVIDENCE_PATH="$EVIDENCE_PATH" \
+TC_ROOT="$ROOT" \
 LD_LIBRARY_PATH="$BUILD:${LD_LIBRARY_PATH:-}" \
 PYTHONPATH="$ROOT/python" \
 TENSORCORE_LIB="$BUILD/$shared_lib" \
 "$PYTHON_BIN" - <<'PY'
 import ctypes
+import json
 import math
 import os
+import pathlib
 import struct
+import subprocess
+import sys
 
 import tensorcore as tc
+
+
+def _git_value(*args):
+    try:
+        return subprocess.check_output(
+            ["git", *args], cwd=os.environ["TC_ROOT"],
+            text=True, stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return None
+
+
+def _base_evidence():
+    dirty = _git_value("status", "--short")
+    return {
+        "schema_version": 1,
+        "git_head": _git_value("rev-parse", "HEAD"),
+        "git_dirty": bool(dirty),
+        "cuda_build_enabled": os.environ.get("TC_CUDA_BUILD_ENABLED") == "1",
+        "require_cuda": os.environ.get("TC_CUDA_REQUIRE") == "1",
+        "runtime_status": "not_run",
+        "device_count": 0,
+        "device": None,
+        "backend": None,
+        "f32_kernel": tc.cuda_last_kernel_name(),
+        "f16_kernel": None,
+        "fallback_backend": None,
+        "training_kernels": {},
+    }
+
+
+def _write_evidence(evidence):
+    path = os.environ.get("TC_CUDA_EVIDENCE_PATH")
+    if path:
+        pathlib.Path(path).write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
 
 
 def _fill_buffer(buf, values):
@@ -42,12 +93,161 @@ def _half_value(bits):
     return struct.unpack("<e", int(bits).to_bytes(2, "little"))[0]
 
 
+def _expect_cuda_training_op(evidence, name, expected_kernel, fn):
+    fn()
+    backend = tc.last_backend_name()
+    kernel = tc.cuda_last_kernel_name()
+    evidence["training_kernels"][name] = {
+        "backend": backend,
+        "kernel": kernel,
+    }
+    if backend != "cuda":
+        raise SystemExit(f"{name} backend was {backend}, expected cuda")
+    if kernel != expected_kernel:
+        raise SystemExit(f"{name} kernel was {kernel}, expected {expected_kernel}")
+
+
+def _run_training_dispatch_smoke(ctx, evidence):
+    bufs = []
+
+    def alloc(nbytes):
+        b = tc.buffer_alloc(ctx, nbytes)
+        bufs.append(b)
+        return b
+
+    try:
+        N, D = 2, 8
+        x_vals = (ctypes.c_uint16 * (N * D))(
+            *[_half_bits(((i % 7) - 3) * 0.125) for i in range(N * D)]
+        )
+        gamma_vals = (ctypes.c_uint16 * D)(*[_half_bits(0.75 + 0.02 * i) for i in range(D)])
+        dy_vals = (ctypes.c_uint16 * (N * D))(
+            *[_half_bits(((i % 5) - 2) * 0.05) for i in range(N * D)]
+        )
+        X = alloc(ctypes.sizeof(x_vals))
+        gamma = alloc(ctypes.sizeof(gamma_vals))
+        Y = alloc(ctypes.sizeof(x_vals))
+        rstd = alloc(N * ctypes.sizeof(ctypes.c_float))
+        dY = alloc(ctypes.sizeof(dy_vals))
+        dX = alloc(ctypes.sizeof(x_vals))
+        dgamma = alloc(D * ctypes.sizeof(ctypes.c_float))
+        _fill_buffer(X, x_vals)
+        _fill_buffer(gamma, gamma_vals)
+        _fill_buffer(dY, dy_vals)
+        _expect_cuda_training_op(
+            evidence, "rmsnorm_forward", "cuda_rmsnorm_forward",
+            lambda: tc.rmsnorm_forward(ctx, X, gamma, Y, rstd, N, D),
+        )
+        _expect_cuda_training_op(
+            evidence, "rmsnorm_backward", "cuda_rmsnorm_backward",
+            lambda: tc.rmsnorm_backward(ctx, X, gamma, dY, rstd, dX, dgamma, N, D),
+        )
+
+        P = 16
+        gate_vals = (ctypes.c_uint16 * P)(*[_half_bits(((i % 9) - 4) * 0.125) for i in range(P)])
+        up_vals = (ctypes.c_uint16 * P)(*[_half_bits(0.2 + 0.01 * i) for i in range(P)])
+        dout_vals = (ctypes.c_uint16 * P)(*[_half_bits(0.01 * ((i % 5) - 2)) for i in range(P)])
+        gate = alloc(ctypes.sizeof(gate_vals))
+        up = alloc(ctypes.sizeof(up_vals))
+        out = alloc(ctypes.sizeof(gate_vals))
+        dout = alloc(ctypes.sizeof(dout_vals))
+        dgate = alloc(ctypes.sizeof(gate_vals))
+        dup = alloc(ctypes.sizeof(gate_vals))
+        _fill_buffer(gate, gate_vals)
+        _fill_buffer(up, up_vals)
+        _fill_buffer(dout, dout_vals)
+        _expect_cuda_training_op(
+            evidence, "swiglu_forward", "cuda_swiglu_forward",
+            lambda: tc.swiglu_forward(ctx, gate, up, out, P),
+        )
+        _expect_cuda_training_op(
+            evidence, "swiglu_backward", "cuda_swiglu_backward",
+            lambda: tc.swiglu_backward(ctx, gate, up, dout, dgate, dup, P),
+        )
+
+        soft_x_vals = (ctypes.c_uint16 * (N * D))(
+            *[_half_bits(((i % 11) - 5) * 0.2) for i in range(N * D)]
+        )
+        soft_dy_vals = (ctypes.c_uint16 * (N * D))(
+            *[_half_bits(((i % 7) - 3) * 0.03) for i in range(N * D)]
+        )
+        SX = alloc(ctypes.sizeof(soft_x_vals))
+        SY = alloc(ctypes.sizeof(soft_x_vals))
+        SdY = alloc(ctypes.sizeof(soft_dy_vals))
+        SdX = alloc(ctypes.sizeof(soft_x_vals))
+        _fill_buffer(SX, soft_x_vals)
+        _fill_buffer(SdY, soft_dy_vals)
+        _expect_cuda_training_op(
+            evidence, "softmax_forward", "cuda_softmax_forward",
+            lambda: tc.softmax_forward(ctx, SX, SY, N, D),
+        )
+        _expect_cuda_training_op(
+            evidence, "softmax_backward", "cuda_softmax_backward",
+            lambda: tc.softmax_backward(ctx, SY, SdY, SdX, N, D),
+        )
+
+        A = 16
+        p_vals = (ctypes.c_float * A)(*[0.1 + 0.001 * i for i in range(A)])
+        z_vals = (ctypes.c_float * A)(*[0.0 for _ in range(A)])
+        g32_vals = (ctypes.c_float * A)(*[0.01 * ((i % 5) - 2) for i in range(A)])
+        g16_vals = (ctypes.c_uint16 * A)(*[_half_bits(0.01 * ((i % 5) - 2)) for i in range(A)])
+        P32 = alloc(ctypes.sizeof(p_vals))
+        M32 = alloc(ctypes.sizeof(z_vals))
+        V32 = alloc(ctypes.sizeof(z_vals))
+        G32 = alloc(ctypes.sizeof(g32_vals))
+        P16 = alloc(ctypes.sizeof(p_vals))
+        M16 = alloc(ctypes.sizeof(z_vals))
+        V16 = alloc(ctypes.sizeof(z_vals))
+        G16 = alloc(ctypes.sizeof(g16_vals))
+        for buf, vals in ((P32, p_vals), (M32, z_vals), (V32, z_vals), (G32, g32_vals),
+                          (P16, p_vals), (M16, z_vals), (V16, z_vals), (G16, g16_vals)):
+            _fill_buffer(buf, vals)
+        _expect_cuda_training_op(
+            evidence, "adamw_step_fp32", "cuda_adamw_step_fp32",
+            lambda: tc.adamw_step(ctx, P32, M32, V32, G32, "f32", A,
+                                  1e-3, 0.9, 0.999, 1e-8, 0.01, 0.1, 0.001),
+        )
+        _expect_cuda_training_op(
+            evidence, "adamw_step_fp16", "cuda_adamw_step_fp16",
+            lambda: tc.adamw_step(ctx, P16, M16, V16, G16, "f16", A,
+                                  1e-3, 0.9, 0.999, 1e-8, 0.01, 0.1, 0.001),
+        )
+    finally:
+        for buf in reversed(bufs):
+            tc.buffer_free(ctx, buf)
+
+
+evidence = _base_evidence()
+require = evidence["require_cuda"]
+
+if not evidence["cuda_build_enabled"]:
+    evidence["runtime_status"] = "skipped_not_built"
+    _write_evidence(evidence)
+    print("CUDA smoke skipped: TC_ENABLE_CUDA runtime dependencies not found")
+    sys.exit(1 if require else 0)
+
 ctx = tc.init()
 try:
-    tc.cuda_init(ctx)
+    try:
+        tc.cuda_init(ctx)
+    except tc.TensorcoreError as exc:
+        evidence["runtime_status"] = "skipped_runtime_unavailable"
+        evidence["init_status"] = exc.status
+        evidence["init_status_string"] = tc.status_string(exc.status)
+        _write_evidence(evidence)
+        print(f"CUDA smoke skipped: {evidence['init_status_string']}")
+        sys.exit(1 if require else 0)
+
     if tc.cuda_device_count() <= 0:
-        raise SystemExit("CUDA smoke requires at least one visible CUDA device")
+        evidence["runtime_status"] = "skipped_runtime_unavailable"
+        evidence["device_count"] = 0
+        _write_evidence(evidence)
+        print("CUDA smoke skipped: no visible CUDA device")
+        sys.exit(1 if require else 0)
+
     info = tc.cuda_device_at(0)
+    evidence["device"] = info
+    evidence["device_count"] = tc.cuda_device_count()
 
     A32_vals = (ctypes.c_float * 4)(1.0, 2.0, 3.0, 4.0)
     B32_vals = (ctypes.c_float * 4)(5.0, 6.0, 7.0, 8.0)
@@ -64,11 +264,13 @@ try:
         expected = (19.0, 22.0, 43.0, 50.0)
         if any(math.fabs(out32[i] - expected[i]) > 1e-4 for i in range(4)):
             raise SystemExit(f"bad CUDA f32 GEMM output: {[out32[i] for i in range(4)]}")
-        if tc.last_backend_name() != "cuda":
-            raise SystemExit(f"f32 backend was {tc.last_backend_name()}, expected cuda")
-        if tc.cuda_last_kernel_name() != "cublas_sgemm_managed":
+        evidence["backend"] = tc.last_backend_name()
+        evidence["f32_kernel"] = tc.cuda_last_kernel_name()
+        if evidence["backend"] != "cuda":
+            raise SystemExit(f"f32 backend was {evidence['backend']}, expected cuda")
+        if evidence["f32_kernel"] != "cublas_sgemm_managed":
             raise SystemExit(
-                f"f32 kernel was {tc.cuda_last_kernel_name()}, expected cublas_sgemm_managed"
+                f"f32 kernel was {evidence['f32_kernel']}, expected cublas_sgemm_managed"
             )
     finally:
         tc.buffer_free(ctx, A32)
@@ -95,10 +297,11 @@ try:
             raise SystemExit(f"bad CUDA f16 GEMM output: {out16}")
         if tc.last_backend_name() != "cuda":
             raise SystemExit(f"f16 backend was {tc.last_backend_name()}, expected cuda")
-        if tc.cuda_last_kernel_name() != "cublas_gemmex_fp16_tensorop_managed":
+        evidence["f16_kernel"] = tc.cuda_last_kernel_name()
+        if evidence["f16_kernel"] != "cublas_gemmex_fp16_tensorop_managed":
             raise SystemExit(
                 "f16 kernel was "
-                f"{tc.cuda_last_kernel_name()}, expected cublas_gemmex_fp16_tensorop_managed"
+                f"{evidence['f16_kernel']}, expected cublas_gemmex_fp16_tensorop_managed"
             )
     finally:
         tc.buffer_free(ctx, A16)
@@ -116,16 +319,21 @@ try:
         tc.gemm(ctx, A32, B32, C32, 2, 2, 2, dtype="f32", accum="f32")
         if tc.last_backend_name() == "cuda":
             raise SystemExit("TC_DISABLE_CUDA_GEMM did not force CPU fallback")
+        evidence["fallback_backend"] = tc.last_backend_name()
     finally:
         tc.buffer_free(ctx, A32)
         tc.buffer_free(ctx, B32)
         tc.buffer_free(ctx, C32)
         os.environ.pop("TC_DISABLE_CUDA_GEMM", None)
 
+    _run_training_dispatch_smoke(ctx, evidence)
+    evidence["runtime_status"] = "passed"
+    _write_evidence(evidence)
     print(
         "CUDA smoke OK: "
         f"{info['device_name']} cc={info['compute_capability']} "
-        "f32=cublas_sgemm_managed f16=cublas_gemmex_fp16_tensorop_managed"
+        "f32=cublas_sgemm_managed f16=cublas_gemmex_fp16_tensorop_managed "
+        f"training_ops={len(evidence['training_kernels'])}"
     )
 finally:
     tc.shutdown(ctx)

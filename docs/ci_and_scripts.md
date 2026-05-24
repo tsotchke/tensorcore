@@ -222,20 +222,29 @@ Validates the JSON artifact emitted by `run_live_mesh_training_demo.sh` via
 ### `ci_cuda_smoke.sh`
 
 Configures a Linux CUDA build with `TC_ENABLE_CUDA=ON`, runs its CTest
-suite, then runs fp32 and fp16 Python GEMM smokes through the default CUDA
-dispatch policy. When `TC_ENABLE_CUDA=ON`, CTest also includes
+suite, then runs fp32/fp16 Python GEMM smokes and Python training dispatch
+smokes through the default CUDA policy. When `TC_ENABLE_CUDA=ON`, CTest includes
 `test_cuda_gemm`, which asserts managed-memory cuBLAS dispatch and applies
 a 4096^3 fp32 perf gate on high-end Ampere+ devices. On CUDA devices that
 report support, the CTest path also covers bf16/fp32-accum and int8/i32-accum
 cuBLAS GEMM plus managed-memory RMSNorm/LayerNorm/SwiGLU/softmax/AdamW
 training dispatch, including RMSNorm/SwiGLU/softmax backward and both
-fp32/fp16-gradient AdamW paths. The Python smoke asserts numerical output,
-`backend=cuda`, expected managed-memory cuBLAS kernel names, and explicit
-`TC_DISABLE_CUDA_GEMM=1` CPU fallback. It requires a visible NVIDIA GPU and
-CUDA Toolkit with `CUDA::cudart` plus `CUDA::cublas`.
+fp32/fp16-gradient AdamW paths. The Python smoke asserts numerical GEMM output,
+`backend=cuda`, expected managed-memory cuBLAS kernel names, explicit
+`TC_DISABLE_CUDA_GEMM=1` CPU fallback, and CUDA dispatch for RMSNorm forward
+and backward, SwiGLU forward and backward, softmax forward and backward, and
+AdamW fp32/fp16-gradient updates.
+
+If `TENSORCORE_CUDA_SMOKE_EVIDENCE_PATH` is set, the script writes
+`tensorcore.cuda_smoke.evidence.v1`-style JSON with `runtime_status` set to
+`passed`, `skipped_not_built`, or `skipped_runtime_unavailable`. Set
+`REQUIRE_CUDA=1` to make skipped evidence fail the script on a host that is
+expected to have a working NVIDIA runtime.
 
 ```sh
-TC_CUDA_BUILD_DIR=build-cuda scripts/ci_cuda_smoke.sh
+TENSORCORE_CUDA_SMOKE_EVIDENCE_PATH=/tmp/cuda.json \
+  TC_CUDA_BUILD_DIR=build-cuda scripts/ci_cuda_smoke.sh
+python3 scripts/check_cuda_smoke_evidence.py /tmp/cuda.json --require-cuda
 ```
 
 ### `ci_hip_smoke.sh`

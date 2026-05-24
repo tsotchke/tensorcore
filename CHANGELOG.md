@@ -42,6 +42,9 @@ every architectural primitive in code and tested:
 - CUDA/portable training closure now registers the end-to-end training
   convergence test and native `training_step` example in non-Metal CTest,
   so CUDA hosts prove more than isolated training kernels.
+- CUDA smoke now emits machine-readable runtime evidence and proves the
+  Python training dispatch path, including RMSNorm/SwiGLU/softmax backward
+  plus fp32/fp16-gradient AdamW, not just cuBLAS GEMM.
 - DiLoCo runtime with NONE/FP16/TOPK_1PCT/TOPK_01PCT compression,
   SGD/Nesterov/Adam outer optimizers, async overlap, sparse-on-the-wire
   cross-continent path.
