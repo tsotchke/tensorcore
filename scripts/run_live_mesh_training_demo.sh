@@ -29,12 +29,15 @@ rank0_bin="${TC_MESH_RANK0_BIN:-$local_build_dir/examples/mesh_training_demo}"
 rank1_ssh="${TC_MESH_RANK1_SSH:-enki}"
 rank1_dir="${TC_MESH_RANK1_DIR:-/tmp/tensorcore-live-mesh-training}"
 rank1_bin="${TC_MESH_RANK1_BIN:-$rank1_dir/mesh_training_demo_cpu}"
+rank1_path="${TC_MESH_RANK1_PATH:-}"
 rank2_ssh="${TC_MESH_RANK2_SSH:-old-donkey}"
 rank2_dir="${TC_MESH_RANK2_DIR:-/tmp/tensorcore-live-mesh-training}"
 rank2_bin="${TC_MESH_RANK2_BIN:-$rank2_dir/build/examples/mesh_training_demo}"
+rank2_path="${TC_MESH_RANK2_PATH:-}"
 rank3_ssh="${TC_MESH_RANK3_SSH:-cosbox}"
 rank3_dir="${TC_MESH_RANK3_DIR:-/tmp/tensorcore-live-mesh-training}"
 rank3_bin="${TC_MESH_RANK3_BIN:-$rank3_dir/build/examples/mesh_training_demo}"
+rank3_path="${TC_MESH_RANK3_PATH:-}"
 
 usage() {
     cat <<EOF
@@ -53,6 +56,7 @@ Environment:
   TC_MESH_RANK3_CUDA=$rank3_cuda
   TC_MESH_PREPARE=$prepare
   TC_MESH_PORT=<port>
+  TC_MESH_RANK{1,2,3}_PATH=<extra remote PATH prefix>
   TC_GLOO_ADVERTISE_HOSTS=<rank0,rank1,...>
   TC_MESH_LOG_DIR=$log_dir
   TC_MESH_TRAINING_EVIDENCE_PATH=<json>
@@ -113,6 +117,7 @@ prepare_linux_rank() {
     local host="$1"
     local remote_dir="$2"
     local enable_cuda="$3"
+    local remote_path="${4:-}"
     local source_head
     local source_dirty=0
     source_head="$(git -C "$ROOT" rev-parse HEAD)"
@@ -124,8 +129,12 @@ prepare_linux_rank() {
         "rm -rf '$remote_dir' && mkdir -p '$remote_dir' && tar -xf - -C '$remote_dir'"
     ssh "$host" \
         "printf '%s\n' '$source_head' > '$remote_dir/.tensorcore_source_head' && printf '%s\n' '$source_dirty' > '$remote_dir/.tensorcore_source_dirty'"
+    local path_prefix=""
+    if [[ -n "$remote_path" ]]; then
+        path_prefix="PATH='$remote_path':\$PATH; export PATH;"
+    fi
     ssh "$host" \
-        "cmake -S '$remote_dir' -B '$remote_dir/build' -DTC_ENABLE_METAL=OFF -DTC_ENABLE_CUDA='$enable_cuda' -DTC_BUILD_TESTS=OFF -DTC_BUILD_BENCH=OFF -DTC_BUILD_EXAMPLES=ON -DCMAKE_BUILD_TYPE=Release && cmake --build '$remote_dir/build' --target mesh_training_demo --parallel '$remote_jobs'"
+        "$path_prefix cmake -S '$remote_dir' -B '$remote_dir/build' -DTC_ENABLE_METAL=OFF -DTC_ENABLE_CUDA='$enable_cuda' -DTC_BUILD_TESTS=OFF -DTC_BUILD_BENCH=OFF -DTC_BUILD_EXAMPLES=ON -DCMAKE_BUILD_TYPE=Release && cmake --build '$remote_dir/build' --target mesh_training_demo --parallel '$remote_jobs'"
 }
 
 if [[ "$prepare" == "1" && "$local_only" != "1" ]]; then
@@ -133,11 +142,11 @@ if [[ "$prepare" == "1" && "$local_only" != "1" ]]; then
     ssh "$rank1_ssh" "mkdir -p '$rank1_dir'"
     scp "$rank0_bin" "$rank1_ssh:$rank1_bin"
     ssh "$rank1_ssh" "chmod +x '$rank1_bin'"
-    prepare_linux_rank "$rank2_ssh" "$rank2_dir" OFF
+    prepare_linux_rank "$rank2_ssh" "$rank2_dir" OFF "$rank2_path"
     if [[ "$rank3_cuda" == "1" ]]; then
-        prepare_linux_rank "$rank3_ssh" "$rank3_dir" ON
+        prepare_linux_rank "$rank3_ssh" "$rank3_dir" ON "$rank3_path"
     else
-        prepare_linux_rank "$rank3_ssh" "$rank3_dir" OFF
+        prepare_linux_rank "$rank3_ssh" "$rank3_dir" OFF "$rank3_path"
     fi
 fi
 
@@ -206,7 +215,12 @@ run_remote_rank() {
     local bin="$3"
     local dir="$4"
     local log="$log_dir/rank${rank}.log"
-    local remote_cmd="cd '$dir' && TC_GLOO_RING='$ring' TC_GLOO_TRACE='$trace' TC_GLOO_RING_CONNECT_TIMEOUT_MS='$timeout_ms'"
+    local remote_path="${5:-}"
+    local path_prefix=""
+    if [[ -n "$remote_path" ]]; then
+        path_prefix="PATH='$remote_path':\$PATH; export PATH; "
+    fi
+    local remote_cmd="${path_prefix}cd '$dir' && TC_GLOO_RING='$ring' TC_GLOO_TRACE='$trace' TC_GLOO_RING_CONNECT_TIMEOUT_MS='$timeout_ms'"
     if [[ -n "$advertise_hosts" ]]; then
         remote_cmd="$remote_cmd TC_GLOO_ADVERTISE_HOSTS='$advertise_hosts'"
     fi
@@ -227,9 +241,9 @@ if [[ "$local_only" == "1" ]]; then
         run_local_rank "$rank"
     done
 else
-    run_remote_rank 1 "$rank1_ssh" "$rank1_bin" "$rank1_dir"
-    run_remote_rank 2 "$rank2_ssh" "$rank2_bin" "$rank2_dir"
-    run_remote_rank 3 "$rank3_ssh" "$rank3_bin" "$rank3_dir"
+    run_remote_rank 1 "$rank1_ssh" "$rank1_bin" "$rank1_dir" "$rank1_path"
+    run_remote_rank 2 "$rank2_ssh" "$rank2_bin" "$rank2_dir" "$rank2_path"
+    run_remote_rank 3 "$rank3_ssh" "$rank3_bin" "$rank3_dir" "$rank3_path"
 fi
 
 rc=0
