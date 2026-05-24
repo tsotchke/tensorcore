@@ -162,7 +162,7 @@ def main() -> int:
 
         dirty = copy.deepcopy(live_mesh_evidence())
         dirty["meta"]["git_dirty"] = True
-        dirty_path = write_json(directory, "dirty.json", dirty)
+        dirty_path = write_json(directory, "dirty.fixture", dirty)
         assert_fails(
             "live mesh evidence must be from a clean git tree",
             "--live-mesh", str(dirty_path),
@@ -172,7 +172,7 @@ def main() -> int:
 
         stale = copy.deepcopy(live_mesh_evidence())
         stale["meta"]["git_head"] = "stale"
-        stale_path = write_json(directory, "stale.json", stale)
+        stale_path = write_json(directory, "stale.fixture", stale)
         assert_fails(
             "live mesh evidence git_head mismatch",
             "--live-mesh", str(stale_path),
@@ -183,7 +183,7 @@ def main() -> int:
         brokered = copy.deepcopy(live_mesh_evidence())
         brokered["summary"]["direct_ring_ranks"] = 3
         brokered["ranks"][2]["direct_ring"]["enabled"] = False
-        brokered_path = write_json(directory, "brokered.json", brokered)
+        brokered_path = write_json(directory, "brokered.fixture", brokered)
         assert_fails(
             "all ranks must report direct_ring=enabled",
             "--live-mesh", str(brokered_path),
@@ -193,7 +193,7 @@ def main() -> int:
 
         bad_cuda = copy.deepcopy(cuda_evidence())
         bad_cuda["training_kernels"]["adamw_step_fp16"]["kernel"] = "cpu_fallback"
-        bad_cuda_path = write_json(directory, "bad-cuda.json", bad_cuda)
+        bad_cuda_path = write_json(directory, "bad-cuda.fixture", bad_cuda)
         assert_fails(
             "adamw_step_fp16 kernel must be cuda_adamw_step_fp16",
             "--cuda", str(bad_cuda_path),
