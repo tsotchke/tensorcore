@@ -18,6 +18,9 @@ jobs:
       - name: Release evidence checker fixtures
         run: python3 scripts/check_release_evidence_selftest.py
 
+      - name: Live mesh training evidence checker fixtures
+        run: python3 scripts/check_live_mesh_training_evidence_selftest.py
+
   portable-cpu:
     name: portable-cpu (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

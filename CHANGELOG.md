@@ -53,7 +53,9 @@ every architectural primitive in code and tested:
   runner for Atlas + Enki + old-donkey + cosbox. The runner can prepare
   remote binaries from the current committed checkout, build cosbox with
   `TC_ENABLE_CUDA=ON`, launch the four ranks over Tailscale, and verify
-  DiLoCo outer sync plus checkpoint counters on every rank.
+  DiLoCo outer sync plus checkpoint counters on every rank. It can also
+  write machine-readable live-run evidence, validated by
+  `scripts/check_live_mesh_training_evidence.py`.
 - Mesh training activation checkpoint mode: `mesh_training_demo
   --checkpoint` now discards `X_norm` after the forward projection,
   realizes it through the RMSNorm recompute callback before the `dW`

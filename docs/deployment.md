@@ -245,6 +245,17 @@ outer steps, and emitted activation-checkpoint counters. The longer soak
 completed five outer steps with 40 checkpoint discard/realize cycles per
 rank; cosbox rank 3 reported `backend=cuda` throughout.
 
+For automation, capture and validate machine-readable evidence:
+
+```sh
+TC_MESH_TRAINING_INNER=8 TC_MESH_TRAINING_OUTER=5 \
+  TC_MESH_TRAINING_EVIDENCE_PATH=/tmp/live-mesh-training.json \
+  scripts/run_live_mesh_training_demo.sh
+python3 scripts/check_live_mesh_training_evidence.py /tmp/live-mesh-training.json \
+  --min-outer-steps 5 --require-direct-ring --require-checkpoint \
+  --require-cuda-rank3
+```
+
 ### 4-rank reference deployment
 
 Launch rank 0 first (must start listening before others try to connect):
