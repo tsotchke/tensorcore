@@ -242,9 +242,9 @@ Use `--require-local-only` for the localhost multi-rank regression mode.
 
 Validates a complete operational evidence bundle by delegating to the release,
 SDK26, CUDA, HIP, PyTorch, and live-mesh evidence checkers, then applying
-bundle-level policy. For the physical mesh, use
-`--require-live-clean-head` so stale or dirty-tree live evidence cannot satisfy
-the current head's deployment gate.
+bundle-level policy. For production promotion, use the clean-head flags so
+stale or dirty-tree release, SDK26, PyTorch, and live-mesh evidence cannot
+satisfy the current head's deployment gate.
 
 ```sh
 python3 scripts/check_operational_evidence.py \
@@ -255,7 +255,9 @@ python3 scripts/check_operational_evidence.py \
   --live-mesh /tmp/live-mesh-training.json \
   --require-release --require-sdk26 --require-cuda --require-pytorch \
   --require-pytorch-backend-allocation --require-live-mesh \
-  --require-live-clean-head --min-live-outer-steps 2 \
+  --require-release-clean-head --require-sdk26-clean-head \
+  --require-pytorch-clean-head --require-live-clean-head \
+  --min-live-outer-steps 2 \
   --require-direct-ring --require-checkpoint --require-cuda-rank3
 ```
 
@@ -396,8 +398,9 @@ The deep smoke. ~1284 lines. Runs *everything*:
    `tc_device_info.supports_tensorops_m5 == true` and that a GEMM dispatch
    reports `TC_BACKEND_TENSOROPS_M5`.
 8. Emit a `build/release_smoke_runtime_evidence.json` artifact with
-   (chip name, family, capability flags, backend per representative call,
-   version triple).
+   chip/runtime status, package/consumer coverage, Metal 4 TensorOps compile
+   and runtime status, and clean git-head provenance when the source checkout
+   exposes `.git`.
 
 Env knobs:
 

@@ -103,12 +103,19 @@ def base_evidence() -> dict[str, Any]:
 
 
 def run_checker(evidence: dict[str, Any]) -> subprocess.CompletedProcess[str]:
+    return run_checker_with_args(evidence)
+
+
+def run_checker_with_args(
+    evidence: dict[str, Any],
+    *args: str,
+) -> subprocess.CompletedProcess[str]:
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
         json.dump(evidence, handle)
         path = pathlib.Path(handle.name)
     try:
         return subprocess.run(
-            [sys.executable, str(CHECKER), str(path)],
+            [sys.executable, str(CHECKER), str(path), *args],
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -135,6 +142,29 @@ def assert_fails(evidence: dict[str, Any], needle: str) -> None:
 def main() -> int:
     good = base_evidence()
     assert_passes(good)
+
+    clean = copy.deepcopy(good)
+    clean["meta"]["git_head"] = "abc123"
+    clean["meta"]["git_dirty"] = False
+    result = run_checker_with_args(clean, "--git-head", "abc123", "--require-clean-head")
+    if result.returncode != 0:
+        raise AssertionError(result.stderr or result.stdout)
+
+    stale_head = copy.deepcopy(clean)
+    stale_head["meta"]["git_head"] = "stale"
+    result = run_checker_with_args(stale_head, "--git-head", "abc123", "--require-clean-head")
+    if result.returncode == 0 or "release evidence git_head mismatch" not in (
+        result.stderr + result.stdout
+    ):
+        raise AssertionError("clean-head stale fixture did not fail as expected")
+
+    dirty_head = copy.deepcopy(clean)
+    dirty_head["meta"]["git_dirty"] = True
+    result = run_checker_with_args(dirty_head, "--git-head", "abc123", "--require-clean-head")
+    if result.returncode == 0 or "release evidence must be from a clean git tree" not in (
+        result.stderr + result.stdout
+    ):
+        raise AssertionError("clean-head dirty fixture did not fail as expected")
 
     stale = copy.deepcopy(good)
     stale["checks"]["public_core_paths"]["missing_files"] = ["lib/ops/gemm.mm"]

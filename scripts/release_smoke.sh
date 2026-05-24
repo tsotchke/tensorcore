@@ -136,11 +136,45 @@ import json
 import os
 import pathlib
 import re
+import subprocess
 import sys
 
 
 def env(name, default=""):
     return os.environ.get(name, default)
+
+
+def git_output(*args):
+    try:
+        return subprocess.check_output(
+            ["git", *args],
+            cwd=env("ROOT"),
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return None
+
+
+def git_dirty():
+    try:
+        subprocess.check_call(
+            ["git", "diff", "--quiet"],
+            cwd=env("ROOT"),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        subprocess.check_call(
+            ["git", "diff", "--cached", "--quiet"],
+            cwd=env("ROOT"),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return False
+    except subprocess.CalledProcessError:
+        return True
+    except Exception:
+        return None
 
 
 def passed(status):
@@ -775,6 +809,8 @@ artifact = {
     "meta": {
         "format": 3,
         "source": "tensorcore_release_smoke",
+        "git_head": git_output("rev-parse", "HEAD"),
+        "git_dirty": git_dirty(),
     },
     "files": coverage_files,
     "status": env("RELEASE_SMOKE_STATUS", "passed"),

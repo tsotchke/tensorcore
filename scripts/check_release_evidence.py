@@ -6,10 +6,12 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import subprocess
 import sys
 from typing import Any
 
 
+ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCHEMA = "tensorcore.release_smoke.runtime_evidence.v1"
 FORMAT_VERSION = 3
 MISSING = object()
@@ -62,6 +64,12 @@ def parse_args() -> argparse.Namespace:
         description="Validate tensorcore release_smoke runtime evidence."
     )
     parser.add_argument("evidence", type=pathlib.Path)
+    parser.add_argument("--git-head", default=git_head())
+    parser.add_argument(
+        "--require-clean-head",
+        action="store_true",
+        help="Require evidence from the expected clean git head.",
+    )
     parser.add_argument(
         "--require-gpu",
         action="store_true",
@@ -78,6 +86,18 @@ def parse_args() -> argparse.Namespace:
         help="Require SDK26+ Metal 4 TensorOps compile evidence without M5 runtime coverage.",
     )
     return parser.parse_args()
+
+
+def git_head() -> str | None:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return None
 
 
 def load_json(path: pathlib.Path) -> Any:
@@ -277,6 +297,20 @@ def check_metal4_consistency(
         )
 
 
+def check_git_provenance(errors: list[str], data: Any, expected_head: str | None) -> None:
+    if not expected_head:
+        errors.append("expected git head is unavailable for release evidence check")
+        return
+    if get_path(data, "meta.git_dirty") is not False:
+        errors.append("release evidence must be from a clean git tree")
+    actual_head = get_path(data, "meta.git_head")
+    if actual_head != expected_head:
+        errors.append(
+            "release evidence git_head mismatch: "
+            f"{actual_head!r} != {expected_head!r}"
+        )
+
+
 def main() -> int:
     args = parse_args()
     data = load_json(args.evidence)
@@ -331,6 +365,8 @@ def main() -> int:
         args.require_metal4_tensorops,
         args.require_metal4_compile,
     )
+    if args.require_clean_head:
+        check_git_provenance(errors, data, args.git_head)
 
     if errors:
         print("release evidence validation failed:", file=sys.stderr)

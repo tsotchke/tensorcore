@@ -57,6 +57,34 @@ def require_path(name: str, path: pathlib.Path | None) -> pathlib.Path:
     return path.expanduser().resolve()
 
 
+def require_clean_head(
+    label: str,
+    data: Any,
+    expected_head: str | None,
+    head_path: str,
+    dirty_path: str,
+) -> None:
+    if not expected_head:
+        raise SystemExit(f"expected git head is unavailable for {label} evidence check")
+    actual_dirty = get_path(data, dirty_path)
+    if actual_dirty is not False:
+        raise SystemExit(f"{label} evidence must be from a clean git tree")
+    actual_head = get_path(data, head_path)
+    if actual_head != expected_head:
+        raise SystemExit(
+            f"{label} evidence git_head mismatch: {actual_head!r} != {expected_head!r}"
+        )
+
+
+def get_path(value: Any, path: str) -> Any:
+    current = value
+    for part in path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
 def normalize_optional_paths(args: argparse.Namespace) -> None:
     for name in ("release", "sdk26", "cuda", "hip", "pytorch", "live_mesh"):
         path = getattr(args, name)
@@ -80,6 +108,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--require-pytorch", action="store_true")
     parser.add_argument("--require-pytorch-backend-allocation", action="store_true")
     parser.add_argument("--require-live-mesh", action="store_true")
+    parser.add_argument("--require-release-clean-head", action="store_true")
+    parser.add_argument("--require-sdk26-clean-head", action="store_true")
+    parser.add_argument("--require-pytorch-clean-head", action="store_true")
     parser.add_argument("--require-live-clean-head", action="store_true")
     parser.add_argument("--min-live-outer-steps", type=int, default=1)
     parser.add_argument("--require-direct-ring", action="store_true")
@@ -108,15 +139,21 @@ def main() -> int:
     normalize_optional_paths(args)
 
     if args.release is not None:
-        run_checker(["scripts/check_release_evidence.py", str(args.release)])
+        cmd = ["scripts/check_release_evidence.py", str(args.release)]
+        if args.require_release_clean_head:
+            cmd.extend(["--git-head", args.git_head or "", "--require-clean-head"])
+        run_checker(cmd)
         checked.append("release")
 
     if args.sdk26 is not None:
-        run_checker([
+        cmd = [
             "scripts/check_release_evidence.py",
             str(args.sdk26),
             "--require-metal4-compile",
-        ])
+        ]
+        if args.require_sdk26_clean_head:
+            cmd.extend(["--git-head", args.git_head or "", "--require-clean-head"])
+        run_checker(cmd)
         checked.append("sdk26")
 
     if args.cuda is not None:
@@ -140,6 +177,14 @@ def main() -> int:
         if args.require_pytorch_backend_allocation:
             cmd.append("--require-backend-allocation")
         run_checker(cmd)
+        if args.require_pytorch_clean_head:
+            require_clean_head(
+                "PyTorch",
+                load_json(args.pytorch),
+                args.git_head,
+                "git_head",
+                "git_dirty",
+            )
         checked.append("pytorch")
 
     if args.live_mesh is not None:
@@ -160,17 +205,14 @@ def main() -> int:
         run_checker(cmd)
 
         live = load_json(args.live_mesh)
-        meta = live.get("meta", {})
         if args.require_live_clean_head:
-            if not args.git_head:
-                raise SystemExit("expected git head is unavailable for live mesh evidence check")
-            if meta.get("git_dirty") is not False:
-                raise SystemExit("live mesh evidence must be from a clean git tree")
-            if meta.get("git_head") != args.git_head:
-                raise SystemExit(
-                    "live mesh evidence git_head mismatch: "
-                    f"{meta.get('git_head')!r} != {args.git_head!r}"
-                )
+            require_clean_head(
+                "live mesh",
+                live,
+                args.git_head,
+                "meta.git_head",
+                "meta.git_dirty",
+            )
         checked.append("live_mesh")
 
     if not checked:

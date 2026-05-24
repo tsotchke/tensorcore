@@ -49,6 +49,9 @@ every architectural primitive in code and tested:
 - CUDA smoke now emits machine-readable runtime evidence and proves the
   Python training dispatch path, including RMSNorm/SwiGLU/softmax backward
   plus fp32/fp16-gradient AdamW, not just cuBLAS GEMM.
+- Release-smoke evidence now records clean git-head provenance, and the
+  operational bundle checker can require release, SDK26, PyTorch, and
+  live-mesh evidence to match the current committed head.
 - DiLoCo runtime with NONE/FP16/TOPK_1PCT/TOPK_01PCT compression,
   SGD/Nesterov/Adam outer optimizers, async overlap, sparse-on-the-wire
   cross-continent path.

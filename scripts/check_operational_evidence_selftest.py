@@ -12,6 +12,7 @@ import tempfile
 from typing import Any
 
 import check_live_mesh_training_evidence_selftest as live_mesh_fixture
+import check_release_evidence_selftest as release_fixture
 from check_cuda_smoke_evidence import EXPECTED_TRAINING_KERNELS
 
 
@@ -24,6 +25,21 @@ def live_mesh_evidence() -> dict[str, Any]:
     evidence = live_mesh_fixture.base_evidence()
     evidence["meta"]["git_head"] = TEST_HEAD
     evidence["meta"]["git_dirty"] = False
+    return evidence
+
+
+def release_evidence() -> dict[str, Any]:
+    evidence = release_fixture.base_evidence()
+    evidence["meta"]["git_head"] = TEST_HEAD
+    evidence["meta"]["git_dirty"] = False
+    return evidence
+
+
+def sdk26_evidence() -> dict[str, Any]:
+    evidence = release_evidence()
+    evidence["checks"]["metal4_tensorops"]["compile_status"] = "compiled"
+    evidence["checks"]["metal4_tensorops"]["runtime_compile_status"] = "compiled"
+    evidence["summary"]["metal4_tensorops_compile_passed"] = True
     return evidence
 
 
@@ -132,18 +148,27 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         directory = pathlib.Path(tmp)
         live_path = write_json(directory, "live.json", live_mesh_evidence())
+        release_path = write_json(directory, "release.json", release_evidence())
+        sdk26_path = write_json(directory, "sdk26.json", sdk26_evidence())
         cuda_path = write_json(directory, "cuda.json", cuda_evidence())
         pytorch_path = write_json(directory, "pytorch.json", pytorch_evidence())
 
         assert_passes(
+            "--release", str(release_path),
+            "--sdk26", str(sdk26_path),
             "--cuda", str(cuda_path),
             "--pytorch", str(pytorch_path),
             "--live-mesh", str(live_path),
             "--git-head", TEST_HEAD,
+            "--require-release",
+            "--require-sdk26",
             "--require-cuda",
             "--require-pytorch",
             "--require-pytorch-backend-allocation",
             "--require-live-mesh",
+            "--require-release-clean-head",
+            "--require-sdk26-clean-head",
+            "--require-pytorch-clean-head",
             "--require-live-clean-head",
             "--min-live-outer-steps", "5",
             "--require-direct-ring",
@@ -178,6 +203,26 @@ def main() -> int:
             "--live-mesh", str(stale_path),
             "--git-head", TEST_HEAD,
             "--require-live-clean-head",
+        )
+
+        stale_release = release_evidence()
+        stale_release["meta"]["git_head"] = "stale"
+        stale_release_path = write_json(directory, "stale-release.fixture", stale_release)
+        assert_fails(
+            "release evidence git_head mismatch",
+            "--release", str(stale_release_path),
+            "--git-head", TEST_HEAD,
+            "--require-release-clean-head",
+        )
+
+        dirty_pytorch = pytorch_evidence()
+        dirty_pytorch["git_dirty"] = True
+        dirty_pytorch_path = write_json(directory, "dirty-pytorch.fixture", dirty_pytorch)
+        assert_fails(
+            "PyTorch evidence must be from a clean git tree",
+            "--pytorch", str(dirty_pytorch_path),
+            "--git-head", TEST_HEAD,
+            "--require-pytorch-clean-head",
         )
 
         brokered = copy.deepcopy(live_mesh_evidence())
