@@ -253,9 +253,11 @@ inline uint64_t amx_z_op(const void* addr, int slot) {
  * Algorithm:
  *   AMX_SET before entering the tile processor
  *   for k in [0, K):
- *     LDX  B_pack[k*16..k*16+15] into X[slot]   (B's k-th row -> X)
- *     LDY  A_pack[k*16..k*16+15] into Y[slot]   (A's k-th col -> Y)
- *     FMA32 skip-Z for k=0, then FMA32 accumulate
+ *     preload k=0 into X[0]/Y[0]
+ *     for k in [1, K):
+ *       LDX/LDY k into the alternate X/Y slot
+ *       FMA32 previous slot, skip-Z only for the first FMA
+ *     FMA32 final loaded slot
  *                                                    (Z[i, j] += X[j] * Y[i])
  *   for r in [0, 16):  STZ C_out + r*16, Z[r]   (write 16 rows back)
  *   leave AMX armed for the thread lifetime
@@ -292,18 +294,27 @@ inline uint64_t amx_fma32_op(int xy_slot, bool skip_z) {
  * call. The first FMA for a given (i, j) tile sets FMA32's skip-Z bit, which
  * writes x*y and avoids 16 LDZ-zero instructions per tile. Splitting the
  * kernel this way lets us walk K in cache-friendly KC chunks while keeping Z
- * live across the inner loop. */
+ * live across the inner loop. The loop alternates X/Y slots 0 and 1, loading
+ * the next k before issuing FMA on the previous slot so the AMX coprocessor can
+ * overlap the load with the prior outer product. */
 __attribute__((noinline))
 static void amx_fma32_accumulate(int kc,
                                  const float* __restrict A_pack,
                                  const float* __restrict B_pack,
                                  bool skip_z_on_first_fma) {
-    for (int k = 0; k < kc; ++k) {
-        const int slot = k & 3;
-        AMX_LDX(amx_xy_op(B_pack + k * 16, slot));   /* B row -> X */
-        AMX_LDY(amx_xy_op(A_pack + k * 16, slot));   /* A col -> Y */
-        AMX_FMA32(amx_fma32_op(slot, skip_z_on_first_fma && k == 0));
+    if (kc <= 0) return;
+
+    AMX_LDX(amx_xy_op(B_pack, 0));   /* B row -> X */
+    AMX_LDY(amx_xy_op(A_pack, 0));   /* A col -> Y */
+
+    for (int k = 1; k < kc; ++k) {
+        const int load_slot = k & 1;
+        const int fma_slot = (k - 1) & 1;
+        AMX_LDX(amx_xy_op(B_pack + k * 16, load_slot));
+        AMX_LDY(amx_xy_op(A_pack + k * 16, load_slot));
+        AMX_FMA32(amx_fma32_op(fma_slot, skip_z_on_first_fma && k == 1));
     }
+    AMX_FMA32(amx_fma32_op((kc - 1) & 1, skip_z_on_first_fma && kc == 1));
 }
 
 /* ----------------------------------------------------------------------------

@@ -15,6 +15,10 @@ every architectural primitive in code and tested:
 - BLAS delegation (Accelerate / Intel MKL / OpenBLAS) — **2.10 TFLOPS
   fp32 at 4096³** on 88-core Xeon E5-2699 v4.
 - AVX2 / NEON / AMX in-tree GEMM micro-kernels (opt-in, self-contained).
+- AMX fp32 GEMM now overlaps X/Y tile loads with the previous FMA32 outer
+  product in the inner loop while preserving the skip-Z first-FMA contract;
+  direct AMX edge regressions remain bit-tight across transpose, alpha/beta,
+  and K=0 cases.
 - **Direct CUDA backend** — `tc_cuda_gemm` validated against cuBLAS
   managed-memory dispatch on RTX 3090: **31.32 TFLOPS fp32**,
   **32.28 TFLOPS fp16/fp32-accum**, and **60.42 TFLOPS fp16-accum**.
