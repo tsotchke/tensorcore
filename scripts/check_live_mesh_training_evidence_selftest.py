@@ -60,6 +60,7 @@ def base_evidence() -> dict[str, Any]:
             "checkpoint_enabled": True,
             "ring_enabled": True,
             "rank3_cuda_requested": True,
+            "local_only": False,
         },
         "summary": {
             "passed": True,
@@ -102,13 +103,14 @@ def assert_passes(evidence: dict[str, Any]) -> None:
         raise AssertionError(result.stderr or result.stdout)
 
 
-def assert_fails(evidence: dict[str, Any], needle: str) -> None:
+def assert_fails(evidence: dict[str, Any], needle: str, *extra_args: str) -> None:
     result = run_checker(
         evidence,
         "--min-outer-steps", "5",
         "--require-direct-ring",
         "--require-checkpoint",
         "--require-cuda-rank3",
+        *extra_args,
     )
     if result.returncode == 0:
         raise AssertionError("checker unexpectedly passed")
@@ -120,6 +122,20 @@ def assert_fails(evidence: dict[str, Any], needle: str) -> None:
 def main() -> int:
     good = base_evidence()
     assert_passes(good)
+
+    local_only = copy.deepcopy(good)
+    local_only["run"]["local_only"] = True
+    local_only_result = run_checker(
+        local_only,
+        "--min-outer-steps", "5",
+        "--require-direct-ring",
+        "--require-checkpoint",
+        "--require-local-only",
+    )
+    if local_only_result.returncode != 0:
+        raise AssertionError(local_only_result.stderr or local_only_result.stdout)
+
+    assert_fails(good, "run.local_only must be true", "--require-local-only")
 
     no_cuda = copy.deepcopy(good)
     no_cuda["summary"]["cuda_ranks"] = []

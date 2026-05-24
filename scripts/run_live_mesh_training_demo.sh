@@ -3,8 +3,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+local_only="${TC_MESH_LOCAL_ONLY:-0}"
 world="${TC_MESH_WORLD:-4}"
-rank0_host="${TC_MESH_RANK0_HOST:-100.96.130.16}"
+default_rank0_host="100.96.130.16"
+if [[ "$local_only" == "1" ]]; then
+    default_rank0_host="127.0.0.1"
+fi
+rank0_host="${TC_MESH_RANK0_HOST:-$default_rank0_host}"
 port="${TC_MESH_PORT:-}"
 inner_steps="${TC_MESH_TRAINING_INNER:-3}"
 outer_steps="${TC_MESH_TRAINING_OUTER:-2}"
@@ -36,8 +41,11 @@ Usage: TC_MESH_PREPARE=1 $0
 
 Runs the full mesh_training_demo across Atlas, Enki, old-donkey, and cosbox.
 Rank 3 is built with CUDA by default; set TC_MESH_RANK3_CUDA=0 for CPU-only.
+Set TC_MESH_LOCAL_ONLY=1 to run all ranks on this host for regression evidence.
 
 Environment:
+  TC_MESH_LOCAL_ONLY=$local_only
+  TC_MESH_WORLD=$world
   TC_MESH_TRAINING_INNER=$inner_steps
   TC_MESH_TRAINING_OUTER=$outer_steps
   TC_MESH_TRAINING_CHECKPOINT=$checkpoint
@@ -54,8 +62,8 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     exit 0
 fi
 
-if [[ "$world" != "4" ]]; then
-    echo "run_live_mesh_training_demo currently expects TC_MESH_WORLD=4" >&2
+if [[ "$world" != "4" && "$local_only" != "1" ]]; then
+    echo "run_live_mesh_training_demo expects TC_MESH_WORLD=4 unless TC_MESH_LOCAL_ONLY=1" >&2
     exit 2
 fi
 
@@ -110,7 +118,7 @@ prepare_linux_rank() {
         "cmake -S '$remote_dir' -B '$remote_dir/build' -DTC_ENABLE_METAL=OFF -DTC_ENABLE_CUDA='$enable_cuda' -DTC_BUILD_TESTS=OFF -DTC_BUILD_BENCH=OFF -DTC_BUILD_EXAMPLES=ON -DCMAKE_BUILD_TYPE=Release && cmake --build '$remote_dir/build' --target mesh_training_demo --parallel '$remote_jobs'"
 }
 
-if [[ "$prepare" == "1" ]]; then
+if [[ "$prepare" == "1" && "$local_only" != "1" ]]; then
     echo "[mesh-training] preparing Enki portable binary"
     ssh "$rank1_ssh" "mkdir -p '$rank1_dir'"
     scp "$rank0_bin" "$rank1_ssh:$rank1_bin"
@@ -129,21 +137,23 @@ remote_check() {
     ssh "$host" "test -x '$bin'"
 }
 
-remote_check "$rank1_ssh" "$rank1_bin" || {
-    echo "rank 1 binary missing on $rank1_ssh: $rank1_bin" >&2
-    echo "rerun with TC_MESH_PREPARE=1" >&2
-    exit 1
-}
-remote_check "$rank2_ssh" "$rank2_bin" || {
-    echo "rank 2 binary missing on $rank2_ssh: $rank2_bin" >&2
-    echo "rerun with TC_MESH_PREPARE=1" >&2
-    exit 1
-}
-remote_check "$rank3_ssh" "$rank3_bin" || {
-    echo "rank 3 binary missing on $rank3_ssh: $rank3_bin" >&2
-    echo "rerun with TC_MESH_PREPARE=1" >&2
-    exit 1
-}
+if [[ "$local_only" != "1" ]]; then
+    remote_check "$rank1_ssh" "$rank1_bin" || {
+        echo "rank 1 binary missing on $rank1_ssh: $rank1_bin" >&2
+        echo "rerun with TC_MESH_PREPARE=1" >&2
+        exit 1
+    }
+    remote_check "$rank2_ssh" "$rank2_bin" || {
+        echo "rank 2 binary missing on $rank2_ssh: $rank2_bin" >&2
+        echo "rerun with TC_MESH_PREPARE=1" >&2
+        exit 1
+    }
+    remote_check "$rank3_ssh" "$rank3_bin" || {
+        echo "rank 3 binary missing on $rank3_ssh: $rank3_bin" >&2
+        echo "rerun with TC_MESH_PREPARE=1" >&2
+        exit 1
+    }
+fi
 
 rank_env=(
     "TC_GLOO_RING=$ring"
@@ -195,12 +205,18 @@ echo "[mesh-training] logs: $log_dir"
 echo "[mesh-training] url: $url"
 run_local_rank 0
 sleep "${TC_MESH_LAUNCH_DELAY:-0.5}"
-run_remote_rank 1 "$rank1_ssh" "$rank1_bin" "$rank1_dir"
-run_remote_rank 2 "$rank2_ssh" "$rank2_bin" "$rank2_dir"
-run_remote_rank 3 "$rank3_ssh" "$rank3_bin" "$rank3_dir"
+if [[ "$local_only" == "1" ]]; then
+    for ((rank = 1; rank < world; rank++)); do
+        run_local_rank "$rank"
+    done
+else
+    run_remote_rank 1 "$rank1_ssh" "$rank1_bin" "$rank1_dir"
+    run_remote_rank 2 "$rank2_ssh" "$rank2_bin" "$rank2_dir"
+    run_remote_rank 3 "$rank3_ssh" "$rank3_bin" "$rank3_dir"
+fi
 
 rc=0
-for rank in 0 1 2 3; do
+for ((rank = 0; rank < world; rank++)); do
     if ! wait "${pids[$rank]}"; then
         echo "[mesh-training] rank $rank failed; log follows" >&2
         sed "s/^/[rank $rank] /" "$log_dir/rank${rank}.log" >&2 || true
@@ -221,7 +237,7 @@ write_evidence() {
     fi
     python3 - "$ROOT" "$log_dir" "$path" "$status" "$world" "$url" \
         "$inner_steps" "$outer_steps" "$checkpoint" "$ring" "$trace" \
-        "$timeout_ms" "$prepare" "$rank3_cuda" <<'PY'
+        "$timeout_ms" "$prepare" "$rank3_cuda" "$local_only" <<'PY'
 import json
 import pathlib
 import re
@@ -242,6 +258,7 @@ trace_enabled = sys.argv[11] == "1"
 timeout_ms = int(sys.argv[12])
 prepare = sys.argv[13] == "1"
 rank3_cuda = sys.argv[14] == "1"
+local_only = sys.argv[15] == "1"
 
 patterns = {
     "direct": re.compile(
@@ -378,6 +395,7 @@ evidence = {
         "ring_connect_timeout_ms": timeout_ms,
         "prepare": prepare,
         "rank3_cuda_requested": rank3_cuda,
+        "local_only": local_only,
     },
     "summary": {
         "passed": status == "passed",
@@ -397,7 +415,7 @@ path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding=
 PY
 }
 
-for rank in 0 1 2 3; do
+for ((rank = 0; rank < world; rank++)); do
     log="$log_dir/rank${rank}.log"
     grep -q "\[rank $rank\] mesh_training_demo OK" "$log" || {
         echo "[mesh-training] rank $rank did not report mesh_training_demo OK" >&2

@@ -23,6 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--require-direct-ring", action="store_true")
     parser.add_argument("--require-checkpoint", action="store_true")
     parser.add_argument("--require-cuda-rank3", action="store_true")
+    parser.add_argument("--require-local-only", action="store_true")
     return parser.parse_args()
 
 
@@ -55,6 +56,8 @@ def main() -> int:
     require(errors, run.get("world") == args.world, f"run.world must be {args.world}")
     require(errors, isinstance(ranks, list) and len(ranks) == args.world,
             f"ranks must contain {args.world} entries")
+    if args.require_local_only:
+        require(errors, run.get("local_only") is True, "run.local_only must be true")
 
     require(errors, summary.get("passed") is True, "summary.passed must be true")
     require(errors, summary.get("all_ranks_passed") is True,

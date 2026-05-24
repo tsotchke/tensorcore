@@ -67,6 +67,11 @@ every architectural primitive in code and tested:
   DiLoCo outer sync plus checkpoint counters on every rank. It can also
   write machine-readable live-run evidence, validated by
   `scripts/check_live_mesh_training_evidence.py`.
+- `Add localhost mesh-training evidence mode`: set `TC_MESH_LOCAL_ONLY=1`
+  to run all `mesh_training_demo` ranks on one host with the same direct
+  ring, DiLoCo, checkpoint, and evidence parser path. The evidence checker
+  now has `--require-local-only` for regression gates when the physical
+  mesh is intermittent.
 - Mesh training activation checkpoint mode: `mesh_training_demo
   --checkpoint` now discards `X_norm` after the forward projection,
   realizes it through the RMSNorm recompute callback before the `dW`

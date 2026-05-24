@@ -210,9 +210,14 @@ builds cosbox with `TC_ENABLE_CUDA=ON` unless `TC_MESH_RANK3_CUDA=0`.
 TC_MESH_PREPARE=1 scripts/run_live_mesh_training_demo.sh
 TC_MESH_TRAINING_INNER=8 TC_MESH_TRAINING_OUTER=5 scripts/run_live_mesh_training_demo.sh
 TC_MESH_TRAINING_CHECKPOINT=0 scripts/run_live_mesh_training_demo.sh
+TC_MESH_LOCAL_ONLY=1 TC_MESH_TRAINING_OUTER=1 \
+  TC_MESH_TRAINING_EVIDENCE_PATH=/tmp/live-mesh-training-local.json \
+  scripts/run_live_mesh_training_demo.sh
 TC_MESH_TRAINING_EVIDENCE_PATH=/tmp/live-mesh-training.json scripts/run_live_mesh_training_demo.sh
 python3 scripts/check_live_mesh_training_evidence.py /tmp/live-mesh-training.json \
   --require-direct-ring --require-checkpoint --require-cuda-rank3
+python3 scripts/check_live_mesh_training_evidence.py /tmp/live-mesh-training-local.json \
+  --require-direct-ring --require-checkpoint --require-local-only
 ```
 
 The optional evidence JSON uses schema
@@ -226,6 +231,7 @@ Validates the JSON artifact emitted by `run_live_mesh_training_demo.sh` via
 `TC_MESH_TRAINING_EVIDENCE_PATH`. Use `--min-outer-steps`,
 `--require-direct-ring`, `--require-checkpoint`, and
 `--require-cuda-rank3` to enforce the operational contract for a live run.
+Use `--require-local-only` for the localhost multi-rank regression mode.
 
 ### `ci_cuda_smoke.sh`
 

@@ -244,6 +244,17 @@ DiLoCo outer sync and activation checkpointing enabled. cosbox is built
 with `TC_ENABLE_CUDA=ON` by default so the RTX 3090 rank uses the CUDA
 managed-memory training path when available.
 
+When the physical mesh is unavailable, the same script can run all ranks on
+the current host for regression evidence:
+
+```sh
+TC_MESH_LOCAL_ONLY=1 TC_MESH_TRAINING_OUTER=1 \
+  TC_MESH_TRAINING_EVIDENCE_PATH=/tmp/live-mesh-training-local.json \
+  scripts/run_live_mesh_training_demo.sh
+python3 scripts/check_live_mesh_training_evidence.py /tmp/live-mesh-training-local.json \
+  --require-direct-ring --require-checkpoint --require-local-only
+```
+
 Validated on 2026-05-23 with:
 
 ```sh
