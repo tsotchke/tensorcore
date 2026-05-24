@@ -143,12 +143,20 @@ some still queued.
 - [x] **chipStar 1.1 built on cosbox (RTX 3090 host)** — hipcc + libCHIP.so
       verified; HIP source compiles. Runtime test blocked on NVIDIA driver
       mismatch; restart-pending.
+- [x] **HIP/chipStar runtime diagnostics + fp32 GEMM evidence gate** —
+      `TC_ENABLE_HIP=ON` now builds HIP device diagnostics when the runtime
+      target exists, even if hipBLAS is absent. When hipBLAS is present,
+      `tc_gemm` can route to `TC_BACKEND_HIP`. The new `test_hip_device`,
+      `test_hip_gemm`, and `scripts/ci_hip_smoke.sh` path records no-build,
+      no-runtime, runtime-only, and full-GEMM evidence states.
 - [x] **Memory-tier API** — `include/tensorcore/memory_tier.h` with
       `tc_buffer_set_tier_hint`, `tc_buffer_promote_async`, etc. L0 (device)
       stub baseline shipping today; L1-L4 tiers (host RAM, RDMA-remote,
       NVMe) materialize as the runtime grows.
-- [ ] **HIP/chipStar runtime body** — `lib/hip/device.cpp`, `lib/hip/gemm.cpp`
-      via chipStar's hipBLAS port. Phase 1.
+- [ ] **HIP/chipStar runtime expansion** — fp16/bf16/int8 coverage,
+      device/managed buffer policy, and cross-vendor perf validation across
+      Intel Level Zero, AMD OpenCL, ARM Mali, and any viable NVIDIA OpenCL
+      stack. Phase 1 follow-through.
 - [x] **NEON GEMM kernel** for aarch64 (xavier, Apple CPU side) — opt-in
       via `TC_USE_NEON_GEMM=1`; CBLAS remains default pending broader
       throughput data.

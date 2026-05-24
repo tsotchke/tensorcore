@@ -44,6 +44,8 @@ if tc.backend_name(tc.TC_BACKEND_METAL_COMPUTE) != "metal_compute":
     raise SystemExit("backend_name(METAL_COMPUTE) mismatch")
 if tc.backend_name(tc.TC_BACKEND_CUDA) != "cuda":
     raise SystemExit("backend_name(CUDA) mismatch")
+if tc.backend_name(tc.TC_BACKEND_HIP) != "hip":
+    raise SystemExit("backend_name(HIP) mismatch")
 if tc.last_backend_name() != "none":
     raise SystemExit("initial last_backend_name mismatch")
 if tc.tensorops_gemm_kernel_name("f16") != "tc4_gemm_f16":

@@ -57,6 +57,7 @@ typedef enum {
     TC_BACKEND_PORTABLE_CPU     = 7,
     TC_BACKEND_METAL_COMPUTE    = 8,
     TC_BACKEND_CUDA             = 9,
+    TC_BACKEND_HIP              = 10,
 } tc_backend_t;
 
 const char* tc_backend_name(tc_backend_t b);  /* "simdgroup_matrix", ... */

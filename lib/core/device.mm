@@ -60,6 +60,7 @@ extern "C" const char* tc_backend_name(tc_backend_t b) {
         case TC_BACKEND_PORTABLE_CPU:     return "portable_cpu";
         case TC_BACKEND_METAL_COMPUTE:    return "metal_compute";
         case TC_BACKEND_CUDA:             return "cuda";
+        case TC_BACKEND_HIP:              return "hip";
     }
     return "?";
 }

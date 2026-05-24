@@ -913,6 +913,7 @@ int main(void) {
     if (strcmp(tc_backend_name(TC_BACKEND_PORTABLE_CPU), "portable_cpu") != 0) rc = 1;
     if (strcmp(tc_backend_name(TC_BACKEND_METAL_COMPUTE), "metal_compute") != 0) rc = 1;
     if (strcmp(tc_backend_name(TC_BACKEND_CUDA), "cuda") != 0) rc = 1;
+    if (strcmp(tc_backend_name(TC_BACKEND_HIP), "hip") != 0) rc = 1;
 
     rc |= run_padded_f32_gemm(ctx);
     rc |= run_padded_f16_gemm(ctx);

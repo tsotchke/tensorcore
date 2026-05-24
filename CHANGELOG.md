@@ -20,6 +20,10 @@ every architectural primitive in code and tested:
   **32.28 TFLOPS fp16/fp32-accum**, and **60.42 TFLOPS fp16-accum**.
 - **chipStar HIP backend** scaffolding for Intel Level Zero, AMD OpenCL,
   ARM Mali — runs on every Khronos-standards GPU vendor.
+- HIP/chipStar fp32 GEMM dispatch now routes `tc_gemm` through
+  `TC_BACKEND_HIP` / `hipblas_sgemm_staged` when the runtime initializes,
+  with `test_hip_gemm`, `scripts/ci_hip_smoke.sh`, and JSON evidence
+  validation for skipped vs passed HIP hosts.
 - GLOO TCP transport with full collective set: default brokered
   SUM/AVG/MIN/MAX, opt-in ring fp32 SUM/AVG for 3+ ranks, broadcast
   any-root, allgather, sparse_allreduce.

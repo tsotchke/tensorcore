@@ -83,6 +83,7 @@ typedef enum {
     TC_BACKEND_PORTABLE_CPU     = 7,   /* portable C CPU backend          */
     TC_BACKEND_METAL_COMPUTE    = 8,   /* generic Metal compute kernels   */
     TC_BACKEND_CUDA             = 9,   /* direct CUDA/cuBLAS backend      */
+    TC_BACKEND_HIP              = 10,  /* chipStar/hipBLAS backend        */
 } tc_backend_t;
 
 tc_backend_t tc_last_backend(void);

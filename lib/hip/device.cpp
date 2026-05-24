@@ -26,6 +26,8 @@
 #include "tensorcore/tensorcore.h"
 
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 
@@ -78,7 +80,12 @@ bool populate_info(int device_index, tc_hip_device_info* info) {
     hipDeviceProp_t prop;
     if (hipGetDeviceProperties(&prop, device_index) != hipSuccess) return false;
     std::memset(info, 0, sizeof(*info));
-    std::strncpy(info->device_name, prop.name, sizeof(info->device_name) - 1);
+    size_t name_len = 0;
+    while (name_len + 1 < sizeof(info->device_name) && prop.name[name_len] != '\0') {
+        ++name_len;
+    }
+    std::memcpy(info->device_name, prop.name, name_len);
+    info->device_name[name_len] = '\0';
     info->vendor = infer_vendor_from_name(prop.name);
     info->global_memory_bytes = prop.totalGlobalMem;
     info->local_memory_bytes = prop.sharedMemPerBlock;
@@ -101,6 +108,45 @@ bool populate_info(int device_index, tc_hip_device_info* info) {
     return true;
 }
 
+bool env_equals_ci(const char* value, const char* expected) {
+    if (!value || !expected) return false;
+    while (*value && *expected) {
+        char a = *value++;
+        char b = *expected++;
+        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+        if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+        if (a != b) return false;
+    }
+    return *value == '\0' && *expected == '\0';
+}
+
+bool env_true(const char* value) {
+    return value &&
+           (env_equals_ci(value, "1") ||
+            env_equals_ci(value, "true") ||
+            env_equals_ci(value, "yes") ||
+            env_equals_ci(value, "on") ||
+            env_equals_ci(value, "enable") ||
+            env_equals_ci(value, "enabled"));
+}
+
+bool env_false(const char* value) {
+    return value &&
+           (env_equals_ci(value, "0") ||
+            env_equals_ci(value, "false") ||
+            env_equals_ci(value, "no") ||
+            env_equals_ci(value, "off") ||
+            env_equals_ci(value, "disable") ||
+            env_equals_ci(value, "disabled"));
+}
+
+bool hip_policy_disabled(void) {
+    if (env_true(std::getenv("TC_DISABLE_HIP_GEMM"))) return true;
+    if (env_false(std::getenv("TC_HIP_GEMM"))) return true;
+    if (env_false(std::getenv("TC_USE_HIP_GEMM"))) return true;
+    return false;
+}
+
 #endif  /* TC_ENABLE_HIP */
 
 }  // namespace
@@ -115,9 +161,13 @@ extern "C" tc_status_t tc_hip_init(tc_context* ctx) {
     auto& s = state();
     if (s.initialized) return TC_OK;
 
-    if (hipInit(0) != hipSuccess) return TC_ERR_INTERNAL;
+    if (hipInit(0) != hipSuccess) {
+        (void)hipGetLastError();
+        return TC_ERR_UNSUPPORTED_FAMILY;
+    }
     int count = 0;
     if (hipGetDeviceCount(&count) != hipSuccess || count <= 0) {
+        (void)hipGetLastError();
         return TC_ERR_UNSUPPORTED_FAMILY;   /* no HIP device available */
     }
     s.device_count = count;
@@ -138,7 +188,15 @@ extern "C" tc_status_t tc_hip_device_info_get(tc_context* ctx, tc_hip_device_inf
 #else
     std::lock_guard<std::mutex> lk(state_mutex());
     auto& s = state();
-    if (!s.initialized) return TC_ERR_NOT_INITIALIZED;
+    if (!s.initialized) {
+        int count = 0;
+        if (hipGetDeviceCount(&count) != hipSuccess || count <= 0) {
+            (void)hipGetLastError();
+            std::memset(out_info, 0, sizeof(*out_info));
+            return TC_ERR_UNSUPPORTED_FAMILY;
+        }
+        return TC_ERR_NOT_INITIALIZED;
+    }
     *out_info = s.info;
     return TC_OK;
 #endif
@@ -148,8 +206,12 @@ extern "C" int tc_hip_device_count(void) {
 #if !defined(TC_ENABLE_HIP)
     return 0;
 #else
-    std::lock_guard<std::mutex> lk(state_mutex());
-    return state().device_count;
+    int count = 0;
+    if (hipGetDeviceCount(&count) != hipSuccess) {
+        (void)hipGetLastError();
+        return 0;
+    }
+    return count;
 #endif
 }
 
@@ -159,8 +221,16 @@ extern "C" tc_status_t tc_hip_device_at(int index, tc_hip_device_info* out_info)
     std::memset(out_info, 0, sizeof(*out_info));
     return TC_ERR_UNSUPPORTED_FAMILY;
 #else
-    std::lock_guard<std::mutex> lk(state_mutex());
-    if (index >= state().device_count) return TC_ERR_INVALID_ARG;
+    int count = 0;
+    if (hipGetDeviceCount(&count) != hipSuccess || count <= 0) {
+        (void)hipGetLastError();
+        std::memset(out_info, 0, sizeof(*out_info));
+        return TC_ERR_UNSUPPORTED_FAMILY;
+    }
+    if (index >= count) {
+        std::memset(out_info, 0, sizeof(*out_info));
+        return TC_ERR_INVALID_ARG;
+    }
     if (!populate_info(index, out_info)) return TC_ERR_INTERNAL;
     return TC_OK;
 #endif
@@ -193,4 +263,22 @@ extern "C" const char* tc_hip_last_kernel_name(void) {
 /* Internal symbol for sibling TUs (gemm.cpp, attention.cpp) to update. */
 extern "C" TC_HIP_INTERNAL void tc_hip_set_last_kernel(const char* name) {
     g_last_kernel = name ? name : "unknown";
+}
+
+extern "C" TC_HIP_INTERNAL int tc_hip_runtime_initialized(void) {
+#if !defined(TC_ENABLE_HIP)
+    return 0;
+#else
+    std::lock_guard<std::mutex> lk(state_mutex());
+    return state().initialized ? 1 : 0;
+#endif
+}
+
+extern "C" TC_HIP_INTERNAL int tc_hip_is_active(void) {
+#if !defined(TC_ENABLE_HIP)
+    return 0;
+#else
+    if (hip_policy_disabled()) return 0;
+    return tc_hip_runtime_initialized();
+#endif
 }

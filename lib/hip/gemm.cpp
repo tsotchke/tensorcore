@@ -6,15 +6,16 @@
  * via the chipStar SPIR-V dispatch layer (or native rocBLAS on AMD when
  * available).
  *
- * Compile gate: TC_ENABLE_HIP=ON in CMake. Without it, returns
- * TC_ERR_UNSUPPORTED_FAMILY so the public dispatch falls back to CBLAS
- * or the reference loop.
+ * Compile gate: TC_ENABLE_HIPBLAS=ON in CMake. Without hipBLAS, returns
+ * TC_ERR_UNSUPPORTED_FAMILY so the public dispatch falls back to CBLAS or
+ * the reference loop while tc_hip_init/device diagnostics can still work.
  */
 
 #include "tensorcore/tensorcore.h"
 #include "tensorcore/hip.h"
 
 #include <cstdint>
+#include <cstdlib>
 
 #if defined(__GNUC__) || defined(__clang__)
 #  define TC_HIP_INTERNAL __attribute__((visibility("hidden")))
@@ -22,7 +23,7 @@
 #  define TC_HIP_INTERNAL
 #endif
 
-#if defined(TC_ENABLE_HIP)
+#if defined(TC_ENABLE_HIPBLAS)
 #  include <hip/hip_runtime.h>
 #  include <hipblas/hipblas.h>
 #endif
@@ -31,7 +32,7 @@ extern "C" TC_HIP_INTERNAL void tc_hip_set_last_kernel(const char* name);
 
 namespace {
 
-#if defined(TC_ENABLE_HIP)
+#if defined(TC_ENABLE_HIPBLAS)
 
 struct HipBlasHandle {
     hipblasHandle_t h = nullptr;
@@ -51,6 +52,75 @@ HipBlasHandle& handle() {
 /* Translate tc_gemm_desc transpose flags into hipBLAS HIPBLAS_OP_*. */
 hipblasOperation_t trans_of(bool t) { return t ? HIPBLAS_OP_T : HIPBLAS_OP_N; }
 
+struct DeviceTriple {
+    void* A = nullptr;
+    void* B = nullptr;
+    void* C = nullptr;
+    ~DeviceTriple() {
+        if (A) hipFree(A);
+        if (B) hipFree(B);
+        if (C) hipFree(C);
+    }
+};
+
+bool matrix_bytes(const tc_gemm_desc* d,
+                  size_t elem_size,
+                  size_t* a_bytes,
+                  size_t* b_bytes,
+                  size_t* c_bytes) {
+    if (!d || !a_bytes || !b_bytes || !c_bytes || elem_size == 0) return false;
+    const int a_rows = d->transpose_a ? d->K : d->M;
+    const int a_cols = d->transpose_a ? d->M : d->K;
+    const int b_rows = d->transpose_b ? d->N : d->K;
+    const int b_cols = d->transpose_b ? d->K : d->N;
+    const int lda_h = d->lda ? d->lda : a_cols;
+    const int ldb_h = d->ldb ? d->ldb : b_cols;
+    const int ldc_h = d->ldc ? d->ldc : d->N;
+    if (a_rows <= 0 || b_rows <= 0 || d->M <= 0 ||
+        lda_h < a_cols || ldb_h < b_cols || ldc_h < d->N) {
+        return false;
+    }
+    *a_bytes = (size_t)a_rows * (size_t)lda_h * elem_size;
+    *b_bytes = (size_t)b_rows * (size_t)ldb_h * elem_size;
+    *c_bytes = (size_t)d->M * (size_t)ldc_h * elem_size;
+    return true;
+}
+
+tc_status_t stage_buffers(const tc_gemm_desc* d,
+                          size_t elem_size,
+                          const void* Ap,
+                          const void* Bp,
+                          const void* Cp,
+                          DeviceTriple* dev) {
+    if (!d || !Ap || !Bp || !Cp || !dev) return TC_ERR_INVALID_ARG;
+    size_t a_bytes = 0, b_bytes = 0, c_bytes = 0;
+    if (!matrix_bytes(d, elem_size, &a_bytes, &b_bytes, &c_bytes)) {
+        return TC_ERR_INVALID_SHAPE;
+    }
+    if (hipMalloc(&dev->A, a_bytes) != hipSuccess) return TC_ERR_ALLOC;
+    if (hipMalloc(&dev->B, b_bytes) != hipSuccess) return TC_ERR_ALLOC;
+    if (hipMalloc(&dev->C, c_bytes) != hipSuccess) return TC_ERR_ALLOC;
+    if (hipMemcpy(dev->A, Ap, a_bytes, hipMemcpyHostToDevice) != hipSuccess) return TC_ERR_INTERNAL;
+    if (hipMemcpy(dev->B, Bp, b_bytes, hipMemcpyHostToDevice) != hipSuccess) return TC_ERR_INTERNAL;
+    if (d->beta != 0.0f) {
+        if (hipMemcpy(dev->C, Cp, c_bytes, hipMemcpyHostToDevice) != hipSuccess) {
+            return TC_ERR_INTERNAL;
+        }
+    }
+    return TC_OK;
+}
+
+tc_status_t fetch_c(const tc_gemm_desc* d, size_t elem_size, void* Cp, const DeviceTriple& dev) {
+    size_t a_bytes = 0, b_bytes = 0, c_bytes = 0;
+    if (!matrix_bytes(d, elem_size, &a_bytes, &b_bytes, &c_bytes)) {
+        return TC_ERR_INVALID_SHAPE;
+    }
+    (void)a_bytes; (void)b_bytes;
+    if (hipMemcpy(Cp, dev.C, c_bytes, hipMemcpyDeviceToHost) != hipSuccess) return TC_ERR_INTERNAL;
+    if (hipDeviceSynchronize() != hipSuccess) return TC_ERR_INTERNAL;
+    return TC_OK;
+}
+
 tc_status_t hip_gemm_sgemm(const tc_gemm_desc* d,
                            const tc_buffer* A, const tc_buffer* B,
                            tc_buffer* C) {
@@ -66,10 +136,13 @@ tc_status_t hip_gemm_sgemm(const tc_gemm_desc* d,
     if (tc_buffer_map((tc_buffer*)A, &Ap) != TC_OK) return TC_ERR_INTERNAL;
     if (tc_buffer_map((tc_buffer*)B, &Bp) != TC_OK) return TC_ERR_INTERNAL;
     if (tc_buffer_map(C, &Cp) != TC_OK) return TC_ERR_INTERNAL;
+    DeviceTriple dev;
+    tc_status_t stage = stage_buffers(d, sizeof(float), Ap, Bp, Cp, &dev);
+    if (stage != TC_OK) return stage;
 
     /* hipBLAS uses column-major. Our C ABI is row-major. The standard trick:
-     *   C^T = B^T * A^T   (row-major → column-major).
-     * So call hipBLAS with M↔N swapped and transposes flipped. */
+     *   C^T = B^T * A^T   (row-major -> column-major).
+     * So call hipBLAS with M/N swapped and transposes flipped. */
     const int M = d->N, N = d->M, K = d->K;
     const int lda = d->ldb ? d->ldb : (d->transpose_b ? d->K : d->N);
     const int ldb = d->lda ? d->lda : (d->transpose_a ? d->M : d->K);
@@ -81,12 +154,15 @@ tc_status_t hip_gemm_sgemm(const tc_gemm_desc* d,
         hh.h, op_a, op_b,
         M, N, K,
         &d->alpha,
-        (const float*)Bp, lda,
-        (const float*)Ap, ldb,
+        (const float*)dev.B, lda,
+        (const float*)dev.A, ldb,
         &d->beta,
-        (float*)Cp, ldc);
-    tc_hip_set_last_kernel("hipblas_sgemm");
-    return (s == HIPBLAS_STATUS_SUCCESS) ? TC_OK : TC_ERR_INTERNAL;
+        (float*)dev.C, ldc);
+    if (s != HIPBLAS_STATUS_SUCCESS) return TC_ERR_INTERNAL;
+    tc_status_t fetch = fetch_c(d, sizeof(float), Cp, dev);
+    if (fetch != TC_OK) return fetch;
+    tc_hip_set_last_kernel("hipblas_sgemm_staged");
+    return TC_OK;
 }
 
 tc_status_t hip_gemm_hgemm(const tc_gemm_desc* d,
@@ -102,6 +178,9 @@ tc_status_t hip_gemm_hgemm(const tc_gemm_desc* d,
     if (tc_buffer_map((tc_buffer*)A, &Ap) != TC_OK) return TC_ERR_INTERNAL;
     if (tc_buffer_map((tc_buffer*)B, &Bp) != TC_OK) return TC_ERR_INTERNAL;
     if (tc_buffer_map(C, &Cp) != TC_OK) return TC_ERR_INTERNAL;
+    DeviceTriple dev;
+    tc_status_t stage = stage_buffers(d, sizeof(hipblasHalf), Ap, Bp, Cp, &dev);
+    if (stage != TC_OK) return stage;
 
     const hipblasHalf alpha = hipblasHalf((__half)d->alpha);
     const hipblasHalf beta = hipblasHalf((__half)d->beta);
@@ -114,28 +193,31 @@ tc_status_t hip_gemm_hgemm(const tc_gemm_desc* d,
         hh.h, trans_of(d->transpose_b), trans_of(d->transpose_a),
         M, N, K,
         &alpha,
-        (const hipblasHalf*)Bp, lda,
-        (const hipblasHalf*)Ap, ldb,
+        (const hipblasHalf*)dev.B, lda,
+        (const hipblasHalf*)dev.A, ldb,
         &beta,
-        (hipblasHalf*)Cp, ldc);
-    tc_hip_set_last_kernel("hipblas_hgemm");
-    return (s == HIPBLAS_STATUS_SUCCESS) ? TC_OK : TC_ERR_INTERNAL;
+        (hipblasHalf*)dev.C, ldc);
+    if (s != HIPBLAS_STATUS_SUCCESS) return TC_ERR_INTERNAL;
+    tc_status_t fetch = fetch_c(d, sizeof(hipblasHalf), Cp, dev);
+    if (fetch != TC_OK) return fetch;
+    tc_hip_set_last_kernel("hipblas_hgemm_staged");
+    return TC_OK;
 }
 
-#endif  /* TC_ENABLE_HIP */
+#endif  /* TC_ENABLE_HIPBLAS */
 
 }  // namespace
 
 /* Public-ish entry point — called from the main tc_gemm dispatcher when
  * the active backend is HIP. Returns TC_ERR_UNSUPPORTED_FAMILY when
- * TC_ENABLE_HIP is OFF so the dispatcher falls through to the next
+ * TC_ENABLE_HIPBLAS is OFF so the dispatcher falls through to the next
  * backend (CBLAS / reference). */
 extern "C" TC_HIP_INTERNAL tc_status_t tc_hip_gemm(tc_context* ctx,
                                                     const tc_gemm_desc* desc,
                                                     const tc_buffer* A,
                                                     const tc_buffer* B,
                                                     tc_buffer* C) {
-#if !defined(TC_ENABLE_HIP)
+#if !defined(TC_ENABLE_HIPBLAS)
     (void)ctx; (void)desc; (void)A; (void)B; (void)C;
     return TC_ERR_UNSUPPORTED_FAMILY;
 #else

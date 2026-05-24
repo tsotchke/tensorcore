@@ -124,6 +124,15 @@ chipStar's HIP backend dispatches to whichever ICD is installed (Intel
 path does **not** work today (NVIDIA's OpenCL driver lacks SPIR-V
 ingestion); use the direct CUDA backend above instead.
 
+`scripts/ci_hip_smoke.sh` is the operational gate for this path. It builds
+with `TC_ENABLE_HIP=ON`, runs CTest, and records whether the host reached
+no HIP runtime, HIP-runtime-only, or full hipBLAS GEMM dispatch. When
+chipStar/hipBLAS are present it asserts fp32 `tc_gemm` dispatch through
+`TC_BACKEND_HIP` / `hipblas_sgemm_staged` plus explicit
+`TC_DISABLE_HIP_GEMM=1` CPU fallback. Set `TC_HIP_PREFIX` when chipStar is
+installed outside standard CMake paths, and `REQUIRE_HIP=1` on a machine
+that must have full HIP GEMM working.
+
 ## 2. Network setup
 
 ### Same-LAN: any IP-routable address

@@ -148,10 +148,13 @@ cmake -S . -B build-hip  -DTC_ENABLE_METAL=OFF -DTC_ENABLE_HIP=ON
 
 `TC_ENABLE_CUDA=ON` requires CMake's `CUDAToolkit` package with
 `CUDA::cudart` and `CUDA::cublas`. `TC_ENABLE_HIP=ON` requires HIP runtime
-and hipBLAS imported targets. If those dependencies are missing, configure
+targets for device diagnostics; hipBLAS is detected separately and enables
+HIP GEMM when present. If runtime dependencies are missing, configure
 prints a warning and falls back to the deterministic unsupported stubs used
 by default builds. Installed CMake packages preserve the effective backend
 flags and rediscover CUDA/HIP dependencies before loading exported targets.
+Use `scripts/ci_cuda_smoke.sh` and `scripts/ci_hip_smoke.sh` for the
+runtime proof on machines that have those backends installed.
 
 The portable build does not build or install `tensorcore.metallib`.
 Consumers should treat the metallib as a Metal-backend artifact and skip

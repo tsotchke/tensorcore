@@ -153,6 +153,7 @@ def _run_diagnostic_api_check():
         tc.backend_name(tc.TC_BACKEND_PORTABLE_CPU) == "portable_cpu" and
         tc.backend_name(tc.TC_BACKEND_METAL_COMPUTE) == "metal_compute" and
         tc.backend_name(tc.TC_BACKEND_CUDA) == "cuda" and
+        tc.backend_name(tc.TC_BACKEND_HIP) == "hip" and
         tc.backend_name(9999) == "?" and
         tc.last_backend() == tc.TC_BACKEND_NONE and
         tc.last_backend_name() == "none"

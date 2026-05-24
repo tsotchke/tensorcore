@@ -272,6 +272,7 @@ typedef enum {
     TC_BACKEND_PORTABLE_CPU     = 7,   /* portable C CPU backend (TC_ENABLE_METAL=OFF) */
     TC_BACKEND_METAL_COMPUTE    = 8,   /* generic Metal compute kernels */
     TC_BACKEND_CUDA             = 9,   /* direct CUDA/cuBLAS backend */
+    TC_BACKEND_HIP              = 10,  /* chipStar/hipBLAS backend */
 } tc_backend_t;
 
 tc_backend_t tc_last_backend(void);            /* thread-local                */
@@ -815,9 +816,10 @@ transport work.
 
 ## HIP — `hip.h`
 
-HIP/chipStar is the staged non-Apple GPU backend. The public symbols are
-exported today as deterministic unsupported stubs so SDK consumers and FFI
-generators can bind the future surface.
+HIP/chipStar is the staged non-Apple GPU backend. Default builds export
+deterministic unsupported stubs so SDK consumers and FFI generators can bind
+the surface everywhere. Builds with `TC_ENABLE_HIP=ON` can initialize a
+chipStar runtime and route fp32 GEMM through hipBLAS as `TC_BACKEND_HIP`.
 
 ```c
 typedef enum {

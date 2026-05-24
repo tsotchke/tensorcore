@@ -606,6 +606,15 @@ extern "C" tc_status_t tc_cuda_gemm(tc_context* ctx,
 extern "C" int tc_cuda_is_active(void);
 #endif
 
+#if defined(TC_ENABLE_HIP)
+extern "C" tc_status_t tc_hip_gemm(tc_context* ctx,
+                                    const tc_gemm_desc* desc,
+                                    const tc_buffer* A,
+                                    const tc_buffer* B,
+                                    tc_buffer* C);
+extern "C" int tc_hip_is_active(void);
+#endif
+
 extern "C" tc_status_t tc_gemm(tc_context* ctx,
                                const tc_gemm_desc* desc,
                                const tc_buffer* A,
@@ -689,7 +698,16 @@ extern "C" tc_status_t tc_gemm(tc_context* ctx,
     tc_status_t s = validate_gemm_buffers(ctx, desc, A, B, C);
     if (s != TC_OK) return s;
 
+#if defined(TC_ENABLE_CUDA) || defined(TC_ENABLE_HIP)
+    const bool same_float =
+        (desc->c_dtype == TC_DTYPE_F32 || desc->c_dtype == TC_DTYPE_F16 ||
+         desc->c_dtype == TC_DTYPE_BF16) &&
+        desc->a_dtype == desc->c_dtype && desc->b_dtype == desc->c_dtype;
+#endif
 #if defined(TC_ENABLE_CUDA)
+    const bool i8_to_i32 =
+        desc->a_dtype == TC_DTYPE_I8 && desc->b_dtype == TC_DTYPE_I8 &&
+        desc->c_dtype == TC_DTYPE_I32;
     /* CUDA dispatch: when a CUDA-enabled context is active, route supported
      * GEMM calls into cuBLAS. TC_DISABLE_CUDA_GEMM=1 / TC_CUDA_GEMM=0 /
      * TC_USE_CUDA_GEMM=0 force CPU fallback for debugging. Supported dtype combos:
@@ -698,13 +716,6 @@ extern "C" tc_status_t tc_gemm(tc_context* ctx,
      *   - bf16 in, bf16 out, fp32 accum
      *   - int8 in, int32 out, int32 accum (K must be multiple of 16)
      */
-    const bool same_float =
-        (desc->c_dtype == TC_DTYPE_F32 || desc->c_dtype == TC_DTYPE_F16 ||
-         desc->c_dtype == TC_DTYPE_BF16) &&
-        desc->a_dtype == desc->c_dtype && desc->b_dtype == desc->c_dtype;
-    const bool i8_to_i32 =
-        desc->a_dtype == TC_DTYPE_I8 && desc->b_dtype == TC_DTYPE_I8 &&
-        desc->c_dtype == TC_DTYPE_I32;
     if (tc_cuda_is_active() && (same_float || i8_to_i32)) {
         tc_status_t cs = tc_cuda_gemm(ctx, desc, A, B, C);
         if (cs == TC_OK) {
@@ -714,7 +725,20 @@ extern "C" tc_status_t tc_gemm(tc_context* ctx,
     }
 #endif
 
-    /* Now apply the CPU dtype gate. Only reached if CUDA didn't service the call. */
+#if defined(TC_ENABLE_HIP)
+    /* HIP/chipStar dispatch: vendor-neutral GPU path via hipBLAS. CUDA stays
+     * preferred on NVIDIA when both runtimes are linked; HIP covers non-CUDA
+     * SPIR-V devices and explicit chipStar builds. */
+    if (tc_hip_is_active() && same_float) {
+        tc_status_t hs = tc_hip_gemm(ctx, desc, A, B, C);
+        if (hs == TC_OK) {
+            return tc_record_dispatch("tc_gemm", TC_BACKEND_HIP, TC_OK);
+        }
+        /* Fall through to CPU path on HIP dtype/runtime failures. */
+    }
+#endif
+
+    /* Now apply the CPU dtype gate. Only reached if no GPU backend served it. */
     if (!supports_cpu_gemm(desc)) return TC_ERR_UNSUPPORTED_DTYPE;
 
     void* Ap = nullptr;

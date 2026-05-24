@@ -151,6 +151,7 @@ Apple7..8 bf16          → fp32-cast fallback via tc_gemm (TC_BACKEND_SIMDGROUP
 small/odd shapes        → MPSMatrix (TC_BACKEND_MPS)
 all GPU paths failed    → cblas_sgemm (TC_BACKEND_ACCELERATE_CPU)
 Linux + CUDA init success -> cuBLAS (TC_BACKEND_CUDA)
+Linux + HIP init success  -> hipBLAS (TC_BACKEND_HIP)
 ```
 
 Use `tc_last_backend()` to see which row matched.

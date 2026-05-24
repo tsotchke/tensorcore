@@ -104,15 +104,22 @@ custom kernels (attention, quantized GEMV, training kernels) live in
 
 ## Status
 
-**Phase 0** (current): API + scaffolding. Header declares `tc_hip_*`;
-`device.cpp` and `gemm.cpp` build as unsupported stubs unless
-`TC_ENABLE_HIP` is compiled in.
+**Phase 0**: API + scaffolding. Header declares `tc_hip_*`; `device.cpp`
+and `gemm.cpp` build as unsupported stubs unless `TC_ENABLE_HIP` is
+compiled in.
 
 **Phase 1.1-1.3**: chipStar install on cosbox, xavier, old-donkey.
 
-**Phase 1.4**: device init + buffer management.
+**Phase 1.4** (current): device init plus optional fp32 hipBLAS dispatch.
+`TC_ENABLE_HIP=ON` now builds runtime diagnostics when the HIP runtime target
+is present, even if hipBLAS is absent. When hipBLAS is found too, `tc_gemm`
+routes to `TC_BACKEND_HIP` after `tc_hip_init` succeeds, using a host-staged
+`hipblasSgemm` path until HIP-owned buffer allocation lands.
+`test_hip_device`, `test_hip_gemm`, and `scripts/ci_hip_smoke.sh` validate
+runtime availability, `hipblas_sgemm_staged`, and explicit CPU fallback.
 
-**Phase 1.5-1.6**: GEMM via hipBLAS.
+**Phase 1.5-1.6**: fp16/bf16/int8 GEMM via hipBLAS plus HIP buffer
+policy.
 
 **Phase 1.7**: FlashAttention port.
 

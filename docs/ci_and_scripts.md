@@ -83,6 +83,7 @@ Python package editable, and runs an inline smoke script that asserts:
 - `tc.backend_name(tc.TC_BACKEND_TENSOROPS_M5) == "tensorops_m5"`
 - `tc.backend_name(tc.TC_BACKEND_METAL_COMPUTE) == "metal_compute"`
 - `tc.backend_name(tc.TC_BACKEND_CUDA) == "cuda"`
+- `tc.backend_name(tc.TC_BACKEND_HIP) == "hip"`
 - `tc.last_backend_name() == "none"` (before any kernel runs)
 - `tc.tensorops_gemm_kernel_name("f16") == "tc4_gemm_f16"`
 - `tc.tensorops_gemm_kernel_name("i8", "i32") is None`
@@ -235,6 +236,26 @@ CUDA Toolkit with `CUDA::cudart` plus `CUDA::cublas`.
 
 ```sh
 TC_CUDA_BUILD_DIR=build-cuda scripts/ci_cuda_smoke.sh
+```
+
+### `ci_hip_smoke.sh`
+
+Configures a Linux chipStar/HIP build with `TC_ENABLE_HIP=ON`, runs CTest,
+then writes optional JSON evidence for the HIP runtime state. If HIP runtime
+targets are missing, the script records `runtime_status=skipped_not_built`;
+if HIP builds but no runtime device is available, it records
+`skipped_runtime_unavailable`; if chipStar initializes but hipBLAS is not
+installed, it records `runtime_only_no_hipblas`. On a working chipStar +
+hipBLAS host, it asserts fp32 GEMM dispatch through `backend=hip`,
+`kernel=hipblas_sgemm_staged`, and verifies `TC_DISABLE_HIP_GEMM=1` falls
+back to a non-HIP backend. Set `TC_HIP_PREFIX=/path/to/chipstar-install`
+when chipStar is outside the default CMake prefix paths.
+
+```sh
+TENSORCORE_HIP_SMOKE_EVIDENCE_PATH=/tmp/hip.json scripts/ci_hip_smoke.sh
+python3 scripts/check_hip_smoke_evidence.py /tmp/hip.json
+
+REQUIRE_HIP=1 scripts/ci_hip_smoke.sh  # fails unless HIP dispatch passes
 ```
 
 ### `check_public_headers.sh`

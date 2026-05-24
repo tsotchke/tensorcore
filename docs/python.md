@@ -129,8 +129,10 @@ before running the recompute callback.
 ### HIP
 `hip_init`, `hip_device_info_get`, `hip_device_count`, `hip_device_at`,
 `hip_select_device`, `hip_last_kernel_name`. The in-tree HIP/chipStar
-backend currently exposes deterministic unsupported diagnostics when no
-runtime is built in.
+backend exposes deterministic unsupported diagnostics when no runtime is
+built in. With `TC_ENABLE_HIP=ON` and a working chipStar/hipBLAS runtime,
+fp32 `gemm` can dispatch as `backend=hip`; set `TC_DISABLE_HIP_GEMM=1`,
+`TC_HIP_GEMM=0`, or `TC_USE_HIP_GEMM=0` to force CPU fallback.
 
 ### CUDA
 `cuda_init`, `cuda_device_count`, `cuda_device_at`, `cuda_select_device`,

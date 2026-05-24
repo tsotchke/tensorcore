@@ -6,6 +6,7 @@ set(tensorcore_VERSION "@PROJECT_VERSION@")
 set(tensorcore_ENABLE_METAL "@TC_ENABLE_METAL@")
 set(tensorcore_ENABLE_CUDA "@TC_ENABLE_CUDA@")
 set(tensorcore_ENABLE_HIP "@TC_ENABLE_HIP@")
+set(tensorcore_ENABLE_HIPBLAS "@TC_ENABLE_HIPBLAS@")
 
 if(tensorcore_ENABLE_CUDA)
     find_dependency(CUDAToolkit)
@@ -13,6 +14,9 @@ endif()
 
 if(tensorcore_ENABLE_HIP)
     find_dependency(hip)
+endif()
+
+if(tensorcore_ENABLE_HIPBLAS)
     find_dependency(hipblas)
 endif()
 
