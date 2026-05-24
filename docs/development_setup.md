@@ -247,21 +247,21 @@ See `make help` for the full menu.
   `pip install mlx`.
 - **PyTorch / TensorFlow.** Tensorcore's core build only needs the C ABI.
   An experimental PyTorch bridge lives in `bindings/pytorch` for fp32/bf16
-  CPU matmul and opt-in `torch.matmul` dispatch experiments. It uses
-  zero-copy tensor wrappers when the runtime accepts the tensor pointer and
-  falls back to staged buffers otherwise. Importing `tensorcore_torch`
-  registers PyTorch's PrivateUse1 name as `tensorcore` and exposes a small
-  `torch.tensorcore` runtime module, but direct tensor allocation on
-  `device="tensorcore"` is intentionally unavailable until allocator /
-  storage / factory kernels land. Use
+  CPU and PrivateUse1 host-memory matmul plus opt-in `torch.matmul` dispatch
+  experiments. It uses zero-copy tensor wrappers when the runtime accepts
+  the tensor pointer and falls back to staged buffers otherwise. Importing
+  `tensorcore_torch` registers PyTorch's PrivateUse1 name as `tensorcore`,
+  exposes a small `torch.tensorcore` runtime module, and enables direct
+  host-memory tensor allocation on `device="tensorcore"`. Use
   `tensorcore_torch.pytorch_backend_state()` or
-  `torch.tensorcore.backend_state()` to inspect that split explicitly from
+  `torch.tensorcore.backend_state()` to inspect that capability state from
   training/deployment scripts; `tensorcore_torch.matmul_eligibility()`
   reports the exact dispatcher reason for tensorcore versus ATen fallback.
   When PyTorch is installed, run
-  `REQUIRE_PYTORCH=1 scripts/ci_pytorch_smoke.sh` to force-build the bridge
-  and validate fp32/bf16, empty matmul, dispatcher, autograd fallback, and
-  PrivateUse1 registration/backend-state behavior.
+  `REQUIRE_PYTORCH=1 REQUIRE_PYTORCH_BACKEND=1 scripts/ci_pytorch_smoke.sh`
+  to force-build the bridge and validate fp32/bf16, empty matmul,
+  dispatcher, autograd fallback, PrivateUse1 allocation, and
+  registration/backend-state behavior.
 - **CUDA.** Obviously.
 - **Real GGUF model.** The bench harness uses synthetic Q4_0 weights;
   full inference against a real GGUF is a v0.2 deliverable.

@@ -78,6 +78,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--require-cuda", action="store_true")
     parser.add_argument("--require-hip", action="store_true")
     parser.add_argument("--require-pytorch", action="store_true")
+    parser.add_argument("--require-pytorch-backend-allocation", action="store_true")
     parser.add_argument("--require-live-mesh", action="store_true")
     parser.add_argument("--require-live-clean-head", action="store_true")
     parser.add_argument("--min-live-outer-steps", type=int, default=1)
@@ -136,6 +137,8 @@ def main() -> int:
         cmd = ["scripts/check_pytorch_smoke_evidence.py", str(args.pytorch)]
         if args.require_pytorch:
             cmd.append("--require-pytorch")
+        if args.require_pytorch_backend_allocation:
+            cmd.append("--require-backend-allocation")
         run_checker(cmd)
         checked.append("pytorch")
 

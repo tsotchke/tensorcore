@@ -185,6 +185,8 @@ if torch.tensorcore.device_count() != 1:
     raise AssertionError("torch.tensorcore should expose one logical device")
 if torch.tensorcore.current_device() != 0:
     raise AssertionError("torch.tensorcore current_device should be 0")
+if torch.tensorcore.supports_device_allocation() is not True:
+    raise AssertionError("torch.tensorcore should report device allocation support")
 if torch.device("tensorcore").type != "tensorcore":
     raise AssertionError("torch.device did not recognize the tensorcore backend name")
 if torch.device("tensorcore:0").index != 0:
@@ -209,12 +211,12 @@ if state.get("is_available") is not True:
     raise AssertionError(f"backend state should report available runtime shim: {state}")
 if state.get("device_count") != 1 or state.get("current_device") != 0:
     raise AssertionError(f"backend state device fields mismatch: {state}")
-if state.get("supports_device_allocation") is not False:
-    raise AssertionError(f"backend state should report allocation unsupported: {state}")
-if state.get("allocator_status") != "not_implemented":
+if state.get("supports_device_allocation") is not True:
+    raise AssertionError(f"backend state should report allocation support: {state}")
+if state.get("allocator_status") != "available":
     raise AssertionError(f"backend state allocation status mismatch: {state}")
-if state.get("factory_kernels") is not False or state.get("storage_kernels") is not False:
-    raise AssertionError(f"backend state should report missing factory/storage kernels: {state}")
+if state.get("factory_kernels") is not True or state.get("storage_kernels") is not True:
+    raise AssertionError(f"backend state should report factory/storage kernels: {state}")
 if state.get("matmul_extension_loaded") is not True:
     raise AssertionError(f"backend state should report matmul extension loaded: {state}")
 probe = state.get("matmul_dispatch_probe")
@@ -223,7 +225,7 @@ if not isinstance(probe, dict) or probe.get("reason") != "eligible":
 if torch.tensorcore.backend_state() != state:
     raise AssertionError("torch.tensorcore.backend_state does not match package state")
 report = tct.pytorch_backend_report()
-if ("allocation=not_implemented" not in report or
+if ("allocation=available" not in report or
         "dispatch_probe=eligible" not in report or
         "registered=True" not in report):
     raise AssertionError(f"backend report missing expected fields: {report}")
@@ -283,6 +285,24 @@ Bb = torch.randn(3, 2, dtype=torch.float32).to(torch.bfloat16)
 expected_b = (Ab.float() @ Bb.float()).to(torch.bfloat16)
 assert_close(tct.matmul_bf16(Ab, Bb), expected_b, rtol=0.0, atol=0.0)
 
+A_tc = tct.to_tensorcore(A)
+B_tc = tct.to_tensorcore(B)
+if A_tc.device.type != "tensorcore" or B_tc.device.type != "tensorcore":
+    raise AssertionError("to_tensorcore did not return tensorcore tensors")
+if not A_tc.is_tensorcore or not B_tc.is_tensorcore:
+    raise AssertionError("generated tensorcore tensor helpers did not recognize PrivateUse1 tensors")
+if tct.matmul_eligibility(A_tc, B_tc).get("reason") != "eligible":
+    raise AssertionError("tensorcore PrivateUse1 matmul was not eligible")
+assert_close(tct.to_cpu(A_tc), A)
+tc_out = tct.matmul(A_tc, B_tc)
+if tc_out.device.type != "tensorcore":
+    raise AssertionError(f"PrivateUse1 matmul returned {tc_out.device}, expected tensorcore")
+assert_close(tct.to_cpu(tc_out), expected)
+torch_tc_out = torch.matmul(A_tc, B_tc)
+if torch_tc_out.device.type != "tensorcore":
+    raise AssertionError(f"torch.matmul PrivateUse1 returned {torch_tc_out.device}, expected tensorcore")
+assert_close(tct.to_cpu(torch_tc_out), expected)
+
 K0 = tct.matmul(torch.empty(3, 0), torch.empty(0, 5))
 assert K0.shape == (3, 5)
 assert torch.count_nonzero(K0).item() == 0
@@ -320,20 +340,17 @@ try:
 except Exception as exc:
     allocation_error = str(exc)
     if backend_required:
-        raise AssertionError(
-            "torch.empty(device='tensorcore') failed; full tensorcore device "
-            "allocation requires PrivateUse1 allocator/storage/factory kernels"
-        ) from exc
-    print(
-        "torch.empty(device='tensorcore') unavailable as expected without "
-        "PrivateUse1 allocator/storage/factory kernels"
-    )
+        raise AssertionError("torch.empty(device='tensorcore') failed") from exc
     allocation_available = False
 else:
     if allocated.device.type != "tensorcore":
         raise AssertionError(f"unexpected allocated device: {allocated.device}")
+    if not allocated.is_tensorcore:
+        raise AssertionError("allocated tensor did not report is_tensorcore")
     allocation_error = None
     allocation_available = True
+if not allocation_available:
+    raise AssertionError(f"tensorcore device allocation unexpectedly unavailable: {allocation_error}")
 
 evidence.update({
     "runtime_status": "passed",
@@ -349,6 +366,8 @@ evidence.update({
         "error_paths_checked": True,
         "default_matmul_dispatch_checked": True,
         "autograd_fallback_checked": True,
+        "privateuse1_matmul_checked": True,
+        "device_roundtrip_checked": True,
     },
     "direct_device_allocation": {
         "available": allocation_available,

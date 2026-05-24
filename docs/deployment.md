@@ -288,8 +288,10 @@ python3 scripts/check_operational_evidence.py \
   --release /tmp/release/release_smoke_runtime_evidence.json \
   --sdk26 /tmp/sdk26/release_smoke_runtime_evidence.json \
   --cuda /tmp/cuda-smoke.json \
+  --pytorch /tmp/pytorch.json \
   --live-mesh /tmp/live-mesh-training.json \
-  --require-release --require-sdk26 --require-cuda --require-live-mesh \
+  --require-release --require-sdk26 --require-cuda --require-pytorch \
+  --require-pytorch-backend-allocation --require-live-mesh \
   --require-live-clean-head --min-live-outer-steps 5 \
   --require-direct-ring --require-checkpoint --require-cuda-rank3
 ```

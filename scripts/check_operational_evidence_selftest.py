@@ -46,6 +46,57 @@ def cuda_evidence() -> dict[str, Any]:
     }
 
 
+def pytorch_evidence() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "git_head": TEST_HEAD,
+        "git_dirty": False,
+        "require_pytorch": False,
+        "require_pytorch_backend": False,
+        "runtime_status": "passed",
+        "message": "tensorcore PyTorch bridge smoke OK",
+        "torch_version": "2.11.0",
+        "tensorcore_lib_dir": "/tmp/tensorcore",
+        "backend_state": {
+            "backend_name": "tensorcore",
+            "privateuse1_backend_name": "tensorcore",
+            "extension_privateuse1_backend_name": "tensorcore",
+            "registered": True,
+            "torch_module_registered": True,
+            "generated_tensor_methods": True,
+            "is_available": True,
+            "device_count": 1,
+            "current_device": 0,
+            "supports_device_allocation": True,
+            "allocator_status": "available",
+            "factory_kernels": True,
+            "storage_kernels": True,
+            "matmul_extension_loaded": True,
+            "matmul_dispatch_probe": {"eligible": True, "reason": "eligible"},
+            "default_matmul_enabled": False,
+            "last_backend_name": "portable_cpu",
+            "amp_supported_dtypes": ["torch.float32", "torch.bfloat16"],
+        },
+        "backend_report": "tensorcore PyTorch backend: registered=True allocation=available",
+        "matmul": {
+            "fp32_eligibility_reason": "eligible",
+            "fp32_backend": "portable_cpu",
+            "bf16_checked": True,
+            "noncontiguous_checked": True,
+            "degenerate_checked": True,
+            "error_paths_checked": True,
+            "default_matmul_dispatch_checked": True,
+            "autograd_fallback_checked": True,
+            "privateuse1_matmul_checked": True,
+            "device_roundtrip_checked": True,
+        },
+        "direct_device_allocation": {
+            "available": True,
+            "error": None,
+        },
+    }
+
+
 def write_json(directory: pathlib.Path, name: str, data: dict[str, Any]) -> pathlib.Path:
     path = directory / name
     path.write_text(json.dumps(data), encoding="utf-8")
@@ -82,12 +133,16 @@ def main() -> int:
         directory = pathlib.Path(tmp)
         live_path = write_json(directory, "live.json", live_mesh_evidence())
         cuda_path = write_json(directory, "cuda.json", cuda_evidence())
+        pytorch_path = write_json(directory, "pytorch.json", pytorch_evidence())
 
         assert_passes(
             "--cuda", str(cuda_path),
+            "--pytorch", str(pytorch_path),
             "--live-mesh", str(live_path),
             "--git-head", TEST_HEAD,
             "--require-cuda",
+            "--require-pytorch",
+            "--require-pytorch-backend-allocation",
             "--require-live-mesh",
             "--require-live-clean-head",
             "--min-live-outer-steps", "5",

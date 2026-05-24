@@ -88,10 +88,11 @@ every architectural primitive in code and tested:
   realizes it through the RMSNorm recompute callback before the `dW`
   backward GEMM, and has a dedicated CTest smoke.
 - Experimental PyTorch bridge with zero-copy fp32 CPU matmul, an opt-in
-  `torch.matmul` dispatcher hook, and structured backend-state reporting
-  for the current PrivateUse1 shim versus future allocator/factory kernels.
-  The bridge now also exposes `matmul_eligibility()` so training code can
-  see the exact tensorcore-dispatch versus ATen-fallback reason.
+  `torch.matmul` dispatcher hook, host-memory PrivateUse1 allocation,
+  explicit `to_tensorcore()` / `to_cpu()` round-trips, and structured
+  backend-state reporting. The bridge now also exposes
+  `matmul_eligibility()` so training code can see the exact
+  tensorcore-dispatch versus ATen-fallback reason.
 
 ### End-to-end validation matrix
 

@@ -6,8 +6,7 @@
  * v0.1 scope:
  *   - fp32 and bf16 2-D matmul.
  *   - 2-D inputs, no batching, no transpose (caller transposes upstream).
- *   - CPU tensors only — Apple unified memory means tensorcore's CPU
- *     backend reads from the same physical RAM PyTorch is using.
+ *   - CPU tensors and tensorcore PrivateUse1 host-memory tensors.
  *     Uses `tc_buffer_from_ptr` when the runtime can wrap PyTorch's
  *     allocator output directly, with an alloc-and-copy fallback for
  *     runtimes that require stricter wrapper alignment.
@@ -25,7 +24,9 @@
 #include <torch/extension.h>
 #include <torch/library.h>
 
+#include <ATen/EmptyTensor.h>
 #include <ATen/ops/matmul_native.h>
+#include <c10/core/Allocator.h>
 #include <c10/core/DeviceType.h>
 #include <pybind11/stl.h>
 
@@ -36,7 +37,9 @@ extern "C" {
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -49,6 +52,37 @@ namespace py = pybind11;
  * `tc_init` cost per matmul. */
 tc_context* g_ctx = nullptr;
 std::atomic<bool> g_default_matmul{false};
+
+void tensorcore_host_delete(void* ptr) {
+    std::free(ptr);
+}
+
+class TensorcoreHostAllocator final : public c10::Allocator {
+public:
+    c10::DataPtr allocate(size_t n) override {
+        void* ptr = nullptr;
+        if (n > 0) {
+            ptr = std::malloc(n);
+            TORCH_CHECK(ptr != nullptr, "tensorcore PrivateUse1 host allocation failed for ", n, " bytes");
+        }
+        return c10::DataPtr(
+            ptr,
+            ptr,
+            &tensorcore_host_delete,
+            c10::Device(c10::DeviceType::PrivateUse1, 0));
+    }
+
+    c10::DeleterFnPtr raw_deleter() const override {
+        return &tensorcore_host_delete;
+    }
+
+    void copy_data(void* dest, const void* src, std::size_t count) const override {
+        std::memcpy(dest, src, count);
+    }
+};
+
+TensorcoreHostAllocator g_tensorcore_allocator;
+std::atomic<bool> g_allocator_registered{false};
 
 void ensure_ctx() {
     static std::atomic<bool> initialized{false};
@@ -73,6 +107,22 @@ void ensure_ctx() {
     init_lock.clear(std::memory_order_release);
 }
 
+void register_tensorcore_allocator() {
+    bool expected = false;
+    if (g_allocator_registered.compare_exchange_strong(expected, true)) {
+        c10::SetAllocator(c10::DeviceType::PrivateUse1, &g_tensorcore_allocator, 1);
+    }
+}
+
+bool is_tensorcore_device(const at::Tensor& t) {
+    return t.device().type() == c10::DeviceType::PrivateUse1;
+}
+
+bool is_host_accessible_device_pair(const at::Tensor& A, const at::Tensor& B) {
+    return (A.device().is_cpu() && B.device().is_cpu()) ||
+           (is_tensorcore_device(A) && is_tensorcore_device(B));
+}
+
 std::string tc_matmul_eligibility_reason(const at::Tensor& A, const at::Tensor& B) {
     if (A.dtype() != B.dtype()) return "dtype_mismatch";
     if (A.dtype() != torch::kFloat32 && A.dtype() != torch::kBFloat16) {
@@ -83,7 +133,10 @@ std::string tc_matmul_eligibility_reason(const at::Tensor& A, const at::Tensor& 
     }
     if (A.dim() != 2 || B.dim() != 2) return "rank_mismatch";
     if (A.size(1) != B.size(0)) return "shape_mismatch";
-    if (!A.device().is_cpu() || !B.device().is_cpu()) return "non_cpu_device";
+    if (!is_host_accessible_device_pair(A, B)) return "unsupported_device_pair";
+    if (is_tensorcore_device(A) && (!A.is_contiguous() || !B.is_contiguous())) {
+        return "non_contiguous_privateuse1";
+    }
     return "eligible";
 }
 
@@ -99,6 +152,7 @@ void register_privateuse1_name() {
     if (!c10::is_privateuse1_backend_registered()) {
         c10::register_privateuse1_backend("tensorcore");
     }
+    register_tensorcore_allocator();
 }
 
 void check_dim_fits_tc(const char* name, int64_t value) {
@@ -147,8 +201,12 @@ at::Tensor tc_matmul_fp32(const at::Tensor& A, const at::Tensor& B) {
     TORCH_CHECK(B.dim() == 2, "tc_matmul requires 2-D B; got dim=", B.dim());
     TORCH_CHECK(A.size(1) == B.size(0),
                 "shape mismatch: A is ", A.sizes(), " B is ", B.sizes());
-    TORCH_CHECK(A.device().is_cpu() && B.device().is_cpu(),
-                "tc_matmul currently CPU only (unified memory on Apple)");
+    TORCH_CHECK(is_host_accessible_device_pair(A, B),
+                "tc_matmul requires both tensors on CPU or both on tensorcore PrivateUse1 host memory");
+    if (is_tensorcore_device(A)) {
+        TORCH_CHECK(A.is_contiguous() && B.is_contiguous(),
+                    "tc_matmul requires contiguous tensorcore PrivateUse1 inputs");
+    }
 
     /* Contiguous, row-major inputs are required by the wire format. */
     const auto A_c = A.contiguous();
@@ -294,6 +352,92 @@ at::Tensor tc_matmul_privateuse1(const at::Tensor& A, const at::Tensor& B) {
     return tc_matmul_fp32(A, B);
 }
 
+at::Tensor tc_empty_memory_format(
+    c10::SymIntArrayRef size,
+    std::optional<at::ScalarType> dtype,
+    std::optional<at::Layout> layout,
+    std::optional<at::Device> device,
+    std::optional<bool> pin_memory,
+    std::optional<c10::MemoryFormat> memory_format) {
+    register_privateuse1_name();
+    TORCH_CHECK(!layout.has_value() || *layout == at::kStrided,
+                "tensorcore PrivateUse1 only supports strided layout");
+    TORCH_CHECK(!pin_memory.value_or(false),
+                "tensorcore PrivateUse1 does not support pinned memory");
+    if (device.has_value()) {
+        TORCH_CHECK(device->type() == c10::DeviceType::PrivateUse1,
+                    "tensorcore empty expected PrivateUse1 device, got ", *device);
+        TORCH_CHECK(!device->has_index() || device->index() == 0,
+                    "tensorcore exposes one logical device: tensorcore:0");
+    }
+    const at::ScalarType scalar = dtype.value_or(at::kFloat);
+    return at::detail::empty_generic_symint(
+        size,
+        &g_tensorcore_allocator,
+        c10::DispatchKeySet(c10::DispatchKey::PrivateUse1),
+        scalar,
+        memory_format);
+}
+
+at::Tensor tc_empty_strided(
+    c10::SymIntArrayRef size,
+    c10::SymIntArrayRef stride,
+    std::optional<at::ScalarType> dtype,
+    std::optional<at::Layout> layout,
+    std::optional<at::Device> device,
+    std::optional<bool> pin_memory) {
+    register_privateuse1_name();
+    TORCH_CHECK(!layout.has_value() || *layout == at::kStrided,
+                "tensorcore PrivateUse1 only supports strided layout");
+    TORCH_CHECK(!pin_memory.value_or(false),
+                "tensorcore PrivateUse1 does not support pinned memory");
+    if (device.has_value()) {
+        TORCH_CHECK(device->type() == c10::DeviceType::PrivateUse1,
+                    "tensorcore empty_strided expected PrivateUse1 device, got ", *device);
+        TORCH_CHECK(!device->has_index() || device->index() == 0,
+                    "tensorcore exposes one logical device: tensorcore:0");
+    }
+    const at::ScalarType scalar = dtype.value_or(at::kFloat);
+    return at::detail::empty_strided_symint_generic(
+        size,
+        stride,
+        &g_tensorcore_allocator,
+        c10::DispatchKeySet(c10::DispatchKey::PrivateUse1),
+        scalar);
+}
+
+size_t tensor_nbytes(const at::Tensor& t) {
+    TORCH_CHECK(t.numel() >= 0, "tensor has negative numel");
+    return static_cast<size_t>(t.numel()) * static_cast<size_t>(t.element_size());
+}
+
+at::Tensor tc_to_tensorcore(const at::Tensor& src) {
+    register_privateuse1_name();
+    TORCH_CHECK(src.device().is_cpu(), "to_tensorcore expects a CPU tensor; got ", src.device());
+    TORCH_CHECK(src.layout() == torch::kStrided, "to_tensorcore expects strided tensors");
+    TORCH_CHECK(src.dtype() == torch::kFloat32 || src.dtype() == torch::kBFloat16,
+                "to_tensorcore supports fp32 and bf16; got ", src.dtype());
+    const auto contiguous = src.contiguous();
+    auto out = at::empty_strided(
+        contiguous.sizes(),
+        contiguous.strides(),
+        contiguous.options().device(c10::Device(c10::DeviceType::PrivateUse1, 0)));
+    std::memcpy(out.data_ptr(), contiguous.data_ptr(), tensor_nbytes(contiguous));
+    return out;
+}
+
+at::Tensor tc_to_cpu(const at::Tensor& src) {
+    TORCH_CHECK(is_tensorcore_device(src), "to_cpu expects a tensorcore PrivateUse1 tensor; got ", src.device());
+    TORCH_CHECK(src.layout() == torch::kStrided, "to_cpu expects strided tensors");
+    TORCH_CHECK(src.is_contiguous(), "to_cpu expects contiguous tensorcore PrivateUse1 tensors");
+    auto out = at::empty_strided(
+        src.sizes(),
+        src.strides(),
+        src.options().device(c10::Device(c10::DeviceType::CPU)));
+    std::memcpy(out.data_ptr(), src.data_ptr(), tensor_nbytes(src));
+    return out;
+}
+
 bool tc_set_default_matmul(bool enabled = true) {
     register_privateuse1_name();
     return g_default_matmul.exchange(enabled, std::memory_order_acq_rel);
@@ -318,6 +462,8 @@ TORCH_LIBRARY_IMPL(aten, AutogradCPU, m) {
 
 TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
     m.impl("matmul", TORCH_FN(tc_matmul_privateuse1));
+    m.impl("empty.memory_format", TORCH_FN(tc_empty_memory_format));
+    m.impl("empty_strided", TORCH_FN(tc_empty_strided));
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
@@ -326,6 +472,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "tc_matmul(A: Tensor[fp32|bf16, MxK], B: Tensor[fp32|bf16, KxN]) -> Tensor[MxN]");
     m.def("matmul_bf16", &tc_matmul_bf16,
           "tc_matmul_bf16(A: Tensor[bf16, MxK], B: Tensor[bf16, KxN]) -> Tensor[bf16, MxN]");
+    m.def("to_tensorcore", &tc_to_tensorcore,
+          "Copy a CPU fp32/bf16 tensor into tensorcore PrivateUse1 host memory");
+    m.def("to_cpu", &tc_to_cpu,
+          "Copy a tensorcore PrivateUse1 tensor back to a CPU tensor");
     m.def("is_matmul_eligible", &is_tc_matmul_eligible,
           "Return whether A and B can route through tensorcore's torch.matmul dispatcher hook");
     m.def("matmul_eligibility", &tc_matmul_eligibility,

@@ -118,14 +118,14 @@ script force-builds `tensorcore_torch` against
 - `tensorcore_torch.pytorch_backend_state()` and
   `torch.tensorcore.backend_state()` report the same structured capability
   snapshot: registered runtime shim, generated tensor helpers, matmul
-  extension loaded, and allocator/storage/factory kernels still marked
-  `not_implemented`
+  extension loaded, and host-memory allocator/storage/factory kernels marked
+  `available`
 - `tensorcore_torch.matmul_eligibility()` exposes the dispatcher gate used
   by the opt-in `torch.matmul` hook, including explicit fallback reasons for
   dtype, rank, and shape mismatches
-- direct tensor allocation with `torch.empty(..., device="tensorcore")`
-  remains unavailable unless `REQUIRE_PYTORCH_BACKEND=1` is set, because
-  allocator/storage/factory kernels are a later backend step
+- direct tensor allocation with `torch.empty(..., device="tensorcore")`,
+  explicit `to_tensorcore()` / `to_cpu()` round-trips, and PrivateUse1
+  matmul dispatch
 
 If PyTorch is not importable, the script skips by default. Set
 `REQUIRE_PYTORCH=1` to make that a hard failure.
@@ -136,13 +136,15 @@ Validate it with:
 
 ```sh
 python3 scripts/check_pytorch_smoke_evidence.py /tmp/pytorch.json
+python3 scripts/check_pytorch_smoke_evidence.py /tmp/pytorch.json \
+  --require-pytorch --require-backend-allocation
 ```
 
 Run locally:
 
 ```sh
 cmake --build build-portable-cpu-current --parallel
-REQUIRE_PYTORCH=1 scripts/ci_pytorch_smoke.sh
+REQUIRE_PYTORCH=1 REQUIRE_PYTORCH_BACKEND=1 scripts/ci_pytorch_smoke.sh
 ```
 
 ### `ci_portable_cpu.sh`
@@ -249,8 +251,10 @@ python3 scripts/check_operational_evidence.py \
   --release /tmp/release/release_smoke_runtime_evidence.json \
   --sdk26 /tmp/sdk26/release_smoke_runtime_evidence.json \
   --cuda /tmp/cuda-smoke.json \
+  --pytorch /tmp/pytorch.json \
   --live-mesh /tmp/live-mesh-training.json \
-  --require-release --require-sdk26 --require-cuda --require-live-mesh \
+  --require-release --require-sdk26 --require-cuda --require-pytorch \
+  --require-pytorch-backend-allocation --require-live-mesh \
   --require-live-clean-head --min-live-outer-steps 2 \
   --require-direct-ring --require-checkpoint --require-cuda-rank3
 ```

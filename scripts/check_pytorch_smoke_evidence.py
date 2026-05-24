@@ -94,6 +94,10 @@ def main() -> int:
             return fail("allocation evidence contradicts backend_state")
         if state.get("allocator_status") == "available" and not evidence_allocation:
             return fail("available allocator_status requires allocation evidence")
+        if state_allocation:
+            for key in ("privateuse1_matmul_checked", "device_roundtrip_checked"):
+                if matmul.get(key) is not True:
+                    return fail(f"{key} must be true when allocation is available")
 
     print(
         "PyTorch smoke evidence OK: "

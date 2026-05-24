@@ -37,10 +37,10 @@ def passed_evidence() -> dict[str, Any]:
             "is_available": True,
             "device_count": 1,
             "current_device": 0,
-            "supports_device_allocation": False,
-            "allocator_status": "not_implemented",
-            "factory_kernels": False,
-            "storage_kernels": False,
+            "supports_device_allocation": True,
+            "allocator_status": "available",
+            "factory_kernels": True,
+            "storage_kernels": True,
             "matmul_extension_loaded": True,
             "matmul_dispatch_probe": {
                 "eligible": True,
@@ -60,10 +60,12 @@ def passed_evidence() -> dict[str, Any]:
             "error_paths_checked": True,
             "default_matmul_dispatch_checked": True,
             "autograd_fallback_checked": True,
+            "privateuse1_matmul_checked": True,
+            "device_roundtrip_checked": True,
         },
         "direct_device_allocation": {
-            "available": False,
-            "error": "allocator is not implemented",
+            "available": True,
+            "error": None,
         },
     }
 
@@ -126,6 +128,7 @@ def main() -> int:
     good = passed_evidence()
     assert_passes(good)
     assert_passes(good, "--require-pytorch")
+    assert_passes(good, "--require-backend-allocation")
 
     skipped = skipped_evidence()
     assert_passes(skipped)
@@ -140,10 +143,14 @@ def main() -> int:
     assert_fails(bad_matmul, "bf16_checked must be true")
 
     bad_allocation = copy.deepcopy(good)
-    bad_allocation["backend_state"]["allocator_status"] = "available"
+    bad_allocation["direct_device_allocation"]["available"] = False
     assert_fails(bad_allocation, "available allocator_status requires allocation evidence")
+
+    bad_roundtrip = copy.deepcopy(good)
+    bad_roundtrip["matmul"]["device_roundtrip_checked"] = False
+    assert_fails(bad_roundtrip, "device_roundtrip_checked must be true")
     assert_fails(
-        good,
+        skipped,
         "--require-backend-allocation needs tensorcore device allocation",
         "--require-backend-allocation",
     )

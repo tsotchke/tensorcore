@@ -2,10 +2,10 @@
 
 Importing this package registers PyTorch's PrivateUse1 backend name as
 ``tensorcore`` and installs a small ``torch.tensorcore`` runtime module. That
-is intentionally narrower than a full PyTorch device backend: tensor factory
-APIs such as ``torch.empty(..., device="tensorcore")`` still require native
-PrivateUse1 allocator/storage/factory kernels and are expected to fail until
-that lower-level backend work exists.
+is intentionally narrower than a full PyTorch device backend: the bridge
+provides host-memory PrivateUse1 allocation, tensor factory kernels, explicit
+CPU round-trips, and matmul dispatch, while unrelated tensorcore-device
+operators still require explicit kernels or CPU round-trips.
 
 The existing extension API remains available directly from this package:
 ``tensorcore_torch.matmul`` and ``tensorcore_torch.set_default_matmul`` are
@@ -82,9 +82,8 @@ def _new_backend_module() -> types.ModuleType:
     module = types.ModuleType("torch.tensorcore")
     module.__doc__ = (
         "Runtime shim for the tensorcore PrivateUse1 PyTorch backend. "
-        "This registers the backend name and common runtime helpers, but "
-        "does not provide allocator/storage/factory kernels for tensors "
-        "created directly on device='tensorcore'."
+        "This registers the backend name, common runtime helpers, host-memory "
+        "allocation, tensor factory kernels, and matmul dispatch."
     )
 
     def is_available() -> bool:
@@ -125,7 +124,7 @@ def _new_backend_module() -> types.ModuleType:
         return [torch.float32, torch.bfloat16]
 
     def supports_device_allocation() -> bool:
-        return False
+        return True
 
     def backend_state() -> Dict[str, Any]:
         owner = sys.modules.get("tensorcore_torch")
@@ -202,6 +201,8 @@ from ._C import (  # noqa: E402
     matmul_eligibility,
     privateuse1_backend_name,
     set_default_matmul,
+    to_cpu,
+    to_tensorcore,
 )
 
 __all__ = [
@@ -216,6 +217,8 @@ __all__ = [
     "pytorch_backend_registered",
     "pytorch_backend_state",
     "set_default_matmul",
+    "to_cpu",
+    "to_tensorcore",
 ]
 
 
@@ -228,9 +231,9 @@ def pytorch_backend_state() -> Dict[str, Any]:
     """Return a structured snapshot of the tensorcore PyTorch bridge state.
 
     This intentionally distinguishes the import-time PrivateUse1 registration
-    shim from a future full tensorcore tensor backend. Today matmul dispatch is
-    backed by the extension, while direct ``device="tensorcore"`` allocation
-    remains unavailable until allocator/storage/factory kernels land.
+    shim from broader PyTorch operator coverage. The extension provides a
+    host-memory allocator, factory kernels, and matmul dispatch; unrelated
+    tensorcore-device operators still need explicit kernels or CPU round-trips.
     """
     module = _torch_backend_module()
     supports_device_allocation = False
