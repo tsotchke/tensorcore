@@ -57,14 +57,12 @@
  *   L2 : 256 KB per core  → MC×KC*4 + NR*KC*4 should fit
  *   L3 : shared            → NC×KC*4 fits per-socket
  *
- * With OpenMP outer parallelism over M, EACH worker thread holds its own
- * pack_A (MC×KC×4 = 144 KB) and pack_B (KC×NC×4) buffers. On a 44-thread
- * Xeon with NC=4096 → 4 MB per thread → 176 MB aggregate, which blows
- * past the 55 MB L3 per socket and tanks throughput. NC=512 keeps
- * pack_B at ~512 KB per thread (≈22 MB aggregate) inside L3.
+ * With OpenMP outer parallelism over M, the macro-kernel packs B once for the
+ * current K/N panel and gives each worker a private A panel. That avoids the
+ * pathological "pack B per worker" variant while also avoiding an OpenMP
+ * region per tiny micro-tile block.
  *
- * Default: MR=6, NR=16, MC=72 (12 MR-rows), KC=256, NC=512.
- * v2 will switch to shared pack_B (BLIS-style) and reraise NC. */
+ * Default: MR=6, NR=16, MC=72 (12 MR-rows), KC=256, NC=512. */
 #define TC_AVX2_MR     6
 #define TC_AVX2_NR     16
 #define TC_AVX2_MC     72
@@ -239,10 +237,22 @@ static int tc_avx2_gemm_f32_slice(int M, int N, int K,
 
     const size_t pack_A_size = (size_t)TC_AVX2_MC * TC_AVX2_KC;
     const size_t pack_B_size = (size_t)TC_AVX2_KC * TC_AVX2_NC;
-    if (tls_packed_A_cap < pack_A_size) {
+
+#if defined(_OPENMP)
+    const char* threads_env = std::getenv("TC_AVX2_THREADS");
+    const int requested_threads = (threads_env && threads_env[0]) ? std::atoi(threads_env) : 0;
+    const int omp_threads = (requested_threads > 0) ? requested_threads : omp_get_max_threads();
+    const bool allow_parallel = requested_threads != 1 && omp_threads > 1 && !omp_in_parallel();
+    const int pack_A_slots = (allow_parallel && omp_threads > 1) ? omp_threads : 1;
+#else
+    const int pack_A_slots = 1;
+#endif
+
+    const size_t pack_A_pool_size = pack_A_size * (size_t)pack_A_slots;
+    if (tls_packed_A_cap < pack_A_pool_size) {
         std::free(tls_packed_A);
-        tls_packed_A = aligned_alloc_fp32(pack_A_size);
-        tls_packed_A_cap = pack_A_size;
+        tls_packed_A = aligned_alloc_fp32(pack_A_pool_size);
+        tls_packed_A_cap = pack_A_pool_size;
     }
     if (tls_packed_B_cap < pack_B_size) {
         std::free(tls_packed_B);
@@ -263,30 +273,30 @@ static int tc_avx2_gemm_f32_slice(int M, int N, int K,
         }
     }
 
-#if defined(_OPENMP)
-    const char* threads_env = std::getenv("TC_AVX2_THREADS");
-    const int requested_threads = (threads_env && threads_env[0]) ? std::atoi(threads_env) : 0;
-    const int omp_threads = (requested_threads > 0) ? requested_threads : omp_get_max_threads();
-    const bool allow_parallel = requested_threads != 1 && omp_threads > 1 && !omp_in_parallel();
-#endif
-
     for (int p = 0; p < K; p += TC_AVX2_KC) {
         const int kc = (p + TC_AVX2_KC <= K) ? TC_AVX2_KC : (K - p);
         for (int j = 0; j < N; j += TC_AVX2_NC) {
             const int nc = (j + TC_AVX2_NC <= N) ? TC_AVX2_NC : (N - j);
             pack_B(B + (size_t)p * ldb + j, ldb, kc, nc, tls_packed_B);
 
-            for (int i = 0; i < M; i += TC_AVX2_MC) {
+            const int i_blocks = (M + TC_AVX2_MC - 1) / TC_AVX2_MC;
+#if defined(_OPENMP)
+            const bool use_parallel = allow_parallel && i_blocks >= 2;
+#pragma omp parallel for schedule(static) if(use_parallel) num_threads(omp_threads)
+#endif
+            for (int ib = 0; ib < i_blocks; ++ib) {
+                const int i = ib * TC_AVX2_MC;
                 const int mc = (i + TC_AVX2_MC <= M) ? TC_AVX2_MC : (M - i);
-                pack_A(A + (size_t)i * lda + p, lda, mc, kc, tls_packed_A);
+#if defined(_OPENMP)
+                const int thread_slot = omp_in_parallel() ? omp_get_thread_num() : 0;
+#else
+                const int thread_slot = 0;
+#endif
+                float* packed_A_panel = tls_packed_A + (size_t)thread_slot * pack_A_size;
+                pack_A(A + (size_t)i * lda + p, lda, mc, kc, packed_A_panel);
 
                 const int jr_tiles = (nc + TC_AVX2_NR - 1) / TC_AVX2_NR;
                 const int ir_tiles = (mc + TC_AVX2_MR - 1) / TC_AVX2_MR;
-#if defined(_OPENMP)
-                const int tile_count = jr_tiles * ir_tiles;
-                const bool use_parallel = allow_parallel && tile_count >= 8;
-#pragma omp parallel for collapse(2) schedule(static) if(use_parallel) num_threads(omp_threads)
-#endif
                 for (int jt = 0; jt < jr_tiles; ++jt) {
                     for (int it = 0; it < ir_tiles; ++it) {
                         const int jr = jt * TC_AVX2_NR;
@@ -294,7 +304,7 @@ static int tc_avx2_gemm_f32_slice(int M, int N, int K,
                         const int nr = (jr + TC_AVX2_NR <= nc) ? TC_AVX2_NR : (nc - jr);
                         const float* pB = tls_packed_B + (size_t)(jr / TC_AVX2_NR) * kc * TC_AVX2_NR;
                         const int mr = (ir + TC_AVX2_MR <= mc) ? TC_AVX2_MR : (mc - ir);
-                        const float* pA = tls_packed_A + (size_t)(ir / TC_AVX2_MR) * TC_AVX2_MR * kc;
+                        const float* pA = packed_A_panel + (size_t)(ir / TC_AVX2_MR) * TC_AVX2_MR * kc;
                         float* Cij = C + (size_t)(i + ir) * ldc + (j + jr);
                         if (mr == TC_AVX2_MR && nr == TC_AVX2_NR && alpha == 1.0f) {
                             float tmp[TC_AVX2_MR * TC_AVX2_NR];

@@ -33,6 +33,9 @@ example.
 `scripts/ci_portable_cpu.sh` adds installed SDK consumer checks plus
 subprocess smokes for the opt-in AVX2, NEON, and AMX GEMM environment
 variants, including an AVX2 serial override via `TC_AVX2_THREADS=1`.
+The throughput-specific AVX2 OpenMP path is measured by the shared-runtime
+`bench_gemm_shared` target rather than the static CTest binaries, keeping
+the static SDK archive free of an OpenMP link dependency.
 Direct AMX C regressions for the raw tile kernel and edge-tile
 alpha/beta wrapper are compiled in portable CPU builds and skip unless
 `TC_RUN_AMX_GEMM_TEST=1` is set; the safe `test_amx_probe` metadata/stub

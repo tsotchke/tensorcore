@@ -138,6 +138,11 @@ every architectural primitive in code and tested:
   shared A/B panel packing, and OpenMP fanout over independent tile work.
   Opt-in via `TC_USE_AVX2_GEMM=1`; `TC_AVX2_THREADS=1` forces serial A/B
   runs. Self-contained and hidden from the public export surface.
+- `Prove AVX2 GEMM 1024+ scaling`: `bench_gemm_shared` now links the
+  OpenMP-enabled shared runtime, while `bench_gemm` keeps measuring the
+  dependency-light static SDK path. On old-donkey, `TC_USE_AVX2_GEMM=1
+  TC_AVX2_THREADS=64 build/bench/bench_gemm_shared` reaches **0.74 TFLOPS**
+  at 4096³ versus **1.53 TFLOPS** for the MKL default.
 - `Add hand-tuned NEON fp32 GEMM micro-kernel`: `lib/ops/gemm_cpu_neon.cpp`.
   8×8 aarch64 SIMD kernel for Apple/ARM CPU builds, opt-in via
   `TC_USE_NEON_GEMM=1`, with CBLAS remaining the default until broader

@@ -116,6 +116,9 @@ What works on the portable CPU build:
   mode but skip unless `TC_RUN_AMX_GEMM_TEST=1` is set on known-good
   Apple-Silicon hardware. `test_amx_probe` runs everywhere because it checks
   only non-trapping AMX metadata/stub paths.
+- shared-library AVX2 throughput via `build/bench/bench_gemm_shared`,
+  which links `libtensorcore.so` so OpenMP tile fanout is present without
+  making the static SDK archive depend on OpenMP.
 - sparse top-k compression helpers
 - memory-tier stub baseline and portable CPU activation-checkpointing
   discard/realize

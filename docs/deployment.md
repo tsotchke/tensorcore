@@ -48,12 +48,16 @@ Ultra's GPU fp32 throughput.
 For the AMD64 hand-tuned AVX2 kernel:
 
 ```sh
-TC_USE_AVX2_GEMM=1 ./build/bench/bench_gemm
+TC_USE_AVX2_GEMM=1 TC_AVX2_THREADS=64 ./build/bench/bench_gemm_shared
 ```
 
-The AVX2 macro-kernel uses OpenMP tile fanout when the shared library was
-built with OpenMP support. Set `TC_AVX2_THREADS=1` to force serial execution
-for A/B comparisons, or `TC_AVX2_THREADS=N` to cap the internal worker count.
+`bench_gemm` links the static SDK archive and is the right default/BLAS
+measurement. `bench_gemm_shared` links `libtensorcore.so`, which owns
+optional internal dependencies such as OpenMP for AVX2 tile fanout. Set
+`TC_AVX2_THREADS=1` to force serial execution for A/B comparisons, or
+`TC_AVX2_THREADS=N` to cap the internal worker count. On old-donkey,
+64 AVX2 workers reached 0.74 TFLOPS at 4096³; the MKL default path remains
+faster at 1.53 TFLOPS and stays the default.
 
 For the aarch64 NEON kernel (xavier, Apple CPU side):
 

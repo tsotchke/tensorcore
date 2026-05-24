@@ -114,7 +114,9 @@ some still queued.
       D=64 on old-donkey.
 - [x] **Hand-tuned AVX2 6×16 fp32 GEMM micro-kernel** (`lib/ops/gemm_cpu_avx2.cpp`)
       — opt-in via `TC_USE_AVX2_GEMM=1`. Self-contained; no BLAS dep.
-      OpenMP outer + 1024+ shape scaling pending.
+      Shared-library OpenMP scaling validated on old-donkey: 0.74 TFLOPS
+      at 4096³ with 64 workers. MKL remains the faster default path at
+      1.53 TFLOPS.
 - [x] **DiLoCo cross-continent training API** — `include/tensorcore/diloco.h`
       + runtime in `lib/distributed/diloco.cpp`. Outer/inner optimizer split,
       local single-rank steps, and dense multi-rank outer steps over
@@ -150,7 +152,10 @@ some still queued.
 - [x] **NEON GEMM kernel** for aarch64 (xavier, Apple CPU side) — opt-in
       via `TC_USE_NEON_GEMM=1`; CBLAS remains default pending broader
       throughput data.
-- [ ] **Multi-thread + 1024+ scaling of the AVX2 GEMM kernel**. Phase 2.
+- [x] **Multi-thread + 1024+ scaling of the AVX2 GEMM kernel**. Phase 2:
+      `bench_gemm_shared` links the OpenMP-enabled shared runtime and
+      validates owned AVX2 fallback scaling through 4096³ on old-donkey.
+      Remaining work is throughput tuning beyond the current 0.74 TFLOPS.
 - [x] **`TC_DIST_GLOO` backend** for Apple and portable CPU collectives over TCP:
       fp32/fp16 all-reduce, min/max, broadcast, allgather, barrier, sparse
       packed exchange, and DiLoCo dense outer steps. WAN correctness proof

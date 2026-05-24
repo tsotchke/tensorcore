@@ -153,6 +153,15 @@ tile kernel and edge-tile alpha/beta wrapper; they skip unless
 validates AMX availability, ISA-version, cluster-count, and fp16/bf16
 gating metadata without executing raw AMX instructions.
 
+`bench_gemm_shared` is the shared-runtime GEMM benchmark. Use it for AVX2
+OpenMP throughput work, for example:
+
+```sh
+TC_USE_AVX2_GEMM=1 TC_AVX2_THREADS=64 \
+  TC_BENCH_DTYPES=f32 TC_BENCH_SIZES=2048,4096 \
+  build/bench/bench_gemm_shared
+```
+
 AMX uses reverse-engineered Apple instructions, so the AMX subprocess
 treats SIGILL as a skip by default instead of taking down the whole smoke
 on hosts that block the instruction. Set `REQUIRE_AMX_GEMM=1` to require

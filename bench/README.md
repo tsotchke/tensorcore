@@ -1,11 +1,13 @@
 # bench/
 
 TFLOPS and tokens/sec harnesses for the load-bearing kernels. Each is a
-single `.c` file that links only `libtensorcore.dylib` and reports
-median over a fixed number of iterations after warmup.
+single `.c` file and reports median over a fixed number of iterations
+after warmup. The default benches link the static SDK archive; selected
+variants also link the shared runtime when that is the path being measured.
 
 ```sh
 ./build/bench/bench_gemm           # GEMM TFLOPS sweep
+./build/bench/bench_gemm_shared    # GEMM through shared libtensorcore
 ./build/bench/bench_attention       # FlashAttention TFLOPS
 ./build/bench/bench_inference_7b    # 7B Q4_0 decode latency
 ```
@@ -46,6 +48,16 @@ TC_USE_128_TILE=1 ./build/bench/bench_gemm
 ```
 
 (v0.1 regresses on M2; v0.2 retunes.)
+
+For Linux AVX2 OpenMP work, use the shared-runtime target. The shared
+library owns OpenMP internally, while the static archive remains
+dependency-light for SDK consumers:
+
+```sh
+TC_USE_AVX2_GEMM=1 TC_AVX2_THREADS=64 \
+  TC_BENCH_DTYPES=f32 TC_BENCH_SIZES=2048,4096 \
+  ./build/bench/bench_gemm_shared
+```
 
 ## `bench_attention.c`
 
