@@ -236,6 +236,25 @@ Validates the JSON artifact emitted by `run_live_mesh_training_demo.sh` via
 `--require-cuda-rank3` to enforce the operational contract for a live run.
 Use `--require-local-only` for the localhost multi-rank regression mode.
 
+### `check_operational_evidence.py`
+
+Validates a complete operational evidence bundle by delegating to the release,
+SDK26, CUDA, HIP, PyTorch, and live-mesh evidence checkers, then applying
+bundle-level policy. For the physical mesh, use
+`--require-live-clean-head` so stale or dirty-tree live evidence cannot satisfy
+the current head's deployment gate.
+
+```sh
+python3 scripts/check_operational_evidence.py \
+  --release /tmp/release/release_smoke_runtime_evidence.json \
+  --sdk26 /tmp/sdk26/release_smoke_runtime_evidence.json \
+  --cuda /tmp/cuda-smoke.json \
+  --live-mesh /tmp/live-mesh-training.json \
+  --require-release --require-sdk26 --require-cuda --require-live-mesh \
+  --require-live-clean-head --min-live-outer-steps 2 \
+  --require-direct-ring --require-checkpoint --require-cuda-rank3
+```
+
 ### `ci_cuda_smoke.sh`
 
 Configures a Linux CUDA build with `TC_ENABLE_CUDA=ON`, runs its CTest

@@ -79,6 +79,10 @@ every architectural primitive in code and tested:
 - `Propagate GLOO advertised hosts in the live mesh launcher`:
   `scripts/run_live_mesh_training_demo.sh` now passes
   `TC_GLOO_ADVERTISE_HOSTS` through to all local and remote ranks.
+- `Add operational evidence bundle validation`:
+  `scripts/check_operational_evidence.py` validates release, SDK26, CUDA,
+  HIP, PyTorch, and live-mesh artifacts together, with clean-current-head
+  enforcement for physical mesh deployment evidence.
 - Mesh training activation checkpoint mode: `mesh_training_demo
   --checkpoint` now discards `X_norm` after the forward projection,
   realizes it through the RMSNorm recompute callback before the `dW`

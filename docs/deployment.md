@@ -280,6 +280,20 @@ python3 scripts/check_live_mesh_training_evidence.py /tmp/live-mesh-training.jso
   --require-cuda-rank3
 ```
 
+When pairing the live run with release, SDK26, and accelerator smoke
+artifacts, validate the bundle as one deployment gate:
+
+```sh
+python3 scripts/check_operational_evidence.py \
+  --release /tmp/release/release_smoke_runtime_evidence.json \
+  --sdk26 /tmp/sdk26/release_smoke_runtime_evidence.json \
+  --cuda /tmp/cuda-smoke.json \
+  --live-mesh /tmp/live-mesh-training.json \
+  --require-release --require-sdk26 --require-cuda --require-live-mesh \
+  --require-live-clean-head --min-live-outer-steps 5 \
+  --require-direct-ring --require-checkpoint --require-cuda-rank3
+```
+
 ### 4-rank reference deployment
 
 Launch rank 0 first (must start listening before others try to connect):
