@@ -132,6 +132,9 @@ chipStar/hipBLAS are present it asserts fp32 `tc_gemm` dispatch through
 `TC_DISABLE_HIP_GEMM=1` CPU fallback. Set `TC_HIP_PREFIX` when chipStar is
 installed outside standard CMake paths, and `REQUIRE_HIP=1` on a machine
 that must have full HIP GEMM working.
+For NVIDIA/chipStar hosts where the runtime target is expected to build but
+the OpenCL/SPIR-V backend may not initialize, validate the evidence with
+`--require-hip-build --require-clean-head` instead of `--require-hip`.
 
 ## 2. Network setup
 

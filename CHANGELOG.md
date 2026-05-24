@@ -59,6 +59,10 @@ every architectural primitive in code and tested:
   archive-based remote builds prepared by the live mesh runner.
 - HIP smoke evidence now uses the same source-head override/marker mechanism
   and operational clean-head gate as CUDA.
+- HIP evidence validation now has a middle policy gate:
+  `--require-hip-build` requires that chipStar/HIP runtime targets compiled,
+  while still accepting explicit runtime-unavailable evidence on hosts such
+  as NVIDIA/OpenCL where SPIR-V device initialization is unavailable.
 - DiLoCo runtime with NONE/FP16/TOPK_1PCT/TOPK_01PCT compression,
   SGD/Nesterov/Adam outer optimizers, async overlap, sparse-on-the-wire
   cross-continent path.

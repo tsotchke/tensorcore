@@ -105,6 +105,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--require-sdk26", action="store_true")
     parser.add_argument("--require-cuda", action="store_true")
     parser.add_argument("--require-hip", action="store_true")
+    parser.add_argument("--require-hip-build", action="store_true")
     parser.add_argument("--require-pytorch", action="store_true")
     parser.add_argument("--require-pytorch-backend-allocation", action="store_true")
     parser.add_argument("--require-live-mesh", action="store_true")
@@ -172,6 +173,8 @@ def main() -> int:
         cmd = ["scripts/check_hip_smoke_evidence.py", str(args.hip)]
         if args.require_hip:
             cmd.append("--require-hip")
+        if args.require_hip_build:
+            cmd.append("--require-hip-build")
         if args.require_hip_clean_head:
             cmd.extend(["--git-head", args.git_head or "", "--require-clean-head"])
         run_checker(cmd)

@@ -41,6 +41,11 @@ def main() -> int:
     parser.add_argument("path", type=pathlib.Path)
     parser.add_argument("--git-head", default=git_head())
     parser.add_argument("--require-hip", action="store_true")
+    parser.add_argument(
+        "--require-hip-build",
+        action="store_true",
+        help="Require that TC_ENABLE_HIP found the chipStar/HIP runtime target.",
+    )
     parser.add_argument("--require-clean-head", action="store_true")
     args = parser.parse_args()
 
@@ -57,6 +62,12 @@ def main() -> int:
 
     if args.require_hip and status != "passed":
         return fail(f"--require-hip needs passed evidence, got {status}")
+
+    if args.require_hip_build:
+        if evidence.get("hip_build_enabled") is not True:
+            return fail("--require-hip-build needs hip_build_enabled=true")
+        if status == "skipped_not_built":
+            return fail("--require-hip-build cannot accept skipped_not_built evidence")
 
     if args.require_clean_head:
         if not args.git_head:

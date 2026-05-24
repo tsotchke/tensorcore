@@ -277,7 +277,10 @@ python3 scripts/check_operational_evidence.py \
 ```
 
 Add `--hip /tmp/hip.json --require-hip --require-hip-clean-head` on mesh
-subsets that include a required HIP/chipStar accelerator host.
+subsets that include a required HIP/chipStar accelerator host. Use
+`--require-hip-build --require-hip-clean-head` when the deployment only
+requires proving that chipStar/HIP compiled and initialized far enough to
+emit runtime-unavailable diagnostics.
 
 ### `ci_cuda_smoke.sh`
 
@@ -332,6 +335,7 @@ by the live-mesh prepare step.
 ```sh
 TENSORCORE_HIP_SMOKE_EVIDENCE_PATH=/tmp/hip.json scripts/ci_hip_smoke.sh
 python3 scripts/check_hip_smoke_evidence.py /tmp/hip.json
+python3 scripts/check_hip_smoke_evidence.py /tmp/hip.json --require-hip-build
 python3 scripts/check_hip_smoke_evidence.py /tmp/hip.json --require-clean-head
 
 REQUIRE_HIP=1 scripts/ci_hip_smoke.sh  # fails unless HIP dispatch passes

@@ -77,6 +77,31 @@ def hip_evidence() -> dict[str, Any]:
     }
 
 
+def hip_runtime_unavailable_evidence() -> dict[str, Any]:
+    evidence = hip_evidence()
+    evidence.update({
+        "runtime_status": "skipped_runtime_unavailable",
+        "hip_build_enabled": True,
+        "hip_gemm_enabled": False,
+        "device_count": 0,
+        "backend": None,
+        "kernel": "none",
+        "fallback_backend": None,
+        "init_status": -4,
+        "init_status_string": "operation unsupported on this GPU family",
+    })
+    return evidence
+
+
+def hip_not_built_evidence() -> dict[str, Any]:
+    evidence = hip_runtime_unavailable_evidence()
+    evidence.update({
+        "runtime_status": "skipped_not_built",
+        "hip_build_enabled": False,
+    })
+    return evidence
+
+
 def pytorch_evidence() -> dict[str, Any]:
     return {
         "schema_version": 1,
@@ -181,6 +206,7 @@ def main() -> int:
             "--require-sdk26",
             "--require-cuda",
             "--require-hip",
+            "--require-hip-build",
             "--require-pytorch",
             "--require-pytorch-backend-allocation",
             "--require-live-mesh",
@@ -283,6 +309,36 @@ def main() -> int:
             "--hip", str(dirty_hip_path),
             "--git-head", TEST_HEAD,
             "--require-hip-clean-head",
+        )
+
+        hip_runtime_unavailable_path = write_json(
+            directory,
+            "hip-runtime-unavailable.fixture",
+            hip_runtime_unavailable_evidence(),
+        )
+        assert_passes(
+            "--hip", str(hip_runtime_unavailable_path),
+            "--git-head", TEST_HEAD,
+            "--require-hip-build",
+            "--require-hip-clean-head",
+        )
+        assert_fails(
+            "--require-hip needs passed evidence",
+            "--hip", str(hip_runtime_unavailable_path),
+            "--git-head", TEST_HEAD,
+            "--require-hip",
+        )
+
+        hip_not_built_path = write_json(
+            directory,
+            "hip-not-built.fixture",
+            hip_not_built_evidence(),
+        )
+        assert_fails(
+            "--require-hip-build needs hip_build_enabled=true",
+            "--hip", str(hip_not_built_path),
+            "--git-head", TEST_HEAD,
+            "--require-hip-build",
         )
 
         brokered = copy.deepcopy(live_mesh_evidence())
