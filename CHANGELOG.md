@@ -93,6 +93,9 @@ every architectural primitive in code and tested:
 - `Propagate GLOO advertised hosts in the live mesh launcher`:
   `scripts/run_live_mesh_training_demo.sh` now passes
   `TC_GLOO_ADVERTISE_HOSTS` through to all local and remote ranks.
+- `Add per-rank remote PATH overrides for live mesh training`:
+  `TC_MESH_RANK{1,2,3}_PATH` lets operators prepend host-specific
+  toolchain directories during remote prepare and rank launch.
 - `Add operational evidence bundle validation`:
   `scripts/check_operational_evidence.py` validates release, SDK26, CUDA,
   HIP, PyTorch, and live-mesh artifacts together, with clean-current-head

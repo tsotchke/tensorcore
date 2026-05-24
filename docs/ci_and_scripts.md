@@ -207,9 +207,15 @@ checkpointing enabled by default. With `TC_MESH_PREPARE=1`, the script
 archives the current committed checkout to the Linux hosts, builds their
 `mesh_training_demo` target, copies the local Apple binary to Enki, and
 builds cosbox with `TC_ENABLE_CUDA=ON` unless `TC_MESH_RANK3_CUDA=0`.
+Use `TC_MESH_RANK1_PATH`, `TC_MESH_RANK2_PATH`, and `TC_MESH_RANK3_PATH`
+when a remote host needs a custom toolchain prefix for `cmake`, `nvcc`, or
+runtime helper binaries; the path prefix is applied during both prepare and
+rank launch.
 
 ```sh
 TC_MESH_PREPARE=1 scripts/run_live_mesh_training_demo.sh
+TC_MESH_RANK3_PATH=/usr/local/cuda/bin TC_MESH_PREPARE=1 \
+  scripts/run_live_mesh_training_demo.sh
 TC_MESH_TRAINING_INNER=8 TC_MESH_TRAINING_OUTER=5 scripts/run_live_mesh_training_demo.sh
 TC_MESH_TRAINING_CHECKPOINT=0 scripts/run_live_mesh_training_demo.sh
 TC_MESH_LOCAL_ONLY=1 TC_MESH_TRAINING_OUTER=1 \

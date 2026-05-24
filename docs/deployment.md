@@ -243,6 +243,9 @@ That runs `examples/mesh_training_demo` across the same four ranks with
 DiLoCo outer sync and activation checkpointing enabled. cosbox is built
 with `TC_ENABLE_CUDA=ON` by default so the RTX 3090 rank uses the CUDA
 managed-memory training path when available.
+If a remote rank needs non-default toolchain paths, set
+`TC_MESH_RANK1_PATH`, `TC_MESH_RANK2_PATH`, or `TC_MESH_RANK3_PATH`; the
+script prepends that value to `PATH` during remote prepare and rank launch.
 
 When the physical mesh is unavailable, the same script can run all ranks on
 the current host for regression evidence:
