@@ -28,7 +28,15 @@ local_build_dir="${TC_MESH_TRAINING_LOCAL_BUILD_DIR:-$ROOT/build-live-mesh-train
 rank0_bin="${TC_MESH_RANK0_BIN:-$local_build_dir/examples/mesh_training_demo}"
 rank1_ssh="${TC_MESH_RANK1_SSH:-enki}"
 rank1_dir="${TC_MESH_RANK1_DIR:-/tmp/tensorcore-live-mesh-training}"
-rank1_bin="${TC_MESH_RANK1_BIN:-$rank1_dir/mesh_training_demo_cpu}"
+rank1_prepare="${TC_MESH_RANK1_PREPARE:-copy-local}"
+rank1_bin="${TC_MESH_RANK1_BIN:-}"
+if [[ -z "$rank1_bin" ]]; then
+    if [[ "$rank1_prepare" == "linux" ]]; then
+        rank1_bin="$rank1_dir/build/examples/mesh_training_demo"
+    else
+        rank1_bin="$rank1_dir/mesh_training_demo_cpu"
+    fi
+fi
 rank1_path="${TC_MESH_RANK1_PATH:-}"
 rank2_ssh="${TC_MESH_RANK2_SSH:-old-donkey}"
 rank2_dir="${TC_MESH_RANK2_DIR:-/tmp/tensorcore-live-mesh-training}"
@@ -56,6 +64,7 @@ Environment:
   TC_MESH_RANK3_CUDA=$rank3_cuda
   TC_MESH_PREPARE=$prepare
   TC_MESH_PORT=<port>
+  TC_MESH_RANK1_PREPARE=copy-local|linux
   TC_MESH_RANK{1,2,3}_PATH=<extra remote PATH prefix>
   TC_GLOO_ADVERTISE_HOSTS=<rank0,rank1,...>
   TC_MESH_LOG_DIR=$log_dir
@@ -138,10 +147,17 @@ prepare_linux_rank() {
 }
 
 if [[ "$prepare" == "1" && "$local_only" != "1" ]]; then
-    echo "[mesh-training] preparing Enki portable binary"
-    ssh "$rank1_ssh" "mkdir -p '$rank1_dir'"
-    scp "$rank0_bin" "$rank1_ssh:$rank1_bin"
-    ssh "$rank1_ssh" "chmod +x '$rank1_bin'"
+    if [[ "$rank1_prepare" == "copy-local" ]]; then
+        echo "[mesh-training] preparing rank 1 portable binary"
+        ssh "$rank1_ssh" "mkdir -p '$rank1_dir'"
+        scp "$rank0_bin" "$rank1_ssh:$rank1_bin"
+        ssh "$rank1_ssh" "chmod +x '$rank1_bin'"
+    elif [[ "$rank1_prepare" == "linux" ]]; then
+        prepare_linux_rank "$rank1_ssh" "$rank1_dir" OFF "$rank1_path"
+    else
+        echo "unsupported TC_MESH_RANK1_PREPARE=$rank1_prepare" >&2
+        exit 2
+    fi
     prepare_linux_rank "$rank2_ssh" "$rank2_dir" OFF "$rank2_path"
     if [[ "$rank3_cuda" == "1" ]]; then
         prepare_linux_rank "$rank3_ssh" "$rank3_dir" ON "$rank3_path"
