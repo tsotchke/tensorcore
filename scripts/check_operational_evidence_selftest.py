@@ -62,6 +62,21 @@ def cuda_evidence() -> dict[str, Any]:
     }
 
 
+def hip_evidence() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "git_head": TEST_HEAD,
+        "git_dirty": False,
+        "runtime_status": "passed",
+        "hip_build_enabled": True,
+        "hip_gemm_enabled": True,
+        "device_count": 1,
+        "backend": "hip",
+        "kernel": "hipblas_sgemm_staged",
+        "fallback_backend": "portable_cpu",
+    }
+
+
 def pytorch_evidence() -> dict[str, Any]:
     return {
         "schema_version": 1,
@@ -151,24 +166,28 @@ def main() -> int:
         release_path = write_json(directory, "release.json", release_evidence())
         sdk26_path = write_json(directory, "sdk26.json", sdk26_evidence())
         cuda_path = write_json(directory, "cuda.json", cuda_evidence())
+        hip_path = write_json(directory, "hip.json", hip_evidence())
         pytorch_path = write_json(directory, "pytorch.json", pytorch_evidence())
 
         assert_passes(
             "--release", str(release_path),
             "--sdk26", str(sdk26_path),
             "--cuda", str(cuda_path),
+            "--hip", str(hip_path),
             "--pytorch", str(pytorch_path),
             "--live-mesh", str(live_path),
             "--git-head", TEST_HEAD,
             "--require-release",
             "--require-sdk26",
             "--require-cuda",
+            "--require-hip",
             "--require-pytorch",
             "--require-pytorch-backend-allocation",
             "--require-live-mesh",
             "--require-release-clean-head",
             "--require-sdk26-clean-head",
             "--require-cuda-clean-head",
+            "--require-hip-clean-head",
             "--require-pytorch-clean-head",
             "--require-live-clean-head",
             "--min-live-outer-steps", "5",
@@ -244,6 +263,26 @@ def main() -> int:
             "--cuda", str(dirty_cuda_path),
             "--git-head", TEST_HEAD,
             "--require-cuda-clean-head",
+        )
+
+        stale_hip = hip_evidence()
+        stale_hip["git_head"] = "stale"
+        stale_hip_path = write_json(directory, "stale-hip.fixture", stale_hip)
+        assert_fails(
+            "HIP evidence git_head mismatch",
+            "--hip", str(stale_hip_path),
+            "--git-head", TEST_HEAD,
+            "--require-hip-clean-head",
+        )
+
+        dirty_hip = hip_evidence()
+        dirty_hip["git_dirty"] = True
+        dirty_hip_path = write_json(directory, "dirty-hip.fixture", dirty_hip)
+        assert_fails(
+            "HIP evidence must be from a clean git tree",
+            "--hip", str(dirty_hip_path),
+            "--git-head", TEST_HEAD,
+            "--require-hip-clean-head",
         )
 
         brokered = copy.deepcopy(live_mesh_evidence())

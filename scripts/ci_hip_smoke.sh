@@ -75,12 +75,58 @@ def git_value(*args):
         return None
 
 
-def base_evidence():
+def truthy(value):
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def falsy(value):
+    return str(value).strip().lower() in ("0", "false", "no", "off")
+
+
+def root_file_value(name):
+    try:
+        return (pathlib.Path(os.environ["TC_ROOT"]) / name).read_text(
+            encoding="utf-8"
+        ).strip()
+    except Exception:
+        return None
+
+
+def source_git_head():
+    return (
+        os.environ.get("TENSORCORE_SOURCE_GIT_HEAD")
+        or git_value("rev-parse", "HEAD")
+        or root_file_value(".tensorcore_source_head")
+    )
+
+
+def source_git_dirty():
+    override = os.environ.get("TENSORCORE_SOURCE_GIT_DIRTY")
+    if override is not None:
+        if truthy(override):
+            return True
+        if falsy(override):
+            return False
+        return None
+
     dirty = git_value("status", "--short")
+    if dirty is not None:
+        return bool(dirty)
+
+    marker = root_file_value(".tensorcore_source_dirty")
+    if marker is not None:
+        if truthy(marker):
+            return True
+        if falsy(marker):
+            return False
+    return None
+
+
+def base_evidence():
     return {
         "schema_version": 1,
-        "git_head": git_value("rev-parse", "HEAD"),
-        "git_dirty": bool(dirty),
+        "git_head": source_git_head(),
+        "git_dirty": source_git_dirty(),
         "hip_build_enabled": os.environ.get("TC_HIP_RUNTIME_TEST_PRESENT") == "1",
         "hip_gemm_enabled": os.environ.get("TC_HIP_GEMM_TEST_PRESENT") == "1",
         "require_hip": os.environ.get("TC_HIP_REQUIRE") == "1",

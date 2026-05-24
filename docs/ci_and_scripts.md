@@ -262,6 +262,9 @@ python3 scripts/check_operational_evidence.py \
   --require-direct-ring --require-checkpoint --require-cuda-rank3
 ```
 
+Add `--hip /tmp/hip.json --require-hip --require-hip-clean-head` on mesh
+subsets that include a required HIP/chipStar accelerator host.
+
 ### `ci_cuda_smoke.sh`
 
 Configures a Linux CUDA build with `TC_ENABLE_CUDA=ON`, runs its CTest
@@ -307,11 +310,16 @@ installed, it records `runtime_only_no_hipblas`. On a working chipStar +
 hipBLAS host, it asserts fp32 GEMM dispatch through `backend=hip`,
 `kernel=hipblas_sgemm_staged`, and verifies `TC_DISABLE_HIP_GEMM=1` falls
 back to a non-HIP backend. Set `TC_HIP_PREFIX=/path/to/chipstar-install`
-when chipStar is outside the default CMake prefix paths.
+when chipStar is outside the default CMake prefix paths. HIP evidence records
+`git_head` and `git_dirty`; archive-based deployments can supply that
+provenance via `TENSORCORE_SOURCE_GIT_HEAD` / `TENSORCORE_SOURCE_GIT_DIRTY`
+or the `.tensorcore_source_head` / `.tensorcore_source_dirty` files written
+by the live-mesh prepare step.
 
 ```sh
 TENSORCORE_HIP_SMOKE_EVIDENCE_PATH=/tmp/hip.json scripts/ci_hip_smoke.sh
 python3 scripts/check_hip_smoke_evidence.py /tmp/hip.json
+python3 scripts/check_hip_smoke_evidence.py /tmp/hip.json --require-clean-head
 
 REQUIRE_HIP=1 scripts/ci_hip_smoke.sh  # fails unless HIP dispatch passes
 ```

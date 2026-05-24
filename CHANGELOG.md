@@ -54,6 +54,8 @@ every architectural primitive in code and tested:
   live-mesh evidence to match the current committed head.
 - CUDA smoke evidence now participates in the same clean-head gate, including
   archive-based remote builds prepared by the live mesh runner.
+- HIP smoke evidence now uses the same source-head override/marker mechanism
+  and operational clean-head gate as CUDA.
 - DiLoCo runtime with NONE/FP16/TOPK_1PCT/TOPK_01PCT compression,
   SGD/Nesterov/Adam outer optimizers, async overlap, sparse-on-the-wire
   cross-continent path.

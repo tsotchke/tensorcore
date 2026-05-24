@@ -6,9 +6,11 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import subprocess
 import sys
 
 
+ROOT = pathlib.Path(__file__).resolve().parents[1]
 VALID_STATUSES = {
     "passed",
     "runtime_only_no_hipblas",
@@ -22,10 +24,24 @@ def fail(message: str) -> int:
     return 1
 
 
+def git_head() -> str | None:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("path", type=pathlib.Path)
+    parser.add_argument("--git-head", default=git_head())
     parser.add_argument("--require-hip", action="store_true")
+    parser.add_argument("--require-clean-head", action="store_true")
     args = parser.parse_args()
 
     try:
@@ -41,6 +57,17 @@ def main() -> int:
 
     if args.require_hip and status != "passed":
         return fail(f"--require-hip needs passed evidence, got {status}")
+
+    if args.require_clean_head:
+        if not args.git_head:
+            return fail("expected git head is unavailable for HIP evidence check")
+        if evidence.get("git_dirty") is not False:
+            return fail("HIP evidence must be from a clean git tree")
+        if evidence.get("git_head") != args.git_head:
+            return fail(
+                "HIP evidence git_head mismatch: "
+                f"{evidence.get('git_head')!r} != {args.git_head!r}"
+            )
 
     if status == "passed":
         if evidence.get("hip_build_enabled") is not True:
