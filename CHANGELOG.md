@@ -49,6 +49,9 @@ every architectural primitive in code and tested:
 - CUDA smoke now emits machine-readable runtime evidence and proves the
   Python training dispatch path, including RMSNorm/SwiGLU/softmax backward
   plus fp32/fp16-gradient AdamW, not just cuBLAS GEMM.
+- CUDA training dispatch now covers LayerNorm backward and RoPE
+  forward/backward on managed buffers, closing two more transformer-training
+  fallbacks in the RTX 3090 path and adding them to CUDA smoke evidence.
 - Release-smoke evidence now records clean git-head provenance, and the
   operational bundle checker can require release, SDK26, PyTorch, and
   live-mesh evidence to match the current committed head.
@@ -240,11 +243,11 @@ every architectural primitive in code and tested:
   Ampere+ devices. CUDA builds also route bf16/fp32-accum and int8/i32-accum
   GEMM through cuBLAS when the device reports support.
   CUDA builds also compile managed-memory training kernels for RMSNorm
-  forward/backward, LayerNorm forward, SwiGLU forward/backward, softmax
-  forward/backward, and fp32/fp16-gradient AdamW with CPU fallback for
-  host-only buffers. `test_training_kernels` now requires CUDA dispatch for
-  these managed-memory paths when a CUDA device is visible and CUDA has not
-  been explicitly disabled.
+  forward/backward, LayerNorm forward/backward, RoPE forward/backward,
+  SwiGLU forward/backward, softmax forward/backward, and fp32/fp16-gradient
+  AdamW with CPU fallback for host-only buffers. `test_training_kernels` now
+  requires CUDA dispatch for these managed-memory paths when a CUDA device is
+  visible and CUDA has not been explicitly disabled.
   Default builds return deterministic unsupported statuses until
   `TC_ENABLE_CUDA` is wired to a CUDA toolchain.
 - `Extend async Metal GEMM to bf16`: `kernels/metal/gemm_async.metal`

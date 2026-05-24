@@ -142,10 +142,10 @@ When tensorcore is built with `TC_ENABLE_CUDA=ON`, CUDA initialization makes
 supported fp32/fp16/bf16/int8 `gemm` calls route into the cuBLAS path by
 default. Runtime-allocated buffers use CUDA managed memory in that mode.
 Set `TC_DISABLE_CUDA_GEMM=1`, `TC_CUDA_GEMM=0`, or `TC_USE_CUDA_GEMM=0` to
-force CPU fallback. Managed buffers can also dispatch RMSNorm forward/backward,
-LayerNorm forward,
-SwiGLU forward/backward, softmax forward/backward, and fp32/fp16-gradient
-AdamW to CUDA; host-only wrappers fall back to portable CPU kernels.
+force CPU fallback. Managed buffers can also dispatch RMSNorm
+forward/backward, LayerNorm forward/backward, RoPE forward/backward, SwiGLU
+forward/backward, softmax forward/backward, and fp32/fp16-gradient AdamW to
+CUDA; host-only wrappers fall back to portable CPU kernels.
 
 ### GEMM
 `gemm`, `gemm_async`, `gemm_batched`.

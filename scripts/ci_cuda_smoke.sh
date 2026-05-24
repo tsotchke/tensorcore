@@ -189,6 +189,22 @@ def _run_training_dispatch_smoke(ctx, evidence):
             lambda: tc.rmsnorm_backward(ctx, X, gamma, dY, rstd, dX, dgamma, N, D),
         )
 
+        beta_vals = (ctypes.c_uint16 * D)(*[_half_bits(0.01 * ((i % 3) - 1)) for i in range(D)])
+        beta = alloc(ctypes.sizeof(beta_vals))
+        ln_y = alloc(ctypes.sizeof(x_vals))
+        mean = alloc(N * ctypes.sizeof(ctypes.c_float))
+        ln_rstd = alloc(N * ctypes.sizeof(ctypes.c_float))
+        ln_dx = alloc(ctypes.sizeof(x_vals))
+        _fill_buffer(beta, beta_vals)
+        _expect_cuda_training_op(
+            evidence, "layernorm_forward", "cuda_layernorm_forward",
+            lambda: tc.layernorm_forward(ctx, X, gamma, beta, ln_y, mean, ln_rstd, N, D),
+        )
+        _expect_cuda_training_op(
+            evidence, "layernorm_backward", "cuda_layernorm_backward",
+            lambda: tc.layernorm_backward(ctx, X, gamma, dY, mean, ln_rstd, ln_dx, N, D),
+        )
+
         P = 16
         gate_vals = (ctypes.c_uint16 * P)(*[_half_bits(((i % 9) - 4) * 0.125) for i in range(P)])
         up_vals = (ctypes.c_uint16 * P)(*[_half_bits(0.2 + 0.01 * i) for i in range(P)])
@@ -230,6 +246,37 @@ def _run_training_dispatch_smoke(ctx, evidence):
         _expect_cuda_training_op(
             evidence, "softmax_backward", "cuda_softmax_backward",
             lambda: tc.softmax_backward(ctx, SY, SdY, SdX, N, D),
+        )
+
+        B, H, S, RD = 1, 2, 4, 32
+        rope_vals = (ctypes.c_uint16 * (B * H * S * RD))(
+            *[_half_bits(((i % 13) - 6) * 0.05) for i in range(B * H * S * RD)]
+        )
+        drope_vals = (ctypes.c_uint16 * (B * H * S * RD))(
+            *[_half_bits(((i % 11) - 5) * 0.04) for i in range(B * H * S * RD)]
+        )
+        cos_vals = (ctypes.c_float * (S * (RD // 2)))()
+        sin_vals = (ctypes.c_float * (S * (RD // 2)))()
+        for pos in range(S):
+            for d in range(RD // 2):
+                theta = pos / (10000.0 ** (2.0 * d / RD))
+                cos_vals[pos * (RD // 2) + d] = math.cos(theta)
+                sin_vals[pos * (RD // 2) + d] = math.sin(theta)
+        rope_x = alloc(ctypes.sizeof(rope_vals))
+        rope_dx = alloc(ctypes.sizeof(drope_vals))
+        rope_cos = alloc(ctypes.sizeof(cos_vals))
+        rope_sin = alloc(ctypes.sizeof(sin_vals))
+        _fill_buffer(rope_x, rope_vals)
+        _fill_buffer(rope_dx, drope_vals)
+        _fill_buffer(rope_cos, cos_vals)
+        _fill_buffer(rope_sin, sin_vals)
+        _expect_cuda_training_op(
+            evidence, "rope_forward", "cuda_rope_forward",
+            lambda: tc.rope_forward(ctx, rope_x, rope_cos, rope_sin, B, H, S, RD),
+        )
+        _expect_cuda_training_op(
+            evidence, "rope_backward", "cuda_rope_backward",
+            lambda: tc.rope_backward(ctx, rope_dx, rope_cos, rope_sin, B, H, S, RD),
         )
 
         A = 16

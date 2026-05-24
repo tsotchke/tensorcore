@@ -868,8 +868,8 @@ fp32/fp16/bf16/int8 GEMM through cuBLAS by default after CUDA initialization.
 Runtime-allocated buffers use CUDA managed memory in that mode; externally
 wrapped host pointers use the staged-copy fallback. Set
 `TC_DISABLE_CUDA_GEMM=1`, `TC_CUDA_GEMM=0`, or `TC_USE_CUDA_GEMM=0` to force
-CPU fallback. CUDA builds also compile
-managed-memory kernels for RMSNorm forward/backward, LayerNorm forward,
+CPU fallback. CUDA builds also compile managed-memory kernels for RMSNorm
+forward/backward, LayerNorm forward/backward, RoPE forward/backward,
 SwiGLU forward/backward, softmax forward/backward, and fp32/fp16-gradient
 AdamW; host-only buffers fall back to the portable CPU implementations.
 

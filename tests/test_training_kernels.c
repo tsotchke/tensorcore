@@ -215,9 +215,14 @@ static int test_layernorm(tc_context* ctx) {
             Yref[n*D+d] = (float)((Xf[n*D+d] - mean) * rstd * gf[d] + bf[d]);
     }
 
+    const int expect_cuda = cuda_training_expected();
     tc_status_t s = tc_layernorm_forward(ctx, Xb, gb, bb, Yb, meanb, rstdb, N, D, eps);
+    const int fwd_backend_ok = (s == TC_OK) &&
+                               backend_matches_training_contract("layernorm_forward", expect_cuda);
     const double err = rms_scaled(Yp, Yref, N*D);
     tc_status_t sb = tc_layernorm_backward(ctx, Xb, gb, dYb, meanb, rstdb, dXb, N, D);
+    const int bwd_backend_ok = (sb == TC_OK) &&
+                               backend_matches_training_contract("layernorm_backward", expect_cuda);
     for (int n = 0; n < N; ++n) {
         double sumg = 0.0, dotg = 0.0;
         const double mean = mp[n], r = rp[n];
@@ -242,7 +247,8 @@ static int test_layernorm(tc_context* ctx) {
     tc_buffer_free(ctx, Xb); tc_buffer_free(ctx, gb); tc_buffer_free(ctx, bb);
     tc_buffer_free(ctx, Yb); tc_buffer_free(ctx, meanb); tc_buffer_free(ctx, rstdb);
     tc_buffer_free(ctx, dYb); tc_buffer_free(ctx, dXb);
-    return (s == TC_OK && sb == TC_OK && err < 5e-3 && dx_err < 5e-3) ? 0 : 1;
+    return (s == TC_OK && sb == TC_OK && fwd_backend_ok && bwd_backend_ok &&
+            err < 5e-3 && dx_err < 5e-3) ? 0 : 1;
 }
 
 static int test_swiglu(tc_context* ctx) {
@@ -404,8 +410,13 @@ static int test_rope(tc_context* ctx) {
         dXref[base+d2] = dx*c + dy*si;
         dXref[base+d2+D/2] = -dx*si + dy*c;
     }
+    const int expect_cuda = cuda_training_expected();
     tc_status_t s = tc_rope_forward(ctx, Xb, cb, sb, B, H, S, D);
+    const int fwd_backend_ok = (s == TC_OK) &&
+                               backend_matches_training_contract("rope_forward", expect_cuda);
     tc_status_t sbw = tc_rope_backward(ctx, dXb, cb, sb, B, H, S, D);
+    const int bwd_backend_ok = (sbw == TC_OK) &&
+                               backend_matches_training_contract("rope_backward", expect_cuda);
     const double err = rms_scaled(Xp, Xref, B*H*S*D);
     const double bw_err = rms_scaled(dXp, dXref, B*H*S*D);
     printf("  rope_forward      B=%d H=%d S=%d D=%d  rms_scaled=%.3e  %s\n",
@@ -414,7 +425,8 @@ static int test_rope(tc_context* ctx) {
            B, H, S, D, bw_err, (sbw==TC_OK && bw_err<5e-3) ? "OK" : "FAIL");
     free(Xf); free(Xref); free(dXf); free(dXref);
     tc_buffer_free(ctx, Xb); tc_buffer_free(ctx, dXb); tc_buffer_free(ctx, cb); tc_buffer_free(ctx, sb);
-    return (s == TC_OK && sbw == TC_OK && err < 5e-3 && bw_err < 5e-3) ? 0 : 1;
+    return (s == TC_OK && sbw == TC_OK && fwd_backend_ok && bwd_backend_ok &&
+            err < 5e-3 && bw_err < 5e-3) ? 0 : 1;
 }
 
 static int test_adamw(tc_context* ctx) {

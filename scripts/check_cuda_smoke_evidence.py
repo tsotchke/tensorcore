@@ -20,10 +20,14 @@ VALID_STATUSES = {
 EXPECTED_TRAINING_KERNELS = {
     "rmsnorm_forward": "cuda_rmsnorm_forward",
     "rmsnorm_backward": "cuda_rmsnorm_backward",
+    "layernorm_forward": "cuda_layernorm_forward",
+    "layernorm_backward": "cuda_layernorm_backward",
     "swiglu_forward": "cuda_swiglu_forward",
     "swiglu_backward": "cuda_swiglu_backward",
     "softmax_forward": "cuda_softmax_forward",
     "softmax_backward": "cuda_softmax_backward",
+    "rope_forward": "cuda_rope_forward",
+    "rope_backward": "cuda_rope_backward",
     "adamw_step_fp32": "cuda_adamw_step_fp32",
     "adamw_step_fp16": "cuda_adamw_step_fp16",
 }

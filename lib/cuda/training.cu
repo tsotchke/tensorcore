@@ -24,6 +24,7 @@
 #include <cuda_fp16.h>
 #include <cstddef>
 #include <cstdint>
+#include <climits>
 
 #if defined(__GNUC__) || defined(__clang__)
 #  define TC_CUDA_INTERNAL __attribute__((visibility("hidden")))
@@ -264,6 +265,70 @@ __global__ void layernorm_forward_kernel(
     }
 }
 
+__global__ void layernorm_backward_kernel(
+        const __half* __restrict__ X,
+        const __half* __restrict__ gamma,
+        const __half* __restrict__ dY,
+        const float* __restrict__ mean,
+        const float* __restrict__ rstd,
+        __half* __restrict__ dX,
+        int D) {
+    const int n = blockIdx.x;
+    const int tid = threadIdx.x;
+    const int block_size = blockDim.x;
+    const float me = mean[n];
+    const float rs = rstd[n];
+
+    float local_sum = 0.0f;
+    float local_dot = 0.0f;
+    for (int d = tid; d < D; d += block_size) {
+        const float dyp = __half2float(dY[n * D + d]) * __half2float(gamma[d]);
+        const float xhat = (__half2float(X[n * D + d]) - me) * rs;
+        local_sum += dyp;
+        local_dot += dyp * xhat;
+    }
+    const float sum_dyp = block_reduce_sum_f32(local_sum);
+    const float dot_dyp_xhat = block_reduce_sum_f32(local_dot);
+    const float inv_d = 1.0f / (float)D;
+
+    for (int d = tid; d < D; d += block_size) {
+        const float dyp = __half2float(dY[n * D + d]) * __half2float(gamma[d]);
+        const float xhat = (__half2float(X[n * D + d]) - me) * rs;
+        dX[n * D + d] = __float2half_rn(
+            rs * (dyp - sum_dyp * inv_d - xhat * dot_dyp_xhat * inv_d));
+    }
+}
+
+__global__ void rope_kernel(
+        __half* __restrict__ X,
+        const float* __restrict__ cos_t,
+        const float* __restrict__ sin_t,
+        int seq,
+        int head_dim,
+        size_t total_pairs,
+        int inverse) {
+    const size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= total_pairs) return;
+
+    const int half = head_dim >> 1;
+    const int k = (int)(i % (size_t)half);
+    const size_t token = i / (size_t)half;
+    const int s_idx = (int)(token % (size_t)seq);
+    __half* row = X + token * (size_t)head_dim;
+    const float c = cos_t[(size_t)s_idx * (size_t)half + (size_t)k];
+    const float si = sin_t[(size_t)s_idx * (size_t)half + (size_t)k];
+    const float x0 = __half2float(row[k]);
+    const float x1 = __half2float(row[k + half]);
+
+    if (inverse) {
+        row[k]        = __float2half_rn(x0 * c + x1 * si);
+        row[k + half] = __float2half_rn(-x0 * si + x1 * c);
+    } else {
+        row[k]        = __float2half_rn(x0 * c - x1 * si);
+        row[k + half] = __float2half_rn(x0 * si + x1 * c);
+    }
+}
+
 /* Block-wide max reduction (parallel to block_reduce_sum_f32 above). */
 __device__ float block_reduce_max_f32(float v) {
     __shared__ float warp_maxs[32];
@@ -372,6 +437,11 @@ bool is_managed_cuda_ptr(const void* ptr) {
 
 bool all_managed2(const void* a, const void* b) {
     return is_managed_cuda_ptr(a) && is_managed_cuda_ptr(b);
+}
+
+bool all_managed3(const void* a, const void* b, const void* c) {
+    return is_managed_cuda_ptr(a) && is_managed_cuda_ptr(b) &&
+           is_managed_cuda_ptr(c);
 }
 
 bool all_managed4(const void* a, const void* b, const void* c, const void* d) {
@@ -540,6 +610,77 @@ extern "C" TC_CUDA_INTERNAL int tc_cuda_layernorm_forward(
     if (cudaGetLastError() != cudaSuccess) return kCudaTrainingError;
     if (cudaDeviceSynchronize() != cudaSuccess) return kCudaTrainingError;
     tc_cuda_set_last_kernel("cuda_layernorm_forward");
+    return kCudaTrainingOk;
+}
+
+extern "C" TC_CUDA_INTERNAL int tc_cuda_layernorm_backward(
+        const void* X, const void* gamma, const void* dY,
+        const void* mean, const void* rstd, void* dX,
+        int N, int D) {
+    if (!X || !gamma || !dY || !mean || !rstd || !dX || N <= 0 || D <= 0) {
+        return kCudaTrainingError;
+    }
+    if (!all_managed6(X, gamma, dY, mean, rstd, dX)) {
+        return kCudaTrainingUnsupported;
+    }
+    int block_size = 32;
+    while (block_size < D && block_size < 1024) block_size <<= 1;
+    layernorm_backward_kernel<<<N, block_size>>>(
+        (const __half*)X, (const __half*)gamma, (const __half*)dY,
+        (const float*)mean, (const float*)rstd, (__half*)dX, D);
+    if (cudaGetLastError() != cudaSuccess) return kCudaTrainingError;
+    if (cudaDeviceSynchronize() != cudaSuccess) return kCudaTrainingError;
+    tc_cuda_set_last_kernel("cuda_layernorm_backward");
+    return kCudaTrainingOk;
+}
+
+extern "C" TC_CUDA_INTERNAL int tc_cuda_rope_forward(
+        void* X, const void* cos_t, const void* sin_t,
+        int batch, int heads, int seq, int head_dim) {
+    if (!X || !cos_t || !sin_t || batch <= 0 || heads <= 0 || seq <= 0 ||
+        head_dim <= 0 || (head_dim & 1)) {
+        return kCudaTrainingError;
+    }
+    if (!all_managed3(X, cos_t, sin_t)) return kCudaTrainingUnsupported;
+    const size_t total_pairs =
+        (size_t)batch * (size_t)heads * (size_t)seq * (size_t)(head_dim / 2);
+    const int block_size = 256;
+    if (total_pairs > (size_t)INT_MAX * (size_t)block_size) {
+        return kCudaTrainingError;
+    }
+    const int blocks = (int)((total_pairs + (size_t)block_size - 1) /
+                             (size_t)block_size);
+    rope_kernel<<<blocks, block_size>>>(
+        (__half*)X, (const float*)cos_t, (const float*)sin_t,
+        seq, head_dim, total_pairs, 0);
+    if (cudaGetLastError() != cudaSuccess) return kCudaTrainingError;
+    if (cudaDeviceSynchronize() != cudaSuccess) return kCudaTrainingError;
+    tc_cuda_set_last_kernel("cuda_rope_forward");
+    return kCudaTrainingOk;
+}
+
+extern "C" TC_CUDA_INTERNAL int tc_cuda_rope_backward(
+        void* dX, const void* cos_t, const void* sin_t,
+        int batch, int heads, int seq, int head_dim) {
+    if (!dX || !cos_t || !sin_t || batch <= 0 || heads <= 0 || seq <= 0 ||
+        head_dim <= 0 || (head_dim & 1)) {
+        return kCudaTrainingError;
+    }
+    if (!all_managed3(dX, cos_t, sin_t)) return kCudaTrainingUnsupported;
+    const size_t total_pairs =
+        (size_t)batch * (size_t)heads * (size_t)seq * (size_t)(head_dim / 2);
+    const int block_size = 256;
+    if (total_pairs > (size_t)INT_MAX * (size_t)block_size) {
+        return kCudaTrainingError;
+    }
+    const int blocks = (int)((total_pairs + (size_t)block_size - 1) /
+                             (size_t)block_size);
+    rope_kernel<<<blocks, block_size>>>(
+        (__half*)dX, (const float*)cos_t, (const float*)sin_t,
+        seq, head_dim, total_pairs, 1);
+    if (cudaGetLastError() != cudaSuccess) return kCudaTrainingError;
+    if (cudaDeviceSynchronize() != cudaSuccess) return kCudaTrainingError;
+    tc_cuda_set_last_kernel("cuda_rope_backward");
     return kCudaTrainingOk;
 }
 

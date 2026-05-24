@@ -71,6 +71,18 @@ extern "C" int tc_cuda_layernorm_forward(const void* X, const void* gamma,
                                           const void* beta,
                                           void* Y, void* mean, void* rstd,
                                           int N, int D, float eps);
+extern "C" int tc_cuda_layernorm_backward(const void* X, const void* gamma,
+                                           const void* dY,
+                                           const void* mean, const void* rstd,
+                                           void* dX, int N, int D);
+extern "C" int tc_cuda_rope_forward(void* X, const void* cos_t,
+                                     const void* sin_t,
+                                     int batch, int heads, int seq,
+                                     int head_dim);
+extern "C" int tc_cuda_rope_backward(void* dX, const void* cos_t,
+                                      const void* sin_t,
+                                      int batch, int heads, int seq,
+                                      int head_dim);
 extern "C" int tc_cuda_softmax_forward(const void* X, void* Y, int N, int D);
 extern "C" int tc_cuda_softmax_backward(const void* Y, const void* dY,
                                          void* dX, int N, int D);
@@ -357,6 +369,16 @@ extern "C" tc_status_t tc_layernorm_backward(tc_context* ctx,
     tc_buffer_map((tc_buffer*)rstd, &rp);
     tc_buffer_map(dX, &dXp);
 
+#if defined(TC_ENABLE_CUDA)
+    if (cuda_training_enabled()) {
+        const int rc = tc_cuda_layernorm_backward(Xp, gp, dYp, mp, rp, dXp, N, D);
+        if (rc == 0) {
+            return tc_record_dispatch("tc_layernorm_backward", TC_BACKEND_CUDA, TC_OK);
+        }
+        if (rc < 0) return TC_ERR_INTERNAL;
+    }
+#endif
+
     const uint16_t* x_data = (const uint16_t*)Xp;
     const uint16_t* g_data = (const uint16_t*)gp;
     const uint16_t* dy_data = (const uint16_t*)dYp;
@@ -427,6 +449,16 @@ extern "C" tc_status_t tc_rope_forward(tc_context* ctx,
     const float* sin_data = (const float*)sp;
     const int half = head_dim / 2;
 
+#if defined(TC_ENABLE_CUDA)
+    if (cuda_training_enabled()) {
+        const int rc = tc_cuda_rope_forward(Xp, cp, sp, batch, heads, seq, head_dim);
+        if (rc == 0) {
+            return tc_record_dispatch("tc_rope_forward", TC_BACKEND_CUDA, TC_OK);
+        }
+        if (rc < 0) return TC_ERR_INTERNAL;
+    }
+#endif
+
     const long total = (long)batch * heads * seq;
 #if defined(_OPENMP)
     #pragma omp parallel for schedule(static) if (total > 1)
@@ -471,6 +503,16 @@ extern "C" tc_status_t tc_rope_backward(tc_context* ctx,
     const float* cos_data = (const float*)cp;
     const float* sin_data = (const float*)sp;
     const int half = head_dim / 2;
+
+#if defined(TC_ENABLE_CUDA)
+    if (cuda_training_enabled()) {
+        const int rc = tc_cuda_rope_backward(dXp, cp, sp, batch, heads, seq, head_dim);
+        if (rc == 0) {
+            return tc_record_dispatch("tc_rope_backward", TC_BACKEND_CUDA, TC_OK);
+        }
+        if (rc < 0) return TC_ERR_INTERNAL;
+    }
+#endif
 
     const long total = (long)batch * heads * seq;
 #if defined(_OPENMP)
