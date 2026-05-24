@@ -256,7 +256,8 @@ python3 scripts/check_operational_evidence.py \
   --require-release --require-sdk26 --require-cuda --require-pytorch \
   --require-pytorch-backend-allocation --require-live-mesh \
   --require-release-clean-head --require-sdk26-clean-head \
-  --require-pytorch-clean-head --require-live-clean-head \
+  --require-cuda-clean-head --require-pytorch-clean-head \
+  --require-live-clean-head \
   --min-live-outer-steps 2 \
   --require-direct-ring --require-checkpoint --require-cuda-rank3
 ```
@@ -281,12 +282,18 @@ If `TENSORCORE_CUDA_SMOKE_EVIDENCE_PATH` is set, the script writes
 `tensorcore.cuda_smoke.evidence.v1`-style JSON with `runtime_status` set to
 `passed`, `skipped_not_built`, or `skipped_runtime_unavailable`. Set
 `REQUIRE_CUDA=1` to make skipped evidence fail the script on a host that is
-expected to have a working NVIDIA runtime.
+expected to have a working NVIDIA runtime. Evidence records `git_head` and
+`git_dirty`; archive-based deployments can supply that provenance via
+`TENSORCORE_SOURCE_GIT_HEAD` / `TENSORCORE_SOURCE_GIT_DIRTY` or the
+`.tensorcore_source_head` / `.tensorcore_source_dirty` files written by the
+live-mesh prepare step.
 
 ```sh
 TENSORCORE_CUDA_SMOKE_EVIDENCE_PATH=/tmp/cuda.json \
   TC_CUDA_BUILD_DIR=build-cuda scripts/ci_cuda_smoke.sh
 python3 scripts/check_cuda_smoke_evidence.py /tmp/cuda.json --require-cuda
+python3 scripts/check_cuda_smoke_evidence.py /tmp/cuda.json \
+  --require-cuda --require-clean-head
 ```
 
 ### `ci_hip_smoke.sh`

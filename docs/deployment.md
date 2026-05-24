@@ -292,6 +292,8 @@ python3 scripts/check_operational_evidence.py \
   --live-mesh /tmp/live-mesh-training.json \
   --require-release --require-sdk26 --require-cuda --require-pytorch \
   --require-pytorch-backend-allocation --require-live-mesh \
+  --require-release-clean-head --require-sdk26-clean-head \
+  --require-cuda-clean-head --require-pytorch-clean-head \
   --require-live-clean-head --min-live-outer-steps 5 \
   --require-direct-ring --require-checkpoint --require-cuda-rank3
 ```

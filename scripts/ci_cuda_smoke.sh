@@ -56,12 +56,58 @@ def _git_value(*args):
         return None
 
 
-def _base_evidence():
+def _truthy(value):
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _falsy(value):
+    return str(value).strip().lower() in ("0", "false", "no", "off")
+
+
+def _root_file_value(name):
+    try:
+        return (pathlib.Path(os.environ["TC_ROOT"]) / name).read_text(
+            encoding="utf-8"
+        ).strip()
+    except Exception:
+        return None
+
+
+def _source_git_head():
+    return (
+        os.environ.get("TENSORCORE_SOURCE_GIT_HEAD")
+        or _git_value("rev-parse", "HEAD")
+        or _root_file_value(".tensorcore_source_head")
+    )
+
+
+def _source_git_dirty():
+    override = os.environ.get("TENSORCORE_SOURCE_GIT_DIRTY")
+    if override is not None:
+        if _truthy(override):
+            return True
+        if _falsy(override):
+            return False
+        return None
+
     dirty = _git_value("status", "--short")
+    if dirty is not None:
+        return bool(dirty)
+
+    marker = _root_file_value(".tensorcore_source_dirty")
+    if marker is not None:
+        if _truthy(marker):
+            return True
+        if _falsy(marker):
+            return False
+    return None
+
+
+def _base_evidence():
     return {
         "schema_version": 1,
-        "git_head": _git_value("rev-parse", "HEAD"),
-        "git_dirty": bool(dirty),
+        "git_head": _source_git_head(),
+        "git_dirty": _source_git_dirty(),
         "cuda_build_enabled": os.environ.get("TC_CUDA_BUILD_ENABLED") == "1",
         "require_cuda": os.environ.get("TC_CUDA_REQUIRE") == "1",
         "runtime_status": "not_run",

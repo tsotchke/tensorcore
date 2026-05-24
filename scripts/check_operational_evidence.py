@@ -110,6 +110,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--require-live-mesh", action="store_true")
     parser.add_argument("--require-release-clean-head", action="store_true")
     parser.add_argument("--require-sdk26-clean-head", action="store_true")
+    parser.add_argument("--require-cuda-clean-head", action="store_true")
     parser.add_argument("--require-pytorch-clean-head", action="store_true")
     parser.add_argument("--require-live-clean-head", action="store_true")
     parser.add_argument("--min-live-outer-steps", type=int, default=1)
@@ -160,6 +161,8 @@ def main() -> int:
         cmd = ["scripts/check_cuda_smoke_evidence.py", str(args.cuda)]
         if args.require_cuda:
             cmd.append("--require-cuda")
+        if args.require_cuda_clean_head:
+            cmd.extend(["--git-head", args.git_head or "", "--require-clean-head"])
         run_checker(cmd)
         checked.append("cuda")
 

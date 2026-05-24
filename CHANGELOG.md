@@ -52,6 +52,8 @@ every architectural primitive in code and tested:
 - Release-smoke evidence now records clean git-head provenance, and the
   operational bundle checker can require release, SDK26, PyTorch, and
   live-mesh evidence to match the current committed head.
+- CUDA smoke evidence now participates in the same clean-head gate, including
+  archive-based remote builds prepared by the live mesh runner.
 - DiLoCo runtime with NONE/FP16/TOPK_1PCT/TOPK_01PCT compression,
   SGD/Nesterov/Adam outer optimizers, async overlap, sparse-on-the-wire
   cross-continent path.

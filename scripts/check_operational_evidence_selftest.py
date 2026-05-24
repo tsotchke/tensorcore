@@ -168,6 +168,7 @@ def main() -> int:
             "--require-live-mesh",
             "--require-release-clean-head",
             "--require-sdk26-clean-head",
+            "--require-cuda-clean-head",
             "--require-pytorch-clean-head",
             "--require-live-clean-head",
             "--min-live-outer-steps", "5",
@@ -223,6 +224,26 @@ def main() -> int:
             "--pytorch", str(dirty_pytorch_path),
             "--git-head", TEST_HEAD,
             "--require-pytorch-clean-head",
+        )
+
+        stale_cuda = cuda_evidence()
+        stale_cuda["git_head"] = "stale"
+        stale_cuda_path = write_json(directory, "stale-cuda.fixture", stale_cuda)
+        assert_fails(
+            "CUDA evidence git_head mismatch",
+            "--cuda", str(stale_cuda_path),
+            "--git-head", TEST_HEAD,
+            "--require-cuda-clean-head",
+        )
+
+        dirty_cuda = cuda_evidence()
+        dirty_cuda["git_dirty"] = True
+        dirty_cuda_path = write_json(directory, "dirty-cuda.fixture", dirty_cuda)
+        assert_fails(
+            "CUDA evidence must be from a clean git tree",
+            "--cuda", str(dirty_cuda_path),
+            "--git-head", TEST_HEAD,
+            "--require-cuda-clean-head",
         )
 
         brokered = copy.deepcopy(live_mesh_evidence())

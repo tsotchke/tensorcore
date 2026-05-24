@@ -113,9 +113,17 @@ prepare_linux_rank() {
     local host="$1"
     local remote_dir="$2"
     local enable_cuda="$3"
+    local source_head
+    local source_dirty=0
+    source_head="$(git -C "$ROOT" rev-parse HEAD)"
+    if ! git -C "$ROOT" diff --quiet || ! git -C "$ROOT" diff --cached --quiet; then
+        source_dirty=1
+    fi
     echo "[mesh-training] preparing $host:$remote_dir from git HEAD (CUDA=$enable_cuda)"
     git -C "$ROOT" archive --format=tar HEAD | ssh "$host" \
         "rm -rf '$remote_dir' && mkdir -p '$remote_dir' && tar -xf - -C '$remote_dir'"
+    ssh "$host" \
+        "printf '%s\n' '$source_head' > '$remote_dir/.tensorcore_source_head' && printf '%s\n' '$source_dirty' > '$remote_dir/.tensorcore_source_dirty'"
     ssh "$host" \
         "cmake -S '$remote_dir' -B '$remote_dir/build' -DTC_ENABLE_METAL=OFF -DTC_ENABLE_CUDA='$enable_cuda' -DTC_BUILD_TESTS=OFF -DTC_BUILD_BENCH=OFF -DTC_BUILD_EXAMPLES=ON -DCMAKE_BUILD_TYPE=Release && cmake --build '$remote_dir/build' --target mesh_training_demo --parallel '$remote_jobs'"
 }
