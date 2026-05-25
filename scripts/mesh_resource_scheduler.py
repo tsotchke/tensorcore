@@ -629,12 +629,32 @@ def claim_job(
     )
 
 
-def heartbeat_lease(lease: dict, job: dict, *, arbiter_cmd: list[str], timeout: float) -> dict:
-    return run_json(
-        arbiter_cmd
-        + ["heartbeat", str(lease["id"]), "--ttl-sec", str(job["ttl_sec"]), "--json"],
-        timeout=timeout,
-    )
+def heartbeat_lease(
+    lease: dict,
+    job: dict,
+    *,
+    arbiter_cmd: list[str],
+    timeout: float,
+    worker_identity: dict | None = None,
+) -> dict:
+    base = ["heartbeat", str(lease["id"]), "--ttl-sec", str(job["ttl_sec"])]
+    if worker_identity is not None:
+        metadata = claim_metadata(job, worker_identity=worker_identity)
+        try:
+            payload = run_json(
+                arbiter_cmd
+                + base
+                + ["--metadata-json", json.dumps(metadata, sort_keys=True), "--json"],
+                timeout=timeout,
+            )
+            payload["metadata_refreshed"] = True
+            return payload
+        except RuntimeError as exc:
+            fallback = run_json(arbiter_cmd + base + ["--json"], timeout=timeout)
+            fallback["metadata_refreshed"] = False
+            fallback["metadata_refresh_error"] = str(exc)[-1000:]
+            return fallback
+    return run_json(arbiter_cmd + base + ["--json"], timeout=timeout)
 
 
 def release_lease(lease: dict, *, arbiter_cmd: list[str], timeout: float) -> dict:
@@ -986,11 +1006,15 @@ def handle_live_holders(
                     arbiter_cmd=arbiter_cmd,
                     timeout=timeout,
                 )
+                heartbeat_identity = (
+                    identity if job.get("resource_class") == "cuda_exclusive" else None
+                )
                 payload = heartbeat_lease(
                     current,
                     job,
                     arbiter_cmd=arbiter_cmd,
                     timeout=timeout,
+                    worker_identity=heartbeat_identity,
                 )
                 result["arbiter"] = {"release": releases, "heartbeat": payload}
                 result["ok"] = (
@@ -998,6 +1022,7 @@ def handle_live_holders(
                     and bool(identity.get("ok"))
                     and releases_ok
                     and bool(payload.get("ok"))
+                    and payload.get("metadata_refreshed", True) is not False
                 )
             except Exception as exc:
                 result["ok"] = False

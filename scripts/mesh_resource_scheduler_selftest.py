@@ -178,6 +178,11 @@ class FakeRuntime:
             )
             return {"ok": True, "lease_id": lease_id}
         if op == "heartbeat":
+            if "--metadata-json" in argv:
+                metadata = json.loads(argv[argv.index("--metadata-json") + 1])
+                for lease in self.leases:
+                    if lease.get("id") == argv[2]:
+                        lease["metadata"] = metadata
             return {"ok": True, "lease_id": argv[2]}
         if op == "release":
             lease_id = argv[2]
@@ -316,6 +321,7 @@ def test_live_holder_is_heartbeated() -> None:
     )
     assert result["ok"] is True
     assert result["results"][0]["action"] == "heartbeated_live_holder"
+    assert "metadata_refreshed" not in result["results"][0]["arbiter"]["heartbeat"]
     assert_event_order(
         runtime,
         [
@@ -1212,6 +1218,51 @@ def test_cuda_live_adoption_records_worker_identity_in_claim() -> None:
     )
 
 
+def test_cuda_live_heartbeat_refreshes_worker_identity_metadata() -> None:
+    runtime = FakeRuntime(
+        leases=[
+            {
+                "id": "lease-qllm",
+                "resource": "cosbox:cuda3090",
+                "owner": "qllm-phase1:cosbox",
+                "metadata": {
+                    "sync_job_id": "qllm-phase1",
+                    "worker_identity_pending": True,
+                },
+            }
+        ],
+        live={"qllm-phase1": True},
+    )
+    result = run_case(
+        [
+            job(
+                "qllm-phase1",
+                priority=100,
+                resource_class="cuda_exclusive",
+                admission_cmd=True,
+                post_start_probe_cmd=True,
+                worker_identity_cmd=True,
+            )
+        ],
+        runtime,
+    )
+    assert result["ok"] is True
+    assert result["results"][0]["action"] == "heartbeated_live_holder"
+    assert result["results"][0]["arbiter"]["heartbeat"]["metadata_refreshed"] is True
+    assert runtime.leases[0]["metadata"]["worker_identity"]["worker_host"] == "cosbox"
+    assert runtime.leases[0]["metadata"]["worker_identity_pending"] is False
+    assert_event_order(
+        runtime,
+        [
+            ("probe", "qllm-phase1"),
+            ("admit", "qllm-phase1"),
+            ("status", "--json"),
+            ("identity", "qllm-phase1"),
+            ("heartbeat", "lease-qllm"),
+        ],
+    )
+
+
 def test_loop_pretty_json_emits_json() -> None:
     scheduler = load_scheduler()
     runtime = FakeRuntime(live={"qllm-phase1": False})
@@ -1268,6 +1319,7 @@ def main() -> int:
     test_cuda_launch_runs_post_start_and_identity()
     test_cuda_post_start_failure_releases_claimed_lease()
     test_cuda_live_adoption_records_worker_identity_in_claim()
+    test_cuda_live_heartbeat_refreshes_worker_identity_metadata()
     test_loop_pretty_json_emits_json()
     print("mesh resource scheduler selftest OK")
     return 0

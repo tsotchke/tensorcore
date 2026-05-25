@@ -17,6 +17,8 @@ conservative:
 - Known stale leases are released only when that job's probe says dead.
 - Unknown leases block the resource.
 - A live known job without a lease is adopted by claiming a lease for it.
+- A live CUDA-exclusive job with an existing lease refreshes worker identity
+  metadata on heartbeat, so lease records do not stay pending after adoption.
 - New CUDA-exclusive work is launched only if its mandatory `admission_cmd`
   exits 0.
 - CUDA-exclusive work must also pass a post-start probe and report worker

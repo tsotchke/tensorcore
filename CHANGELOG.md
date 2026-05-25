@@ -102,6 +102,8 @@ every architectural primitive in code and tested:
   command templates receive `{resource}`/`{node}` context, and tenant-aware
   fair-share selection prevents one user from monopolizing every idle machine
   in a single scheduler pass.
+- Mesh scheduler heartbeats for live CUDA-exclusive jobs now refresh worker
+  identity metadata on the existing lease instead of leaving identity pending.
 - Jack's Windows host is now proven over Tailscale/SSH for portable CPU
   bootstrap, CTest, install smoke, and Python smoke on the current head; its
   inventory CUDA lane remains blocked until Windows CUDA admission and worker
