@@ -42,6 +42,9 @@ jobs:
       - name: Mesh resource scheduler fixtures
         run: python3 scripts/mesh_resource_scheduler_selftest.py
 
+      - name: Live mesh launcher shell syntax
+        run: bash -n scripts/run_live_mesh_smoke.sh scripts/run_live_mesh_training_demo.sh
+
       - name: CUDA resource admission fixtures
         run: python3 scripts/check_cuda_resource_admission_selftest.py
 
