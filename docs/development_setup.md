@@ -179,12 +179,18 @@ keep the Windows host reproducible:
 
 ```sh
 TC_WINDOWS_SSH_KEY="$HOME/.ssh/id_ed25519_jack" scripts/run_windows_host_smoke.sh
+TC_WINDOWS_EVIDENCE_PATH=/tmp/windows-host.json \
+  TC_WINDOWS_SSH_KEY="$HOME/.ssh/id_ed25519_jack" \
+  scripts/run_windows_host_smoke.sh
 ```
 
 By default the script clones the repo if missing, then uses `git pull
 --ff-only` on `master` before running `bootstrap_windows_cpu.ps1`. Set
 `TC_WINDOWS_RESET=1` only for a clean operational gate where it is acceptable
-to hard-reset the remote checkout to `origin/master`.
+to hard-reset the remote checkout to `origin/master`. Set
+`TC_WINDOWS_EVIDENCE_PATH` to capture JSON evidence for
+`scripts/check_windows_host_smoke_evidence.py` and
+`scripts/check_operational_evidence.py`.
 
 For an explicit Visual Studio x64 build:
 

@@ -222,12 +222,19 @@ to `src/tensorcore` if needed, fast-forwards `master`, then launches
 
 ```sh
 TC_WINDOWS_SSH_KEY="$HOME/.ssh/id_ed25519_jack" scripts/run_windows_host_smoke.sh
+TC_WINDOWS_EVIDENCE_PATH=/tmp/windows-host.json \
+  TC_WINDOWS_SSH_KEY="$HOME/.ssh/id_ed25519_jack" \
+  scripts/run_windows_host_smoke.sh
+python3 scripts/check_windows_host_smoke_evidence.py /tmp/windows-host.json \
+  --require-windows --require-clean-head --require-python
 ```
 
 Set `TC_WINDOWS_SSH`, `TC_WINDOWS_REPO`, `TC_WINDOWS_REF`, or
 `TC_WINDOWS_REMOTE_URL` for other Windows hosts. The default update is
 non-destructive; set `TC_WINDOWS_RESET=1` only when the remote checkout is a
 dedicated smoke workspace that can be hard-reset to `origin/<ref>`.
+`TC_WINDOWS_EVIDENCE_PATH` writes
+`tensorcore.windows_host_smoke.evidence.v1` after the remote bootstrap passes.
 
 ### `run_live_mesh_smoke.sh`
 
@@ -337,7 +344,7 @@ was prepared from the archived checkout during that run.
 ### `check_operational_evidence.py`
 
 Validates a complete operational evidence bundle by delegating to the release,
-SDK26, CUDA, HIP, PyTorch, and live-mesh evidence checkers, then applying
+SDK26, CUDA, HIP, PyTorch, Windows, and live-mesh evidence checkers, then applying
 bundle-level policy. For production promotion, use the clean-head flags so
 stale or dirty-tree release, SDK26, PyTorch, and live-mesh evidence cannot
 satisfy the current head's deployment gate.
@@ -348,11 +355,14 @@ python3 scripts/check_operational_evidence.py \
   --sdk26 /tmp/sdk26/release_smoke_runtime_evidence.json \
   --cuda /tmp/cuda-smoke.json \
   --pytorch /tmp/pytorch.json \
+  --windows /tmp/windows-host.json \
   --live-mesh /tmp/live-mesh-training.json \
   --require-release --require-sdk26 --require-cuda --require-pytorch \
-  --require-pytorch-backend-allocation --require-live-mesh \
+  --require-pytorch-backend-allocation --require-windows \
+  --require-windows-python --require-live-mesh \
   --require-release-clean-head --require-sdk26-clean-head \
   --require-cuda-clean-head --require-pytorch-clean-head \
+  --require-windows-clean-head \
   --require-live-clean-head \
   --min-live-outer-steps 2 \
   --require-direct-ring --require-checkpoint --require-cuda-rank3
@@ -363,6 +373,11 @@ subsets that include a required HIP/chipStar accelerator host. Use
 `--require-hip-build --require-hip-clean-head` when the deployment only
 requires proving that chipStar/HIP compiled and initialized far enough to
 emit runtime-unavailable diagnostics.
+
+Add `--windows /tmp/windows-host.json --require-windows
+--require-windows-clean-head` when Jack or another Windows node is part of
+the deployment proof. Add `--require-windows-python` when the Windows Python
+binding smoke must be present, not skipped.
 
 ### `ci_cuda_smoke.sh`
 

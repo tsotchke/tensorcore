@@ -153,6 +153,30 @@ def pytorch_evidence() -> dict[str, Any]:
     }
 
 
+def windows_evidence() -> dict[str, Any]:
+    return {
+        "schema": "tensorcore.windows_host_smoke.evidence.v1",
+        "schema_version": 1,
+        "runtime_status": "passed",
+        "git_head": TEST_HEAD,
+        "git_dirty": False,
+        "ref": "master",
+        "repo": "src/tensorcore",
+        "remote_url": "https://github.com/tsotchke/tensorcore.git",
+        "host": {
+            "computer_name": "DESKTOP-JACK-BLUPC",
+            "user": "tsotchke",
+            "os": "Microsoft Windows 11 Pro",
+        },
+        "update": {"reset": False},
+        "bootstrap": {
+            "ran": True,
+            "install_requested": False,
+            "skip_python": False,
+        },
+    }
+
+
 def write_json(directory: pathlib.Path, name: str, data: dict[str, Any]) -> pathlib.Path:
     path = directory / name
     path.write_text(json.dumps(data), encoding="utf-8")
@@ -193,6 +217,7 @@ def main() -> int:
         cuda_path = write_json(directory, "cuda.json", cuda_evidence())
         hip_path = write_json(directory, "hip.json", hip_evidence())
         pytorch_path = write_json(directory, "pytorch.json", pytorch_evidence())
+        windows_path = write_json(directory, "windows.json", windows_evidence())
 
         assert_passes(
             "--release", str(release_path),
@@ -200,6 +225,7 @@ def main() -> int:
             "--cuda", str(cuda_path),
             "--hip", str(hip_path),
             "--pytorch", str(pytorch_path),
+            "--windows", str(windows_path),
             "--live-mesh", str(live_path),
             "--git-head", TEST_HEAD,
             "--require-release",
@@ -209,12 +235,15 @@ def main() -> int:
             "--require-hip-build",
             "--require-pytorch",
             "--require-pytorch-backend-allocation",
+            "--require-windows",
+            "--require-windows-python",
             "--require-live-mesh",
             "--require-release-clean-head",
             "--require-sdk26-clean-head",
             "--require-cuda-clean-head",
             "--require-hip-clean-head",
             "--require-pytorch-clean-head",
+            "--require-windows-clean-head",
             "--require-live-clean-head",
             "--min-live-outer-steps", "5",
             "--require-direct-ring",
@@ -224,6 +253,7 @@ def main() -> int:
 
         assert_fails("no evidence paths were provided")
         assert_fails("--live-mesh evidence is required", "--require-live-mesh")
+        assert_fails("--windows evidence is required", "--require-windows")
         assert_fails(
             "expected git head is unavailable",
             "--live-mesh", str(live_path),
@@ -269,6 +299,26 @@ def main() -> int:
             "--pytorch", str(dirty_pytorch_path),
             "--git-head", TEST_HEAD,
             "--require-pytorch-clean-head",
+        )
+
+        stale_windows = windows_evidence()
+        stale_windows["git_head"] = "stale"
+        stale_windows_path = write_json(directory, "stale-windows.fixture", stale_windows)
+        assert_fails(
+            "Windows evidence git_head mismatch",
+            "--windows", str(stale_windows_path),
+            "--git-head", TEST_HEAD,
+            "--require-windows-clean-head",
+        )
+
+        dirty_windows = windows_evidence()
+        dirty_windows["git_dirty"] = True
+        dirty_windows_path = write_json(directory, "dirty-windows.fixture", dirty_windows)
+        assert_fails(
+            "Windows evidence must be from a clean git tree",
+            "--windows", str(dirty_windows_path),
+            "--git-head", TEST_HEAD,
+            "--require-windows-clean-head",
         )
 
         stale_cuda = cuda_evidence()

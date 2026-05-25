@@ -24,6 +24,9 @@ jobs:
       - name: PyTorch smoke evidence checker fixtures
         run: python3 scripts/check_pytorch_smoke_evidence_selftest.py
 
+      - name: Windows host smoke evidence checker fixtures
+        run: python3 scripts/check_windows_host_smoke_evidence_selftest.py
+
       - name: Operational evidence checker fixtures
         run: python3 scripts/check_operational_evidence_selftest.py
 

@@ -68,6 +68,9 @@ every architectural primitive in code and tested:
   `scripts/run_windows_host_smoke.sh` SSHes over Tailscale, clones or
   fast-forwards the remote checkout, and runs the same bootstrap gate on
   Jack's machine or any future Windows node.
+- Windows host smoke can now emit machine-readable evidence, with
+  `scripts/check_windows_host_smoke_evidence.py` and operational-bundle
+  policy flags for requiring clean-head Windows proof.
 - Release-smoke evidence now records clean git-head provenance, and the
   operational bundle checker can require release, SDK26, PyTorch, and
   live-mesh evidence to match the current committed head.

@@ -298,11 +298,14 @@ python3 scripts/check_operational_evidence.py \
   --sdk26 /tmp/sdk26/release_smoke_runtime_evidence.json \
   --cuda /tmp/cuda-smoke.json \
   --pytorch /tmp/pytorch.json \
+  --windows /tmp/windows-host.json \
   --live-mesh /tmp/live-mesh-training.json \
   --require-release --require-sdk26 --require-cuda --require-pytorch \
-  --require-pytorch-backend-allocation --require-live-mesh \
+  --require-pytorch-backend-allocation --require-windows \
+  --require-windows-python --require-live-mesh \
   --require-release-clean-head --require-sdk26-clean-head \
   --require-cuda-clean-head --require-pytorch-clean-head \
+  --require-windows-clean-head \
   --require-live-clean-head --min-live-outer-steps 5 \
   --require-direct-ring --require-checkpoint --require-cuda-rank3 \
   --require-rank1-source-prepare

@@ -86,7 +86,7 @@ def get_path(value: Any, path: str) -> Any:
 
 
 def normalize_optional_paths(args: argparse.Namespace) -> None:
-    for name in ("release", "sdk26", "cuda", "hip", "pytorch", "live_mesh"):
+    for name in ("release", "sdk26", "cuda", "hip", "pytorch", "windows", "live_mesh"):
         path = getattr(args, name)
         if path is not None:
             setattr(args, name, path.expanduser().resolve())
@@ -99,6 +99,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cuda", type=pathlib.Path)
     parser.add_argument("--hip", type=pathlib.Path)
     parser.add_argument("--pytorch", type=pathlib.Path)
+    parser.add_argument("--windows", type=pathlib.Path)
     parser.add_argument("--live-mesh", type=pathlib.Path)
     parser.add_argument("--git-head", default=git_head())
     parser.add_argument("--require-release", action="store_true")
@@ -108,12 +109,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--require-hip-build", action="store_true")
     parser.add_argument("--require-pytorch", action="store_true")
     parser.add_argument("--require-pytorch-backend-allocation", action="store_true")
+    parser.add_argument("--require-windows", action="store_true")
+    parser.add_argument("--require-windows-python", action="store_true")
     parser.add_argument("--require-live-mesh", action="store_true")
     parser.add_argument("--require-release-clean-head", action="store_true")
     parser.add_argument("--require-sdk26-clean-head", action="store_true")
     parser.add_argument("--require-cuda-clean-head", action="store_true")
     parser.add_argument("--require-hip-clean-head", action="store_true")
     parser.add_argument("--require-pytorch-clean-head", action="store_true")
+    parser.add_argument("--require-windows-clean-head", action="store_true")
     parser.add_argument("--require-live-clean-head", action="store_true")
     parser.add_argument("--min-live-outer-steps", type=int, default=1)
     parser.add_argument("--require-direct-ring", action="store_true")
@@ -138,6 +142,8 @@ def main() -> int:
         args.hip = require_path("--hip", args.hip)
     if args.require_pytorch:
         args.pytorch = require_path("--pytorch", args.pytorch)
+    if args.require_windows:
+        args.windows = require_path("--windows", args.windows)
     if args.require_live_mesh:
         args.live_mesh = require_path("--live-mesh", args.live_mesh)
     normalize_optional_paths(args)
@@ -196,6 +202,17 @@ def main() -> int:
                 "git_dirty",
             )
         checked.append("pytorch")
+
+    if args.windows is not None:
+        cmd = ["scripts/check_windows_host_smoke_evidence.py", str(args.windows)]
+        if args.require_windows:
+            cmd.append("--require-windows")
+        if args.require_windows_python:
+            cmd.append("--require-python")
+        if args.require_windows_clean_head:
+            cmd.extend(["--git-head", args.git_head or "", "--require-clean-head"])
+        run_checker(cmd)
+        checked.append("windows")
 
     if args.live_mesh is not None:
         cmd = [
