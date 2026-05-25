@@ -564,6 +564,11 @@ set_target_properties(tensorcore PROPERTIES
     OUTPUT_NAME tensorcore
     XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC YES
 )
+if(WIN32)
+    set_target_properties(tensorcore PROPERTIES
+        OUTPUT_NAME tensorcore_static
+    )
+endif()
 
 # ----------------------------------------------------------------------------
 # Subdirectories

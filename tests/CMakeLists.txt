@@ -138,10 +138,14 @@ if(NOT TC_ENABLE_METAL)
 
     # Split-binary remote distributed test for real multi-machine deployment.
     # Run manually with --rank/--world/--url. Not registered with ctest since
-    # it requires coordinated launch across two hosts.
-    add_executable(test_dist_remote test_dist_remote.c)
-    target_link_libraries(test_dist_remote PRIVATE tensorcore)
-    target_include_directories(test_dist_remote PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    # it requires coordinated launch across two hosts. The current GLOO
+    # transport is POSIX-socket backed, so Windows skips this binary until
+    # the Winsock transport lands.
+    if(NOT WIN32)
+        add_executable(test_dist_remote test_dist_remote.c)
+        target_link_libraries(test_dist_remote PRIVATE tensorcore)
+        target_include_directories(test_dist_remote PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    endif()
 
     # CUDA backend smoke + perf gate. Only compiled when TC_ENABLE_CUDA=ON.
     # At runtime, exits 77 (skip) when no NVIDIA device is present.
