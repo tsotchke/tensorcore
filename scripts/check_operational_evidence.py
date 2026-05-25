@@ -112,6 +112,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--require-hip", action="store_true")
     parser.add_argument("--require-hip-build", action="store_true")
     parser.add_argument("--require-hip-toolchain", action="store_true")
+    parser.add_argument("--require-hip-spirv-runtime", action="store_true")
     parser.add_argument("--require-ready-hip-toolchain", action="store_true")
     parser.add_argument("--require-pytorch", action="store_true")
     parser.add_argument("--require-pytorch-backend-allocation", action="store_true")
@@ -148,6 +149,8 @@ def main() -> int:
     if args.require_hip:
         args.hip = require_path("--hip", args.hip)
     if args.require_hip_toolchain:
+        args.hip_toolchain = require_path("--hip-toolchain", args.hip_toolchain)
+    if args.require_hip_spirv_runtime:
         args.hip_toolchain = require_path("--hip-toolchain", args.hip_toolchain)
     if args.require_ready_hip_toolchain:
         args.hip_toolchain = require_path("--hip-toolchain", args.hip_toolchain)
@@ -201,6 +204,8 @@ def main() -> int:
         cmd = ["scripts/check_hip_toolchain_evidence.py", str(args.hip_toolchain)]
         if args.require_hip_toolchain:
             cmd.append("--require-build-toolchain")
+        if args.require_hip_spirv_runtime:
+            cmd.append("--require-spirv-runtime")
         if args.require_ready_hip_toolchain:
             cmd.append("--require-ready")
         if args.require_hip_toolchain_clean_head:

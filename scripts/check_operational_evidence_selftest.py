@@ -291,6 +291,7 @@ def main() -> int:
             "--require-hip",
             "--require-hip-build",
             "--require-hip-toolchain",
+            "--require-hip-spirv-runtime",
             "--require-ready-hip-toolchain",
             "--require-pytorch",
             "--require-pytorch-backend-allocation",
@@ -315,6 +316,10 @@ def main() -> int:
         assert_fails("--live-mesh evidence is required", "--require-live-mesh")
         assert_fails("--windows evidence is required", "--require-windows")
         assert_fails("--hip-toolchain evidence is required", "--require-hip-toolchain")
+        assert_fails(
+            "--hip-toolchain evidence is required",
+            "--require-hip-spirv-runtime",
+        )
         assert_fails(
             "expected git head is unavailable",
             "--live-mesh", str(live_path),
@@ -432,6 +437,22 @@ def main() -> int:
             "--hip-toolchain", str(stale_hip_toolchain_path),
             "--git-head", TEST_HEAD,
             "--require-hip-toolchain-clean-head",
+        )
+
+        missing_spirv = hip_toolchain_evidence()
+        missing_spirv["runtime"]["gpu_spirv_device"] = False
+        missing_spirv["readiness"].update({
+            "gpu_spirv_runtime": False,
+            "status": "missing_requirements",
+            "missing": ["SPIR-V-capable GPU OpenCL or Level Zero runtime"],
+        })
+        missing_spirv_path = write_json(
+            directory, "missing-hip-spirv-runtime.fixture", missing_spirv
+        )
+        assert_fails(
+            "--require-spirv-runtime needs readiness.gpu_spirv_runtime=true",
+            "--hip-toolchain", str(missing_spirv_path),
+            "--require-hip-spirv-runtime",
         )
 
         hip_runtime_unavailable_path = write_json(

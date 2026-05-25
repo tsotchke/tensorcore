@@ -101,8 +101,9 @@ every architectural primitive in code and tested:
   OpenCL/Level Zero runtime, GPU/SPIR-V device capability, CMake package,
   hipBLAS, and path-hint evidence;
   `scripts/check_hip_toolchain_evidence.py` and the operational bundle can
-  require build-toolchain or ready-for-hipBLAS policy before a host is
-  admitted as a chipStar accelerator. Archive-based remote runs now honor
+  require build-toolchain, SPIR-V-capable GPU runtime, or ready-for-hipBLAS
+  policy before a host is admitted as a chipStar accelerator. Archive-based
+  remote runs now honor
   `.tensorcore_source_head` / `.tensorcore_source_dirty` provenance markers,
   and the probe recognizes versioned LLVM/SPIR-V tools such as
   `llvm-spirv-19`.

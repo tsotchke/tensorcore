@@ -152,7 +152,7 @@ produced by the host's smoke jobs. Examples:
   "admission_cmd": [
     "ssh",
     "xavier",
-    "cd /home/tyr/work/tensorcore && python3 scripts/check_operational_evidence.py --hip-toolchain /tmp/hip-toolchain.json --require-ready-hip-toolchain --require-hip-toolchain-clean-head"
+    "cd /home/tyr/work/tensorcore && python3 scripts/check_operational_evidence.py --hip-toolchain /tmp/hip-toolchain.json --require-hip-spirv-runtime --require-hip-toolchain-clean-head"
   ]
 }
 ```

@@ -385,9 +385,11 @@ subsets that include a required HIP/chipStar accelerator host. Use
 requires proving that chipStar/HIP compiled and initialized far enough to
 emit runtime-unavailable diagnostics.
 Add `--hip-toolchain /tmp/hip-toolchain.json --require-hip-toolchain` when
-the deployment must prove `hipcc` plus HIP CMake config, and add
-`--require-ready-hip-toolchain` when hipBLAS-ready SPIR-V-capable GPU runtime
-evidence is required before scheduling work to that host.
+the deployment must prove `hipcc` plus HIP CMake config, add
+`--require-hip-spirv-runtime` when the host must expose a SPIR-V-capable GPU
+runtime, and add `--require-ready-hip-toolchain` when hipBLAS-ready
+SPIR-V-capable GPU runtime evidence is required before scheduling work to
+that host.
 
 Add `--windows /tmp/windows-host.json --require-windows
 --require-windows-clean-head` when Jack or another Windows node is part of
