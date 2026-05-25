@@ -73,7 +73,9 @@ using tc_socket_t = int;
 using tc_socklen_t = socklen_t;
 #endif
 
-#if defined(__GNUC__) || defined(__clang__)
+#if defined(_WIN32)
+#  define TC_GLOO_HIDDEN
+#elif defined(__GNUC__) || defined(__clang__)
 #  define TC_GLOO_HIDDEN __attribute__((visibility("hidden")))
 #else
 #  define TC_GLOO_HIDDEN

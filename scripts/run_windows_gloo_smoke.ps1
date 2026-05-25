@@ -57,7 +57,12 @@ try {
         if (-not $Proc.HasExited) {
             $Failed = $true
             Stop-Process -Id $Proc.Id -Force -ErrorAction SilentlyContinue
-        } elseif ($Proc.ExitCode -ne 0) {
+            continue
+        }
+
+        $Proc.WaitForExit()
+        if ($null -eq $Proc.ExitCode -or $Proc.ExitCode -ne 0) {
+            Write-Host "[tensorcore/windows-gloo] rank process $($Proc.Id) exit=$($Proc.ExitCode)"
             $Failed = $true
         }
     }

@@ -125,7 +125,7 @@ if (\$NoSmoke -ne '1') {
     try {
         \$BootstrapProcess = Start-Process -FilePath powershell -ArgumentList \$Args -NoNewWindow -Wait -PassThru -RedirectStandardInput \$EmptyInput
         if (\$BootstrapProcess.ExitCode -ne 0) {
-            throw "bootstrap failed with exit code \$BootstrapProcess.ExitCode"
+            throw "bootstrap failed with exit code \$(\$BootstrapProcess.ExitCode)"
         }
     } finally {
         Remove-Item -Force \$EmptyInput -ErrorAction SilentlyContinue
