@@ -242,6 +242,39 @@ The optional evidence JSON uses schema
 outer-step losses, selected backend, direct-ring route counts, checkpoint
 discard/realize counters, and per-rank launch/prepare metadata.
 
+### `mesh_resource_scheduler.py`
+
+Coordinates shared mesh resources such as `cosbox:cuda3090` through the
+Tsotchke arbiter. It reads a small jobs JSON, probes known live work,
+releases only verified-stale leases, adopts live known holders, and launches
+new jobs only after claiming the requested resource. Unknown leases and
+unknown liveness block scheduling instead of killing another agent's work.
+
+Run one dry pass:
+
+```sh
+scripts/mesh_resource_scheduler.py \
+  --arbiter-cmd ~/.tsotchke/bin/tsotchke-arbiter \
+  --jobs-json ~/.tsotchke/state/mesh-resource-jobs.json \
+  --dry-run --pretty-json
+```
+
+Run the daemon loop and persist last-state evidence:
+
+```sh
+scripts/mesh_resource_scheduler.py \
+  --arbiter-cmd ~/.tsotchke/bin/tsotchke-arbiter \
+  --jobs-json ~/.tsotchke/state/mesh-resource-jobs.json \
+  --state-json ~/.tsotchke/state/mesh-resource-scheduler-state.json \
+  --loop --interval-sec 30
+```
+
+Fixture coverage:
+
+```sh
+python3 scripts/mesh_resource_scheduler_selftest.py
+```
+
 ### `check_live_mesh_training_evidence.py`
 
 Validates the JSON artifact emitted by `run_live_mesh_training_demo.sh` via

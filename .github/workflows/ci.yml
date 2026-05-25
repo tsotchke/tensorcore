@@ -27,6 +27,9 @@ jobs:
       - name: Operational evidence checker fixtures
         run: python3 scripts/check_operational_evidence_selftest.py
 
+      - name: Mesh resource scheduler fixtures
+        run: python3 scripts/mesh_resource_scheduler_selftest.py
+
   portable-cpu:
     name: portable-cpu (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

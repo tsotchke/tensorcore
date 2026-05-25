@@ -78,6 +78,9 @@ are the entry points; everything below goes deeper.
   tests.
 - **[diloco.md](diloco.md)** — low-communication outer-loop training for
   cross-site meshes, plus current implementation status.
+- **[mesh_resource_scheduler.md](mesh_resource_scheduler.md)** — the
+  mesh-wide lease and queue controller for shared hardware such as
+  `cosbox:cuda3090`.
 - **[python.md](python.md)** — the `tensorcore` Python binding, ctypes
   layout, numpy interop.
 
@@ -98,6 +101,8 @@ are the entry points; everything below goes deeper.
   kernel: tile layouts, function constants, threadgroup memory budget.
 - **[ci_and_scripts.md](ci_and_scripts.md)** — what each CI workflow
   runs and what every helper script in `scripts/` does.
+- **[mesh_resource_scheduler.md](mesh_resource_scheduler.md)** — how agents
+  submit shared-resource jobs without killing each other's work.
 
 ### Recipes — assembling real workloads
 
@@ -153,6 +158,7 @@ are the entry points; everything below goes deeper.
 | Metal kernels | `kernels/metal/*.metal` |
 | GGUF reader | `lib/io/gguf.c` |
 | Distributed | `lib/distributed/{distributed,ring_local}.mm`, `lib/distributed/{distributed_cpu,gloo_tcp}.cpp` |
+| Mesh resource scheduler | `scripts/mesh_resource_scheduler.py` |
 | MPS + Accelerate fallbacks | `lib/fallback/{mps_gemm.mm,accelerate_gemm.c}` |
 | M5 / Metal 4 TensorOps | `lib/tensorops/tensorops_m5.mm` (SDK-gated) |
 | Eshkol bridge | `eshkol/bridge/tensorcore_codegen.cpp` |
