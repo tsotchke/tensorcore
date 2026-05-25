@@ -97,6 +97,10 @@ every architectural primitive in code and tested:
 - Mesh inventory `backend: "cuda"` rows now force `cuda_exclusive` scheduler
   semantics, preventing jobs from downgrading CUDA accelerators to generic
   resources and bypassing admission/post-start/worker-identity gates.
+- Jack's Windows host is now proven over Tailscale/SSH for portable CPU
+  bootstrap, CTest, install smoke, and Python smoke on the current head; its
+  inventory CUDA lane remains blocked until Windows CUDA admission and worker
+  identity probes are validated.
 - Release-smoke evidence now records clean git-head provenance, and the
   operational bundle checker can require release, SDK26, PyTorch, and
   live-mesh evidence to match the current committed head.

@@ -58,9 +58,9 @@
       "capacity": 1,
       "memory_gib": 12,
       "status": "blocked",
-      "blocked_reason": "SSH/auth and Windows CUDA admission probes are not installed yet.",
+      "blocked_reason": "Windows SSH/bootstrap and portable CPU smoke pass; CUDA admission/toolchain probes are not validated yet.",
       "general_queue_eligible": false,
-      "description": "Jack's RTX 3060 auxiliary lane; register it now, but do not schedule jobs until access and probes are healthy."
+      "description": "Jack's RTX 3060 auxiliary lane; keep blocked until Windows CUDA admission and worker identity probes are healthy."
     },
     {
       "id": "atlas:qwen_gen",

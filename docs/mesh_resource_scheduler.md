@@ -26,8 +26,9 @@ the source of truth for accelerator ownership and scheduling eligibility:
 
 - `cosbox:cuda3090` is the primary exclusive CUDA artifact lane.
 - `old-donkey:cuda3050` is the low-VRAM CUDA precompute lane.
-- `jack-blupc:cuda3060` is registered but marked `blocked` until SSH/auth and
-  Windows CUDA admission probes are healthy.
+- `jack-blupc:cuda3060` is registered but marked `blocked`; Windows
+  SSH/bootstrap and portable CPU smoke are healthy, but CUDA admission and
+  worker-identity probes still need validation before scheduling GPU work.
 - `atlas:metal_m2ultra` is active Metal capacity for validation, evaluation,
   generation support, and Tensorcore Metal workloads.
 - `enki:metal_m4_tsotchke_chan` is `reserved`; only `tsotchke-chan` owners may
