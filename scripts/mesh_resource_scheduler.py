@@ -23,6 +23,8 @@ from typing import Any
 
 DEFAULT_ARBITER_CMD = "~/.tsotchke/bin/tsotchke-arbiter"
 SCHEMA = "tensorcore.mesh_resource_jobs.v1"
+INVENTORY_SCHEMA = "tensorcore.mesh_resources.v1"
+INVENTORY_STATUSES = {"active", "reserved", "blocked"}
 RESOURCE_CLASSES = {"generic", "cuda_exclusive"}
 DESIRED_STATES = {"running", "paused"}
 
@@ -81,6 +83,88 @@ def load_jobs(path: str) -> list[dict]:
     if not isinstance(jobs, list):
         raise SystemExit("--jobs-json must contain a list or an object with jobs")
     return [normalize_job(job) for job in jobs]
+
+
+def load_inventory(path: str | None) -> dict[str, dict]:
+    if not path:
+        return {}
+    raw = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("--inventory-json must contain a JSON object")
+    if raw.get("schema") != INVENTORY_SCHEMA:
+        raise ValueError(f"--inventory-json schema must be {INVENTORY_SCHEMA}")
+    resources = raw.get("resources")
+    if not isinstance(resources, list):
+        raise ValueError("--inventory-json resources must be a list")
+    out: dict[str, dict] = {}
+    for row in resources:
+        if not isinstance(row, dict):
+            raise ValueError("--inventory-json resources contains a non-object row")
+        resource_id = row.get("id")
+        if not isinstance(resource_id, str) or not resource_id.strip():
+            raise ValueError("--inventory-json resource id must be a non-empty string")
+        if resource_id in out:
+            raise ValueError(f"--inventory-json has duplicate resource {resource_id!r}")
+        capacity = row.get("capacity", 1)
+        if not isinstance(capacity, int) or capacity < 1:
+            raise ValueError(f"resource {resource_id!r} capacity must be a positive integer")
+        status = row.get("status", "active")
+        if status not in INVENTORY_STATUSES:
+            raise ValueError(
+                f"resource {resource_id!r} status must be one of {sorted(INVENTORY_STATUSES)!r}"
+            )
+        if status == "blocked" and not str(row.get("blocked_reason") or "").strip():
+            raise ValueError(f"resource {resource_id!r} status=blocked requires blocked_reason")
+        general = row.get("general_queue_eligible", True)
+        if not isinstance(general, bool):
+            raise ValueError(f"resource {resource_id!r} general_queue_eligible must be a JSON boolean")
+        reserved_for = row.get("reserved_for", [])
+        if reserved_for is None:
+            reserved_for = []
+        if not isinstance(reserved_for, list) or not all(isinstance(item, str) for item in reserved_for):
+            raise ValueError(f"resource {resource_id!r} reserved_for must be a string list")
+        out[resource_id] = dict(row)
+    return out
+
+
+def owner_matches_rule(owner: str, rule: str) -> bool:
+    if rule.endswith("*"):
+        return owner.startswith(rule[:-1])
+    return owner == rule
+
+
+def owner_allowed_for_reserved_resource(owner: str, rules: list[str]) -> bool:
+    return any(owner_matches_rule(owner, rule) for rule in rules)
+
+
+def validate_jobs_against_inventory(jobs: list[dict], inventory: dict[str, dict]) -> None:
+    if not inventory:
+        return
+    errors = []
+    for job in jobs:
+        resource = inventory.get(job["resource"])
+        if resource is None:
+            errors.append(f"job {job['id']!r} targets unknown resource {job['resource']!r}")
+            continue
+        status = str(resource.get("status", "active"))
+        if status == "blocked" and job["desired_state"] == "running":
+            reason = resource.get("blocked_reason") or "no blocked_reason provided"
+            errors.append(f"job {job['id']!r} targets blocked resource {job['resource']!r}: {reason}")
+        general = resource.get("general_queue_eligible", True)
+        reserved_for = resource.get("reserved_for") or []
+        if general is False and reserved_for:
+            if not owner_allowed_for_reserved_resource(job["owner"], reserved_for):
+                errors.append(
+                    f"job {job['id']!r} owner {job['owner']!r} is not allowed "
+                    f"to use reserved resource {job['resource']!r}"
+                )
+        elif general is False and status != "blocked" and job["desired_state"] == "running":
+            errors.append(
+                f"job {job['id']!r} targets non-general resource {job['resource']!r} "
+                "with no reserved_for allow-list"
+            )
+    if errors:
+        raise ValueError("; ".join(errors))
 
 
 def infer_resource_class(resource: str) -> str:
@@ -866,6 +950,7 @@ def schedule_once(args: argparse.Namespace) -> dict:
     if not arbiter_cmd:
         raise SystemExit("--arbiter-cmd resolved to an empty command")
     jobs = load_jobs(args.jobs_json)
+    validate_jobs_against_inventory(jobs, load_inventory(args.inventory_json))
     probes = {job["id"]: probe_job(job, timeout=args.probe_timeout_sec) for job in jobs}
     completions = {
         job["id"]: complete_job(job, timeout=args.probe_timeout_sec)
@@ -963,6 +1048,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--arbiter-cmd", default=DEFAULT_ARBITER_CMD)
     parser.add_argument("--jobs-json", required=True)
+    parser.add_argument("--inventory-json")
     parser.add_argument("--state-json")
     parser.add_argument("--timeout-sec", type=float, default=10.0)
     parser.add_argument("--probe-timeout-sec", type=float, default=10.0)

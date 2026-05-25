@@ -19,6 +19,39 @@ conservative:
 - A new job is launched only after the scheduler has claimed the resource.
 - If a launch fails, the scheduler releases the lease it just claimed.
 
+## Fleet Inventory
+
+Mesh capacity is declared in `configs/mesh_resources.json`. That inventory is
+the source of truth for accelerator ownership and scheduling eligibility:
+
+- `cosbox:cuda3090` is the primary exclusive CUDA artifact lane.
+- `old-donkey:cuda3050` is the low-VRAM CUDA precompute lane.
+- `jack-blupc:cuda3060` is registered but marked `blocked` until SSH/auth and
+  Windows CUDA admission probes are healthy.
+- `atlas:metal_m2ultra` is active Metal capacity for validation, evaluation,
+  generation support, and Tensorcore Metal workloads.
+- `enki:metal_m4_tsotchke_chan` is `reserved`; only `tsotchke-chan` owners may
+  use it. General mesh jobs must not target the M4 Metal slot.
+
+Run the scheduler with `--inventory-json configs/mesh_resources.json` so jobs
+targeting unknown, blocked, or reserved resources fail validation before they
+can claim an arbiter lease.
+Validate inventory edits with:
+
+```sh
+python3 scripts/check_mesh_resource_inventory.py
+```
+
+Use `scripts/mesh_arbiter_with_inventory.py` as the scheduler's `--arbiter-cmd`
+wrapper when the arbiter status path should also show the inventory resources:
+
+```sh
+scripts/mesh_resource_scheduler.py \
+  --arbiter-cmd "scripts/mesh_arbiter_with_inventory.py --inventory-json configs/mesh_resources.json --arbiter-cmd ~/.tsotchke/bin/tsotchke-arbiter --" \
+  --inventory-json configs/mesh_resources.json \
+  --jobs-json ~/.tsotchke/state/mesh-resource-jobs.json
+```
+
 ## Jobs File
 
 The jobs file is JSON:

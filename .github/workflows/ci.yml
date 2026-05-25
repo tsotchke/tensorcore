@@ -42,6 +42,11 @@ jobs:
       - name: Mesh resource scheduler fixtures
         run: python3 scripts/mesh_resource_scheduler_selftest.py
 
+      - name: Mesh resource inventory fixtures
+        run: |
+          python3 scripts/mesh_arbiter_with_inventory_selftest.py
+          python3 scripts/check_mesh_resource_inventory.py
+
       - name: Live mesh launcher shell syntax
         run: bash -n scripts/run_live_mesh_smoke.sh scripts/run_live_mesh_training_demo.sh
 

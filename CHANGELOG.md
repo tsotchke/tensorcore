@@ -90,6 +90,10 @@ every architectural primitive in code and tested:
   `scripts/check_cuda_resource_admission.py` and
   `scripts/mesh_worker_identity.py` for worker host process, cgroup, and CUDA
   metadata.
+- Mesh resource scheduling now has a checked-in fleet inventory
+  (`configs/mesh_resources.json`) plus validation and arbiter-capacity
+  wrapper tools, so blocked hosts and reserved slots such as Enki's
+  Tsotchke-chan M4 lane are rejected before any lease is claimed.
 - Release-smoke evidence now records clean git-head provenance, and the
   operational bundle checker can require release, SDK26, PyTorch, and
   live-mesh evidence to match the current committed head.

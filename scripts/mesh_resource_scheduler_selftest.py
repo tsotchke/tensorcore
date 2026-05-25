@@ -57,6 +57,7 @@ def args_for(path: pathlib.Path, *, dry_run: bool = False) -> argparse.Namespace
     return argparse.Namespace(
         arbiter_cmd="arbiter",
         jobs_json=str(path),
+        inventory_json=None,
         state_json=None,
         timeout_sec=1.0,
         probe_timeout_sec=1.0,
@@ -689,6 +690,133 @@ def test_job_schema_rejects_string_boolean() -> None:
             raise AssertionError("string boolean was accepted")
 
 
+def test_inventory_rejects_reserved_resource_for_unlisted_owner() -> None:
+    scheduler = load_scheduler()
+    jobs = [job("assistant-metal", priority=1, resource="enki:metal_m4_tsotchke_chan")]
+    inventory = {
+        "enki:metal_m4_tsotchke_chan": {
+            "id": "enki:metal_m4_tsotchke_chan",
+            "general_queue_eligible": False,
+            "reserved_for": ["tsotchke-chan", "tsotchke-chan:*"],
+            "status": "reserved",
+        }
+    }
+    try:
+        scheduler.validate_jobs_against_inventory(jobs, inventory)
+    except ValueError as exc:
+        assert "reserved resource" in str(exc)
+    else:
+        raise AssertionError("reserved resource accepted an unlisted owner")
+
+
+def test_inventory_allows_reserved_resource_owner_prefix() -> None:
+    scheduler = load_scheduler()
+    jobs = [
+        job(
+            "tsotchke-chan-metal",
+            priority=1,
+            owner="tsotchke-chan:interactive",
+            resource="enki:metal_m4_tsotchke_chan",
+        )
+    ]
+    inventory = {
+        "enki:metal_m4_tsotchke_chan": {
+            "id": "enki:metal_m4_tsotchke_chan",
+            "general_queue_eligible": False,
+            "reserved_for": ["tsotchke-chan", "tsotchke-chan:*"],
+            "status": "reserved",
+        }
+    }
+    scheduler.validate_jobs_against_inventory(jobs, inventory)
+
+
+def test_inventory_blocks_running_job_on_blocked_resource() -> None:
+    scheduler = load_scheduler()
+    jobs = [job("jack-cuda", priority=1, resource="jack-blupc:cuda3060")]
+    inventory = {
+        "jack-blupc:cuda3060": {
+            "id": "jack-blupc:cuda3060",
+            "general_queue_eligible": False,
+            "status": "blocked",
+            "blocked_reason": "ssh unavailable",
+        }
+    }
+    try:
+        scheduler.validate_jobs_against_inventory(jobs, inventory)
+    except ValueError as exc:
+        assert "blocked resource" in str(exc)
+    else:
+        raise AssertionError("blocked resource accepted a running job")
+
+
+def test_inventory_rejects_bad_resource_rows() -> None:
+    scheduler = load_scheduler()
+    bad_rows = [
+        {
+            "cosbox:cuda3090": {
+                "id": "cosbox:cuda3090",
+                "capacity": 0,
+            },
+            "needle": "capacity must be a positive integer",
+        },
+        {
+            "cosbox:cuda3090": {
+                "id": "cosbox:cuda3090",
+                "status": "offline",
+            },
+            "needle": "status must be one of",
+        },
+        {
+            "cosbox:cuda3090": {
+                "id": "cosbox:cuda3090",
+                "status": "blocked",
+            },
+            "needle": "status=blocked requires blocked_reason",
+        },
+        {
+            "cosbox:cuda3090": {
+                "id": "cosbox:cuda3090",
+                "general_queue_eligible": "false",
+            },
+            "needle": "general_queue_eligible must be a JSON boolean",
+        },
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        for index, case in enumerate(bad_rows):
+            path = pathlib.Path(tmp) / f"bad-inventory-{index}.json"
+            path.write_text(
+                json.dumps({
+                    "schema": "tensorcore.mesh_resources.v1",
+                    "resources": [case["cosbox:cuda3090"]],
+                }),
+                encoding="utf-8",
+            )
+            try:
+                scheduler.load_inventory(str(path))
+            except ValueError as exc:
+                assert case["needle"] in str(exc)
+            else:
+                raise AssertionError(f"bad inventory row {index} was accepted")
+
+
+def test_inventory_blocks_non_general_resource_without_allowlist() -> None:
+    scheduler = load_scheduler()
+    jobs = [job("metal", priority=1, resource="atlas:private_metal")]
+    inventory = {
+        "atlas:private_metal": {
+            "id": "atlas:private_metal",
+            "general_queue_eligible": False,
+            "status": "reserved",
+        }
+    }
+    try:
+        scheduler.validate_jobs_against_inventory(jobs, inventory)
+    except ValueError as exc:
+        assert "with no reserved_for allow-list" in str(exc)
+    else:
+        raise AssertionError("non-general resource without allow-list accepted a job")
+
+
 def test_cuda_launch_runs_post_start_and_identity() -> None:
     runtime = FakeRuntime(live={"qllm-phase1": False})
     result = run_case(
@@ -830,6 +958,11 @@ def main() -> int:
     test_admission_timeout_blocks_launch_for_that_pass()
     test_cuda_job_requires_admission_post_start_and_identity()
     test_job_schema_rejects_string_boolean()
+    test_inventory_rejects_reserved_resource_for_unlisted_owner()
+    test_inventory_allows_reserved_resource_owner_prefix()
+    test_inventory_blocks_running_job_on_blocked_resource()
+    test_inventory_rejects_bad_resource_rows()
+    test_inventory_blocks_non_general_resource_without_allowlist()
     test_cuda_launch_runs_post_start_and_identity()
     test_cuda_post_start_failure_releases_claimed_lease()
     test_cuda_live_adoption_records_worker_identity_in_claim()

@@ -1,0 +1,106 @@
+{
+  "schema": "tensorcore.mesh_resources.v1",
+  "resources": [
+    {
+      "id": "atlas:metal_m2ultra",
+      "node": "atlas",
+      "backend": "metal",
+      "class": "metal-large-unified",
+      "capacity": 1,
+      "memory_gib": 192,
+      "gpu_cores": 76,
+      "status": "active",
+      "general_queue_eligible": true,
+      "description": "Atlas M2 Ultra Metal slot for validation, evaluation, generation support, and Tensorcore Metal workloads that do not need the CUDA artifact lane."
+    },
+    {
+      "id": "enki:metal_m4_tsotchke_chan",
+      "node": "enki",
+      "backend": "metal",
+      "class": "metal-reserved",
+      "capacity": 1,
+      "memory_gib": 16,
+      "gpu_cores": 10,
+      "status": "reserved",
+      "general_queue_eligible": false,
+      "reserved_for": [
+        "tsotchke-chan",
+        "tsotchke-chan:*"
+      ],
+      "description": "Enki M4 Metal is reserved for Tsotchke-chan and must not receive general mesh jobs."
+    },
+    {
+      "id": "cosbox:cuda3090",
+      "node": "cosbox",
+      "backend": "cuda",
+      "class": "cuda-training",
+      "capacity": 1,
+      "memory_gib": 24,
+      "status": "active",
+      "general_queue_eligible": true,
+      "description": "Primary RTX 3090 artifact lane for GeoRefine/qLLM exclusive CUDA jobs."
+    },
+    {
+      "id": "old-donkey:cuda3050",
+      "node": "old-donkey",
+      "backend": "cuda",
+      "class": "cuda-low-vram",
+      "capacity": 1,
+      "status": "active",
+      "general_queue_eligible": true,
+      "description": "Low-VRAM CUDA lane for qLLM teacher-logit precompute and small shard jobs."
+    },
+    {
+      "id": "jack-blupc:cuda3060",
+      "node": "jack-blupc",
+      "backend": "cuda",
+      "class": "cuda-small-auxiliary",
+      "capacity": 1,
+      "memory_gib": 12,
+      "status": "blocked",
+      "blocked_reason": "SSH/auth and Windows CUDA admission probes are not installed yet.",
+      "general_queue_eligible": false,
+      "description": "Jack's RTX 3060 auxiliary lane; register it now, but do not schedule jobs until access and probes are healthy."
+    },
+    {
+      "id": "atlas:qwen_gen",
+      "node": "atlas",
+      "backend": "service",
+      "class": "llm-generation",
+      "capacity": 1,
+      "status": "active",
+      "general_queue_eligible": true,
+      "description": "Atlas Qwen generation service slot."
+    },
+    {
+      "id": "atlas:validation",
+      "node": "atlas",
+      "backend": "service",
+      "class": "validation",
+      "capacity": 1,
+      "status": "active",
+      "general_queue_eligible": true,
+      "description": "Atlas validation-only slot for checks that should not contend with the CUDA artifact lane."
+    },
+    {
+      "id": "old-donkey:kimi_openai",
+      "node": "old-donkey",
+      "backend": "service",
+      "class": "llm-generation",
+      "capacity": 1,
+      "status": "active",
+      "general_queue_eligible": true,
+      "description": "Old-donkey Kimi OpenAI-compatible service slot."
+    },
+    {
+      "id": "old-donkey:kimi_native",
+      "node": "old-donkey",
+      "backend": "service",
+      "class": "llm-generation",
+      "capacity": 1,
+      "status": "active",
+      "general_queue_eligible": true,
+      "description": "Old-donkey native Kimi runtime slot."
+    }
+  ]
+}

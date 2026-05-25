@@ -335,6 +335,7 @@ Run one dry pass:
 ```sh
 scripts/mesh_resource_scheduler.py \
   --arbiter-cmd ~/.tsotchke/bin/tsotchke-arbiter \
+  --inventory-json configs/mesh_resources.json \
   --jobs-json ~/.tsotchke/state/mesh-resource-jobs.json \
   --dry-run --pretty-json
 ```
@@ -344,6 +345,7 @@ Run the daemon loop and persist last-state evidence:
 ```sh
 scripts/mesh_resource_scheduler.py \
   --arbiter-cmd ~/.tsotchke/bin/tsotchke-arbiter \
+  --inventory-json configs/mesh_resources.json \
   --jobs-json ~/.tsotchke/state/mesh-resource-jobs.json \
   --state-json ~/.tsotchke/state/mesh-resource-scheduler-state.json \
   --loop --interval-sec 30 \
@@ -356,7 +358,13 @@ Fixture coverage:
 
 ```sh
 python3 scripts/mesh_resource_scheduler_selftest.py
+python3 scripts/mesh_arbiter_with_inventory_selftest.py
+python3 scripts/check_mesh_resource_inventory.py
 ```
+
+Use `scripts/mesh_arbiter_with_inventory.py` when arbiter capacity/status
+output should be seeded from `configs/mesh_resources.json` before the scheduler
+claims leases.
 
 ### `check_cuda_resource_admission.py`
 
