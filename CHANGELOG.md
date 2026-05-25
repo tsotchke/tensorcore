@@ -85,6 +85,10 @@ every architectural primitive in code and tested:
   `admission_cmd` over CUDA/HIP/Windows/live-mesh evidence, and failed or
   timed-out admission blocks new launches without disturbing already-live
   holders.
+- Mesh resource scheduling now has a `cuda_exclusive` resource class with
+  required admission, post-start, and worker-identity gates, plus
+  `scripts/check_cuda_resource_admission.py` and
+  `scripts/mesh_cuda_worker_identity.py` for NVIDIA host process metadata.
 - Release-smoke evidence now records clean git-head provenance, and the
   operational bundle checker can require release, SDK26, PyTorch, and
   live-mesh evidence to match the current committed head.

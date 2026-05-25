@@ -314,8 +314,10 @@ discard/realize counters, and per-rank launch/prepare metadata.
 Coordinates shared mesh resources such as `cosbox:cuda3090` through the
 Tsotchke arbiter. It reads a small jobs JSON, probes known live work,
 releases only verified-stale leases, adopts live known holders, and launches
-new jobs only after claiming the requested resource. Unknown leases and
-unknown liveness block scheduling instead of killing another agent's work.
+new jobs only after claiming the requested resource. CUDA-exclusive jobs add
+admission, post-start, and worker-identity gates before a launch is considered
+healthy. Unknown leases and unknown liveness block scheduling instead of
+killing another agent's work.
 
 Run one dry pass:
 
@@ -340,6 +342,42 @@ Fixture coverage:
 
 ```sh
 python3 scripts/mesh_resource_scheduler_selftest.py
+```
+
+### `check_cuda_resource_admission.py`
+
+Host-local admission gate for exclusive NVIDIA jobs. It refuses launch when
+`nvidia-smi` reports unmanaged compute applications, with an optional regex
+allowlist for tiny helper processes.
+
+```sh
+python3 scripts/check_cuda_resource_admission.py --resource cosbox:cuda3090
+```
+
+Fixture coverage:
+
+```sh
+python3 scripts/check_cuda_resource_admission_selftest.py
+```
+
+### `mesh_cuda_worker_identity.py`
+
+Emits Linux NVIDIA worker identity JSON for `cuda_exclusive` scheduler jobs.
+Use it as `worker_identity_cmd` on remote hosts to record hostname, cgroup,
+optional systemd unit metadata, matching `nvidia-smi` compute processes, and
+`cuda_pids`.
+
+```sh
+python3 scripts/mesh_cuda_worker_identity.py \
+  --unit qllm-phase1.service \
+  --process-substring qllm \
+  --require-cuda-process
+```
+
+Fixture coverage:
+
+```sh
+python3 scripts/mesh_cuda_worker_identity_selftest.py
 ```
 
 ### `check_live_mesh_training_evidence.py`

@@ -62,6 +62,9 @@ def args_for(path: pathlib.Path, *, dry_run: bool = False) -> argparse.Namespace
         probe_timeout_sec=1.0,
         admission_timeout_sec=1.0,
         start_timeout_sec=1.0,
+        post_start_timeout_sec=1.0,
+        post_start_interval_sec=0.0,
+        worker_identity_timeout_sec=1.0,
         dry_run=dry_run,
         json=False,
         pretty_json=False,
@@ -79,11 +82,15 @@ def job(
     desired_state: str = "running",
     completion_cmd: bool = False,
     admission_cmd: bool = False,
+    post_start_probe_cmd: bool = False,
+    worker_identity_cmd: bool = False,
+    resource: str = "cosbox:cuda3090",
+    resource_class: str | None = "generic",
 ) -> dict[str, Any]:
     out = {
         "id": job_id,
         "sync_id": job_id,
-        "resource": "cosbox:cuda3090",
+        "resource": resource,
         "owner": owner or f"{job_id}:cosbox",
         "priority": priority,
         "desired_state": desired_state,
@@ -91,10 +98,16 @@ def job(
         "probe_cmd": ["probe", job_id],
         "start_cmd": ["start", job_id],
     }
+    if resource_class is not None:
+        out["resource_class"] = resource_class
     if completion_cmd:
         out["completion_cmd"] = ["complete", job_id]
     if admission_cmd:
         out["admission_cmd"] = ["admit", job_id]
+    if post_start_probe_cmd:
+        out["post_start_probe_cmd"] = ["post", job_id]
+    if worker_identity_cmd:
+        out["worker_identity_cmd"] = ["identity", job_id]
     return out
 
 
@@ -107,12 +120,16 @@ class FakeRuntime:
         complete: dict[str, bool | None] | None = None,
         admitted: dict[str, bool | None] | None = None,
         start_rc: dict[str, int] | None = None,
+        post_start: dict[str, bool | None] | None = None,
+        identity: dict[str, bool | None] | None = None,
     ) -> None:
         self.leases = list(leases or [])
         self.live = dict(live or {})
         self.complete = dict(complete or {})
         self.admitted = dict(admitted or {})
         self.start_rc = dict(start_rc or {})
+        self.post_start = dict(post_start or {})
+        self.identity = dict(identity or {})
         self.events: list[tuple[str, str | None]] = []
         self.next_lease = 1
 
@@ -176,6 +193,29 @@ class FakeRuntime:
             rc = 0 if state else 1
             stdout = f"{ident} admission ok" if rc == 0 else ""
             stderr = "" if rc == 0 else f"{ident} admission failed"
+            return subprocess.CompletedProcess(argv, rc, stdout=stdout, stderr=stderr)
+        if op == "post":
+            state = self.post_start.get(ident, True)
+            if state is None:
+                raise subprocess.TimeoutExpired(argv, timeout)
+            rc = 0 if state else 1
+            stdout = f"{ident} post-start ok" if rc == 0 else ""
+            stderr = "" if rc == 0 else f"{ident} post-start failed"
+            return subprocess.CompletedProcess(argv, rc, stdout=stdout, stderr=stderr)
+        if op == "identity":
+            state = self.identity.get(ident, True)
+            if state is None:
+                raise subprocess.TimeoutExpired(argv, timeout)
+            rc = 0 if state else 1
+            payload = {
+                "worker_host": "cosbox",
+                "worker_pid": 1234,
+                "worker_systemd_unit": f"{ident}.service",
+                "worker_cgroup": f"/user.slice/{ident}.service",
+                "cuda_pids": [1234],
+            }
+            stdout = json.dumps(payload) if rc == 0 else ""
+            stderr = "" if rc == 0 else f"{ident} identity failed"
             return subprocess.CompletedProcess(argv, rc, stdout=stdout, stderr=stderr)
         raise AssertionError(f"unexpected command argv: {argv!r}")
 
@@ -622,6 +662,134 @@ def test_admission_timeout_blocks_launch_for_that_pass() -> None:
     )
 
 
+def test_cuda_job_requires_admission_post_start_and_identity() -> None:
+    scheduler = load_scheduler()
+    with tempfile.TemporaryDirectory() as tmp:
+        bad_job = job("qllm-phase1", priority=50, resource_class=None)
+        path = write_jobs(pathlib.Path(tmp), [bad_job])
+        try:
+            scheduler.schedule_once(args_for(path))
+        except ValueError as exc:
+            assert "requires admission_cmd" in str(exc)
+        else:
+            raise AssertionError("cuda job without admission_cmd was accepted")
+
+
+def test_job_schema_rejects_string_boolean() -> None:
+    scheduler = load_scheduler()
+    with tempfile.TemporaryDirectory() as tmp:
+        bad_job = job("qllm-phase1", priority=50)
+        bad_job["enabled"] = "false"
+        path = write_jobs(pathlib.Path(tmp), [bad_job])
+        try:
+            scheduler.schedule_once(args_for(path))
+        except ValueError as exc:
+            assert "must be a JSON boolean" in str(exc)
+        else:
+            raise AssertionError("string boolean was accepted")
+
+
+def test_cuda_launch_runs_post_start_and_identity() -> None:
+    runtime = FakeRuntime(live={"qllm-phase1": False})
+    result = run_case(
+        [
+            job(
+                "qllm-phase1",
+                priority=100,
+                resource_class="cuda_exclusive",
+                admission_cmd=True,
+                post_start_probe_cmd=True,
+                worker_identity_cmd=True,
+            )
+        ],
+        runtime,
+    )
+    assert result["ok"] is True
+    row = result["results"][0]
+    assert row["action"] == "claimed_and_launched"
+    assert row["post_start"]["verified"] is True
+    assert row["worker_identity"]["ok"] is True
+    assert_event_order(
+        runtime,
+        [
+            ("probe", "qllm-phase1"),
+            ("admit", "qllm-phase1"),
+            ("status", "--json"),
+            ("claim", "cosbox:cuda3090"),
+            ("start", "qllm-phase1"),
+            ("post", "qllm-phase1"),
+            ("identity", "qllm-phase1"),
+        ],
+    )
+
+
+def test_cuda_post_start_failure_releases_claimed_lease() -> None:
+    runtime = FakeRuntime(
+        live={"qllm-phase1": False},
+        post_start={"qllm-phase1": False},
+    )
+    result = run_case(
+        [
+            job(
+                "qllm-phase1",
+                priority=100,
+                resource_class="cuda_exclusive",
+                admission_cmd=True,
+                post_start_probe_cmd=True,
+                worker_identity_cmd=True,
+            )
+        ],
+        runtime,
+    )
+    assert result["ok"] is False
+    row = result["results"][0]
+    assert row["post_start"]["verified"] is False
+    assert row["release_after_failed_start"]["ok"] is True
+    assert_event_order(
+        runtime,
+        [
+            ("probe", "qllm-phase1"),
+            ("admit", "qllm-phase1"),
+            ("status", "--json"),
+            ("claim", "cosbox:cuda3090"),
+            ("start", "qllm-phase1"),
+            ("post", "qllm-phase1"),
+            ("release", "lease-new-1"),
+        ],
+    )
+
+
+def test_cuda_live_adoption_records_worker_identity_in_claim() -> None:
+    runtime = FakeRuntime(live={"qllm-phase1": True})
+    result = run_case(
+        [
+            job(
+                "qllm-phase1",
+                priority=100,
+                resource_class="cuda_exclusive",
+                admission_cmd=True,
+                post_start_probe_cmd=True,
+                worker_identity_cmd=True,
+            )
+        ],
+        runtime,
+    )
+    assert result["ok"] is True
+    assert result["results"][0]["action"] == "adopted_live_holder"
+    assert runtime.leases[0]["metadata"]["worker_identity"]["worker_host"] == "cosbox"
+    assert runtime.leases[0]["metadata"]["worker_identity_pending"] is False
+    assert_event_order(
+        runtime,
+        [
+            ("probe", "qllm-phase1"),
+            ("admit", "qllm-phase1"),
+            ("status", "--json"),
+            ("identity", "qllm-phase1"),
+            ("claim", "cosbox:cuda3090"),
+        ],
+    )
+
+
 def test_loop_pretty_json_emits_json() -> None:
     scheduler = load_scheduler()
     runtime = FakeRuntime(live={"qllm-phase1": False})
@@ -660,6 +828,11 @@ def main() -> int:
     test_admission_failure_skips_blocked_high_priority_job()
     test_admission_failure_blocks_when_no_admitted_candidate()
     test_admission_timeout_blocks_launch_for_that_pass()
+    test_cuda_job_requires_admission_post_start_and_identity()
+    test_job_schema_rejects_string_boolean()
+    test_cuda_launch_runs_post_start_and_identity()
+    test_cuda_post_start_failure_releases_claimed_lease()
+    test_cuda_live_adoption_records_worker_identity_in_claim()
     test_loop_pretty_json_emits_json()
     print("mesh resource scheduler selftest OK")
     return 0

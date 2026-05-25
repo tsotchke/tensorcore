@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -22,6 +23,8 @@ from typing import Any
 
 DEFAULT_ARBITER_CMD = "~/.tsotchke/bin/tsotchke-arbiter"
 SCHEMA = "tensorcore.mesh_resource_jobs.v1"
+RESOURCE_CLASSES = {"generic", "cuda_exclusive"}
+DESIRED_STATES = {"running", "paused"}
 
 
 def command(value: Any) -> list[str]:
@@ -80,27 +83,80 @@ def load_jobs(path: str) -> list[dict]:
     return [normalize_job(job) for job in jobs]
 
 
+def infer_resource_class(resource: str) -> str:
+    if ":cuda" in resource or resource.startswith("cuda"):
+        return "cuda_exclusive"
+    return "generic"
+
+
+def require_str(job: dict, key: str) -> str:
+    value = job.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"job {job.get('id', '<unknown>')!r} field {key!r} must be a non-empty string")
+    return value
+
+
+def require_bool(job: dict, key: str, default: bool) -> bool:
+    value = job.get(key, default)
+    if not isinstance(value, bool):
+        raise ValueError(f"job {job.get('id', '<unknown>')!r} field {key!r} must be a JSON boolean")
+    return value
+
+
+def validate_command_field(job: dict, key: str, *, required: bool) -> None:
+    value = job.get(key)
+    if value is None:
+        if required:
+            raise ValueError(f"job {job['id']!r} requires {key} for resource_class={job['resource_class']}")
+        return
+    if isinstance(value, str):
+        if not shlex.split(value):
+            raise ValueError(f"job {job['id']!r} field {key!r} must not be empty")
+        return
+    if isinstance(value, list) and value and all(isinstance(part, str) for part in value):
+        return
+    raise ValueError(f"job {job['id']!r} field {key!r} must be a non-empty string or string list")
+
+
 def normalize_job(job: Any) -> dict:
     if not isinstance(job, dict):
         raise SystemExit("--jobs-json contains a non-object job")
     out = dict(job)
-    missing = [key for key in ("id", "resource", "owner") if not out.get(key)]
-    if missing:
-        raise ValueError(f"job missing required field(s): {', '.join(missing)}")
-    out["id"] = str(out["id"])
+    out["id"] = require_str(out, "id")
     out["sync_id"] = str(out.get("sync_id") or out["id"])
-    out["resource"] = str(out["resource"])
-    out["owner"] = str(out["owner"])
+    out["resource"] = require_str(out, "resource")
+    out["owner"] = require_str(out, "owner")
     out["priority"] = int(out.get("priority", 0))
-    out["enabled"] = bool(out.get("enabled", True))
+    out["enabled"] = require_bool(out, "enabled", True)
     out["ttl_sec"] = float(out.get("ttl_sec", 900.0))
-    out["desired_state"] = str(out.get("desired_state", "running"))
+    if out["ttl_sec"] <= 0:
+        raise ValueError(f"job {out['id']!r} field 'ttl_sec' must be positive")
+    out["desired_state"] = require_str(out, "desired_state") if "desired_state" in out else "running"
+    if out["desired_state"] not in DESIRED_STATES:
+        raise ValueError(
+            f"job {out['id']!r} desired_state must be one of {sorted(DESIRED_STATES)!r}"
+        )
+    out["resource_class"] = str(out.get("resource_class") or infer_resource_class(out["resource"]))
+    if out["resource_class"] not in RESOURCE_CLASSES:
+        raise ValueError(
+            f"job {out['id']!r} resource_class must be one of {sorted(RESOURCE_CLASSES)!r}"
+        )
+    requires_host_gate = out["resource_class"] == "cuda_exclusive"
+    validate_command_field(out, "probe_cmd", required=False)
+    validate_command_field(out, "start_cmd", required=out["desired_state"] == "running")
+    validate_command_field(out, "completion_cmd", required=False)
+    validate_command_field(out, "admission_cmd", required=requires_host_gate)
+    validate_command_field(out, "post_start_probe_cmd", required=requires_host_gate)
+    validate_command_field(out, "worker_identity_cmd", required=requires_host_gate)
 
     metadata = out.get("metadata") if isinstance(out.get("metadata"), dict) else {}
     metadata = dict(metadata)
     metadata.setdefault("surface", "tensorcore_mesh_scheduler")
     metadata["sync_job_id"] = out["sync_id"]
     metadata["job_id"] = out["id"]
+    metadata["resource_class"] = out["resource_class"]
+    metadata["scheduler_host"] = os.uname().nodename
+    metadata["worker_identity_pending"] = requires_host_gate
     out["metadata"] = metadata
     return out
 
@@ -227,7 +283,22 @@ def matching_leases(status: dict, job: dict) -> list[dict]:
     return dedupe_leases(owner)
 
 
-def claim_job(job: dict, *, arbiter_cmd: list[str], timeout: float) -> dict:
+def claim_metadata(job: dict, worker_identity: dict | None = None) -> dict:
+    metadata = dict(job["metadata"])
+    if worker_identity and worker_identity.get("ok"):
+        metadata["worker_identity"] = worker_identity.get("identity")
+        metadata["worker_identity_pending"] = False
+    return metadata
+
+
+def claim_job(
+    job: dict,
+    *,
+    arbiter_cmd: list[str],
+    timeout: float,
+    worker_identity: dict | None = None,
+) -> dict:
+    metadata = claim_metadata(job, worker_identity=worker_identity)
     return run_json(
         arbiter_cmd
         + [
@@ -238,7 +309,7 @@ def claim_job(job: dict, *, arbiter_cmd: list[str], timeout: float) -> dict:
             "--ttl-sec",
             str(job["ttl_sec"]),
             "--metadata-json",
-            json.dumps(job["metadata"], sort_keys=True),
+            json.dumps(metadata, sort_keys=True),
             "--json",
         ],
         timeout=timeout,
@@ -286,6 +357,84 @@ def start_job(job: dict, *, timeout: float) -> dict:
         "stdout_tail": proc.stdout.strip()[-1000:],
         "stderr_tail": proc.stderr.strip()[-1000:],
     }
+
+
+def post_start_probe_job(
+    job: dict,
+    *,
+    timeout: float,
+    interval: float,
+) -> dict:
+    probe_cmd = command(job.get("post_start_probe_cmd"))
+    if not probe_cmd:
+        if job.get("resource_class") != "cuda_exclusive":
+            return {"verified": True, "reason": "not_required", "rc": None}
+        return {"verified": False, "reason": "missing_post_start_probe_cmd", "rc": None}
+    deadline = time.monotonic() + max(0.0, timeout)
+    attempts = 0
+    last: dict[str, Any] = {"verified": False, "reason": "not_run", "rc": None}
+    while True:
+        attempts += 1
+        remaining = deadline - time.monotonic()
+        if attempts > 1 and remaining <= 0:
+            last["reason"] = "post_start_timeout"
+            last["attempts"] = attempts - 1
+            return last
+        try:
+            proc = run_capture(probe_cmd, timeout=max(0.1, min(remaining, 10.0)))
+        except subprocess.TimeoutExpired:
+            last = {
+                "verified": None,
+                "reason": "post_start_probe_timeout",
+                "rc": None,
+                "attempts": attempts,
+            }
+        else:
+            last = {
+                "verified": proc.returncode == 0,
+                "reason": "ok" if proc.returncode == 0 else "post_start_probe_failed",
+                "rc": proc.returncode,
+                "stdout_tail": proc.stdout.strip()[-1000:],
+                "stderr_tail": proc.stderr.strip()[-1000:],
+                "attempts": attempts,
+            }
+            if proc.returncode == 0:
+                return last
+        if interval <= 0:
+            return last
+        if time.monotonic() >= deadline:
+            last["reason"] = "post_start_timeout"
+            return last
+        time.sleep(max(0.0, min(interval, deadline - time.monotonic())))
+
+
+def collect_worker_identity(job: dict, *, timeout: float) -> dict:
+    identity_cmd = command(job.get("worker_identity_cmd"))
+    if not identity_cmd:
+        if job.get("resource_class") != "cuda_exclusive":
+            return {"ok": True, "reason": "not_required", "rc": None, "identity": {}}
+        return {"ok": False, "reason": "missing_worker_identity_cmd", "rc": None}
+    try:
+        proc = run_capture(identity_cmd, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "reason": "worker_identity_timeout", "rc": None}
+    result: dict[str, Any] = {
+        "ok": proc.returncode == 0,
+        "reason": "ok" if proc.returncode == 0 else "worker_identity_failed",
+        "rc": proc.returncode,
+        "stdout_tail": proc.stdout.strip()[-1000:],
+        "stderr_tail": proc.stderr.strip()[-1000:],
+    }
+    if proc.returncode == 0:
+        try:
+            parsed = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            parsed = {"text": proc.stdout.strip()}
+        if isinstance(parsed, dict):
+            result["identity"] = parsed
+        else:
+            result["identity"] = {"value": parsed}
+    return result
 
 
 def enabled_running_jobs(jobs: list[dict], resource: str) -> list[dict]:
@@ -405,6 +554,7 @@ def handle_live_holders(
     *,
     arbiter_cmd: list[str],
     timeout: float,
+    worker_identity_timeout: float,
     dry_run: bool,
 ) -> tuple[list[dict], list[dict]]:
     results = []
@@ -432,6 +582,7 @@ def handle_live_holders(
 
     if current:
         action = "would_heartbeat_live_holder" if dry_run else "heartbeated_live_holder"
+        identity = collect_worker_identity(job, timeout=worker_identity_timeout)
         result = {
             "resource": job["resource"],
             "job": job["id"],
@@ -439,7 +590,8 @@ def handle_live_holders(
             "lease_id": current.get("id"),
             "stale_lease_ids": [lease.get("id") for lease in stale],
             "probe": probes[job["id"]],
-            "ok": not other_known,
+            "worker_identity": identity,
+            "ok": not other_known and bool(identity.get("ok")),
         }
         if other_known:
             result["action"] = "live_holder_conflicting_known_lease"
@@ -460,6 +612,7 @@ def handle_live_holders(
                 result["arbiter"] = {"release": releases, "heartbeat": payload}
                 result["ok"] = (
                     not other_known
+                    and bool(identity.get("ok"))
                     and releases_ok
                     and bool(payload.get("ok"))
                 )
@@ -490,16 +643,27 @@ def handle_live_holders(
         return results, errors
 
     action = "would_adopt_live_holder" if dry_run else "adopted_live_holder"
+    identity = collect_worker_identity(job, timeout=worker_identity_timeout)
     result = {
         "resource": job["resource"],
         "job": job["id"],
         "action": action,
         "probe": probes[job["id"]],
-        "ok": True,
+        "worker_identity": identity,
+        "ok": bool(identity.get("ok")),
     }
+    if not identity.get("ok"):
+        result["action"] = "live_holder_identity_failed"
+        results.append(result)
+        return results, errors
     if not dry_run:
         try:
-            payload = claim_job(job, arbiter_cmd=arbiter_cmd, timeout=timeout)
+            payload = claim_job(
+                job,
+                arbiter_cmd=arbiter_cmd,
+                timeout=timeout,
+                worker_identity=identity,
+            )
             result["arbiter"] = payload
             result["ok"] = bool(payload.get("ok"))
             result["lease_id"] = payload.get("lease_id") or payload.get("id")
@@ -552,6 +716,7 @@ def schedule_resource(
             probes,
             arbiter_cmd=arbiter_cmd,
             timeout=args.timeout_sec,
+            worker_identity_timeout=args.worker_identity_timeout_sec,
             dry_run=args.dry_run,
         )
         results.extend(live_results)
@@ -661,9 +826,25 @@ def schedule_resource(
         result["ok"] = False
         result["start_error"] = str(exc)
 
+    if result["ok"]:
+        post_start = post_start_probe_job(
+            candidate,
+            timeout=args.post_start_timeout_sec,
+            interval=args.post_start_interval_sec,
+        )
+        result["post_start"] = post_start
+        result["ok"] = post_start.get("verified") is True
+        if result["ok"]:
+            identity = collect_worker_identity(
+                candidate,
+                timeout=args.worker_identity_timeout_sec,
+            )
+            result["worker_identity"] = identity
+            result["ok"] = bool(identity.get("ok"))
+
     if not result["ok"]:
         lease_id = claim_payload.get("lease_id") or claim_payload.get("id")
-        if lease_id:
+        if lease_id and result.get("post_start", {}).get("verified") is not True:
             try:
                 result["release_after_failed_start"] = release_lease(
                     {"id": lease_id},
@@ -787,6 +968,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--probe-timeout-sec", type=float, default=10.0)
     parser.add_argument("--admission-timeout-sec", type=float, default=10.0)
     parser.add_argument("--start-timeout-sec", type=float, default=60.0)
+    parser.add_argument("--post-start-timeout-sec", type=float, default=30.0)
+    parser.add_argument("--post-start-interval-sec", type=float, default=2.0)
+    parser.add_argument("--worker-identity-timeout-sec", type=float, default=10.0)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--pretty-json", action="store_true")
@@ -796,6 +980,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.max_iterations < 0:
         parser.error("--max-iterations must be >= 0")
+    if args.post_start_timeout_sec < 0:
+        parser.error("--post-start-timeout-sec must be >= 0")
+    if args.post_start_interval_sec < 0:
+        parser.error("--post-start-interval-sec must be >= 0")
+    if args.worker_identity_timeout_sec <= 0:
+        parser.error("--worker-identity-timeout-sec must be > 0")
     return args
 
 
