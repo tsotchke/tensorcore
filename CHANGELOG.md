@@ -75,6 +75,10 @@ every architectural primitive in code and tested:
   split-rank CTest launcher, so Jack's x86 Windows host proves
   `TC_DIST_GLOO` allreduce over loopback instead of only portable CPU
   single-process kernels.
+- Mesh resource scheduling now supports completion gates: GeoRefine Qwen
+  jobs can declare an artifact checker, completed jobs are not relaunched,
+  completed stale leases are released, and unknown completion checks block
+  relaunch for that scheduler pass.
 - Release-smoke evidence now records clean git-head provenance, and the
   operational bundle checker can require release, SDK26, PyTorch, and
   live-mesh evidence to match the current committed head.

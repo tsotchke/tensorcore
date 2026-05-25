@@ -76,8 +76,9 @@ def job(
     priority: int,
     owner: str | None = None,
     desired_state: str = "running",
+    completion_cmd: bool = False,
 ) -> dict[str, Any]:
-    return {
+    out = {
         "id": job_id,
         "sync_id": job_id,
         "resource": "cosbox:cuda3090",
@@ -88,6 +89,9 @@ def job(
         "probe_cmd": ["probe", job_id],
         "start_cmd": ["start", job_id],
     }
+    if completion_cmd:
+        out["completion_cmd"] = ["complete", job_id]
+    return out
 
 
 class FakeRuntime:
@@ -96,10 +100,12 @@ class FakeRuntime:
         *,
         leases: list[dict[str, Any]] | None = None,
         live: dict[str, bool] | None = None,
+        complete: dict[str, bool | None] | None = None,
         start_rc: dict[str, int] | None = None,
     ) -> None:
         self.leases = list(leases or [])
         self.live = dict(live or {})
+        self.complete = dict(complete or {})
         self.start_rc = dict(start_rc or {})
         self.events: list[tuple[str, str | None]] = []
         self.next_lease = 1
@@ -147,6 +153,16 @@ class FakeRuntime:
         if op == "start":
             rc = self.start_rc.get(ident, 0)
             return subprocess.CompletedProcess(argv, rc, stdout=f"started {ident}", stderr="")
+        if op == "complete":
+            state = self.complete.get(ident, False)
+            if state is None:
+                raise subprocess.TimeoutExpired(argv, timeout)
+            rc = 0 if state else 1
+            stdout = (
+                f"{ident} final_heldout_ppl=12.3 final_stored_size_bytes=456"
+                if rc == 0 else ""
+            )
+            return subprocess.CompletedProcess(argv, rc, stdout=stdout, stderr="")
         raise AssertionError(f"unexpected command argv: {argv!r}")
 
 
@@ -396,6 +412,125 @@ def test_failed_launch_releases_claimed_lease() -> None:
     )
 
 
+def test_incomplete_high_priority_job_runs_before_lower_priority_job() -> None:
+    runtime = FakeRuntime(
+        live={"qllm-phase1": False, "georefine-m2": False},
+        complete={"georefine-m2": False},
+    )
+    result = run_case(
+        [
+            job("georefine-m2", priority=100, completion_cmd=True),
+            job("qllm-phase1", priority=50),
+        ],
+        runtime,
+    )
+    assert result["ok"] is True
+    assert result["results"][0]["action"] == "claimed_and_launched"
+    assert result["results"][0]["job"] == "georefine-m2"
+    assert result["results"][0]["completion"]["complete"] is False
+    assert_event_order(
+        runtime,
+        [
+            ("probe", "georefine-m2"),
+            ("probe", "qllm-phase1"),
+            ("complete", "georefine-m2"),
+            ("status", "--json"),
+            ("claim", "cosbox:cuda3090"),
+            ("start", "georefine-m2"),
+        ],
+    )
+
+
+def test_completed_high_priority_job_is_not_relaunched() -> None:
+    runtime = FakeRuntime(
+        live={"qllm-phase1": False, "georefine-m2": False},
+        complete={"georefine-m2": True},
+    )
+    result = run_case(
+        [
+            job("georefine-m2", priority=100, completion_cmd=True),
+            job("qllm-phase1", priority=50),
+        ],
+        runtime,
+    )
+    assert result["ok"] is True
+    assert result["results"][0]["action"] == "claimed_and_launched"
+    assert result["results"][0]["job"] == "qllm-phase1"
+    assert_event_order(
+        runtime,
+        [
+            ("probe", "georefine-m2"),
+            ("probe", "qllm-phase1"),
+            ("complete", "georefine-m2"),
+            ("status", "--json"),
+            ("claim", "cosbox:cuda3090"),
+            ("start", "qllm-phase1"),
+        ],
+    )
+
+
+def test_completed_stale_lease_is_released_before_next_job() -> None:
+    runtime = FakeRuntime(
+        leases=[
+            {
+                "id": "lease-geo",
+                "resource": "cosbox:cuda3090",
+                "owner": "georefine-m2:cosbox",
+                "metadata": {"sync_job_id": "georefine-m2"},
+            }
+        ],
+        live={"qllm-phase1": False, "georefine-m2": False},
+        complete={"georefine-m2": True},
+    )
+    result = run_case(
+        [
+            job("georefine-m2", priority=100, completion_cmd=True),
+            job("qllm-phase1", priority=50),
+        ],
+        runtime,
+    )
+    assert result["ok"] is True
+    assert [row["action"] for row in result["results"]] == [
+        "released_completed_lease",
+        "claimed_and_launched",
+    ]
+    assert result["results"][1]["job"] == "qllm-phase1"
+    assert_event_order(
+        runtime,
+        [
+            ("probe", "georefine-m2"),
+            ("probe", "qllm-phase1"),
+            ("complete", "georefine-m2"),
+            ("status", "--json"),
+            ("release", "lease-geo"),
+            ("claim", "cosbox:cuda3090"),
+            ("start", "qllm-phase1"),
+        ],
+    )
+
+
+def test_unknown_completion_does_not_relaunch_job() -> None:
+    runtime = FakeRuntime(
+        live={"georefine-m2": False},
+        complete={"georefine-m2": None},
+    )
+    result = run_case(
+        [job("georefine-m2", priority=100, completion_cmd=True)],
+        runtime,
+    )
+    assert result["ok"] is True
+    assert result["results"][0]["action"] == "idle_completion_unknown"
+    assert result["results"][0]["jobs"] == ["georefine-m2"]
+    assert_event_order(
+        runtime,
+        [
+            ("probe", "georefine-m2"),
+            ("complete", "georefine-m2"),
+            ("status", "--json"),
+        ],
+    )
+
+
 def test_loop_pretty_json_emits_json() -> None:
     scheduler = load_scheduler()
     runtime = FakeRuntime(live={"qllm-phase1": False})
@@ -427,6 +562,10 @@ def main() -> int:
     test_paused_live_job_still_holds_resource()
     test_multiple_live_holders_is_an_error()
     test_failed_launch_releases_claimed_lease()
+    test_incomplete_high_priority_job_runs_before_lower_priority_job()
+    test_completed_high_priority_job_is_not_relaunched()
+    test_completed_stale_lease_is_released_before_next_job()
+    test_unknown_completion_does_not_relaunch_job()
     test_loop_pretty_json_emits_json()
     print("mesh resource scheduler selftest OK")
     return 0

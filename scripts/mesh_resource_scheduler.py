@@ -122,6 +122,23 @@ def probe_job(job: dict, *, timeout: float) -> dict:
     }
 
 
+def complete_job(job: dict, *, timeout: float) -> dict:
+    completion_cmd = command(job.get("completion_cmd"))
+    if not completion_cmd:
+        return {"complete": False, "reason": "missing_completion_cmd", "rc": None}
+    try:
+        proc = run_capture(completion_cmd, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return {"complete": None, "reason": "completion_timeout", "rc": None}
+    return {
+        "complete": proc.returncode == 0,
+        "reason": "ok" if proc.returncode == 0 else "completion_failed",
+        "rc": proc.returncode,
+        "stdout_tail": proc.stdout.strip()[-1000:],
+        "stderr_tail": proc.stderr.strip()[-1000:],
+    }
+
+
 def lease_metadata(row: dict) -> dict:
     metadata = row.get("metadata")
     if isinstance(metadata, dict):
@@ -272,11 +289,17 @@ def enabled_jobs(jobs: list[dict], resource: str) -> list[dict]:
     ]
 
 
-def choose_candidate(jobs: list[dict], probes: dict[str, dict], resource: str) -> dict | None:
+def choose_candidate(
+    jobs: list[dict],
+    probes: dict[str, dict],
+    completions: dict[str, dict],
+    resource: str,
+) -> dict | None:
     candidates = [
         job
         for job in enabled_running_jobs(jobs, resource)
         if probes[job["id"]]["live"] is False
+        and completions[job["id"]]["complete"] is False
     ]
     if not candidates:
         return None
@@ -286,6 +309,7 @@ def choose_candidate(jobs: list[dict], probes: dict[str, dict], resource: str) -
 def reconcile_stale_leases(
     jobs: list[dict],
     probes: dict[str, dict],
+    completions: dict[str, dict],
     resource: str,
     status: dict,
     *,
@@ -301,16 +325,25 @@ def reconcile_stale_leases(
         job_probe = probes[job["id"]]
         if job_probe["live"] is not False:
             continue
+        completion = completions[job["id"]]
         leases = matching_leases(status, job)
         if not leases:
             continue
-        action = "would_release_stale_lease" if dry_run else "released_stale_lease"
+        if completion["complete"] is True:
+            action = (
+                "would_release_completed_lease"
+                if dry_run
+                else "released_completed_lease"
+            )
+        else:
+            action = "would_release_stale_lease" if dry_run else "released_stale_lease"
         result = {
             "resource": resource,
             "job": job["id"],
             "action": action,
             "lease_ids": [lease.get("id") for lease in leases],
             "probe": job_probe,
+            "completion": completion,
             "ok": True,
         }
         if not dry_run:
@@ -462,6 +495,7 @@ def schedule_resource(
     resource: str,
     jobs: list[dict],
     probes: dict[str, dict],
+    completions: dict[str, dict],
     status: dict,
     args: argparse.Namespace,
     *,
@@ -470,6 +504,7 @@ def schedule_resource(
     results, errors = reconcile_stale_leases(
         jobs,
         probes,
+        completions,
         resource,
         status,
         arbiter_cmd=arbiter_cmd,
@@ -521,8 +556,35 @@ def schedule_resource(
         })
         return results, errors
 
-    candidate = choose_candidate(jobs, probes, resource)
+    candidate = choose_candidate(jobs, probes, completions, resource)
     if candidate is None:
+        completed_jobs = [
+            job["id"]
+            for job in enabled_running_jobs(jobs, resource)
+            if completions[job["id"]]["complete"] is True
+        ]
+        if completed_jobs:
+            results.append({
+                "resource": resource,
+                "action": "idle_completed_jobs",
+                "jobs": completed_jobs,
+                "ok": True,
+            })
+            return results, errors
+        unknown_completion_jobs = [
+            job["id"]
+            for job in enabled_running_jobs(jobs, resource)
+            if probes[job["id"]]["live"] is False
+            and completions[job["id"]]["complete"] is None
+        ]
+        if unknown_completion_jobs:
+            results.append({
+                "resource": resource,
+                "action": "idle_completion_unknown",
+                "jobs": unknown_completion_jobs,
+                "ok": True,
+            })
+            return results, errors
         results.append({"resource": resource, "action": "idle_no_candidate", "ok": True})
         return results, errors
 
@@ -532,6 +594,7 @@ def schedule_resource(
             "job": candidate["id"],
             "action": "would_claim_and_launch",
             "probe": probes[candidate["id"]],
+            "completion": completions[candidate["id"]],
             "ok": True,
         })
         return results, errors
@@ -542,6 +605,7 @@ def schedule_resource(
         "job": candidate["id"],
         "action": "claimed_and_launched",
         "arbiter": claim_payload,
+        "completion": completions[candidate["id"]],
         "ok": bool(claim_payload.get("ok")),
     }
     if not claim_payload.get("ok"):
@@ -581,6 +645,10 @@ def schedule_once(args: argparse.Namespace) -> dict:
         raise SystemExit("--arbiter-cmd resolved to an empty command")
     jobs = load_jobs(args.jobs_json)
     probes = {job["id"]: probe_job(job, timeout=args.probe_timeout_sec) for job in jobs}
+    completions = {
+        job["id"]: complete_job(job, timeout=args.probe_timeout_sec)
+        for job in jobs
+    }
     status = run_json(arbiter_cmd + ["status", "--json"], timeout=args.timeout_sec)
     resources = sorted({job["resource"] for job in jobs})
     results = []
@@ -591,6 +659,7 @@ def schedule_once(args: argparse.Namespace) -> dict:
                 resource,
                 jobs,
                 probes,
+                completions,
                 status,
                 args,
                 arbiter_cmd=arbiter_cmd,

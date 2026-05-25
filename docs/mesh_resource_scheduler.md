@@ -50,13 +50,18 @@ The jobs file is JSON:
       "sync_id": "georefine-m2-cosbox",
       "resource": "cosbox:cuda3090",
       "owner": "georefine:m2",
-      "priority": 10,
-      "desired_state": "paused",
+      "priority": 100,
+      "desired_state": "running",
       "ttl_sec": 900,
       "probe_cmd": [
         "ssh",
         "cosbox",
         "pgrep -af 'experiments.georefine|m2_compress|m2_live_agent' >/dev/null"
+      ],
+      "completion_cmd": [
+        "ssh",
+        "cosbox",
+        "/home/tyr/.local/bin/check-georefine-qwen-artifact /path/to/run --max-size-ratio 0.10"
       ],
       "metadata": {
         "project": "georefine"
@@ -76,8 +81,18 @@ Fields:
 - `desired_state`: `running` makes the job launchable; `paused` prevents new
   launches but still lets a live job be adopted and protected.
 - `probe_cmd`: command that exits 0 when the job is live.
+- `completion_cmd`: optional command that exits 0 only when the job's output is
+  complete and should not be relaunched. A nonzero exit code means
+  "definitively incomplete"; a timeout is treated as unknown and blocks
+  relaunch of that job for the current scheduler pass.
 - `start_cmd`: command used only when the job is selected for launch.
 - `metadata`: copied into the arbiter lease with `sync_job_id` and `job_id`.
+
+For the current GeoRefine Qwen target, completion means the run's
+`m2_certificate.json` has `completed=true`, a positive final held-out PPL
+(`ppl_compressed_eval`), a positive final stored size (`size_compressed_bytes`),
+and `size_ratio <= 0.10`. `scripts/check_georefine_qwen_artifact.py` enforces
+that gate.
 
 ## Running
 
