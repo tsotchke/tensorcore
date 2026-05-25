@@ -5,6 +5,8 @@ param(
     [string]$Generator,
     [string]$Platform,
     [string]$Python,
+    [string]$CMake,
+    [string]$CTest,
     [switch]$SkipPython
 )
 
@@ -41,13 +43,73 @@ function Invoke-Step {
     }
 }
 
+function Resolve-Tool {
+    param(
+        [string]$Name,
+        [string]$Override
+    )
+    if (-not [string]::IsNullOrWhiteSpace($Override)) {
+        if ([IO.Path]::IsPathRooted($Override) -and (Test-Path $Override)) {
+            return (Resolve-Path $Override).Path
+        }
+        $Command = Get-Command $Override -ErrorAction SilentlyContinue
+        if ($Command) {
+            return $Command.Source
+        }
+        throw "$Name not found: $Override"
+    }
+
+    $Command = Get-Command $Name -ErrorAction SilentlyContinue
+    if ($Command) {
+        return $Command.Source
+    }
+    return $null
+}
+
+function Find-VsWhere {
+    $Candidates = @(
+        (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"),
+        (Join-Path $env:ProgramFiles "Microsoft Visual Studio\Installer\vswhere.exe")
+    )
+    foreach ($Candidate in $Candidates) {
+        if ($Candidate -and (Test-Path $Candidate)) {
+            return (Resolve-Path $Candidate).Path
+        }
+    }
+    return $null
+}
+
+function Find-VisualStudioCMake {
+    $VsWhere = Find-VsWhere
+    if (-not $VsWhere) {
+        return $null
+    }
+    $InstallPath = & $VsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.CMake.Project -property installationPath
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($InstallPath)) {
+        $InstallPath = & $VsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    }
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($InstallPath)) {
+        return $null
+    }
+    $Candidate = Join-Path $InstallPath "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+    if (Test-Path $Candidate) {
+        return (Resolve-Path $Candidate).Path
+    }
+    return $null
+}
+
 function Find-TensorcoreDll {
     param([string]$BaseDir)
     $Candidates = @(
+        (Join-Path $BaseDir "bin\libtensorcore.dll"),
         (Join-Path $BaseDir "bin\tensorcore.dll"),
+        (Join-Path $BaseDir "bin\$Config\libtensorcore.dll"),
         (Join-Path $BaseDir "bin\$Config\tensorcore.dll"),
+        (Join-Path $BaseDir "lib\libtensorcore.dll"),
         (Join-Path $BaseDir "lib\tensorcore.dll"),
+        (Join-Path $BaseDir "$Config\libtensorcore.dll"),
         (Join-Path $BaseDir "$Config\tensorcore.dll"),
+        (Join-Path $BaseDir "libtensorcore.dll"),
         (Join-Path $BaseDir "tensorcore.dll")
     )
     foreach ($Candidate in $Candidates) {
@@ -55,7 +117,7 @@ function Find-TensorcoreDll {
             return (Resolve-Path $Candidate).Path
         }
     }
-    $Found = Get-ChildItem -Path $BaseDir -Filter "tensorcore.dll" -Recurse -File -ErrorAction SilentlyContinue |
+    $Found = Get-ChildItem -Path $BaseDir -Include "tensorcore.dll","libtensorcore.dll" -Recurse -File -ErrorAction SilentlyContinue |
         Select-Object -First 1
     if ($Found) {
         return $Found.FullName
@@ -86,6 +148,25 @@ if ([string]::IsNullOrWhiteSpace($Python)) {
 $BuildDir = Resolve-RepoPath $BuildDir "build-windows-cpu"
 $Prefix = Resolve-RepoPath $Prefix (Join-Path ([IO.Path]::GetTempPath()) "tensorcore-windows-install")
 
+$CMakeExe = Resolve-Tool "cmake" $CMake
+if (-not $CMakeExe) {
+    $CMakeExe = Find-VisualStudioCMake
+}
+if (-not $CMakeExe) {
+    throw "cmake not found. Install CMake or Visual Studio Build Tools with the CMake component, then rerun scripts\ci_windows_cpu.ps1."
+}
+
+$CTestExe = Resolve-Tool "ctest" $CTest
+if (-not $CTestExe) {
+    $BundledCTest = Join-Path (Split-Path -Parent $CMakeExe) "ctest.exe"
+    if (Test-Path $BundledCTest) {
+        $CTestExe = (Resolve-Path $BundledCTest).Path
+    }
+}
+if (-not $CTestExe) {
+    throw "ctest not found. Install CMake or pass -CTest <path-to-ctest.exe>."
+}
+
 $ConfigureArgs = @(
     "-S", $Root,
     "-B", $BuildDir,
@@ -103,10 +184,10 @@ if (-not [string]::IsNullOrWhiteSpace($Platform)) {
     $ConfigureArgs += @("-A", $Platform)
 }
 
-Invoke-Step "configure portable CPU" "cmake" $ConfigureArgs
-Invoke-Step "build portable CPU" "cmake" @("--build", $BuildDir, "--config", $Config, "--parallel")
-Invoke-Step "run CTest" "ctest" @("--test-dir", $BuildDir, "-C", $Config, "--output-on-failure")
-Invoke-Step "install native SDK" "cmake" @("--install", $BuildDir, "--config", $Config, "--prefix", $Prefix)
+Invoke-Step "configure portable CPU" $CMakeExe $ConfigureArgs
+Invoke-Step "build portable CPU" $CMakeExe @("--build", $BuildDir, "--config", $Config, "--parallel")
+Invoke-Step "run CTest" $CTestExe @("--test-dir", $BuildDir, "-C", $Config, "--output-on-failure")
+Invoke-Step "install native SDK" $CMakeExe @("--install", $BuildDir, "--config", $Config, "--prefix", $Prefix)
 
 $NativeDll = Find-TensorcoreDll $Prefix
 if (-not $NativeDll) {

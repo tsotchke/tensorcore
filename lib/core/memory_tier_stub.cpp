@@ -8,7 +8,7 @@
 
 #include "tensorcore/memory_tier.h"
 
-#ifdef __GNUC__
+#if defined(__GNUC__) && !defined(_WIN32)
 #  define TC_WEAK __attribute__((weak))
 #else
 #  define TC_WEAK
