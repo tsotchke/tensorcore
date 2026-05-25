@@ -28,8 +28,8 @@
  * to fp32 for accumulation, then back to fp16 on the wire. int8/bf16 hooks
  * are reserved.
  *
- * Build gate: POSIX sockets. The file compiles to an unsupported stub on
- * Windows; production Windows build would use Winsock.
+ * Build gate: POSIX sockets or Winsock. Windows uses the same brokered
+ * protocol through a small socket portability layer below.
  */
 
 #include "tensorcore/tensorcore.h"
@@ -48,7 +48,15 @@
 #include <vector>
 
 #if defined(_WIN32)
-#  define TC_GLOO_AVAILABLE 0
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  define WIN32_LEAN_AND_MEAN
+#  include <winsock2.h>
+#  include <ws2tcpip.h>
+#  define TC_GLOO_AVAILABLE 1
+using tc_socket_t = SOCKET;
+using tc_socklen_t = int;
 #else
 #  define TC_GLOO_AVAILABLE 1
 #  include <arpa/inet.h>
@@ -61,6 +69,8 @@
 #  include <sys/socket.h>
 #  include <sys/types.h>
 #  include <unistd.h>
+using tc_socket_t = int;
+using tc_socklen_t = socklen_t;
 #endif
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -73,12 +83,134 @@
 
 namespace {
 
+constexpr tc_socket_t TC_INVALID_SOCKET_FD = (tc_socket_t)-1;
+
+#if defined(_WIN32)
+struct WinsockRuntime {
+    bool ok = false;
+    WinsockRuntime() {
+        WSADATA data;
+        ok = (WSAStartup(MAKEWORD(2, 2), &data) == 0);
+    }
+    ~WinsockRuntime() {
+        if (ok) WSACleanup();
+    }
+};
+
+bool winsock_ready(void) {
+    static WinsockRuntime runtime;
+    return runtime.ok;
+}
+#else
+bool winsock_ready(void) { return true; }
+#endif
+
+bool socket_valid(tc_socket_t fd) {
+    return fd != TC_INVALID_SOCKET_FD;
+}
+
+int socket_last_error(void) {
+#if defined(_WIN32)
+    return WSAGetLastError();
+#else
+    return errno;
+#endif
+}
+
+bool socket_interrupted(int err) {
+#if defined(_WIN32)
+    return err == WSAEINTR;
+#else
+    return err == EINTR;
+#endif
+}
+
+bool socket_in_progress(int err) {
+#if defined(_WIN32)
+    return err == WSAEINPROGRESS || err == WSAEWOULDBLOCK;
+#else
+    return err == EINPROGRESS;
+#endif
+}
+
+bool socket_transient_connect_error(int err) {
+#if defined(_WIN32)
+    return err == WSAECONNREFUSED || err == WSAEHOSTUNREACH ||
+           err == WSAENETUNREACH || err == WSAETIMEDOUT ||
+           err == WSAEWOULDBLOCK || err == WSAEINPROGRESS;
+#else
+    return err == ECONNREFUSED || err == EHOSTUNREACH ||
+           err == ENETUNREACH || err == ETIMEDOUT;
+#endif
+}
+
+void socket_sleep_ms(int ms) {
+#if defined(_WIN32)
+    Sleep((DWORD)ms);
+#else
+    usleep((useconds_t)ms * 1000u);
+#endif
+}
+
+void socket_close(tc_socket_t fd) {
+    if (!socket_valid(fd)) return;
+#if defined(_WIN32)
+    closesocket(fd);
+#else
+    ::close(fd);
+#endif
+}
+
+bool socket_set_nonblocking(tc_socket_t fd, bool enabled, long* old_flags) {
+#if defined(_WIN32)
+    (void)old_flags;
+    u_long mode = enabled ? 1u : 0u;
+    return ioctlsocket(fd, FIONBIO, &mode) == 0;
+#else
+    const int flags = ::fcntl(fd, F_GETFL, 0);
+    if (flags < 0) return false;
+    if (old_flags) *old_flags = flags;
+    const int next = enabled ? (flags | O_NONBLOCK) : (int)(old_flags ? *old_flags : flags);
+    return ::fcntl(fd, F_SETFL, next) == 0;
+#endif
+}
+
+void socket_restore_blocking(tc_socket_t fd, long old_flags) {
+#if defined(_WIN32)
+    (void)old_flags;
+    u_long mode = 0;
+    (void)ioctlsocket(fd, FIONBIO, &mode);
+#else
+    (void)::fcntl(fd, F_SETFL, (int)old_flags);
+#endif
+}
+
+int socket_select(tc_socket_t max_fd_hint,
+                  fd_set* rfds,
+                  fd_set* wfds,
+                  timeval* tv) {
+#if defined(_WIN32)
+    (void)max_fd_hint;
+    return ::select(0, rfds, wfds, nullptr, tv);
+#else
+    return ::select(max_fd_hint + 1, rfds, wfds, nullptr, tv);
+#endif
+}
+
+bool socket_set_int_option(tc_socket_t fd, int level, int optname, int value) {
+#if defined(_WIN32)
+    return ::setsockopt(fd, level, optname, (const char*)&value, sizeof(value)) == 0;
+#else
+    return ::setsockopt(fd, level, optname, &value, sizeof(value)) == 0;
+#endif
+}
+
 struct GlooState {
-    int                    rendez_listen_fd = -1;   /* rank 0 only */
-    int                    rendez_conn_fd   = -1;   /* rank > 0: connection to rank 0 */
-    std::vector<int>       peer_conns;              /* fd to each peer rank (size world_size, self is -1) */
-    int                    next_fd          = -1;
-    int                    prev_fd          = -1;
+    tc_socket_t            rendez_listen_fd = TC_INVALID_SOCKET_FD;  /* rank 0 only */
+    tc_socket_t            rendez_conn_fd   = TC_INVALID_SOCKET_FD;  /* rank > 0: connection to rank 0 */
+    std::vector<tc_socket_t> peer_conns;                             /* socket to each peer rank, self invalid */
+    tc_socket_t            next_fd          = TC_INVALID_SOCKET_FD;
+    tc_socket_t            prev_fd          = TC_INVALID_SOCKET_FD;
     std::string            self_host;
     uint16_t               self_port        = 0;
 };
@@ -142,23 +274,41 @@ bool host_looks_ipv6(const std::string& host) {
     return host.find(':') != std::string::npos;
 }
 
-bool write_all(int fd, const void* data, size_t bytes) {
+bool write_all(tc_socket_t fd, const void* data, size_t bytes) {
     const uint8_t* p = (const uint8_t*)data;
     while (bytes > 0) {
-        ssize_t n = ::write(fd, p, bytes);
-        if (n <= 0) { if (errno == EINTR) continue; return false; }
-        p += n; bytes -= (size_t)n;
+        const size_t chunk = std::min(bytes, (size_t)0x3fffffff);
+#if defined(_WIN32)
+        int n = ::send(fd, (const char*)p, (int)chunk, 0);
+#else
+        ssize_t n = ::write(fd, p, chunk);
+#endif
+        if (n <= 0) {
+            if (socket_interrupted(socket_last_error())) continue;
+            return false;
+        }
+        p += n;
+        bytes -= (size_t)n;
     }
     return true;
 }
 
-bool read_all(int fd, void* data, size_t bytes) {
+bool read_all(tc_socket_t fd, void* data, size_t bytes) {
     uint8_t* p = (uint8_t*)data;
     while (bytes > 0) {
-        ssize_t n = ::read(fd, p, bytes);
+        const size_t chunk = std::min(bytes, (size_t)0x3fffffff);
+#if defined(_WIN32)
+        int n = ::recv(fd, (char*)p, (int)chunk, 0);
+#else
+        ssize_t n = ::read(fd, p, chunk);
+#endif
         if (n == 0) return false;     /* EOF - peer disconnected */
-        if (n < 0)  { if (errno == EINTR) continue; return false; }
-        p += n; bytes -= (size_t)n;
+        if (n < 0)  {
+            if (socket_interrupted(socket_last_error())) continue;
+            return false;
+        }
+        p += n;
+        bytes -= (size_t)n;
     }
     return true;
 }
@@ -174,94 +324,111 @@ bool checked_f32_bytes(size_t n, size_t* out) {
     return checked_mul_size(n, sizeof(float), out);
 }
 
-int tcp_listen(uint16_t port, const std::string& rendezvous_host, std::string* out_host) {
+tc_socket_t tcp_listen(uint16_t port, const std::string& rendezvous_host, std::string* out_host) {
+    if (!winsock_ready()) return TC_INVALID_SOCKET_FD;
     const int family = host_looks_ipv6(rendezvous_host) ? AF_INET6 : AF_INET;
-    int fd = ::socket(family, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
-    int yes = 1;
-    ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    tc_socket_t fd = ::socket(family, SOCK_STREAM, 0);
+    if (!socket_valid(fd)) return TC_INVALID_SOCKET_FD;
+    (void)socket_set_int_option(fd, SOL_SOCKET, SO_REUSEADDR, 1);
     if (family == AF_INET6) {
-        int v6only = 1;
-        (void)::setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only));
+        (void)socket_set_int_option(fd, IPPROTO_IPV6, IPV6_V6ONLY, 1);
         sockaddr_in6 addr6 = {};
         addr6.sin6_family = AF_INET6;
         addr6.sin6_port = htons(port);
         addr6.sin6_addr = in6addr_any;
-        if (::bind(fd, (sockaddr*)&addr6, sizeof(addr6)) < 0) { ::close(fd); return -1; }
+        if (::bind(fd, (sockaddr*)&addr6, sizeof(addr6)) < 0) {
+            socket_close(fd);
+            return TC_INVALID_SOCKET_FD;
+        }
         if (out_host) *out_host = "::";
     } else {
         sockaddr_in addr = {};
         addr.sin_family = AF_INET;
         addr.sin_port = htons(port);
         addr.sin_addr.s_addr = htonl(INADDR_ANY);
-        if (::bind(fd, (sockaddr*)&addr, sizeof(addr)) < 0) { ::close(fd); return -1; }
+        if (::bind(fd, (sockaddr*)&addr, sizeof(addr)) < 0) {
+            socket_close(fd);
+            return TC_INVALID_SOCKET_FD;
+        }
         if (out_host) *out_host = "0.0.0.0";
     }
-    if (::listen(fd, 64) < 0) { ::close(fd); return -1; }
+    if (::listen(fd, 64) < 0) {
+        socket_close(fd);
+        return TC_INVALID_SOCKET_FD;
+    }
     return fd;
 }
 
-int tcp_connect(const std::string& host, uint16_t port) {
+tc_socket_t tcp_connect(const std::string& host, uint16_t port) {
+    if (!winsock_ready()) return TC_INVALID_SOCKET_FD;
     addrinfo hints = {};
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     addrinfo* res = nullptr;
     char port_str[16];
     std::snprintf(port_str, sizeof(port_str), "%u", port);
-    if (::getaddrinfo(host.c_str(), port_str, &hints, &res) != 0 || !res) return -1;
+    if (::getaddrinfo(host.c_str(), port_str, &hints, &res) != 0 || !res) {
+        return TC_INVALID_SOCKET_FD;
+    }
 
     /* Retry on transient failures (rank 0 may not be listening yet). */
     for (int retries = 30; retries >= 0; --retries) {
         int saved_errno = 0;
         for (addrinfo* ai = res; ai; ai = ai->ai_next) {
-            int fd = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-            if (fd < 0) { saved_errno = errno; continue; }
-            int yes = 1;
-            ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
+            tc_socket_t fd = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+            if (!socket_valid(fd)) {
+                saved_errno = socket_last_error();
+                continue;
+            }
+            (void)socket_set_int_option(fd, IPPROTO_TCP, TCP_NODELAY, 1);
             if (::connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) {
                 ::freeaddrinfo(res);
                 return fd;
             }
-            saved_errno = errno;
-            ::close(fd);
+            saved_errno = socket_last_error();
+            socket_close(fd);
         }
-        if ((saved_errno == ECONNREFUSED || saved_errno == EHOSTUNREACH ||
-             saved_errno == ENETUNREACH || saved_errno == ETIMEDOUT) && retries > 0) {
-            usleep(100 * 1000);
+        if (socket_transient_connect_error(saved_errno) && retries > 0) {
+            socket_sleep_ms(100);
             continue;
         }
         ::freeaddrinfo(res);
-        return -1;
+        return TC_INVALID_SOCKET_FD;
     }
     ::freeaddrinfo(res);
-    return -1;
+    return TC_INVALID_SOCKET_FD;
 }
 
-int tcp_connect_timeout(const std::string& host, uint16_t port, int timeout_ms) {
+tc_socket_t tcp_connect_timeout(const std::string& host, uint16_t port, int timeout_ms) {
+    if (!winsock_ready()) return TC_INVALID_SOCKET_FD;
     addrinfo hints = {};
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     addrinfo* res = nullptr;
     char port_str[16];
     std::snprintf(port_str, sizeof(port_str), "%u", port);
-    if (::getaddrinfo(host.c_str(), port_str, &hints, &res) != 0 || !res) return -1;
+    if (::getaddrinfo(host.c_str(), port_str, &hints, &res) != 0 || !res) {
+        return TC_INVALID_SOCKET_FD;
+    }
 
     for (addrinfo* ai = res; ai; ai = ai->ai_next) {
-        int fd = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-        if (fd < 0) continue;
-        int yes = 1;
-        ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
+        tc_socket_t fd = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (!socket_valid(fd)) continue;
+        (void)socket_set_int_option(fd, IPPROTO_TCP, TCP_NODELAY, 1);
 
-        const int flags = ::fcntl(fd, F_GETFL, 0);
-        if (flags >= 0) (void)::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+        long flags = 0;
+        if (!socket_set_nonblocking(fd, true, &flags)) {
+            socket_close(fd);
+            continue;
+        }
         int rc = ::connect(fd, ai->ai_addr, ai->ai_addrlen);
         if (rc == 0) {
-            if (flags >= 0) (void)::fcntl(fd, F_SETFL, flags);
+            socket_restore_blocking(fd, flags);
             ::freeaddrinfo(res);
             return fd;
         }
-        if (errno != EINPROGRESS) {
-            ::close(fd);
+        if (!socket_in_progress(socket_last_error())) {
+            socket_close(fd);
             continue;
         }
 
@@ -272,25 +439,30 @@ int tcp_connect_timeout(const std::string& host, uint16_t port, int timeout_ms) 
         FD_ZERO(&wfds);
         FD_SET(fd, &wfds);
         do {
-            rc = ::select(fd + 1, nullptr, &wfds, nullptr, &tv);
-        } while (rc < 0 && errno == EINTR);
+            rc = socket_select(fd, nullptr, &wfds, &tv);
+        } while (rc < 0 && socket_interrupted(socket_last_error()));
         if (rc <= 0) {
-            ::close(fd);
+            socket_close(fd);
             continue;
         }
 
         int so_error = 0;
-        socklen_t len = sizeof(so_error);
-        if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &len) != 0 || so_error != 0) {
-            ::close(fd);
+        tc_socklen_t len = sizeof(so_error);
+#if defined(_WIN32)
+        char* so_error_ptr = (char*)&so_error;
+#else
+        void* so_error_ptr = &so_error;
+#endif
+        if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, so_error_ptr, &len) != 0 || so_error != 0) {
+            socket_close(fd);
             continue;
         }
-        if (flags >= 0) (void)::fcntl(fd, F_SETFL, flags);
+        socket_restore_blocking(fd, flags);
         ::freeaddrinfo(res);
         return fd;
     }
     ::freeaddrinfo(res);
-    return -1;
+    return TC_INVALID_SOCKET_FD;
 }
 
 bool peer_addr_valid(const RingPeerInfo& p) {
@@ -343,17 +515,17 @@ bool resolve_host_peer(const std::string& host, RingPeerInfo* out) {
     return ok;
 }
 
-bool endpoint_from_fd(int fd, bool peer, RingPeerInfo* out) {
-    if (fd < 0 || !out) return false;
+bool endpoint_from_fd(tc_socket_t fd, bool peer, RingPeerInfo* out) {
+    if (!socket_valid(fd) || !out) return false;
     sockaddr_storage ss = {};
-    socklen_t alen = sizeof(ss);
+    tc_socklen_t alen = sizeof(ss);
     const int rc = peer
         ? ::getpeername(fd, (sockaddr*)&ss, &alen)
         : ::getsockname(fd, (sockaddr*)&ss, &alen);
     return rc == 0 && store_sockaddr_peer(ss, out);
 }
 
-RingPeerInfo advertised_peer_info(int rank, int rendez_fd, const std::string& rendezvous_host) {
+RingPeerInfo advertised_peer_info(int rank, tc_socket_t rendez_fd, const std::string& rendezvous_host) {
     RingPeerInfo out = {};
     auto trim = [](const std::string& s) -> std::string {
         size_t first = 0;
@@ -415,7 +587,7 @@ int ring_connect_timeout_ms(void) {
     return (int)v;
 }
 
-int accept_with_timeout(int listen_fd, int timeout_ms) {
+tc_socket_t accept_with_timeout(tc_socket_t listen_fd, int timeout_ms) {
     timeval tv = {};
     tv.tv_sec = timeout_ms / 1000;
     tv.tv_usec = (timeout_ms % 1000) * 1000;
@@ -425,12 +597,12 @@ int accept_with_timeout(int listen_fd, int timeout_ms) {
         fd_set rfds;
         FD_ZERO(&rfds);
         FD_SET(listen_fd, &rfds);
-        rc = ::select(listen_fd + 1, &rfds, nullptr, nullptr, &tv);
-    } while (rc < 0 && errno == EINTR);
-    if (rc <= 0) return -1;
+        rc = socket_select(listen_fd, &rfds, nullptr, &tv);
+    } while (rc < 0 && socket_interrupted(socket_last_error()));
+    if (rc <= 0) return TC_INVALID_SOCKET_FD;
 
     sockaddr_storage peer_addr = {};
-    socklen_t alen = sizeof(peer_addr);
+    tc_socklen_t alen = sizeof(peer_addr);
     return ::accept(listen_fd, (sockaddr*)&peer_addr, &alen);
 }
 
@@ -492,25 +664,28 @@ bool exchange_ring_chunks(GlooState* s,
 
 void close_gloo_state(GlooState* s) {
     if (!s) return;
-    auto is_peer_fd = [&](int fd) {
-        for (int peer : s->peer_conns) {
+    auto is_peer_fd = [&](tc_socket_t fd) {
+        for (tc_socket_t peer : s->peer_conns) {
             if (peer == fd) return true;
         }
         return false;
     };
-    auto close_if_unique = [&](int fd) {
-        if (fd < 0) return;
+    auto close_if_unique = [&](tc_socket_t fd) {
+        if (!socket_valid(fd)) return;
         if (fd == s->rendez_listen_fd || fd == s->rendez_conn_fd) return;
         if (is_peer_fd(fd)) return;
-        ::close(fd);
+        socket_close(fd);
     };
     close_if_unique(s->next_fd);
     if (s->prev_fd != s->next_fd) close_if_unique(s->prev_fd);
-    if (s->rendez_listen_fd >= 0) ::close(s->rendez_listen_fd);
-    if (s->rendez_conn_fd >= 0 && s->rendez_conn_fd != s->peer_conns[0]) {
-        ::close(s->rendez_conn_fd);
+    if (socket_valid(s->rendez_listen_fd)) socket_close(s->rendez_listen_fd);
+    if (socket_valid(s->rendez_conn_fd) &&
+        (s->peer_conns.empty() || s->rendez_conn_fd != s->peer_conns[0])) {
+        socket_close(s->rendez_conn_fd);
     }
-    for (int fd : s->peer_conns) if (fd >= 0) ::close(fd);
+    for (tc_socket_t fd : s->peer_conns) {
+        if (socket_valid(fd)) socket_close(fd);
+    }
     delete s;
 }
 
@@ -527,13 +702,14 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
 
     auto* s = new (std::nothrow) GlooState();
     if (!s) return nullptr;
-    s->peer_conns.assign((size_t)world_size, -1);
+    s->peer_conns.assign((size_t)world_size, TC_INVALID_SOCKET_FD);
 
     if (rank == 0) {
         /* Listen + accept all others. */
         s->rendez_listen_fd = tcp_listen(port, host, &s->self_host);
-        if (s->rendez_listen_fd < 0) {
-            gloo_trace(rank, "init=listen_failed host=%s port=%u errno=%d", host.c_str(), port, errno);
+        if (!socket_valid(s->rendez_listen_fd)) {
+            gloo_trace(rank, "init=listen_failed host=%s port=%u errno=%d",
+                       host.c_str(), port, socket_last_error());
             close_gloo_state(s);
             return nullptr;
         }
@@ -541,10 +717,10 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
                    host.c_str(), port, host_looks_ipv6(host) ? "ipv6" : "ipv4");
         for (int r = 1; r < world_size; ++r) {
             sockaddr_storage peer_addr = {};
-            socklen_t alen = sizeof(peer_addr);
-            int fd = ::accept(s->rendez_listen_fd, (sockaddr*)&peer_addr, &alen);
-            if (fd < 0) {
-                gloo_trace(rank, "init=accept_failed errno=%d", errno);
+            tc_socklen_t alen = sizeof(peer_addr);
+            tc_socket_t fd = ::accept(s->rendez_listen_fd, (sockaddr*)&peer_addr, &alen);
+            if (!socket_valid(fd)) {
+                gloo_trace(rank, "init=accept_failed errno=%d", socket_last_error());
                 close_gloo_state(s);
                 return nullptr;
             }
@@ -553,26 +729,26 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
             if (!read_all(fd, &peer_rank, 4) ||
                 peer_rank == 0 ||
                 peer_rank >= (uint32_t)world_size ||
-                s->peer_conns[peer_rank] >= 0) {
+                socket_valid(s->peer_conns[peer_rank])) {
                 gloo_trace(rank, "init=peer_rank_failed peer_rank=%u", peer_rank);
-                ::close(fd); close_gloo_state(s); return nullptr;
+                socket_close(fd); close_gloo_state(s); return nullptr;
             }
-            int yes = 1;
-            ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
+            (void)socket_set_int_option(fd, IPPROTO_TCP, TCP_NODELAY, 1);
             s->peer_conns[peer_rank] = fd;
         }
     } else {
         /* Connect to rank 0. */
-        int fd = tcp_connect(host, port);
-        if (fd < 0) {
-            gloo_trace(rank, "init=connect_failed host=%s port=%u errno=%d", host.c_str(), port, errno);
+        tc_socket_t fd = tcp_connect(host, port);
+        if (!socket_valid(fd)) {
+            gloo_trace(rank, "init=connect_failed host=%s port=%u errno=%d",
+                       host.c_str(), port, socket_last_error());
             close_gloo_state(s);
             return nullptr;
         }
         uint32_t self_rank = (uint32_t)rank;
         if (!write_all(fd, &self_rank, 4)) {
-            gloo_trace(rank, "init=write_rank_failed errno=%d", errno);
-            ::close(fd); close_gloo_state(s); return nullptr;
+            gloo_trace(rank, "init=write_rank_failed errno=%d", socket_last_error());
+            socket_close(fd); close_gloo_state(s); return nullptr;
         }
         s->rendez_conn_fd = fd;
         s->peer_conns[0] = fd;
@@ -598,8 +774,8 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
      * rank 0 <-> rank 1 directly via the rendezvous, no extra connections
      * needed. We keep that fast path.
      * ------------------------------------------------------------------ */
-    s->next_fd = -1;
-    s->prev_fd = -1;
+    s->next_fd = TC_INVALID_SOCKET_FD;
+    s->prev_fd = TC_INVALID_SOCKET_FD;
 
     if (world_size <= 2) {
         if (world_size == 2) {
@@ -624,29 +800,32 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
      * cannot bind, the group falls back to broker collectives instead of
      * failing the distributed context. */
     const uint16_t ring_port_base = (uint16_t)(port + 1);
-    int my_ring_listen = -1;
+    tc_socket_t my_ring_listen = TC_INVALID_SOCKET_FD;
     uint16_t my_ring_port = 0;
     for (int attempt = 0; attempt < 64; ++attempt) {
         my_ring_port = (uint16_t)(ring_port_base + rank + attempt * world_size);
         std::string ignored;
         my_ring_listen = tcp_listen(my_ring_port, host, &ignored);
-        if (my_ring_listen >= 0) break;
+        if (socket_valid(my_ring_listen)) break;
     }
-    if (my_ring_listen < 0) my_ring_port = 0;
+    if (!socket_valid(my_ring_listen)) my_ring_port = 0;
     s->self_port = my_ring_port;
     auto broker_fallback = [&]() -> GlooState* {
         gloo_trace(rank, "direct_ring=fallback");
-        if (my_ring_listen >= 0) {
-            ::close(my_ring_listen);
-            my_ring_listen = -1;
+        if (socket_valid(my_ring_listen)) {
+            socket_close(my_ring_listen);
+            my_ring_listen = TC_INVALID_SOCKET_FD;
         }
-        if (s->next_fd >= 0) { ::close(s->next_fd); s->next_fd = -1; }
-        if (s->prev_fd >= 0 && s->prev_fd != s->next_fd) {
-            ::close(s->prev_fd);
-            s->prev_fd = -1;
+        const tc_socket_t old_next = s->next_fd;
+        const tc_socket_t old_prev = s->prev_fd;
+        if (socket_valid(old_next)) {
+            socket_close(old_next);
         }
-        s->next_fd = -1;
-        s->prev_fd = -1;
+        if (socket_valid(old_prev) && old_prev != old_next) {
+            socket_close(old_prev);
+        }
+        s->next_fd = TC_INVALID_SOCKET_FD;
+        s->prev_fd = TC_INVALID_SOCKET_FD;
         return s;
     };
 
@@ -725,10 +904,10 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
     bool direct_ok = true;
     const std::string next_host = peer_addr_string(peers[next_rank]);
     s->next_fd = tcp_connect_timeout(next_host, peers[next_rank].port, timeout_ms);
-    if (s->next_fd < 0) direct_ok = false;
-    if (my_ring_listen >= 0) {
+    if (!socket_valid(s->next_fd)) direct_ok = false;
+    if (socket_valid(my_ring_listen)) {
         s->prev_fd = accept_with_timeout(my_ring_listen, timeout_ms);
-        if (s->prev_fd < 0) direct_ok = false;
+        if (!socket_valid(s->prev_fd)) direct_ok = false;
     } else {
         direct_ok = false;
     }
@@ -752,10 +931,9 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
     }
     if (!group_direct_ok) return broker_fallback();
 
-    int yes = 1;
-    if (s->next_fd >= 0) ::setsockopt(s->next_fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
-    if (s->prev_fd >= 0) ::setsockopt(s->prev_fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
-    if (my_ring_listen >= 0) ::close(my_ring_listen);
+    if (socket_valid(s->next_fd)) (void)socket_set_int_option(s->next_fd, IPPROTO_TCP, TCP_NODELAY, 1);
+    if (socket_valid(s->prev_fd)) (void)socket_set_int_option(s->prev_fd, IPPROTO_TCP, TCP_NODELAY, 1);
+    if (socket_valid(my_ring_listen)) socket_close(my_ring_listen);
 
     gloo_trace(rank, "direct_ring=enabled next_rank=%d next=%s:%u timeout_ms=%d",
                next_rank, next_host.c_str(), peers[next_rank].port,
@@ -787,7 +965,7 @@ extern "C" TC_GLOO_HIDDEN void tc_gloo_destroy(GlooState* s) {
 extern "C" TC_GLOO_HIDDEN int tc_gloo_allreduce_f32_sum_ring(GlooState* s, int world_size, int rank,
                                                               float* data, size_t n) {
     if (world_size <= 1) return 0;
-    if (s->next_fd < 0 || s->prev_fd < 0) return -1;
+    if (!socket_valid(s->next_fd) || !socket_valid(s->prev_fd)) return -1;
     if (n > std::numeric_limits<size_t>::max() - (size_t)(world_size - 1)) return -1;
     const size_t chunk_elems = (n + world_size - 1) / world_size;
     std::vector<float> recv_buf(chunk_elems, 0.0f);
@@ -855,7 +1033,7 @@ extern "C" TC_GLOO_HIDDEN int tc_gloo_allreduce_f32_sum(GlooState* s, int world_
     if (world_size <= 1) return 0;
     const char* no_ring = std::getenv("TC_GLOO_NO_RING");
     if (world_size >= 3 && !(no_ring && no_ring[0] == '1') &&
-        s->next_fd >= 0 && s->prev_fd >= 0) {
+        socket_valid(s->next_fd) && socket_valid(s->prev_fd)) {
         gloo_trace(rank, "allreduce_f32_sum route=ring elements=%zu", n);
         return tc_gloo_allreduce_f32_sum_ring(s, world_size, rank, data, n);
     }
@@ -899,7 +1077,7 @@ extern "C" TC_GLOO_HIDDEN int tc_gloo_broadcast_f32(GlooState* s, int world_size
     if (rank == root) {
         for (int r = 0; r < world_size; ++r) {
             if (r == root) continue;
-            int fd = (rank == 0) ? s->peer_conns[r] : s->peer_conns[0];
+            tc_socket_t fd = (rank == 0) ? s->peer_conns[r] : s->peer_conns[0];
             (void)fd;
             /* For root != 0: we'd need a separate direct connection. v0
              * supports root==0 only; other roots return error. */

@@ -141,8 +141,8 @@ this build.
 
 Windows is a portable CPU target today. It builds the same public C ABI and
 Python `ctypes` surface, installs `tensorcore.dll` or `libtensorcore.dll`
-depending on the generator, and skips POSIX-only forked GLOO tests with
-CTest's skip code until a Winsock transport lands.
+depending on the generator, and runs a Winsock-backed `TC_DIST_GLOO`
+loopback split-rank smoke. POSIX-only forked GLOO tests remain Unix-only.
 
 Jack's Tailscale host is `desktop-jack-blupc` (`100.68.70.96`). The expected
 toolchain on that machine is:

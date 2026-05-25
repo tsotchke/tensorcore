@@ -71,6 +71,10 @@ every architectural primitive in code and tested:
 - Windows host smoke can now emit machine-readable evidence, with
   `scripts/check_windows_host_smoke_evidence.py` and operational-bundle
   policy flags for requiring clean-head Windows proof.
+- Windows GLOO TCP is now backed by Winsock and covered by a local
+  split-rank CTest launcher, so Jack's x86 Windows host proves
+  `TC_DIST_GLOO` allreduce over loopback instead of only portable CPU
+  single-process kernels.
 - Release-smoke evidence now records clean git-head provenance, and the
   operational bundle checker can require release, SDK26, PyTorch, and
   live-mesh evidence to match the current committed head.

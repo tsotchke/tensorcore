@@ -184,8 +184,9 @@ known-good local hardware.
 
 Builds the Windows x86 portable CPU target with MSVC or another CMake
 Windows generator. It configures `TC_ENABLE_METAL=OFF`, disables CUDA/HIP
-unless explicitly tested elsewhere, runs CTest with `-C Release`, installs
-the native SDK, and imports Python against the produced `tensorcore.dll`.
+unless explicitly tested elsewhere, runs CTest with `-C Release` including
+the Winsock-backed local `TC_DIST_GLOO` split-rank smoke, installs the
+native SDK, and imports Python against the produced `tensorcore.dll`.
 If `cmake` / `ctest` are not on PATH, the script also checks the Visual
 Studio Build Tools bundled CMake location.
 
@@ -235,6 +236,13 @@ non-destructive; set `TC_WINDOWS_RESET=1` only when the remote checkout is a
 dedicated smoke workspace that can be hard-reset to `origin/<ref>`.
 `TC_WINDOWS_EVIDENCE_PATH` writes
 `tensorcore.windows_host_smoke.evidence.v1` after the remote bootstrap passes.
+
+### `run_windows_gloo_smoke.ps1`
+
+CTest helper for Windows portable CPU builds. It reserves a loopback TCP
+port, starts two `test_dist_remote.exe` ranks against that rendezvous URL,
+prints per-rank stdout/stderr, and fails if either process exits nonzero or
+times out. It is normally launched by CTest rather than run directly.
 
 ### `run_live_mesh_smoke.sh`
 

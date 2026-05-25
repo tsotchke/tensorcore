@@ -137,14 +137,18 @@ if(NOT TC_ENABLE_METAL)
     )
 
     # Split-binary remote distributed test for real multi-machine deployment.
-    # Run manually with --rank/--world/--url. Not registered with ctest since
-    # it requires coordinated launch across two hosts. The current GLOO
-    # transport is POSIX-socket backed, so Windows skips this binary until
-    # the Winsock transport lands.
-    if(NOT WIN32)
-        add_executable(test_dist_remote test_dist_remote.c)
-        target_link_libraries(test_dist_remote PRIVATE tensorcore)
-        target_include_directories(test_dist_remote PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    # Run manually with --rank/--world/--url. On Windows, CTest runs a small
+    # two-process loopback launcher because fork() tests are not available.
+    add_executable(test_dist_remote test_dist_remote.c)
+    target_link_libraries(test_dist_remote PRIVATE tensorcore)
+    target_include_directories(test_dist_remote PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    if(WIN32)
+        add_test(NAME test_dist_remote_local
+            COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+                    -File ${CMAKE_SOURCE_DIR}/scripts/run_windows_gloo_smoke.ps1
+                    -Exe $<TARGET_FILE:test_dist_remote>
+        )
+        set_tests_properties(test_dist_remote_local PROPERTIES TIMEOUT 60)
     endif()
 
     # CUDA backend smoke + perf gate. Only compiled when TC_ENABLE_CUDA=ON.

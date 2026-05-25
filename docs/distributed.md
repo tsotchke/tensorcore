@@ -78,14 +78,15 @@ runtime yet).
 
 CPU-backed all-reduce over Ethernet for default Apple and portable CPU
 builds. Slower than the future TB5/JACCL backend but works between any
-networked hosts. The current in-tree transport uses `gloo+tcp://host:port`
-rendezvous, rank-0 broker collectives by default, and optional direct ring
-neighbor sockets for `world_size >= 3` fp32 SUM when `TC_GLOO_RING=1` is
-set. The broker rendezvous path accepts IPv4 hosts, DNS names, and
-bracketed IPv6 literals such as `tcp://[fd00::10]:29500`. Direct ring setup
-is opportunistic: ranks advertise their reachable address, try bounded
-neighbor connects, and coordinate fallback over the rendezvous sockets if
-any direct edge is blocked by NAT/firewall policy. Set
+networked hosts. The current in-tree transport uses POSIX sockets on Unix
+and Winsock on Windows, with `gloo+tcp://host:port` rendezvous, rank-0
+broker collectives by default, and optional direct ring neighbor sockets
+for `world_size >= 3` fp32 SUM when `TC_GLOO_RING=1` is set. The broker
+rendezvous path accepts IPv4 hosts, DNS names, and bracketed IPv6 literals
+such as `tcp://[fd00::10]:29500`. Direct ring setup is opportunistic: ranks
+advertise their reachable address, try bounded neighbor connects, and
+coordinate fallback over the rendezvous sockets if any direct edge is
+blocked by NAT/firewall policy. Set
 `TC_GLOO_ADVERTISE_HOSTS=rank0,rank1,...` for rank-indexed advertised
 overlay addresses, or `TC_GLOO_ADVERTISE_HOST` on each rank for a
 single-rank override. Set `TC_GLOO_TRACE=1` to confirm whether a run
@@ -189,9 +190,13 @@ loop now means v0.5 will be a backend swap, not a code change.
 - `tests/test_gloo_ring_fork.c`: localhost smoke with four forked ranks
   and `TC_GLOO_RING=1`, covering direct TCP ring reduce-scatter/all-gather
   for fp32 SUM.
+- `tests/test_dist_remote.c` plus `scripts/run_windows_gloo_smoke.ps1`:
+  Windows CTest launcher that starts two split-rank processes over
+  `tcp://127.0.0.1:port` and validates brokered fp32 allreduce.
 
 The ring and GLOO TCP fork smokes run in the default Apple suite. The same
-GLOO smokes also run in the portable CPU suite.
+GLOO smokes also run in the portable CPU suite; Windows runs the split-rank
+launcher because `fork()` is not available there.
 
 ## What's silicon-bound vs software-bound
 

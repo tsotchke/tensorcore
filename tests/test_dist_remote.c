@@ -45,12 +45,29 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
+
+#if defined(_WIN32)
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  define WIN32_LEAN_AND_MEAN
+#  include <windows.h>
+#else
+#  include <time.h>
+#endif
 
 static double now(void) {
+#if defined(_WIN32)
+    LARGE_INTEGER freq;
+    LARGE_INTEGER ticks;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&ticks);
+    return (double)ticks.QuadPart / (double)freq.QuadPart;
+#else
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
     return t.tv_sec + t.tv_nsec * 1e-9;
+#endif
 }
 
 static int fail_(const char* what, int rank) {

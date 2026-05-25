@@ -8,6 +8,9 @@ CPU-only build registers `test_portable_cpu.c`, `test_conv2d.c`,
 `test_sparse_compress.c`, `test_gloo_fork.c`, and `test_gloo_ring_fork.c`,
 plus `test_checkpoint.c` and the DiLoCo-over-GLOO fork tests. Non-Metal
 builds also register `example_training_step` when `TC_BUILD_EXAMPLES=ON`.
+On Windows, the portable suite registers `test_dist_remote_local`, which
+launches two `test_dist_remote.exe` ranks over loopback to cover the
+Winsock-backed GLOO TCP path without relying on `fork()`.
 Each native test is a single `.c` file (or `.mm` for the buffer pool,
 which needs ObjC++).
 Numerical tests compare against an fp64 CPU reference or a bit-exact CPU
