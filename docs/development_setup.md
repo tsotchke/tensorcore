@@ -144,8 +144,9 @@ Python `ctypes` surface, installs `tensorcore.dll` or `libtensorcore.dll`
 depending on the generator, and runs a Winsock-backed `TC_DIST_GLOO`
 loopback split-rank smoke. POSIX-only forked GLOO tests remain Unix-only.
 
-Jack's Tailscale host is `desktop-jack-blupc` (`100.68.70.96`). The expected
-toolchain on that machine is:
+Jack's Windows machine is reachable over Tailscale/SSH; use `tailscale status`
+to confirm its current MagicDNS name or 100.x address. The expected toolchain
+on that machine is:
 
 - Visual Studio Build Tools 2022 with **Desktop development with C++**
   (MSVC, Windows SDK, and CMake tools).
@@ -178,6 +179,9 @@ From a Unix controller on the same tailnet, use the SSH orchestrator to
 keep the Windows host reproducible:
 
 ```sh
+mkdir -p ~/.config/tensorcore
+printf '%s\n' 'TC_WINDOWS_SSH=tsotchke@desktop-jack-blupc' \
+  > ~/.config/tensorcore/windows-host.env
 TC_WINDOWS_SSH_KEY="$HOME/.ssh/id_ed25519_jack" scripts/run_windows_host_smoke.sh
 TC_WINDOWS_EVIDENCE_PATH=/tmp/windows-host.json \
   TC_WINDOWS_SSH_KEY="$HOME/.ssh/id_ed25519_jack" \

@@ -29,6 +29,16 @@ def main() -> int:
             raise AssertionError(f"git_dirty marker was not honored: {evidence['git_dirty']!r}")
         if evidence["readiness"]["status"] not in VALID_STATUSES:
             raise AssertionError(f"unexpected readiness: {evidence['readiness']!r}")
+
+        prefix = root / "prefix"
+        bindir = prefix / "bin"
+        bindir.mkdir(parents=True)
+        versioned = bindir / "llvm-spirv-19"
+        versioned.write_text("#!/bin/sh\nprintf 'llvm-spirv test\\n'\n", encoding="utf-8")
+        versioned.chmod(0o755)
+        got = probe_hip_toolchain.find_tool("llvm-spirv", [str(prefix)])
+        if got != str(versioned):
+            raise AssertionError(f"versioned llvm-spirv was not found: {got!r}")
     print("HIP toolchain probe selftest OK")
     return 0
 

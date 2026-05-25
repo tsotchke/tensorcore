@@ -67,7 +67,9 @@ every architectural primitive in code and tested:
 - Windows host smoke is now operational from the Unix side too:
   `scripts/run_windows_host_smoke.sh` SSHes over Tailscale, clones or
   fast-forwards the remote checkout, and runs the same bootstrap gate on
-  Jack's machine or any future Windows node.
+  Jack's machine or any future Windows node. The target SSH coordinate now
+  comes from `TC_WINDOWS_SSH` or a private local config file instead of a
+  source-controlled tailnet address.
 - Windows host smoke can now emit machine-readable evidence, with
   `scripts/check_windows_host_smoke_evidence.py` and operational-bundle
   policy flags for requiring clean-head Windows proof.
@@ -100,7 +102,9 @@ every architectural primitive in code and tested:
   `scripts/check_hip_toolchain_evidence.py` and the operational bundle can
   require build-toolchain or ready-for-hipBLAS policy before a host is
   admitted as a chipStar accelerator. Archive-based remote runs now honor
-  `.tensorcore_source_head` / `.tensorcore_source_dirty` provenance markers.
+  `.tensorcore_source_head` / `.tensorcore_source_dirty` provenance markers,
+  and the probe recognizes versioned LLVM/SPIR-V tools such as
+  `llvm-spirv-19`.
 - DiLoCo runtime with NONE/FP16/TOPK_1PCT/TOPK_01PCT compression,
   SGD/Nesterov/Adam outer optimizers, async overlap, sparse-on-the-wire
   cross-continent path.

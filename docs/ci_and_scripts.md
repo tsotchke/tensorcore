@@ -216,12 +216,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\bootstrap_windows_cp
 ### `run_windows_host_smoke.sh`
 
 Runs the Windows bootstrap on a Tailscale/SSH-reachable host from a Unix
-controller. It defaults to Jack's machine
-(`tsotchke@100.68.70.96`), clones `https://github.com/tsotchke/tensorcore.git`
-to `src/tensorcore` if needed, fast-forwards `master`, then launches
-`bootstrap_windows_cpu.ps1`.
+controller. The SSH target is required through `TC_WINDOWS_SSH` or a private
+local config file at `~/.config/tensorcore/windows-host.env`. The script
+clones `https://github.com/tsotchke/tensorcore.git` to `src/tensorcore` if
+needed, fast-forwards `master`, then launches `bootstrap_windows_cpu.ps1`.
 
 ```sh
+mkdir -p ~/.config/tensorcore
+printf '%s\n' 'TC_WINDOWS_SSH=tsotchke@desktop-jack-blupc' \
+  > ~/.config/tensorcore/windows-host.env
 TC_WINDOWS_SSH_KEY="$HOME/.ssh/id_ed25519_jack" scripts/run_windows_host_smoke.sh
 TC_WINDOWS_EVIDENCE_PATH=/tmp/windows-host.json \
   TC_WINDOWS_SSH_KEY="$HOME/.ssh/id_ed25519_jack" \

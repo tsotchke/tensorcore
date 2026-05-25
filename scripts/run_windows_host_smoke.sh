@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-windows_ssh="${TC_WINDOWS_SSH:-tsotchke@100.68.70.96}"
+windows_config="${TC_WINDOWS_CONFIG:-$HOME/.config/tensorcore/windows-host.env}"
+if [[ -f "$windows_config" ]]; then
+    # Private machine coordinates belong in local config, never in source.
+    # shellcheck source=/dev/null
+    source "$windows_config"
+fi
+
+windows_ssh="${TC_WINDOWS_SSH:-}"
 windows_repo="${TC_WINDOWS_REPO:-src/tensorcore}"
 windows_remote_url="${TC_WINDOWS_REMOTE_URL:-https://github.com/tsotchke/tensorcore.git}"
 windows_ref="${TC_WINDOWS_REF:-master}"
@@ -19,7 +26,8 @@ Usage:
   scripts/run_windows_host_smoke.sh
 
 Environment:
-  TC_WINDOWS_SSH                  SSH target, default tsotchke@100.68.70.96
+  TC_WINDOWS_CONFIG               Optional local env file, default ~/.config/tensorcore/windows-host.env
+  TC_WINDOWS_SSH                  SSH target. Required via env or TC_WINDOWS_CONFIG.
   TC_WINDOWS_SSH_KEY              Optional private key path
   TC_WINDOWS_REPO                 Remote repo path, default src/tensorcore
   TC_WINDOWS_REMOTE_URL           Remote clone URL
@@ -36,6 +44,11 @@ USAGE
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     usage
     exit 0
+fi
+
+if [[ -z "$windows_ssh" ]]; then
+    echo "tensorcore/windows-host: TC_WINDOWS_SSH is required via env or $windows_config" >&2
+    exit 2
 fi
 
 ps_quote() {

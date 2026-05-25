@@ -23,6 +23,10 @@ from typing import Any
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 VERSION_TIMEOUT_SEC = 8
+TOOL_ALIASES = {
+    "llvm-spirv": ["llvm-spirv", "llvm-spirv-19", "llvm-spirv-20"],
+    "spirv-val": ["spirv-val", "spirv-val-19", "spirv-val-20"],
+}
 
 
 def git_value(root: pathlib.Path, *args: str) -> str | None:
@@ -118,16 +122,19 @@ def candidate_prefixes() -> list[str]:
 
 
 def find_tool(name: str, prefixes: list[str]) -> str | None:
-    found = shutil.which(name)
-    if found:
-        return found
-    suffixes = [("bin", name), ("llvm", "bin", name)]
+    aliases = TOOL_ALIASES.get(name, [name])
+    for alias in aliases:
+        found = shutil.which(alias)
+        if found:
+            return found
     for prefix in prefixes:
         root = pathlib.Path(prefix)
-        for parts in suffixes:
-            candidate = root.joinpath(*parts)
-            if candidate.exists() and os.access(candidate, os.X_OK):
-                return str(candidate)
+        for alias in aliases:
+            suffixes = [("bin", alias), ("llvm", "bin", alias)]
+            for parts in suffixes:
+                candidate = root.joinpath(*parts)
+                if candidate.exists() and os.access(candidate, os.X_OK):
+                    return str(candidate)
     return None
 
 
