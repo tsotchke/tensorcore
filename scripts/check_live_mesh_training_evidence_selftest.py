@@ -71,6 +71,8 @@ def base_evidence() -> dict[str, Any]:
                     "prepared_this_run": False,
                     "path_prefix_set": False,
                     "cuda_requested": False,
+                    "requested_backend": "portable_cpu",
+                    "cuda_fallback_allowed": False,
                 },
                 {
                     "rank": 1,
@@ -81,6 +83,8 @@ def base_evidence() -> dict[str, Any]:
                     "prepared_this_run": True,
                     "path_prefix_set": True,
                     "cuda_requested": False,
+                    "requested_backend": "portable_cpu",
+                    "cuda_fallback_allowed": False,
                 },
                 {
                     "rank": 2,
@@ -91,6 +95,8 @@ def base_evidence() -> dict[str, Any]:
                     "prepared_this_run": True,
                     "path_prefix_set": True,
                     "cuda_requested": False,
+                    "requested_backend": "portable_cpu",
+                    "cuda_fallback_allowed": False,
                 },
                 {
                     "rank": 3,
@@ -101,8 +107,16 @@ def base_evidence() -> dict[str, Any]:
                     "prepared_this_run": True,
                     "path_prefix_set": True,
                     "cuda_requested": True,
+                    "requested_backend": "cuda",
+                    "cuda_fallback_allowed": False,
                 },
             ],
+            "backend_policy": {
+                "cpu_backend": "portable_cpu",
+                "cuda_backend": "cuda",
+                "cuda_requested_ranks": [3],
+                "cuda_fallback_allowed": False,
+            },
         },
         "summary": {
             "passed": True,
@@ -113,6 +127,20 @@ def base_evidence() -> dict[str, Any]:
             "ring_route_events": 20,
             "checkpoint_ranks": 4,
             "cuda_ranks": [3],
+            "requested_cuda_ranks": [3],
+            "all_requested_cuda_ranks_used": True,
+            "backend_fallback_ranks": [],
+            "rank_backend_summary": [
+                {
+                    "rank": rank,
+                    "requested_backend": "cuda" if rank == 3 else "portable_cpu",
+                    "observed_backends": ["cuda"] if rank == 3 else ["portable_cpu"],
+                    "cuda_requested": rank == 3,
+                    "cuda_fallback": False,
+                    "cuda_fallback_allowed": False,
+                }
+                for rank in range(4)
+            ],
         },
         "ranks": ranks,
     }
@@ -140,6 +168,8 @@ def assert_passes(evidence: dict[str, Any]) -> None:
         "--require-direct-ring",
         "--require-checkpoint",
         "--require-cuda-rank3",
+        "--require-explicit-backends",
+        "--require-no-backend-fallback",
     )
     if result.returncode != 0:
         raise AssertionError(result.stderr or result.stdout)
@@ -152,6 +182,8 @@ def assert_fails(evidence: dict[str, Any], needle: str, *extra_args: str) -> Non
         "--require-direct-ring",
         "--require-checkpoint",
         "--require-cuda-rank3",
+        "--require-explicit-backends",
+        "--require-no-backend-fallback",
         *extra_args,
     )
     if result.returncode == 0:
@@ -173,6 +205,8 @@ def main() -> int:
         "--require-direct-ring",
         "--require-checkpoint",
         "--require-local-only",
+        "--require-explicit-backends",
+        "--require-no-backend-fallback",
     )
     if local_only_result.returncode != 0:
         raise AssertionError(local_only_result.stderr or local_only_result.stdout)
@@ -185,6 +219,8 @@ def main() -> int:
         "--require-direct-ring",
         "--require-checkpoint",
         "--require-cuda-rank3",
+        "--require-explicit-backends",
+        "--require-no-backend-fallback",
         "--require-rank1-source-prepare",
     )
     if source_prepared_result.returncode != 0:
@@ -199,6 +235,16 @@ def main() -> int:
     no_cuda["summary"]["cuda_ranks"] = []
     no_cuda["ranks"][3]["outer"][0]["backend"] = "portable_cpu"
     assert_fails(no_cuda, "rank 3 must report CUDA backend")
+
+    cuda_fallback = copy.deepcopy(good)
+    cuda_fallback["summary"]["cuda_ranks"] = []
+    cuda_fallback["summary"]["all_requested_cuda_ranks_used"] = False
+    cuda_fallback["summary"]["backend_fallback_ranks"] = [3]
+    cuda_fallback["summary"]["rank_backend_summary"][3]["observed_backends"] = ["portable_cpu"]
+    cuda_fallback["summary"]["rank_backend_summary"][3]["cuda_fallback"] = True
+    for outer in cuda_fallback["ranks"][3]["outer"]:
+        outer["backend"] = "portable_cpu"
+    assert_fails(cuda_fallback, "requested CUDA ranks fell back to another backend")
 
     brokered = copy.deepcopy(good)
     brokered["summary"]["direct_ring_ranks"] = 3

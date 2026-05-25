@@ -278,6 +278,9 @@ checkpointing enabled by default. With `TC_MESH_PREPARE=1`, the script
 archives the current committed checkout to the Linux hosts, builds their
 `mesh_training_demo` target, copies the local Apple binary to Enki, and
 builds cosbox with `TC_ENABLE_CUDA=ON` unless `TC_MESH_RANK3_CUDA=0`.
+When CUDA is requested, rank 3 must report `backend=cuda`; set
+`TC_MESH_ALLOW_CUDA_FALLBACK=1` only when a CPU fallback is intentional and
+should be recorded as such in the evidence.
 Set `TC_MESH_RANK1_PREPARE=linux` when Enki/rank 1 should also be built
 from the archived checkout instead of receiving the local binary.
 Use `TC_MESH_RANK1_PATH`, `TC_MESH_RANK2_PATH`, and `TC_MESH_RANK3_PATH`
@@ -300,18 +303,22 @@ TC_GLOO_ADVERTISE_HOSTS=<rank0>,<rank1>,<rank2>,<rank3> \
   TC_MESH_TRAINING_EVIDENCE_PATH=/tmp/live-mesh-training.json \
   scripts/run_live_mesh_training_demo.sh
 python3 scripts/check_live_mesh_training_evidence.py /tmp/live-mesh-training.json \
-  --require-direct-ring --require-checkpoint --require-cuda-rank3
+  --require-direct-ring --require-checkpoint --require-cuda-rank3 \
+  --require-explicit-backends --require-no-backend-fallback
 python3 scripts/check_live_mesh_training_evidence.py /tmp/live-mesh-training.json \
   --require-direct-ring --require-checkpoint --require-cuda-rank3 \
-  --require-rank1-source-prepare
+  --require-rank1-source-prepare \
+  --require-explicit-backends --require-no-backend-fallback
 python3 scripts/check_live_mesh_training_evidence.py /tmp/live-mesh-training-local.json \
-  --require-direct-ring --require-checkpoint --require-local-only
+  --require-direct-ring --require-checkpoint --require-local-only \
+  --require-explicit-backends --require-no-backend-fallback
 ```
 
 The optional evidence JSON uses schema
 `tensorcore.live_mesh_training.evidence.v1` and records per-rank rendezvous,
 outer-step losses, selected backend, direct-ring route counts, checkpoint
-discard/realize counters, and per-rank launch/prepare metadata.
+discard/realize counters, requested-vs-observed backend summaries, CUDA
+fallback ranks, and per-rank launch/prepare metadata.
 
 ### `mesh_resource_scheduler.py`
 
@@ -396,6 +403,8 @@ Validates the JSON artifact emitted by `run_live_mesh_training_demo.sh` via
 `TC_MESH_TRAINING_EVIDENCE_PATH`. Use `--min-outer-steps`,
 `--require-direct-ring`, `--require-checkpoint`, and
 `--require-cuda-rank3` to enforce the operational contract for a live run.
+Add `--require-explicit-backends --require-no-backend-fallback` when CUDA
+fallback must be impossible for the evidence to pass.
 Use `--require-local-only` for the localhost multi-rank regression mode.
 Use `--require-rank1-source-prepare` when the evidence must prove rank 1
 was prepared from the archived checkout during that run.
@@ -424,7 +433,8 @@ python3 scripts/check_operational_evidence.py \
   --require-windows-clean-head \
   --require-live-clean-head \
   --min-live-outer-steps 2 \
-  --require-direct-ring --require-checkpoint --require-cuda-rank3
+  --require-direct-ring --require-checkpoint --require-cuda-rank3 \
+  --require-explicit-backends --require-no-backend-fallback
 ```
 
 Add `--hip /tmp/hip.json --require-hip --require-hip-clean-head` on mesh

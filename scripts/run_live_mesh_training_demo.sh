@@ -24,6 +24,7 @@ checkpoint="${TC_MESH_TRAINING_CHECKPOINT:-1}"
 prepare="${TC_MESH_PREPARE:-0}"
 remote_jobs="${TC_MESH_REMOTE_JOBS:-8}"
 rank3_cuda="${TC_MESH_RANK3_CUDA:-1}"
+allow_cuda_fallback="${TC_MESH_ALLOW_CUDA_FALLBACK:-0}"
 trace="${TC_MESH_TRACE:-1}"
 ring="${TC_MESH_RING:-1}"
 timeout_ms="${TC_MESH_RING_CONNECT_TIMEOUT_MS:-10000}"
@@ -72,6 +73,7 @@ Environment:
   TC_MESH_TRAINING_OUTER=$outer_steps
   TC_MESH_TRAINING_CHECKPOINT=$checkpoint
   TC_MESH_RANK3_CUDA=$rank3_cuda
+  TC_MESH_ALLOW_CUDA_FALLBACK=$allow_cuda_fallback
   TC_MESH_PREPARE=$prepare
   TC_MESH_PORT=<port>
   TC_MESH_RANK1_PREPARE=copy-local|linux
@@ -312,7 +314,7 @@ write_evidence() {
     fi
     python3 - "$ROOT" "$log_dir" "$path" "$status" "$world" "$url" \
         "$inner_steps" "$outer_steps" "$checkpoint" "$ring" "$trace" \
-        "$timeout_ms" "$prepare" "$rank3_cuda" "$local_only" \
+        "$timeout_ms" "$prepare" "$rank3_cuda" "$allow_cuda_fallback" "$local_only" \
         "$rank0_host" "$rank0_bin" \
         "$rank1_prepare" "$rank1_ssh" "$rank1_dir" "$rank1_bin" "$rank1_path" \
         "$rank2_ssh" "$rank2_dir" "$rank2_bin" "$rank2_path" \
@@ -337,7 +339,8 @@ trace_enabled = sys.argv[11] == "1"
 timeout_ms = int(sys.argv[12])
 prepare = sys.argv[13] == "1"
 rank3_cuda = sys.argv[14] == "1"
-local_only = sys.argv[15] == "1"
+allow_cuda_fallback = sys.argv[15] == "1"
+local_only = sys.argv[16] == "1"
 (
     rank0_host,
     rank0_bin,
@@ -354,7 +357,7 @@ local_only = sys.argv[15] == "1"
     rank3_dir,
     rank3_bin,
     rank3_path,
-) = sys.argv[16:31]
+) = sys.argv[17:32]
 
 patterns = {
     "direct": re.compile(
@@ -469,6 +472,8 @@ if local_only:
             "prepared_this_run": False,
             "path_prefix_set": False,
             "cuda_requested": False,
+            "requested_backend": "portable_cpu",
+            "cuda_fallback_allowed": False,
         }
         for rank in range(world)
     ]
@@ -483,6 +488,8 @@ else:
             "prepared_this_run": False,
             "path_prefix_set": False,
             "cuda_requested": False,
+            "requested_backend": "portable_cpu",
+            "cuda_fallback_allowed": False,
         },
         {
             "rank": 1,
@@ -493,6 +500,8 @@ else:
             "prepared_this_run": prepared_this_run,
             "path_prefix_set": bool(rank1_path),
             "cuda_requested": False,
+            "requested_backend": "portable_cpu",
+            "cuda_fallback_allowed": False,
         },
         {
             "rank": 2,
@@ -503,6 +512,8 @@ else:
             "prepared_this_run": prepared_this_run,
             "path_prefix_set": bool(rank2_path),
             "cuda_requested": False,
+            "requested_backend": "portable_cpu",
+            "cuda_fallback_allowed": False,
         },
         {
             "rank": 3,
@@ -513,8 +524,38 @@ else:
             "prepared_this_run": prepared_this_run,
             "path_prefix_set": bool(rank3_path),
             "cuda_requested": rank3_cuda,
+            "requested_backend": "cuda" if rank3_cuda else "portable_cpu",
+            "cuda_fallback_allowed": allow_cuda_fallback,
         },
     ]
+
+rank_backend_summary = []
+requested_cuda_ranks = []
+backend_fallback_ranks = []
+for launch in rank_launch:
+    rank = int(launch["rank"])
+    observed_backends = sorted({
+        outer["backend"]
+        for outer in ranks[rank]["outer"]
+        if isinstance(outer, dict) and outer.get("backend")
+    })
+    cuda_requested = bool(launch.get("cuda_requested"))
+    if cuda_requested:
+        requested_cuda_ranks.append(rank)
+    cuda_fallback = cuda_requested and "cuda" not in observed_backends
+    if cuda_fallback:
+        backend_fallback_ranks.append(rank)
+    rank_backend_summary.append({
+        "rank": rank,
+        "requested_backend": launch.get(
+            "requested_backend",
+            "cuda" if cuda_requested else "portable_cpu",
+        ),
+        "observed_backends": observed_backends,
+        "cuda_requested": cuda_requested,
+        "cuda_fallback": cuda_fallback,
+        "cuda_fallback_allowed": bool(launch.get("cuda_fallback_allowed")),
+    })
 
 def git_value(*args: str) -> str:
     try:
@@ -550,6 +591,12 @@ evidence = {
         "ring_connect_timeout_ms": timeout_ms,
         "prepare": prepare,
         "rank3_cuda_requested": rank3_cuda,
+        "backend_policy": {
+            "cpu_backend": "portable_cpu",
+            "cuda_backend": "cuda",
+            "cuda_requested_ranks": requested_cuda_ranks,
+            "cuda_fallback_allowed": allow_cuda_fallback,
+        },
         "local_only": local_only,
         "rank_launch": rank_launch,
     },
@@ -562,6 +609,10 @@ evidence = {
         "ring_route_events": ring_route_events,
         "checkpoint_ranks": checkpoint_ranks,
         "cuda_ranks": cuda_ranks,
+        "requested_cuda_ranks": requested_cuda_ranks,
+        "all_requested_cuda_ranks_used": all(rank in cuda_ranks for rank in requested_cuda_ranks),
+        "backend_fallback_ranks": backend_fallback_ranks,
+        "rank_backend_summary": rank_backend_summary,
     },
     "ranks": rank_list,
 }
@@ -586,6 +637,14 @@ for ((rank = 0; rank < world; rank++)); do
     if [[ "$checkpoint" == "1" ]]; then
         grep -q "checkpoint x_norm discards=" "$log" || {
             echo "[mesh-training] rank $rank did not report checkpoint counters" >&2
+            sed "s/^/[rank $rank] /" "$log" >&2
+            exit 1
+        }
+    fi
+    if [[ "$allow_cuda_fallback" != "1" && "$local_only" != "1" && "$rank3_cuda" == "1" && "$rank" == "3" ]]; then
+        grep -q "backend=cuda" "$log" || {
+            echo "[mesh-training] rank 3 was configured for CUDA but did not report backend=cuda" >&2
+            echo "[mesh-training] set TC_MESH_ALLOW_CUDA_FALLBACK=1 to record an intentional fallback" >&2
             sed "s/^/[rank $rank] /" "$log" >&2
             exit 1
         }

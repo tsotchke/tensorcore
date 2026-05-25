@@ -133,6 +133,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--require-cuda-rank3", action="store_true")
     parser.add_argument("--require-local-only", action="store_true")
     parser.add_argument("--require-rank1-source-prepare", action="store_true")
+    parser.add_argument("--require-explicit-backends", action="store_true")
+    parser.add_argument("--require-no-backend-fallback", action="store_true")
     return parser.parse_args()
 
 
@@ -258,6 +260,10 @@ def main() -> int:
             cmd.append("--require-local-only")
         if args.require_rank1_source_prepare:
             cmd.append("--require-rank1-source-prepare")
+        if args.require_explicit_backends:
+            cmd.append("--require-explicit-backends")
+        if args.require_no_backend_fallback:
+            cmd.append("--require-no-backend-fallback")
         run_checker(cmd)
 
         live = load_json(args.live_mesh)

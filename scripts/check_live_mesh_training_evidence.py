@@ -25,6 +25,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--require-cuda-rank3", action="store_true")
     parser.add_argument("--require-local-only", action="store_true")
     parser.add_argument("--require-rank1-source-prepare", action="store_true")
+    parser.add_argument("--require-explicit-backends", action="store_true")
+    parser.add_argument("--require-no-backend-fallback", action="store_true")
     return parser.parse_args()
 
 
@@ -95,6 +97,42 @@ def main() -> int:
     if args.require_cuda_rank3:
         require(errors, 3 in summary.get("cuda_ranks", []),
                 "rank 3 must report CUDA backend")
+
+    backend_policy = run.get("backend_policy", {})
+    rank_backend_summary = summary.get("rank_backend_summary", [])
+    if args.require_explicit_backends:
+        require(errors, isinstance(backend_policy, dict),
+                "run.backend_policy must be present")
+        require(errors, backend_policy.get("cpu_backend") == "portable_cpu",
+                "run.backend_policy.cpu_backend must be portable_cpu")
+        require(errors, backend_policy.get("cuda_backend") == "cuda",
+                "run.backend_policy.cuda_backend must be cuda")
+        require(errors, isinstance(rank_backend_summary, list) and
+                len(rank_backend_summary) == args.world,
+                "summary.rank_backend_summary must cover all ranks")
+        requested = summary.get("requested_cuda_ranks")
+        policy_requested = backend_policy.get("cuda_requested_ranks")
+        require(errors, requested == policy_requested,
+                "requested CUDA ranks must match backend policy")
+        if isinstance(rank_backend_summary, list):
+            for item in rank_backend_summary:
+                if not isinstance(item, dict):
+                    errors.append(f"rank backend summary must be object, got {item!r}")
+                    continue
+                rank = item.get("rank")
+                require(errors, item.get("requested_backend") in {"portable_cpu", "cuda"},
+                        f"rank {rank} requested backend is invalid")
+                require(errors, bool(item.get("observed_backends")),
+                        f"rank {rank} must report at least one observed backend")
+                if item.get("cuda_requested") and not item.get("cuda_fallback_allowed"):
+                    require(errors, item.get("cuda_fallback") is False,
+                            f"rank {rank} unexpectedly fell back from CUDA")
+
+    if args.require_no_backend_fallback:
+        require(errors, summary.get("backend_fallback_ranks", []) == [],
+                "requested CUDA ranks fell back to another backend")
+        require(errors, summary.get("all_requested_cuda_ranks_used") is True,
+                "not all requested CUDA ranks reported CUDA")
 
     if isinstance(ranks, list):
         for item in ranks:

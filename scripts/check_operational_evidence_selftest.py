@@ -310,6 +310,8 @@ def main() -> int:
             "--require-direct-ring",
             "--require-checkpoint",
             "--require-cuda-rank3",
+            "--require-explicit-backends",
+            "--require-no-backend-fallback",
         )
 
         assert_fails("no evidence paths were provided")
@@ -494,6 +496,25 @@ def main() -> int:
             "--live-mesh", str(brokered_path),
             "--min-live-outer-steps", "5",
             "--require-direct-ring",
+        )
+
+        fallback_live = copy.deepcopy(live_mesh_evidence())
+        fallback_live["summary"]["cuda_ranks"] = []
+        fallback_live["summary"]["all_requested_cuda_ranks_used"] = False
+        fallback_live["summary"]["backend_fallback_ranks"] = [3]
+        fallback_live["summary"]["rank_backend_summary"][3]["observed_backends"] = [
+            "portable_cpu"
+        ]
+        fallback_live["summary"]["rank_backend_summary"][3]["cuda_fallback"] = True
+        for outer in fallback_live["ranks"][3]["outer"]:
+            outer["backend"] = "portable_cpu"
+        fallback_live_path = write_json(directory, "fallback-live.fixture", fallback_live)
+        assert_fails(
+            "requested CUDA ranks fell back to another backend",
+            "--live-mesh", str(fallback_live_path),
+            "--min-live-outer-steps", "5",
+            "--require-explicit-backends",
+            "--require-no-backend-fallback",
         )
 
         bad_cuda = copy.deepcopy(cuda_evidence())

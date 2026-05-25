@@ -287,7 +287,8 @@ TC_MESH_LOCAL_ONLY=1 TC_MESH_TRAINING_OUTER=1 \
   TC_MESH_TRAINING_EVIDENCE_PATH=/tmp/live-mesh-training-local.json \
   scripts/run_live_mesh_training_demo.sh
 python3 scripts/check_live_mesh_training_evidence.py /tmp/live-mesh-training-local.json \
-  --require-direct-ring --require-checkpoint --require-local-only
+  --require-direct-ring --require-checkpoint --require-local-only \
+  --require-explicit-backends --require-no-backend-fallback
 ```
 
 Validated on 2026-05-23 with:
@@ -312,8 +313,14 @@ TC_MESH_TRAINING_INNER=8 TC_MESH_TRAINING_OUTER=5 \
   scripts/run_live_mesh_training_demo.sh
 python3 scripts/check_live_mesh_training_evidence.py /tmp/live-mesh-training.json \
   --min-outer-steps 5 --require-direct-ring --require-checkpoint \
-  --require-cuda-rank3 --require-rank1-source-prepare
+  --require-cuda-rank3 --require-rank1-source-prepare \
+  --require-explicit-backends --require-no-backend-fallback
 ```
+
+The launcher fails by default if rank 3 is configured for CUDA but the
+training logs do not report `backend=cuda`. Set
+`TC_MESH_ALLOW_CUDA_FALLBACK=1` only for a deliberate fallback run; the
+evidence records the fallback rank so promotion checks can reject it.
 
 When pairing the live run with release, SDK26, and accelerator smoke
 artifacts, validate the bundle as one deployment gate:
@@ -334,7 +341,8 @@ python3 scripts/check_operational_evidence.py \
   --require-windows-clean-head \
   --require-live-clean-head --min-live-outer-steps 5 \
   --require-direct-ring --require-checkpoint --require-cuda-rank3 \
-  --require-rank1-source-prepare
+  --require-rank1-source-prepare \
+  --require-explicit-backends --require-no-backend-fallback
 ```
 
 ### 4-rank reference deployment

@@ -134,6 +134,10 @@ every architectural primitive in code and tested:
   DiLoCo outer sync plus checkpoint counters on every rank. It can also
   write machine-readable live-run evidence, validated by
   `scripts/check_live_mesh_training_evidence.py`.
+- Live mesh training evidence now records requested vs observed backends per
+  rank and fails by default when rank 3 is configured for CUDA but does not
+  report `backend=cuda`; intentional fallback runs must set
+  `TC_MESH_ALLOW_CUDA_FALLBACK=1` and are visible in the JSON summary.
 - `Add localhost mesh-training evidence mode`: set `TC_MESH_LOCAL_ONLY=1`
   to run all `mesh_training_demo` ranks on one host with the same direct
   ring, DiLoCo, checkpoint, and evidence parser path. The evidence checker
