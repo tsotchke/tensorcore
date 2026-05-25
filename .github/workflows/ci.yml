@@ -49,6 +49,8 @@ jobs:
         run: |
           python3 scripts/mesh_arbiter_with_inventory_selftest.py
           python3 scripts/check_mesh_resource_inventory.py
+          python3 scripts/check_mesh_resource_jobs.py
+          python3 scripts/mesh_system_audit_selftest.py
 
       - name: Live mesh launcher shell syntax
         run: bash -n scripts/run_live_mesh_smoke.sh scripts/run_live_mesh_training_demo.sh scripts/run_windows_cuda_probe.sh

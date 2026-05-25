@@ -1,0 +1,189 @@
+{
+  "schema": "tensorcore.mesh_resource_jobs.v1",
+  "jobs": [
+    {
+      "id": "qllm-phase1-cosbox",
+      "sync_id": "qllm-phase1-cosbox",
+      "resource": "cosbox:cuda3090",
+      "resource_class": "cuda_exclusive",
+      "owner": "qllm:phase1:cosbox",
+      "tenant": "qllm",
+      "priority": 50,
+      "desired_state": "paused",
+      "ttl_sec": 900,
+      "probe_cmd": [
+        "ssh",
+        "cosbox",
+        "systemctl --user is-active --quiet qllm-phase1.service"
+      ],
+      "start_cmd": [
+        "ssh",
+        "cosbox",
+        "systemctl --user start qllm-phase1.service"
+      ],
+      "admission_cmd": [
+        "ssh",
+        "cosbox",
+        "/home/tyr/.local/bin/check-cuda-resource-admission --resource cosbox:cuda3090 --allow-process-regex steamwebhelper$ --allowed-process-max-memory-mib 16 --json"
+      ],
+      "post_start_probe_cmd": [
+        "ssh",
+        "cosbox",
+        "systemctl --user is-active --quiet qllm-phase1.service"
+      ],
+      "worker_identity_cmd": [
+        "ssh",
+        "cosbox",
+        "/home/tyr/.local/bin/mesh-worker-identity --resource cosbox:cuda3090 --unit qllm-phase1.service --match-regex qllm.train_geometric_lm_torch --require-active-unit --require-matching-process --require-matched-cuda"
+      ],
+      "metadata": {
+        "project": "semiclassical_qllm",
+        "scheduler_contract": "cuda_exclusive_admission_poststart_identity",
+        "scheduler_pause_reason": "Qwen cr010/cr020 90pct artifact required first",
+        "service": "qllm-phase1"
+      }
+    },
+    {
+      "id": "georefine-m2-cosbox",
+      "sync_id": "georefine-m2-cosbox",
+      "resource": "cosbox:cuda3090",
+      "resource_class": "cuda_exclusive",
+      "owner": "georefine:m2:cosbox",
+      "tenant": "georefine",
+      "priority": 100,
+      "desired_state": "running",
+      "ttl_sec": 900,
+      "adopt_unknown_lease_metadata_keys": [
+        "project",
+        "service",
+        "run_dir"
+      ],
+      "probe_cmd": [
+        "ssh",
+        "cosbox",
+        "/home/tyr/.local/bin/check-georefine-qwen-cr025-live"
+      ],
+      "completion_cmd": [
+        "ssh",
+        "cosbox",
+        "/home/tyr/.local/bin/check-georefine-qwen-artifact /home/tyr/bytehole/georefine/runs/qwen3_5_0_8b_cr025_emb1024_fint4_cal4096_kd2048_t010_q005_20260525_043850 --max-size-ratio 0.10"
+      ],
+      "admission_cmd": [
+        "ssh",
+        "cosbox",
+        "/home/tyr/.local/bin/check-cuda-resource-admission --resource cosbox:cuda3090 --allow-process-regex '(steamwebhelper$|/opt/google/chrome/chrome)' --allowed-process-max-memory-mib 256 --json"
+      ],
+      "start_cmd": [
+        "ssh",
+        "cosbox",
+        "/home/tyr/.local/bin/start-georefine-qwen-cr025"
+      ],
+      "post_start_probe_cmd": [
+        "ssh",
+        "cosbox",
+        "/home/tyr/.local/bin/check-georefine-qwen-cr025-live"
+      ],
+      "worker_identity_cmd": [
+        "ssh",
+        "cosbox",
+        "/home/tyr/.local/bin/mesh-worker-identity --resource cosbox:cuda3090 --match-regex experiments.georefine.m2_compress.*qwen3_5_0_8b_cr025_emb1024_fint4_cal4096_kd2048_t010_q005_20260525_043850 --artifact-dir /home/tyr/bytehole/georefine/runs/qwen3_5_0_8b_cr025_emb1024_fint4_cal4096_kd2048_t010_q005_20260525_043850 --require-matching-process --require-matched-cuda"
+      ],
+      "metadata": {
+        "admission_policy": "allow low-memory steamwebhelper/chrome GPU helper only",
+        "artifact_gate": "completed + ppl_compressed_eval + size_compressed_bytes + size_ratio<=0.10 + quality_loss<=0.05 + target_kl<=0.10",
+        "code_commit": "a9458c9",
+        "last_failed_at_unix": 1779725919.4935071,
+        "last_failed_run_dir": "/home/tyr/bytehole/georefine/runs/qwen3_5_0_8b_cr020_emb1024_fint4_kd1200_t010_q005_20260524_102543",
+        "last_failure": "quality_gate_failed_pre_storage",
+        "last_failure_evidence": "CR020 size gate passed at projected_size_ratio=0.0908186834, but quality failed: held-out PPL delta=0.0768095022 > 0.05, validation_kl_mean=0.2464159429, target_kl_not_met.",
+        "launcher_contract": "no-live-agent-supervised-cr025-cal4096-kd2048",
+        "operator_note": "adopted live cr025 Qwen candidate under scheduler lease",
+        "probe": "m2_supervisor_status_pid_liveness",
+        "project": "georefine",
+        "resumed_at_unix": 1779727191.9594738,
+        "run_dir": "/home/tyr/bytehole/georefine/runs/qwen3_5_0_8b_cr025_emb1024_fint4_cal4096_kd2048_t010_q005_20260525_043850",
+        "scheduler_contract": "cuda_exclusive_admission_poststart_identity",
+        "scheduler_pause_reason": "CR020 failed strict held-out quality and target-KL gates; paused to prevent relaunch churn.",
+        "service": "m2",
+        "target": "qwen-cr025-supervised-cal4096-kd2048-size10-artifact"
+      }
+    },
+    {
+      "id": "old-donkey-precompute-chain",
+      "sync_id": "old-donkey-precompute-chain",
+      "resource": "old-donkey:cuda3050",
+      "resource_class": "cuda_exclusive",
+      "owner": "qllm:precompute:old-donkey",
+      "tenant": "qllm",
+      "priority": 20,
+      "desired_state": "running",
+      "ttl_sec": 900,
+      "probe_cmd": [
+        "ssh",
+        "old-donkey",
+        "pgrep -af 'precompute_teacher_logits.py.*--shard /data/qllm/corpus/phase1.shards/.*\\.bin' >/dev/null"
+      ],
+      "admission_cmd": [
+        "ssh",
+        "old-donkey",
+        "/home/tyr/.local/bin/check-cuda-resource-admission --resource old-donkey:cuda3050 --json"
+      ],
+      "start_cmd": [
+        "ssh",
+        "old-donkey",
+        "/data/qllm/runs/start_olddonkey_precompute_chain.sh"
+      ],
+      "post_start_probe_cmd": [
+        "ssh",
+        "old-donkey",
+        "pgrep -af 'precompute_teacher_logits.py.*--shard /data/qllm/corpus/phase1.shards/.*\\.bin' >/dev/null"
+      ],
+      "worker_identity_cmd": [
+        "ssh",
+        "old-donkey",
+        "/home/tyr/.local/bin/mesh-worker-identity --resource old-donkey:cuda3050 --match-regex 'precompute_teacher_logits.py.*--shard /data/qllm/corpus/phase1.shards/.*\\.bin' --require-matching-process --require-matched-cuda"
+      ],
+      "metadata": {
+        "operator_note": "adopted active old-donkey precompute chain under scheduler lease",
+        "project": "semiclassical_qllm",
+        "scheduler_contract": "cuda_exclusive_admission_poststart_identity",
+        "service": "precompute_teacher_logits",
+        "shard": "chain_resume"
+      }
+    },
+    {
+      "id": "atlas-metal-m2ultra-lane",
+      "sync_id": "atlas-metal-m2ultra-lane",
+      "resource": "atlas:metal_m2ultra",
+      "resource_class": "generic",
+      "owner": "tensorcore:atlas-metal",
+      "tenant": "tensorcore",
+      "priority": 10,
+      "desired_state": "paused",
+      "ttl_sec": 900,
+      "metadata": {
+        "project": "tensorcore",
+        "scheduler_contract": "scheduler_registered_lane",
+        "scheduler_pause_reason": "no submitted Atlas Metal workload yet",
+        "service": "metal_m2ultra"
+      }
+    },
+    {
+      "id": "atlas-validation-lane",
+      "sync_id": "atlas-validation-lane",
+      "resource": "atlas:validation",
+      "resource_class": "generic",
+      "owner": "tensorcore:atlas-validation",
+      "tenant": "tensorcore",
+      "priority": 10,
+      "desired_state": "paused",
+      "ttl_sec": 900,
+      "metadata": {
+        "project": "tensorcore",
+        "scheduler_contract": "scheduler_registered_lane",
+        "scheduler_pause_reason": "no submitted Atlas validation workload yet",
+        "service": "validation"
+      }
+    }
+  ]
+}

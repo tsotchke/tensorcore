@@ -416,6 +416,76 @@ def test_unknown_lease_blocks_launch() -> None:
     )
 
 
+def test_live_holder_adopts_unknown_lease_when_metadata_matches() -> None:
+    georefine = job("georefine-m2", priority=10, tenant="georefine")
+    georefine["metadata"] = {
+        "project": "georefine",
+        "run_dir": "/runs/qwen-cr025",
+    }
+    georefine["adopt_unknown_lease_metadata_keys"] = ["project", "run_dir"]
+    runtime = FakeRuntime(
+        leases=[
+            {
+                "id": "lease-manual",
+                "resource": "cosbox:cuda3090",
+                "owner": "georefine:manual-cr025",
+                "metadata": {
+                    "project": "georefine",
+                    "run_dir": "/runs/qwen-cr025",
+                },
+            }
+        ],
+        live={"qllm-phase1": False, "georefine-m2": True},
+    )
+    result = run_case([job("qllm-phase1", priority=50), georefine], runtime)
+    assert result["ok"] is True
+    assert result["results"][0]["action"] == "adopted_unknown_lease_live_holder"
+    assert runtime.leases[0]["metadata"]["sync_job_id"] == "georefine-m2"
+    assert runtime.leases[0]["metadata"]["tenant"] == "georefine"
+    assert_event_order(
+        runtime,
+        [
+            ("probe", "qllm-phase1"),
+            ("probe", "georefine-m2"),
+            ("status", "--json"),
+            ("heartbeat", "lease-manual"),
+        ],
+    )
+
+
+def test_unknown_lease_metadata_match_still_requires_same_tenant() -> None:
+    georefine = job("georefine-m2", priority=10, tenant="georefine")
+    georefine["metadata"] = {
+        "project": "georefine",
+        "run_dir": "/runs/qwen-cr025",
+    }
+    georefine["adopt_unknown_lease_metadata_keys"] = ["project", "run_dir"]
+    runtime = FakeRuntime(
+        leases=[
+            {
+                "id": "lease-other-tenant",
+                "resource": "cosbox:cuda3090",
+                "owner": "other:manual-cr025",
+                "metadata": {
+                    "project": "georefine",
+                    "run_dir": "/runs/qwen-cr025",
+                },
+            }
+        ],
+        live={"georefine-m2": True},
+    )
+    result = run_case([georefine], runtime)
+    assert result["ok"] is True
+    assert result["results"][0]["action"] == "live_holder_blocked_by_unknown_lease"
+    assert_event_order(
+        runtime,
+        [
+            ("probe", "georefine-m2"),
+            ("status", "--json"),
+        ],
+    )
+
+
 def test_known_lease_with_unknown_liveness_blocks_live_adoption() -> None:
     georefine = job("georefine-m2", priority=10)
     georefine.pop("probe_cmd")
@@ -1290,6 +1360,8 @@ def main() -> int:
     test_live_holder_without_lease_is_adopted()
     test_stale_known_lease_is_released_before_launch()
     test_unknown_lease_blocks_launch()
+    test_live_holder_adopts_unknown_lease_when_metadata_matches()
+    test_unknown_lease_metadata_match_still_requires_same_tenant()
     test_known_lease_with_unknown_liveness_blocks_live_adoption()
     test_paused_live_job_still_holds_resource()
     test_multiple_live_holders_is_an_error()

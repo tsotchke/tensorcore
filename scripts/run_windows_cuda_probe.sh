@@ -16,6 +16,7 @@ windows_reset="${TC_WINDOWS_RESET:-0}"
 windows_timeout="${TC_WINDOWS_SSH_CONNECT_TIMEOUT:-10}"
 windows_evidence_path="${TC_WINDOWS_CUDA_EVIDENCE_PATH:-}"
 allowed_process_max_memory_mib="${TC_WINDOWS_CUDA_ALLOWED_PROCESS_MAX_MEMORY_MIB:-64}"
+windows_build_smoke="${TC_WINDOWS_CUDA_BUILD_SMOKE:-0}"
 evidence_marker="__TENSORCORE_WINDOWS_CUDA_PROBE_EVIDENCE__"
 
 usage() {
@@ -32,6 +33,7 @@ Environment:
   TC_WINDOWS_REF          Branch/ref to test, default master
   TC_WINDOWS_RESET=1      Hard-reset remote repo to origin/<ref>
   TC_WINDOWS_CUDA_EVIDENCE_PATH  Optional local JSON evidence output path
+  TC_WINDOWS_CUDA_BUILD_SMOKE=1  Also configure, build, and CTest CUDA on Windows
 USAGE
 }
 
@@ -62,6 +64,7 @@ ref_q=$(ps_quote "$windows_ref")
 reset_q=$(ps_quote "$windows_reset")
 marker_q=$(ps_quote "$evidence_marker")
 allowed_memory_q=$(ps_quote "$allowed_process_max_memory_mib")
+build_smoke_q=$(ps_quote "$windows_build_smoke")
 
 remote_command=$(cat <<PS
 \$ErrorActionPreference = 'Stop'
@@ -74,6 +77,7 @@ Set-StrictMode -Version 3.0
 \$Reset = $reset_q
 \$EvidenceMarker = $marker_q
 \$AllowedProcessMaxMemoryMiB = [int]$allowed_memory_q
+\$BuildSmoke = $build_smoke_q
 
 function Find-CommandPath([string]\$Name) {
     \$cmd = Get-Command \$Name -ErrorAction SilentlyContinue
@@ -157,6 +161,169 @@ function Parse-ComputeApps([string[]]\$Rows) {
     return \$apps
 }
 
+function Parse-NvidiaSmiProcessTable([string[]]\$Rows) {
+    \$processes = @()
+    \$inProcesses = \$false
+    foreach (\$line in \$Rows) {
+        if (\$line -match '^\|\s*Processes:') {
+            \$inProcesses = \$true
+            continue
+        }
+        if (-not \$inProcesses) { continue }
+        if (\$line -notmatch '^\|') { continue }
+        if (\$line -match '^\|\s*(GPU|=|\+|-)' -or \$line -match 'Process name') { continue }
+        if (\$line -match '^\|\s*(\d+)\s+(\S+)\s+(\S+)\s+(\d+)\s+(\S+)\s+(.+?)\s+((?:N/A)|(?:\d+)MiB)\s*\|') {
+            \$processes += [ordered]@{
+                gpu = To-NullableInt \$Matches[1]
+                gi = \$Matches[2]
+                ci = \$Matches[3]
+                pid = To-NullableInt \$Matches[4]
+                type = \$Matches[5]
+                process_name = \$Matches[6].Trim()
+                used_memory = \$Matches[7]
+            }
+        }
+    }
+    return \$processes
+}
+
+function Is-OpaqueWddmApp(\$App) {
+    return (
+        \$null -eq \$App.used_memory_mib -and
+        [string]\$App.process_name -eq '[Insufficient Permissions]'
+    )
+}
+
+function Cmd-Quote([string]\$Value) {
+    return '"' + \$Value + '"'
+}
+
+function Parse-CtestSummary([string]\$Text) {
+    \$summary = [ordered]@{
+        tests_total = \$null
+        tests_failed = \$null
+        tests_passed = \$null
+        tests_skipped = \$null
+        cuda_gemm_passed = \$false
+    }
+    if (\$Text -match '100% tests passed, 0 tests failed out of (\d+)') {
+        \$summary.tests_total = [int]\$Matches[1]
+        \$summary.tests_failed = 0
+    } elseif (\$Text -match '(\d+)% tests passed, (\d+) tests failed out of (\d+)') {
+        \$summary.tests_total = [int]\$Matches[3]
+        \$summary.tests_failed = [int]\$Matches[2]
+    }
+    if (\$Text -match 'Test\s+#?\d+:\s+test_cuda_gemm\s+\.*\s+Passed') {
+        \$summary.cuda_gemm_passed = \$true
+    }
+    if (\$Text -match 'The following tests did not run:') {
+        \$skipped = 0
+        foreach (\$line in \$Text -split [Environment]::NewLine) {
+            if (\$line -match '^\s*\d+\s+-\s+\S+\s+\(Skipped\)') {
+                \$skipped += 1
+            }
+        }
+        \$summary.tests_skipped = \$skipped
+    }
+    if (\$null -ne \$summary.tests_total -and \$null -ne \$summary.tests_failed) {
+        \$SkippedCount = 0
+        if (\$null -ne \$summary.tests_skipped) {
+            \$SkippedCount = [int]\$summary.tests_skipped
+        }
+        \$summary.tests_passed = \$summary.tests_total - \$summary.tests_failed - \$SkippedCount
+    }
+    return \$summary
+}
+
+function Run-BuildSmoke([string]\$RuntimeStatus, \$CudaToolkit) {
+    \$BuildDir = Join-Path \$Repo 'build-windows-cuda-smoke'
+    \$result = [ordered]@{
+        ran = \$true
+        ok = \$false
+        build_dir = \$BuildDir
+        reason = \$null
+        rc = \$null
+        command_lines = @()
+        output_tail = ''
+        tests_total = \$null
+        tests_passed = \$null
+        tests_failed = \$null
+        tests_skipped = \$null
+        cuda_gemm_passed = \$false
+    }
+    if (\$RuntimeStatus -ne 'ready') {
+        \$result.reason = 'runtime_not_ready'
+        return \$result
+    }
+    \$Vs = Join-Path \${env:ProgramFiles(x86)} 'Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat'
+    if (-not (Test-Path \$Vs)) {
+        \$result.reason = 'vsdevcmd_not_found'
+        return \$result
+    }
+    if (-not \$CudaToolkit.nvcc_found -or [string]::IsNullOrWhiteSpace(\$CudaToolkit.cuda_path)) {
+        \$result.reason = 'cuda_toolkit_not_found'
+        return \$result
+    }
+
+    Remove-Item -Recurse -Force \$BuildDir -ErrorAction SilentlyContinue
+    \$CudaPath = [string]\$CudaToolkit.cuda_path
+    \$CudaBin = Join-Path \$CudaPath 'bin'
+    \$Nvcc = Join-Path \$CudaBin 'nvcc.exe'
+    \$BatchPath = Join-Path \$env:TEMP 'tensorcore-windows-cuda-smoke.cmd'
+    \$CallVs = 'call ' + (Cmd-Quote \$Vs) + ' -arch=x64 -host_arch=x64'
+    \$SetCudaPath = 'set "CUDA_PATH=' + \$CudaPath + '"'
+    \$SetPath = 'set "PATH=' + \$CudaBin + ';%PATH%"'
+    \$Configure = 'cmake -S ' + (Cmd-Quote \$Repo) + ' -B ' + (Cmd-Quote \$BuildDir) +
+        ' -G Ninja -DTC_ENABLE_METAL=OFF -DTC_ENABLE_CUDA=ON -DTC_BUILD_TESTS=ON' +
+        ' -DTC_BUILD_BENCH=OFF -DTC_BUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release' +
+        ' -DCUDAToolkit_ROOT=' + (Cmd-Quote \$CudaPath) +
+        ' -DCMAKE_CUDA_COMPILER=' + (Cmd-Quote \$Nvcc) +
+        ' -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl'
+    \$BuildCommand = 'cmake --build ' + (Cmd-Quote \$BuildDir) + ' --parallel 4'
+    \$CtestCommand = 'ctest --test-dir ' + (Cmd-Quote \$BuildDir) + ' --output-on-failure --timeout 240'
+    \$steps = @(
+        '@echo off',
+        \$CallVs,
+        'if errorlevel 1 exit /b %errorlevel%',
+        \$SetCudaPath,
+        \$SetPath,
+        \$Configure,
+        'if errorlevel 1 exit /b %errorlevel%',
+        \$BuildCommand,
+        'if errorlevel 1 exit /b %errorlevel%',
+        \$CtestCommand
+    )
+    \$result.command_lines = \$steps
+    Set-Content -LiteralPath \$BatchPath -Encoding ASCII -Value \$steps
+    \$PreviousErrorActionPreference = \$ErrorActionPreference
+    \$ErrorActionPreference = 'Continue'
+    try {
+        \$Output = @(& cmd.exe /c (Cmd-Quote \$BatchPath) 2>&1)
+        \$Rc = \$LASTEXITCODE
+    } finally {
+        \$ErrorActionPreference = \$PreviousErrorActionPreference
+        Remove-Item -Force -LiteralPath \$BatchPath -ErrorAction SilentlyContinue
+    }
+    \$Text = \$Output -join [Environment]::NewLine
+    \$summary = Parse-CtestSummary \$Text
+    \$result.rc = \$Rc
+    \$result.output_tail = Tail-Text \$Text 6000
+    \$result.tests_total = \$summary.tests_total
+    \$result.tests_passed = \$summary.tests_passed
+    \$result.tests_failed = \$summary.tests_failed
+    \$result.tests_skipped = \$summary.tests_skipped
+    \$result.cuda_gemm_passed = \$summary.cuda_gemm_passed
+    \$result.ok = (
+        \$Rc -eq 0 -and
+        \$summary.tests_failed -eq 0 -and
+        \$summary.cuda_gemm_passed
+    )
+    if (-not \$result.ok -and [string]::IsNullOrWhiteSpace(\$result.reason)) {
+        \$result.reason = 'build_or_ctest_failed'
+    }
+    return \$result
+}
+
 Write-Output "[tensorcore/windows-cuda] host=\$env:COMPUTERNAME repo=\$Repo ref=\$Ref"
 Update-Repo
 \$FullHead = (git -C \$Repo rev-parse HEAD)
@@ -190,6 +357,18 @@ if (\$NvidiaSmiPath) {
         \$Nvidia.stderr_tail = Tail-Text (\$GpuOutput -join [Environment]::NewLine)
     }
 
+    \$ProcessTableOutput = @(& \$NvidiaSmiPath 2>&1)
+    \$ProcessTableRc = \$LASTEXITCODE
+    \$VisibleProcessRows = @()
+    if (\$ProcessTableRc -eq 0) {
+        \$VisibleProcessRows = @(Parse-NvidiaSmiProcessTable \$ProcessTableOutput)
+    }
+    \$Nvidia.process_table_rc = \$ProcessTableRc
+    \$Nvidia.visible_processes = \$VisibleProcessRows
+    if (\$ProcessTableRc -ne 0) {
+        \$Nvidia.process_table_stderr_tail = Tail-Text (\$ProcessTableOutput -join [Environment]::NewLine)
+    }
+
     \$AppsOutput = @(& \$NvidiaSmiPath '--query-compute-apps=pid,process_name,used_gpu_memory' '--format=csv,noheader,nounits' 2>&1)
     \$AppsRc = \$LASTEXITCODE
     if (\$AppsRc -eq 0) {
@@ -201,10 +380,19 @@ if (\$NvidiaSmiPath) {
                 \$Blocked += \$app
             }
         }
-        \$Admission.ok = (\$Blocked.Count -eq 0)
-        \$Admission.reason = if (\$Admission.ok) { 'ok' } else { 'blocked_cuda_compute_apps' }
+        \$OpaqueWddm = @(\$Blocked | Where-Object { Is-OpaqueWddmApp \$_ })
+        if (\$Blocked.Count -gt 0 -and \$OpaqueWddm.Count -eq \$Blocked.Count -and \$VisibleProcessRows.Count -eq 0) {
+            \$Admission.ok = \$true
+            \$Admission.reason = 'ok_opaque_wddm_rows_no_visible_cuda_processes'
+            \$Admission.ignored_opaque_wddm_app_count = \$OpaqueWddm.Count
+            \$Admission.ignored_opaque_wddm = \$OpaqueWddm
+            \$Admission.blocked = @()
+        } else {
+            \$Admission.ok = (\$Blocked.Count -eq 0)
+            \$Admission.reason = if (\$Admission.ok) { 'ok' } else { 'blocked_cuda_compute_apps' }
+            \$Admission.blocked = \$Blocked
+        }
         \$Admission.compute_app_count = \$ComputeApps.Count
-        \$Admission.blocked = \$Blocked
     } else {
         \$Admission.ok = \$false
         \$Admission.reason = 'nvidia_smi_compute_apps_failed'
@@ -213,6 +401,24 @@ if (\$NvidiaSmiPath) {
 }
 
 \$NvccPath = Find-CommandPath 'nvcc'
+\$ToolkitCandidates = @()
+if (-not [string]::IsNullOrWhiteSpace(\$env:CUDA_PATH)) {
+    \$ToolkitCandidates += \$env:CUDA_PATH
+}
+\$RepoParent = Split-Path -Parent \$Repo
+if (-not [string]::IsNullOrWhiteSpace(\$RepoParent)) {
+    \$ToolkitCandidates += (Join-Path \$RepoParent 'cuda-redist-12.6\toolkit')
+}
+\$ToolkitCandidates += (Join-Path \$env:USERPROFILE 'src\cuda-redist-12.6\toolkit')
+foreach (\$Candidate in \$ToolkitCandidates) {
+    if (\$NvccPath) { break }
+    \$CandidateNvcc = Join-Path \$Candidate 'bin\nvcc.exe'
+    if (Test-Path \$CandidateNvcc) {
+        \$NvccPath = \$CandidateNvcc
+        \$env:CUDA_PATH = \$Candidate
+        \$env:Path = ((Join-Path \$Candidate 'bin') + ';' + \$env:Path)
+    }
+}
 \$NvccVersion = @()
 if (\$NvccPath) {
     \$NvccVersion = @(& \$NvccPath '--version' 2>&1)
@@ -222,6 +428,7 @@ if (\$NvccPath) {
 if (Test-Path \$ToolkitRoot) {
     \$ToolkitDirs = @(Get-ChildItem \$ToolkitRoot -Directory | ForEach-Object { \$_.FullName })
 }
+\$ToolkitDirs = @(\$ToolkitDirs + (\$ToolkitCandidates | Where-Object { Test-Path \$_ }) | Select-Object -Unique)
 \$CudaToolkit = [ordered]@{
     nvcc_found = (\$null -ne \$NvccPath)
     nvcc_path = \$NvccPath
@@ -238,6 +445,12 @@ if (\$DeviceCount -gt 0 -and \$CudaToolkit.nvcc_found -and \$Admission.ok) {
     \$RuntimeStatus = 'admission_blocked'
 } elseif (\$DeviceCount -gt 0) {
     \$RuntimeStatus = 'driver_only'
+}
+
+\$BuildSmokeResult = [ordered]@{ ran = \$false }
+if (\$BuildSmoke -eq '1') {
+    Write-Output '[tensorcore/windows-cuda] build smoke requested'
+    \$BuildSmokeResult = Run-BuildSmoke \$RuntimeStatus \$CudaToolkit
 }
 
 \$Evidence = [ordered]@{
@@ -260,6 +473,7 @@ if (\$DeviceCount -gt 0 -and \$CudaToolkit.nvcc_found -and \$Admission.ok) {
     devices = \$Devices
     cuda_toolkit = \$CudaToolkit
     admission = \$Admission
+    build_smoke = \$BuildSmokeResult
 }
 
 Write-Output (\$EvidenceMarker + (\$Evidence | ConvertTo-Json -Depth 8 -Compress))

@@ -104,6 +104,14 @@ every architectural primitive in code and tested:
   in a single scheduler pass.
 - Mesh scheduler heartbeats for live CUDA-exclusive jobs now refresh worker
   identity metadata on the existing lease instead of leaving identity pending.
+- Mesh scheduler jobs now have a checked-in source of truth
+  (`configs/mesh_resource_jobs.json`) plus `scripts/check_mesh_resource_jobs.py`,
+  and live jobs can safely adopt same-tenant manual leases when explicitly
+  declared metadata fields match.
+- `scripts/mesh_system_audit.py` now audits the whole mesh control plane:
+  inventory, expanded scheduler jobs, scheduler freshness, arbiter resources,
+  reserved/blocked policy, scheduler lease identity metadata, and optional live
+  CUDA process ownership.
 - Jack's Windows host is now proven over Tailscale/SSH for portable CPU
   bootstrap, CTest, install smoke, and Python smoke on the current head; its
   inventory CUDA lane remains blocked until Windows CUDA admission and worker
@@ -112,9 +120,14 @@ every architectural primitive in code and tested:
   `scripts/run_windows_cuda_probe.sh` records `nvidia-smi` device facts,
   compute-app admission state, CUDA Toolkit / `nvcc` discovery, and clean
   git-head provenance for Jack's RTX lane.
-- Jack's RTX 3060 now has current driver evidence, but remains scheduler-blocked
-  because exclusive CUDA admission reports active/opaque GPU processes and the
-  CUDA Toolkit / `nvcc` is not installed yet.
+- Jack's RTX 3060 now has current driver, admission, CUDA Toolkit 12.6
+  redistributable, Windows CUDA configure/build, full CTest, and CUDA GEMM
+  runtime evidence; the scheduler lane remains blocked only until the Windows
+  CUDA worker-identity/start contract is validated.
+- Windows CUDA probing now distinguishes opaque WDDM desktop rows from real
+  CUDA process-table entries and can discover Jack's user-local CUDA 12.6
+  redistributable toolkit under `src/cuda-redist-12.6`; optional build-smoke
+  evidence now records CUDA configure/build/CTest and `test_cuda_gemm`.
 - Release-smoke evidence now records clean git-head provenance, and the
   operational bundle checker can require release, SDK26, PyTorch, and
   live-mesh evidence to match the current committed head.

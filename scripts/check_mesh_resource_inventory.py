@@ -13,6 +13,17 @@ from typing import Any
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 DEFAULT_INVENTORY = ROOT / "configs" / "mesh_resources.json"
+CONTROL_PLANES = {"tensorcore_scheduler", "direct_lease", "reserved", "blocked"}
+SCHEDULER_CANDIDATES = [
+    ROOT / "scripts" / "mesh_resource_scheduler.py",
+    pathlib.Path(__file__).with_name("mesh-resource-scheduler"),
+    pathlib.Path(__file__).with_name("mesh_resource_scheduler.py"),
+]
+ARBITER_INVENTORY_CANDIDATES = [
+    ROOT / "scripts" / "mesh_arbiter_with_inventory.py",
+    pathlib.Path(__file__).with_name("mesh-arbiter-with-inventory"),
+    pathlib.Path(__file__).with_name("mesh_arbiter_with_inventory.py"),
+]
 
 
 def load_module(name: str, path: pathlib.Path) -> ModuleType:
@@ -42,13 +53,18 @@ def require(errors: list[str], condition: bool, message: str) -> None:
 
 
 def validate_inventory(path: pathlib.Path) -> list[str]:
+    scheduler_path = next((item for item in SCHEDULER_CANDIDATES if item.exists()), SCHEDULER_CANDIDATES[0])
+    arbiter_inventory_path = next(
+        (item for item in ARBITER_INVENTORY_CANDIDATES if item.exists()),
+        ARBITER_INVENTORY_CANDIDATES[0],
+    )
     scheduler = load_module(
         "mesh_resource_scheduler_for_inventory_check",
-        ROOT / "scripts" / "mesh_resource_scheduler.py",
+        scheduler_path,
     )
     arbiter_inventory = load_module(
         "mesh_arbiter_with_inventory_for_inventory_check",
-        ROOT / "scripts" / "mesh_arbiter_with_inventory.py",
+        arbiter_inventory_path,
     )
     resources: dict[str, dict[str, Any]] = scheduler.load_inventory(str(path))
     capacities: dict[str, dict[str, Any]] = arbiter_inventory.load_inventory_capacities(str(path))
@@ -81,6 +97,15 @@ def validate_inventory(path: pathlib.Path) -> list[str]:
         if row.get("general_queue_eligible") is False and row.get("status") != "blocked":
             require(errors, bool(row.get("reserved_for")),
                     f"{resource_id}: non-general resource must have reserved_for or be blocked")
+        control_plane = row.get("control_plane")
+        require(errors, control_plane in CONTROL_PLANES,
+                f"{resource_id}: control_plane must be one of {sorted(CONTROL_PLANES)!r}")
+        if row.get("status") == "blocked":
+            require(errors, control_plane == "blocked",
+                    f"{resource_id}: blocked resources must use control_plane=blocked")
+        if row.get("status") == "reserved":
+            require(errors, control_plane == "reserved",
+                    f"{resource_id}: reserved resources must use control_plane=reserved")
 
     return errors
 

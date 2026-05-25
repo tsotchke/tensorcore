@@ -245,7 +245,8 @@ dedicated smoke workspace that can be hard-reset to `origin/<ref>`.
 Runs a non-destructive CUDA readiness probe on a Tailscale/SSH-reachable
 Windows host. It fast-forwards the remote checkout like
 `run_windows_host_smoke.sh`, then records NVIDIA driver/device visibility,
-`nvidia-smi` compute-app admission state, and CUDA toolkit / `nvcc` discovery.
+`nvidia-smi` compute-app admission state, CUDA toolkit / `nvcc` discovery,
+and optional Windows CUDA configure/build/CTest proof.
 This is the scheduling gate for Jack's RTX lane before any GPU work is allowed.
 
 ```sh
@@ -255,10 +256,25 @@ python3 scripts/check_windows_cuda_probe_evidence.py /tmp/windows-cuda.json \
   --require-driver --require-admission-clear --require-clean-head
 ```
 
-Use `--require-toolchain` or `--require-ready` only after the CUDA Toolkit is
-installed and `nvcc` is visible on the remote PATH. Driver-only evidence is
-still useful: it proves the GPU/driver and admission state while keeping the
-inventory lane blocked until the build toolchain is complete.
+Set `TC_WINDOWS_CUDA_BUILD_SMOKE=1` to have the probe configure a CUDA-enabled
+Ninja/MSVC build, run full CTest, and require `test_cuda_gemm`:
+
+```sh
+TC_WINDOWS_CUDA_BUILD_SMOKE=1 \
+TC_WINDOWS_CUDA_EVIDENCE_PATH=/tmp/windows-cuda.json \
+  scripts/run_windows_cuda_probe.sh
+python3 scripts/check_windows_cuda_probe_evidence.py /tmp/windows-cuda.json \
+  --require-ready --require-build-smoke
+```
+
+Driver-only evidence is still useful: it proves the GPU/driver and admission
+state while keeping the inventory lane blocked until the build toolchain is
+complete.
+On Windows display GPUs, `nvidia-smi --query-compute-apps` may report ordinary
+desktop/WDDM processes as `[Insufficient Permissions]` even when the full
+`nvidia-smi` process table has no visible CUDA entries. The probe records those
+rows as `ignored_opaque_wddm` and allows admission only when the visible CUDA
+process table is empty.
 
 ### `run_windows_gloo_smoke.ps1`
 
@@ -355,7 +371,9 @@ a launch is considered healthy. Unknown leases and unknown liveness block
 scheduling instead of killing another agent's work. When `--inventory-json` is
 supplied, inventory rows with `backend: "cuda"` infer `cuda_exclusive` for
 omitted job classes and reject explicit `generic` CUDA jobs before any lease can
-be claimed.
+be claimed. The checked-in default job set lives at
+`configs/mesh_resource_jobs.json`; deploy that file to the live state path when
+the control-plane contract changes.
 
 Run one dry pass:
 
@@ -363,7 +381,7 @@ Run one dry pass:
 scripts/mesh_resource_scheduler.py \
   --arbiter-cmd ~/.tsotchke/bin/tsotchke-arbiter \
   --inventory-json configs/mesh_resources.json \
-  --jobs-json ~/.tsotchke/state/mesh-resource-jobs.json \
+  --jobs-json configs/mesh_resource_jobs.json \
   --dry-run --pretty-json
 ```
 
@@ -387,11 +405,28 @@ Fixture coverage:
 python3 scripts/mesh_resource_scheduler_selftest.py
 python3 scripts/mesh_arbiter_with_inventory_selftest.py
 python3 scripts/check_mesh_resource_inventory.py
+python3 scripts/check_mesh_resource_jobs.py
+python3 scripts/mesh_system_audit_selftest.py
 ```
 
 Use `scripts/mesh_arbiter_with_inventory.py` when arbiter capacity/status
 output should be seeded from `configs/mesh_resources.json` before the scheduler
 claims leases.
+
+### `mesh_system_audit.py`
+
+Audits the whole mesh control plane: inventory, expanded scheduler jobs,
+scheduler freshness, arbiter resources, reserved/blocked policy, scheduler
+lease worker identity, and optional live CUDA process ownership.
+
+```sh
+scripts/mesh_system_audit.py \
+  --inventory-json configs/mesh_resources.json \
+  --jobs-json ~/.tsotchke/state/mesh-resource-jobs.json \
+  --scheduler-state-json ~/.tsotchke/state/mesh-resource-scheduler-state.json \
+  --arbiter-cmd "scripts/mesh_arbiter_with_inventory.py --inventory-json configs/mesh_resources.json --arbiter-cmd ~/.tsotchke/bin/tsotchke-arbiter -- status --json" \
+  --probe-cuda
+```
 
 ### `check_cuda_resource_admission.py`
 
@@ -464,7 +499,9 @@ python3 scripts/check_operational_evidence.py \
   --require-release --require-sdk26 --require-cuda --require-pytorch \
   --require-pytorch-backend-allocation --require-windows \
   --require-windows-python --require-windows-cuda-driver \
-  --require-windows-cuda-admission-clear --require-live-mesh \
+  --require-windows-cuda-toolchain --require-windows-cuda-admission-clear \
+  --require-windows-cuda-ready --require-windows-cuda-build-smoke \
+  --require-live-mesh \
   --require-release-clean-head --require-sdk26-clean-head \
   --require-cuda-clean-head --require-pytorch-clean-head \
   --require-windows-clean-head --require-windows-cuda-clean-head \
@@ -493,8 +530,9 @@ binding smoke must be present, not skipped.
 Add `--windows-cuda /tmp/windows-cuda.json --require-windows-cuda-driver
 --require-windows-cuda-admission-clear --require-windows-cuda-clean-head`
 to prove a Windows NVIDIA lane is visible and not currently occupied; add
-`--require-windows-cuda-toolchain` or `--require-windows-cuda-ready` before
-unblocking that lane for CUDA builds.
+`--require-windows-cuda-toolchain`, `--require-windows-cuda-ready`, and
+`--require-windows-cuda-build-smoke` before treating that lane as CUDA-build
+ready.
 
 ### `ci_cuda_smoke.sh`
 

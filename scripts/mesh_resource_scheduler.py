@@ -425,6 +425,14 @@ def normalize_job(job: Any, inventory: dict[str, dict] | None = None) -> dict:
         out["tenant_max_parallel"] = int(tenant_max_parallel)
         if out["tenant_max_parallel"] < 1:
             raise ValueError(f"job {out['id']!r} field 'tenant_max_parallel' must be >= 1")
+    adopt_keys = out.get("adopt_unknown_lease_metadata_keys", [])
+    if adopt_keys is None:
+        adopt_keys = []
+    if not isinstance(adopt_keys, list) or not all(isinstance(item, str) for item in adopt_keys):
+        raise ValueError(
+            f"job {out['id']!r} field 'adopt_unknown_lease_metadata_keys' must be a string list"
+        )
+    out["adopt_unknown_lease_metadata_keys"] = adopt_keys
     out["enabled"] = require_bool(out, "enabled", True)
     out["ttl_sec"] = float(out.get("ttl_sec", 900.0))
     if out["ttl_sec"] <= 0:
@@ -548,6 +556,36 @@ def lease_sync_id(row: dict) -> str | None:
         or metadata.get("sync_id")
     )
     return str(value) if value else None
+
+
+def lease_tenant(row: dict) -> str:
+    metadata = lease_metadata(row)
+    owner = str(row.get("owner") or "")
+    return str(metadata.get("tenant") or owner.split(":", 1)[0] or owner)
+
+
+def adoptable_unknown_leases(job: dict, leases: list[dict]) -> tuple[list[dict], list[dict]]:
+    keys = job.get("adopt_unknown_lease_metadata_keys") or []
+    if not keys:
+        return [], list(leases)
+    job_metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    adopted = []
+    remaining = []
+    for lease in leases:
+        metadata = lease_metadata(lease)
+        if lease_tenant(lease) != job["tenant"]:
+            remaining.append(lease)
+            continue
+        if all(
+            key in job_metadata
+            and key in metadata
+            and str(job_metadata[key]) == str(metadata[key])
+            for key in keys
+        ):
+            adopted.append(lease)
+        else:
+            remaining.append(lease)
+    return adopted, remaining
 
 
 def dedupe_leases(rows: list[dict]) -> list[dict]:
@@ -1040,12 +1078,59 @@ def handle_live_holders(
         })
         return results, errors
 
+    adopted_unknown, remaining_unknown = adoptable_unknown_leases(job, unknown_leases)
+    if adopted_unknown and not remaining_unknown:
+        current = adopted_unknown[0]
+        stale = adopted_unknown[1:]
+        action = (
+            "would_adopt_unknown_lease_live_holder"
+            if dry_run
+            else "adopted_unknown_lease_live_holder"
+        )
+        identity = collect_worker_identity(job, timeout=worker_identity_timeout)
+        result = {
+            "resource": job["resource"],
+            "job": job["id"],
+            "action": action,
+            "lease_id": current.get("id"),
+            "stale_lease_ids": [lease.get("id") for lease in stale],
+            "probe": probes[job["id"]],
+            "worker_identity": identity,
+            "ok": bool(identity.get("ok")),
+        }
+        if not dry_run:
+            try:
+                releases, releases_ok = release_many(
+                    stale,
+                    arbiter_cmd=arbiter_cmd,
+                    timeout=timeout,
+                )
+                payload = heartbeat_lease(
+                    current,
+                    job,
+                    arbiter_cmd=arbiter_cmd,
+                    timeout=timeout,
+                    worker_identity=identity,
+                )
+                result["arbiter"] = {"release": releases, "heartbeat": payload}
+                result["ok"] = (
+                    bool(identity.get("ok"))
+                    and releases_ok
+                    and bool(payload.get("ok"))
+                    and payload.get("metadata_refreshed", True) is not False
+                )
+            except Exception as exc:
+                result["ok"] = False
+                errors.append({"resource": job["resource"], "job": job["id"], "error": str(exc)})
+        results.append(result)
+        return results, errors
+
     if unknown_leases:
         results.append({
             "resource": job["resource"],
             "job": job["id"],
             "action": "live_holder_blocked_by_unknown_lease",
-            "lease_ids": [lease.get("id") for lease in unknown_leases],
+            "lease_ids": [lease.get("id") for lease in remaining_unknown or unknown_leases],
             "ok": True,
         })
         return results, errors

@@ -116,6 +116,81 @@ def main() -> int:
         ready_path = write_json(directory, "ready.json", ready)
         assert_passes(ready_path, "--require-ready", "--require-toolchain")
 
+        build_ready = copy.deepcopy(ready)
+        build_ready["build_smoke"] = {
+            "ran": True,
+            "ok": True,
+            "build_dir": "C:/Users/tsotchke/src/tensorcore/build-windows-cuda-smoke",
+            "reason": None,
+            "rc": 0,
+            "tests_total": 17,
+            "tests_passed": 11,
+            "tests_failed": 0,
+            "tests_skipped": 6,
+            "cuda_gemm_passed": True,
+        }
+        build_ready_path = write_json(directory, "build-ready.json", build_ready)
+        assert_passes(
+            build_ready_path,
+            "--require-ready",
+            "--require-toolchain",
+            "--require-build-smoke",
+        )
+
+        failed_build = copy.deepcopy(ready)
+        failed_build["build_smoke"] = {
+            "ran": True,
+            "ok": False,
+            "reason": "build_or_ctest_failed",
+            "rc": 1,
+        }
+        failed_build_path = write_json(directory, "failed-build.json", failed_build)
+        assert_fails(
+            failed_build_path,
+            "--require-build-smoke needs passing CUDA configure/build/CTest evidence",
+            "--require-build-smoke",
+        )
+
+        opaque_wddm = copy.deepcopy(ready)
+        opaque_wddm["admission"] = {
+            "ok": True,
+            "reason": "ok_opaque_wddm_rows_no_visible_cuda_processes",
+            "allowed_process_max_memory_mib": 64,
+            "compute_app_count": 2,
+            "blocked": [],
+            "ignored_opaque_wddm_app_count": 2,
+            "ignored_opaque_wddm": [
+                {
+                    "pid": 1724,
+                    "process_name": "[Insufficient Permissions]",
+                    "used_memory_mib": None,
+                    "raw": "1724, [Insufficient Permissions], [N/A]",
+                },
+                {
+                    "pid": 9684,
+                    "process_name": "[Insufficient Permissions]",
+                    "used_memory_mib": None,
+                    "raw": "9684, [Insufficient Permissions], [N/A]",
+                },
+            ],
+        }
+        opaque_wddm["nvidia_smi"]["visible_processes"] = []
+        opaque_path = write_json(directory, "opaque-wddm.json", opaque_wddm)
+        assert_passes(
+            opaque_path,
+            "--require-ready",
+            "--require-toolchain",
+            "--require-admission-clear",
+        )
+
+        bad_clear = copy.deepcopy(ready)
+        bad_clear["admission"]["blocked"] = [{"pid": 1234, "process_name": "python.exe"}]
+        bad_clear_path = write_json(directory, "bad-clear.json", bad_clear)
+        assert_fails(
+            bad_clear_path,
+            "clear admission evidence must not include blocked CUDA processes",
+        )
+
         dirty = copy.deepcopy(evidence())
         dirty["git_dirty"] = True
         dirty_path = write_json(directory, "dirty.json", dirty)

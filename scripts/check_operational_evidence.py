@@ -123,6 +123,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--require-windows-cuda-toolchain", action="store_true")
     parser.add_argument("--require-windows-cuda-admission-clear", action="store_true")
     parser.add_argument("--require-windows-cuda-ready", action="store_true")
+    parser.add_argument("--require-windows-cuda-build-smoke", action="store_true")
     parser.add_argument("--require-live-mesh", action="store_true")
     parser.add_argument("--require-release-clean-head", action="store_true")
     parser.add_argument("--require-sdk26-clean-head", action="store_true")
@@ -171,6 +172,7 @@ def main() -> int:
         or args.require_windows_cuda_toolchain
         or args.require_windows_cuda_admission_clear
         or args.require_windows_cuda_ready
+        or args.require_windows_cuda_build_smoke
     ):
         args.windows_cuda = require_path("--windows-cuda", args.windows_cuda)
     if args.require_live_mesh:
@@ -266,6 +268,8 @@ def main() -> int:
             cmd.append("--require-admission-clear")
         if args.require_windows_cuda_ready:
             cmd.append("--require-ready")
+        if args.require_windows_cuda_build_smoke:
+            cmd.append("--require-build-smoke")
         if args.require_windows_cuda_clean_head:
             cmd.extend(["--git-head", args.git_head or "", "--require-clean-head"])
         run_checker(cmd)

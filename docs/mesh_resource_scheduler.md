@@ -15,8 +15,13 @@ conservative:
   to the least-scheduled tenant first, with `priority` used inside that fair
   share.
 - Known stale leases are released only when that job's probe says dead.
-- Unknown leases block the resource.
+- Unknown leases block the resource unless the live job explicitly declares
+  matching adoption metadata.
 - A live known job without a lease is adopted by claiming a lease for it.
+- A live known job may adopt an otherwise-unknown lease only when
+  `adopt_unknown_lease_metadata_keys` is set, the lease has the same tenant,
+  and every listed metadata field matches. This recovers manual leases that
+  describe the same workload without stealing another user's lease.
 - A live CUDA-exclusive job with an existing lease refreshes worker identity
   metadata on heartbeat, so lease records do not stay pending after adoption.
 - New CUDA-exclusive work is launched only if its mandatory `admission_cmd`
@@ -34,24 +39,48 @@ the source of truth for accelerator ownership and scheduling eligibility:
 - `cosbox:cuda3090` is the primary exclusive CUDA artifact lane.
 - `old-donkey:cuda3050` is the low-VRAM CUDA precompute lane.
 - `jack-blupc:cuda3060` is registered but marked `blocked`; Windows
-  SSH/bootstrap and portable CPU smoke are healthy, and the RTX 3060 driver is
-  visible. `scripts/run_windows_cuda_probe.sh` currently keeps the lane blocked
-  until exclusive admission is clear and the CUDA Toolkit / `nvcc` is installed.
+  SSH/bootstrap, portable CPU smoke, CUDA Toolkit 12.6 redistributable
+  discovery, exclusive admission, and CUDA build/CTest smoke are healthy. Keep
+  the scheduler lane blocked until the Windows CUDA worker-identity/start
+  contract is validated.
 - `atlas:metal_m2ultra` is active Metal capacity for validation, evaluation,
   generation support, and Tensorcore Metal workloads.
 - `enki:metal_m4_tsotchke_chan` is `reserved`; only `tsotchke-chan` owners may
   use it. General mesh jobs must not target the M4 Metal slot.
 
-Run the scheduler with `--inventory-json configs/mesh_resources.json` so jobs
-targeting unknown, blocked, or reserved resources fail validation before they
-can claim an arbiter lease. Inventory rows with `backend: "cuda"` are also
-forced through the `cuda_exclusive` job policy; a CUDA job cannot downgrade
-itself to `generic` and bypass admission, post-start, or worker-identity
-checks.
+Each row also declares `control_plane`:
+
+- `tensorcore_scheduler`: jobs for this resource must be present in the
+  scheduler jobs file, or the system audit reports an unused scheduler lane.
+- `direct_lease`: clients may claim arbiter leases directly without a scheduler
+  job, useful for request-scoped generation services.
+- `reserved`: capacity is visible but only the `reserved_for` principals may
+  use it.
+- `blocked`: capacity is inventoried but must not receive scheduled work.
+
+Run the scheduler with `--inventory-json configs/mesh_resources.json` and
+`--jobs-json configs/mesh_resource_jobs.json` so jobs targeting unknown,
+blocked, or reserved resources fail validation before they can claim an arbiter
+lease. Inventory rows with `backend: "cuda"` are also forced through the
+`cuda_exclusive` job policy; a CUDA job cannot downgrade itself to `generic`
+and bypass admission, post-start, or worker-identity checks.
 Validate inventory edits with:
 
 ```sh
 python3 scripts/check_mesh_resource_inventory.py
+python3 scripts/check_mesh_resource_jobs.py
+```
+
+Audit the live mesh, including scheduler freshness, arbiter inventory, lease
+metadata, and optional CUDA process ownership:
+
+```sh
+scripts/mesh_system_audit.py \
+  --inventory-json configs/mesh_resources.json \
+  --jobs-json ~/.tsotchke/state/mesh-resource-jobs.json \
+  --scheduler-state-json ~/.tsotchke/state/mesh-resource-scheduler-state.json \
+  --arbiter-cmd "scripts/mesh_arbiter_with_inventory.py --inventory-json configs/mesh_resources.json --arbiter-cmd ~/.tsotchke/bin/tsotchke-arbiter -- status --json" \
+  --probe-cuda
 ```
 
 Use `scripts/mesh_arbiter_with_inventory.py` as the scheduler's `--arbiter-cmd`
@@ -178,6 +207,10 @@ Fields:
   sharded jobs that should use multiple machines.
 - `tenant_max_parallel`: optional per-job tenant concurrency cap. The scheduler
   also supports a global `--max-running-per-tenant` cap.
+- `adopt_unknown_lease_metadata_keys`: optional list of metadata fields that
+  allow the scheduler to adopt a live job's otherwise-unknown lease when the
+  lease has the same tenant and all listed metadata fields match. Keep this
+  narrow, for example `["project", "service", "run_dir"]`.
 - `desired_state`: `running` makes the job launchable; `paused` prevents new
   launches but still lets a live job be adopted and protected.
 - `probe_cmd`: optional command that exits 0 when the job is live. If omitted

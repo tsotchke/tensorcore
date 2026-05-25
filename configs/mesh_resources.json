@@ -10,6 +10,7 @@
       "memory_gib": 192,
       "gpu_cores": 76,
       "status": "active",
+      "control_plane": "tensorcore_scheduler",
       "general_queue_eligible": true,
       "description": "Atlas M2 Ultra Metal slot for validation, evaluation, generation support, and Tensorcore Metal workloads that do not need the CUDA artifact lane."
     },
@@ -22,6 +23,7 @@
       "memory_gib": 16,
       "gpu_cores": 10,
       "status": "reserved",
+      "control_plane": "reserved",
       "general_queue_eligible": false,
       "reserved_for": [
         "tsotchke-chan",
@@ -37,6 +39,7 @@
       "capacity": 1,
       "memory_gib": 24,
       "status": "active",
+      "control_plane": "tensorcore_scheduler",
       "general_queue_eligible": true,
       "description": "Primary RTX 3090 artifact lane for GeoRefine/qLLM exclusive CUDA jobs."
     },
@@ -47,6 +50,7 @@
       "class": "cuda-low-vram",
       "capacity": 1,
       "status": "active",
+      "control_plane": "tensorcore_scheduler",
       "general_queue_eligible": true,
       "description": "Low-VRAM CUDA lane for qLLM teacher-logit precompute and small shard jobs."
     },
@@ -58,9 +62,10 @@
       "capacity": 1,
       "memory_gib": 12,
       "status": "blocked",
-      "blocked_reason": "Windows SSH/bootstrap and portable CPU smoke pass, and the RTX 3060 driver is visible; exclusive CUDA admission is blocked by active/opaque GPU processes and nvcc/toolkit is not installed.",
+      "blocked_reason": "Windows SSH/bootstrap, portable CPU smoke, CUDA Toolkit 12.6 redistributable discovery, exclusive CUDA admission, and CUDA build/CTest smoke pass; scheduler lane remains blocked until the Windows CUDA worker-identity/start contract is validated.",
+      "control_plane": "blocked",
       "general_queue_eligible": false,
-      "description": "Jack's RTX 3060 auxiliary lane; keep blocked until Windows CUDA admission is clear and the CUDA Toolkit / worker identity probes are healthy."
+      "description": "Jack's RTX 3060 auxiliary lane; usable for explicit Windows CUDA smoke evidence, but keep blocked for scheduler work until worker identity and launch probes are healthy."
     },
     {
       "id": "atlas:qwen_gen",
@@ -69,6 +74,7 @@
       "class": "llm-generation",
       "capacity": 1,
       "status": "active",
+      "control_plane": "direct_lease",
       "general_queue_eligible": true,
       "description": "Atlas Qwen generation service slot."
     },
@@ -79,6 +85,7 @@
       "class": "validation",
       "capacity": 1,
       "status": "active",
+      "control_plane": "tensorcore_scheduler",
       "general_queue_eligible": true,
       "description": "Atlas validation-only slot for checks that should not contend with the CUDA artifact lane."
     },
@@ -89,6 +96,7 @@
       "class": "llm-generation",
       "capacity": 1,
       "status": "active",
+      "control_plane": "direct_lease",
       "general_queue_eligible": true,
       "description": "Old-donkey Kimi OpenAI-compatible service slot."
     },
@@ -99,6 +107,7 @@
       "class": "llm-generation",
       "capacity": 1,
       "status": "active",
+      "control_plane": "direct_lease",
       "general_queue_eligible": true,
       "description": "Old-donkey native Kimi runtime slot."
     }

@@ -276,6 +276,27 @@ def windows_cuda_evidence() -> dict[str, Any]:
     }
 
 
+def windows_cuda_ready_evidence() -> dict[str, Any]:
+    data = windows_cuda_evidence()
+    data["runtime_status"] = "ready"
+    data["cuda_toolkit"]["nvcc_found"] = True
+    data["cuda_toolkit"]["nvcc_path"] = "C:/Users/tsotchke/src/cuda-redist-12.6/toolkit/bin/nvcc.exe"
+    data["cuda_toolkit"]["cuda_path"] = "C:/Users/tsotchke/src/cuda-redist-12.6/toolkit"
+    data["build_smoke"] = {
+        "ran": True,
+        "ok": True,
+        "build_dir": "C:/Users/tsotchke/src/tensorcore/build-windows-cuda-smoke",
+        "reason": None,
+        "rc": 0,
+        "tests_total": 17,
+        "tests_passed": 11,
+        "tests_failed": 0,
+        "tests_skipped": 6,
+        "cuda_gemm_passed": True,
+    }
+    return data
+
+
 def write_json(directory: pathlib.Path, name: str, data: dict[str, Any]) -> pathlib.Path:
     path = directory / name
     path.write_text(json.dumps(data), encoding="utf-8")
@@ -321,7 +342,7 @@ def main() -> int:
         pytorch_path = write_json(directory, "pytorch.json", pytorch_evidence())
         windows_path = write_json(directory, "windows.json", windows_evidence())
         windows_cuda_path = write_json(
-            directory, "windows-cuda.json", windows_cuda_evidence()
+            directory, "windows-cuda.json", windows_cuda_ready_evidence()
         )
 
         assert_passes(
@@ -348,7 +369,10 @@ def main() -> int:
             "--require-windows",
             "--require-windows-python",
             "--require-windows-cuda-driver",
+            "--require-windows-cuda-toolchain",
             "--require-windows-cuda-admission-clear",
+            "--require-windows-cuda-ready",
+            "--require-windows-cuda-build-smoke",
             "--require-live-mesh",
             "--require-release-clean-head",
             "--require-sdk26-clean-head",

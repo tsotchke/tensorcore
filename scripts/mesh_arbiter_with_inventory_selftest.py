@@ -12,11 +12,16 @@ from types import ModuleType
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "scripts" / "mesh_arbiter_with_inventory.py"
+SCRIPT_CANDIDATES = [
+    ROOT / "scripts" / "mesh_arbiter_with_inventory.py",
+    pathlib.Path(__file__).with_name("mesh-arbiter-with-inventory"),
+    pathlib.Path(__file__).with_name("mesh_arbiter_with_inventory.py"),
+]
 
 
 def load_module() -> ModuleType:
-    loader = importlib.machinery.SourceFileLoader("mesh_arbiter_with_inventory_under_test", str(SCRIPT))
+    path = next((item for item in SCRIPT_CANDIDATES if item.exists()), SCRIPT_CANDIDATES[0])
+    loader = importlib.machinery.SourceFileLoader("mesh_arbiter_with_inventory_under_test", str(path))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     assert spec is not None
     assert spec.loader is not None

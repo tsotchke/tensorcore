@@ -28,11 +28,41 @@
 #include <string.h>
 #include <time.h>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
+static double now(void) {
+    LARGE_INTEGER freq;
+    LARGE_INTEGER counter;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&counter);
+    return (double)counter.QuadPart / (double)freq.QuadPart;
+}
+
+static int tc_setenv(const char* name, const char* value, int overwrite) {
+    if (!overwrite && getenv(name)) return 0;
+    return _putenv_s(name, value);
+}
+
+static int tc_unsetenv(const char* name) {
+    return _putenv_s(name, "");
+}
+#else
 static double now(void) {
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
     return t.tv_sec + t.tv_nsec * 1e-9;
 }
+
+static int tc_setenv(const char* name, const char* value, int overwrite) {
+    return setenv(name, value, overwrite);
+}
+
+static int tc_unsetenv(const char* name) {
+    return unsetenv(name);
+}
+#endif
 
 static uint16_t f32_to_bf16(float x) {
     union { float f; uint32_t u; } v = {x};
@@ -64,9 +94,9 @@ static int expect_cuda_backend(const char* label, const char* expected_kernel) {
 
 int main(void) {
     /* Validate the default CUDA policy, independent of the caller's shell. */
-    unsetenv("TC_USE_CUDA_GEMM");
-    unsetenv("TC_CUDA_GEMM");
-    unsetenv("TC_DISABLE_CUDA_GEMM");
+    tc_unsetenv("TC_USE_CUDA_GEMM");
+    tc_unsetenv("TC_CUDA_GEMM");
+    tc_unsetenv("TC_DISABLE_CUDA_GEMM");
 
     tc_context* ctx = NULL;
     if (tc_init(&ctx) != TC_OK) {
@@ -234,7 +264,7 @@ int main(void) {
     }
 
     /* --- Perf: fp16 with fp16-accum (high-rate tensor-core path). --- */
-    setenv("TC_CUDA_FP16_ACCUM", "1", 1);
+    tc_setenv("TC_CUDA_FP16_ACCUM", "1", 1);
     {
         const int N = 4096;
         tc_buffer *A, *B, *C;
@@ -280,7 +310,7 @@ int main(void) {
     }
 
     /* --- Correctness + perf: bf16 GEMM via tensor cores. --- */
-    unsetenv("TC_CUDA_FP16_ACCUM");   /* bf16 uses fp32 accum, no toggle. */
+    tc_unsetenv("TC_CUDA_FP16_ACCUM");   /* bf16 uses fp32 accum, no toggle. */
     if (!info.supports_bf16) {
         printf("  bf16 GEMM skipped: device reports no bf16 tensor core support\n");
     } else {
@@ -436,7 +466,7 @@ int main(void) {
     /* Explicit opt-out still forces the CPU path, which is useful for A/B
      * debugging and for hosts that want CUDA built but not selected. */
     {
-        setenv("TC_DISABLE_CUDA_GEMM", "1", 1);
+        tc_setenv("TC_DISABLE_CUDA_GEMM", "1", 1);
         tc_buffer *A, *B, *C;
         float a_vals[4] = {1, 2, 3, 4};
         float b_vals[4] = {5, 6, 7, 8};
@@ -467,7 +497,7 @@ int main(void) {
             return 1;
         }
         tc_buffer_free(ctx, A); tc_buffer_free(ctx, B); tc_buffer_free(ctx, C);
-        unsetenv("TC_DISABLE_CUDA_GEMM");
+        tc_unsetenv("TC_DISABLE_CUDA_GEMM");
     }
 
     tc_shutdown(ctx);
