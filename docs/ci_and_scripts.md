@@ -267,14 +267,20 @@ python3 scripts/check_windows_cuda_probe_evidence.py /tmp/windows-cuda.json \
   --require-ready --require-build-smoke
 ```
 
-Driver-only evidence is still useful: it proves the GPU/driver and admission
-state while keeping the inventory lane blocked until the build toolchain is
-complete.
+Driver-only evidence is still useful before a Windows lane is promoted into
+the scheduler: it proves the GPU/driver and admission state while keeping
+scheduling conservative until the build toolchain is complete.
 On Windows display GPUs, `nvidia-smi --query-compute-apps` may report ordinary
 desktop/WDDM processes as `[Insufficient Permissions]` even when the full
 `nvidia-smi` process table has no visible CUDA entries. The probe records those
 rows as `ignored_opaque_wddm` and allows admission only when the visible CUDA
 process table is empty.
+
+Use `scripts/check_windows_cuda_resource_admission.py` as the scheduler
+`admission_cmd` for Jack-style Windows CUDA lanes. Use
+`scripts/mesh_windows_worker_identity.py` as a workload-specific
+`worker_identity_cmd` after the job's `start_cmd` and `post_start_probe_cmd`
+can identify the actual Windows CUDA worker process.
 
 ### `run_windows_gloo_smoke.ps1`
 
@@ -442,6 +448,7 @@ Fixture coverage:
 
 ```sh
 python3 scripts/check_cuda_resource_admission_selftest.py
+python3 scripts/check_windows_cuda_resource_admission_selftest.py
 ```
 
 ### `mesh_worker_identity.py`
@@ -465,6 +472,7 @@ Fixture coverage:
 
 ```sh
 python3 scripts/mesh_worker_identity_selftest.py
+python3 scripts/mesh_windows_worker_identity_selftest.py
 ```
 
 ### `check_live_mesh_training_evidence.py`

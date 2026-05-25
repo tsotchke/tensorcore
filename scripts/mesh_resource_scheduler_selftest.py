@@ -538,6 +538,31 @@ def test_paused_live_job_still_holds_resource() -> None:
     )
 
 
+def test_paused_cuda_lane_checks_admission_but_never_launches() -> None:
+    paused = job(
+        "jack-cuda3060-lane",
+        priority=10,
+        desired_state="paused",
+        resource="jack-blupc:cuda3060",
+        resource_class="cuda_exclusive",
+        admission_cmd=True,
+        post_start_probe_cmd=True,
+        worker_identity_cmd=True,
+    )
+    runtime = FakeRuntime(live={"jack-cuda3060-lane": False})
+    result = run_case([paused], runtime)
+    assert result["ok"] is True
+    assert result["results"][0]["action"] == "idle_no_candidate"
+    assert_event_order(
+        runtime,
+        [
+            ("probe", "jack-cuda3060-lane"),
+            ("admit", "jack-cuda3060-lane"),
+            ("status", "--json"),
+        ],
+    )
+
+
 def test_multiple_live_holders_is_an_error() -> None:
     runtime = FakeRuntime(live={"qllm-phase1": True, "georefine-m2": True})
     result = run_case(
@@ -1364,6 +1389,7 @@ def main() -> int:
     test_unknown_lease_metadata_match_still_requires_same_tenant()
     test_known_lease_with_unknown_liveness_blocks_live_adoption()
     test_paused_live_job_still_holds_resource()
+    test_paused_cuda_lane_checks_admission_but_never_launches()
     test_multiple_live_holders_is_an_error()
     test_failed_launch_releases_claimed_lease()
     test_incomplete_high_priority_job_runs_before_lower_priority_job()

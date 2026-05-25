@@ -152,6 +152,56 @@
       }
     },
     {
+      "id": "jack-cuda3060-lane",
+      "sync_id": "jack-cuda3060-lane",
+      "resource": "jack-blupc:cuda3060",
+      "resource_class": "cuda_exclusive",
+      "owner": "tensorcore:jack-cuda",
+      "tenant": "tensorcore",
+      "priority": 10,
+      "desired_state": "paused",
+      "ttl_sec": 900,
+      "probe_cmd": [
+        "ssh",
+        "jack-blupc",
+        "powershell -NoProfile -Command \"exit 1\""
+      ],
+      "admission_cmd": [
+        "python3",
+        "scripts/check_windows_cuda_resource_admission.py",
+        "--target",
+        "jack-blupc",
+        "--resource",
+        "jack-blupc:cuda3060",
+        "--require-toolchain",
+        "--json"
+      ],
+      "post_start_probe_cmd": [
+        "ssh",
+        "jack-blupc",
+        "powershell -NoProfile -Command \"exit 1\""
+      ],
+      "worker_identity_cmd": [
+        "python3",
+        "scripts/mesh_windows_worker_identity.py",
+        "--target",
+        "jack-blupc",
+        "--resource",
+        "jack-blupc:cuda3060",
+        "--match-regex",
+        "tensorcore|python|cuda",
+        "--require-matching-process",
+        "--require-matched-cuda",
+        "--json"
+      ],
+      "metadata": {
+        "project": "tensorcore",
+        "scheduler_contract": "windows_cuda_admission_registered_lane",
+        "scheduler_pause_reason": "no submitted Jack CUDA workload yet",
+        "service": "cuda3060"
+      }
+    },
+    {
       "id": "atlas-metal-m2ultra-lane",
       "sync_id": "atlas-metal-m2ultra-lane",
       "resource": "atlas:metal_m2ultra",

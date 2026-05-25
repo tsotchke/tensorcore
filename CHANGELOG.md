@@ -113,21 +113,22 @@ every architectural primitive in code and tested:
   reserved/blocked policy, scheduler lease identity metadata, and optional live
   CUDA process ownership.
 - Jack's Windows host is now proven over Tailscale/SSH for portable CPU
-  bootstrap, CTest, install smoke, and Python smoke on the current head; its
-  inventory CUDA lane remains blocked until Windows CUDA admission and worker
-  identity probes are validated.
+  bootstrap, CTest, install smoke, and Python smoke on the current head.
 - Windows CUDA readiness now has a non-destructive probe and validator:
   `scripts/run_windows_cuda_probe.sh` records `nvidia-smi` device facts,
   compute-app admission state, CUDA Toolkit / `nvcc` discovery, and clean
   git-head provenance for Jack's RTX lane.
 - Jack's RTX 3060 now has current driver, admission, CUDA Toolkit 12.6
   redistributable, Windows CUDA configure/build, full CTest, and CUDA GEMM
-  runtime evidence; the scheduler lane remains blocked only until the Windows
-  CUDA worker-identity/start contract is validated.
+  runtime evidence.
 - Windows CUDA probing now distinguishes opaque WDDM desktop rows from real
   CUDA process-table entries and can discover Jack's user-local CUDA 12.6
   redistributable toolkit under `src/cuda-redist-12.6`; optional build-smoke
   evidence now records CUDA configure/build/CTest and `test_cuda_gemm`.
+- Jack's RTX 3060 lane is now active in the checked-in scheduler inventory as
+  a paused CUDA-exclusive lane with WDDM-aware admission and Windows
+  worker-identity helpers. It cannot launch work until a submitted job provides
+  real start and post-start probes for the specific Windows CUDA process.
 - Release-smoke evidence now records clean git-head provenance, and the
   operational bundle checker can require release, SDK26, PyTorch, and
   live-mesh evidence to match the current committed head.

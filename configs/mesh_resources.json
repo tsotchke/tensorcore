@@ -61,11 +61,20 @@
       "class": "cuda-small-auxiliary",
       "capacity": 1,
       "memory_gib": 12,
-      "status": "blocked",
-      "blocked_reason": "Windows SSH/bootstrap, portable CPU smoke, CUDA Toolkit 12.6 redistributable discovery, exclusive CUDA admission, and CUDA build/CTest smoke pass; scheduler lane remains blocked until the Windows CUDA worker-identity/start contract is validated.",
-      "control_plane": "blocked",
-      "general_queue_eligible": false,
-      "description": "Jack's RTX 3060 auxiliary lane; usable for explicit Windows CUDA smoke evidence, but keep blocked for scheduler work until worker identity and launch probes are healthy."
+      "status": "active",
+      "control_plane": "tensorcore_scheduler",
+      "general_queue_eligible": true,
+      "cuda_probe_cmd": [
+        "python3",
+        "scripts/check_windows_cuda_resource_admission.py",
+        "--target",
+        "jack-blupc",
+        "--resource",
+        "jack-blupc:cuda3060",
+        "--require-toolchain",
+        "--json"
+      ],
+      "description": "Jack's RTX 3060 auxiliary CUDA lane. Windows CUDA readiness is validated with WDDM-aware admission plus nvcc/toolchain evidence."
     },
     {
       "id": "atlas:qwen_gen",

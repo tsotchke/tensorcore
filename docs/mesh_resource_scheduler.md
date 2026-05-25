@@ -38,11 +38,11 @@ the source of truth for accelerator ownership and scheduling eligibility:
 
 - `cosbox:cuda3090` is the primary exclusive CUDA artifact lane.
 - `old-donkey:cuda3050` is the low-VRAM CUDA precompute lane.
-- `jack-blupc:cuda3060` is registered but marked `blocked`; Windows
-  SSH/bootstrap, portable CPU smoke, CUDA Toolkit 12.6 redistributable
-  discovery, exclusive admission, and CUDA build/CTest smoke are healthy. Keep
-  the scheduler lane blocked until the Windows CUDA worker-identity/start
-  contract is validated.
+- `jack-blupc:cuda3060` is active as a scheduler-registered paused lane.
+  Windows SSH/bootstrap, portable CPU smoke, CUDA Toolkit 12.6 redistributable
+  discovery, exclusive admission, and CUDA build/CTest smoke are healthy.
+  Submitted Jack CUDA jobs must still provide workload-specific start,
+  post-start, and Windows worker-identity probes before they can launch.
 - `atlas:metal_m2ultra` is active Metal capacity for validation, evaluation,
   generation support, and Tensorcore Metal workloads.
 - `enki:metal_m4_tsotchke_chan` is `reserved`; only `tsotchke-chan` owners may

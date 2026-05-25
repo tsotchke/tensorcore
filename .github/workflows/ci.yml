@@ -56,10 +56,14 @@ jobs:
         run: bash -n scripts/run_live_mesh_smoke.sh scripts/run_live_mesh_training_demo.sh scripts/run_windows_cuda_probe.sh
 
       - name: CUDA resource admission fixtures
-        run: python3 scripts/check_cuda_resource_admission_selftest.py
+        run: |
+          python3 scripts/check_cuda_resource_admission_selftest.py
+          python3 scripts/check_windows_cuda_resource_admission_selftest.py
 
       - name: Mesh worker identity fixtures
-        run: python3 scripts/mesh_worker_identity_selftest.py
+        run: |
+          python3 scripts/mesh_worker_identity_selftest.py
+          python3 scripts/mesh_windows_worker_identity_selftest.py
 
   portable-cpu:
     name: portable-cpu (${{ matrix.os }})
