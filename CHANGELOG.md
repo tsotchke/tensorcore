@@ -99,7 +99,8 @@ every architectural primitive in code and tested:
   OpenCL/Level Zero runtime, CMake package, hipBLAS, and path-hint evidence;
   `scripts/check_hip_toolchain_evidence.py` and the operational bundle can
   require build-toolchain or ready-for-hipBLAS policy before a host is
-  admitted as a chipStar accelerator.
+  admitted as a chipStar accelerator. Archive-based remote runs now honor
+  `.tensorcore_source_head` / `.tensorcore_source_dirty` provenance markers.
 - DiLoCo runtime with NONE/FP16/TOPK_1PCT/TOPK_01PCT compression,
   SGD/Nesterov/Adam outer optimizers, async overlap, sparse-on-the-wire
   cross-continent path.

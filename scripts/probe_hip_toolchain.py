@@ -25,16 +25,61 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 VERSION_TIMEOUT_SEC = 8
 
 
-def git_value(*args: str) -> str | None:
+def git_value(root: pathlib.Path, *args: str) -> str | None:
     try:
         return subprocess.check_output(
             ["git", *args],
-            cwd=ROOT,
+            cwd=root,
             text=True,
             stderr=subprocess.DEVNULL,
         ).strip()
     except Exception:
         return None
+
+
+def truthy(value: str | None) -> bool:
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def falsy(value: str | None) -> bool:
+    return str(value).strip().lower() in ("0", "false", "no", "off")
+
+
+def root_file_value(root: pathlib.Path, name: str) -> str | None:
+    try:
+        return (root / name).read_text(encoding="utf-8").strip()
+    except Exception:
+        return None
+
+
+def source_git_head(root: pathlib.Path) -> str | None:
+    return (
+        os.environ.get("TENSORCORE_SOURCE_GIT_HEAD")
+        or git_value(root, "rev-parse", "HEAD")
+        or root_file_value(root, ".tensorcore_source_head")
+    )
+
+
+def source_git_dirty(root: pathlib.Path) -> bool | None:
+    override = os.environ.get("TENSORCORE_SOURCE_GIT_DIRTY")
+    if override is not None:
+        if truthy(override):
+            return True
+        if falsy(override):
+            return False
+        return None
+
+    dirty = git_value(root, "status", "--short")
+    if dirty is not None:
+        return bool(dirty)
+
+    marker = root_file_value(root, ".tensorcore_source_dirty")
+    if marker is not None:
+        if truthy(marker):
+            return True
+        if falsy(marker):
+            return False
+    return None
 
 
 def split_env_paths(value: str | None) -> list[str]:
@@ -253,7 +298,7 @@ def path_hints(prefixes: list[str]) -> list[str]:
 
 
 def collect_evidence(root: str | pathlib.Path = ROOT) -> dict[str, Any]:
-    del root  # Keep the callable stable for scripts that pass TC_ROOT.
+    source_root = pathlib.Path(root).expanduser().resolve()
     prefixes = candidate_prefixes()
     tools = collect_tools(prefixes)
     packages = collect_cmake_packages(prefixes)
@@ -291,8 +336,8 @@ def collect_evidence(root: str | pathlib.Path = ROOT) -> dict[str, Any]:
 
     return {
         "schema_version": 1,
-        "git_head": git_value("rev-parse", "HEAD"),
-        "git_dirty": bool(git_value("status", "--short")),
+        "git_head": source_git_head(source_root),
+        "git_dirty": source_git_dirty(source_root),
         "platform": {
             "system": platform.system(),
             "machine": platform.machine(),

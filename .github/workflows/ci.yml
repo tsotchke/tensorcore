@@ -27,6 +27,15 @@ jobs:
       - name: Windows host smoke evidence checker fixtures
         run: python3 scripts/check_windows_host_smoke_evidence_selftest.py
 
+      - name: HIP toolchain probe fixtures
+        run: python3 scripts/probe_hip_toolchain_selftest.py
+
+      - name: HIP toolchain evidence checker fixtures
+        run: python3 scripts/check_hip_toolchain_evidence_selftest.py
+
+      - name: HIP smoke evidence checker fixtures
+        run: python3 scripts/check_hip_smoke_evidence_selftest.py
+
       - name: Operational evidence checker fixtures
         run: python3 scripts/check_operational_evidence_selftest.py
 
