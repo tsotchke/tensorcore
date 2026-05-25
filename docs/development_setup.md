@@ -140,8 +140,9 @@ this build.
 ## Windows x86 portable CPU setup
 
 Windows is a portable CPU target today. It builds the same public C ABI and
-Python `ctypes` surface, installs `tensorcore.dll`, and skips POSIX-only
-forked GLOO tests with CTest's skip code until a Winsock transport lands.
+Python `ctypes` surface, installs `tensorcore.dll` or `libtensorcore.dll`
+depending on the generator, and skips POSIX-only forked GLOO tests with
+CTest's skip code until a Winsock transport lands.
 
 Jack's Tailscale host is `desktop-jack-blupc` (`100.68.70.96`). The expected
 toolchain on that machine is:
@@ -152,6 +153,18 @@ toolchain on that machine is:
 - Python 3.11 or 3.12 for the Python binding smoke.
 - Optional Ninja; otherwise use the Visual Studio generator from a Developer
   PowerShell or x64 Native Tools prompt.
+
+The bootstrap script checks this state, installs Python for the current
+user when requested, installs Visual Studio Build Tools when run from an
+elevated PowerShell, and then runs the same Windows smoke used in CI:
+
+```powershell
+cd "$env:USERPROFILE\src\tensorcore"
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\bootstrap_windows_cpu.ps1
+
+# First-time toolchain install, from an Administrator PowerShell:
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\bootstrap_windows_cpu.ps1 -Install
+```
 
 On Jack's machine:
 

@@ -186,6 +186,8 @@ Builds the Windows x86 portable CPU target with MSVC or another CMake
 Windows generator. It configures `TC_ENABLE_METAL=OFF`, disables CUDA/HIP
 unless explicitly tested elsewhere, runs CTest with `-C Release`, installs
 the native SDK, and imports Python against the produced `tensorcore.dll`.
+If `cmake` / `ctest` are not on PATH, the script also checks the Visual
+Studio Build Tools bundled CMake location.
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ci_windows_cpu.ps1
@@ -196,6 +198,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ci_windows_cpu.ps1 `
 Use `-SkipPython` only for first-pass compiler bring-up on a machine that
 does not have Python installed yet; deployment validation should keep the
 Python smoke enabled.
+
+### `bootstrap_windows_cpu.ps1`
+
+Checks a Windows x86 host for Visual Studio Build Tools, CMake/CTest, and
+Python, then runs `ci_windows_cpu.ps1` with explicit tool paths. With
+`-Install`, it downloads Visual Studio Build Tools 2022 and Python for a
+first-time machine. The Build Tools install requires an Administrator
+PowerShell; Python installs for the current user.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\bootstrap_windows_cpu.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\bootstrap_windows_cpu.ps1 -Install
+```
 
 ### `run_live_mesh_smoke.sh`
 

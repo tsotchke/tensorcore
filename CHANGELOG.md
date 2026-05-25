@@ -59,6 +59,11 @@ every architectural primitive in code and tested:
 - Portable CPU GEMM now honors the BLAS `beta == 0` contract without
   reading stale `C` contents, fixing the Windows conv2d forward NaN
   regression and adding poisoned-output coverage for f32/f16/bf16/i8.
+- Jack's Windows host now has a reproducible bootstrap path:
+  `scripts/bootstrap_windows_cpu.ps1` detects Visual Studio Build Tools,
+  CMake/CTest, and Python, then runs the full Windows portable CPU smoke.
+  MinGW-style and MSVC-style DLL names are both accepted by the loader and
+  packaging scripts.
 - Release-smoke evidence now records clean git-head provenance, and the
   operational bundle checker can require release, SDK26, PyTorch, and
   live-mesh evidence to match the current committed head.

@@ -50,7 +50,7 @@ def _library_names():
     if sys.platform.startswith("linux"):
         return ("libtensorcore.so", "libtensorcore.dylib")
     if sys.platform.startswith("win"):
-        return ("tensorcore.dll",)
+        return ("tensorcore.dll", "libtensorcore.dll")
     return ("libtensorcore.so", "libtensorcore.dylib")
 
 

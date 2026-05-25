@@ -13,7 +13,12 @@ from wheel.macosx_libfile import extract_macosx_min_system_version
 
 
 ROOT = Path(__file__).resolve().parent
-NATIVE_LIBRARY_NAMES = ("libtensorcore.dylib", "libtensorcore.so", "tensorcore.dll")
+NATIVE_LIBRARY_NAMES = (
+    "libtensorcore.dylib",
+    "libtensorcore.so",
+    "tensorcore.dll",
+    "libtensorcore.dll",
+)
 NATIVE_OPTIONAL_ARTIFACTS = ("tensorcore.metallib",)
 MACOS_ARCH_TAGS = {
     "arm64": {"arm64"},
@@ -46,14 +51,14 @@ def _artifact_dirs():
     yield from add(ROOT / "build" / "lib")
 
 
-def _platform_library_name():
+def _platform_library_names():
     if sys.platform == "darwin":
-        return "libtensorcore.dylib"
+        return ("libtensorcore.dylib",)
     if sys.platform.startswith("linux"):
-        return "libtensorcore.so"
+        return ("libtensorcore.so",)
     if sys.platform.startswith("win"):
-        return "tensorcore.dll"
-    return None
+        return ("tensorcore.dll", "libtensorcore.dll")
+    return ()
 
 
 def _metallib_required():
@@ -177,9 +182,10 @@ class bdist_wheel_with_native_artifacts(bdist_wheel):
     def run(self):
         found = _find_native_artifacts()
         required = []
-        platform_lib = _platform_library_name()
-        if platform_lib:
-            required.append(platform_lib)
+        platform_libs = _platform_library_names()
+        if platform_libs:
+            if not any(name in found for name in platform_libs):
+                required.append(" or ".join(platform_libs))
         elif not any(name in found for name in NATIVE_LIBRARY_NAMES):
             required.extend(NATIVE_LIBRARY_NAMES)
         if _metallib_required():
@@ -188,7 +194,11 @@ class bdist_wheel_with_native_artifacts(bdist_wheel):
         missing = [name for name in required if name not in found]
         if missing:
             searched = ", ".join(str(p) for p in _artifact_dirs())
-            lib_hint = platform_lib or "one of " + ", ".join(NATIVE_LIBRARY_NAMES)
+            lib_hint = (
+                " or ".join(platform_libs)
+                if platform_libs else
+                "one of " + ", ".join(NATIVE_LIBRARY_NAMES)
+            )
             raise SetupError(
                 "cannot build tensorcore-apple wheel without native artifacts: "
                 f"missing {', '.join(missing)}. Build/install tensorcore first "

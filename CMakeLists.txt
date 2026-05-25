@@ -489,6 +489,9 @@ set_target_properties(tensorcore_shared PROPERTIES
     MACHO_CURRENT_VERSION "${PROJECT_VERSION}"
     MACHO_COMPATIBILITY_VERSION "${TC_MACHO_COMPATIBILITY_VERSION}"
 )
+if(WIN32)
+    set_target_properties(tensorcore_shared PROPERTIES PREFIX "")
+endif()
 add_library(tensorcore::tensorcore_shared ALIAS tensorcore_shared)
 if(TC_ENABLE_METAL)
     add_dependencies(tensorcore_shared tensorcore_metallib)

@@ -101,16 +101,16 @@ function Find-VisualStudioCMake {
 function Find-TensorcoreDll {
     param([string]$BaseDir)
     $Candidates = @(
-        (Join-Path $BaseDir "bin\libtensorcore.dll"),
         (Join-Path $BaseDir "bin\tensorcore.dll"),
-        (Join-Path $BaseDir "bin\$Config\libtensorcore.dll"),
+        (Join-Path $BaseDir "bin\libtensorcore.dll"),
         (Join-Path $BaseDir "bin\$Config\tensorcore.dll"),
-        (Join-Path $BaseDir "lib\libtensorcore.dll"),
+        (Join-Path $BaseDir "bin\$Config\libtensorcore.dll"),
         (Join-Path $BaseDir "lib\tensorcore.dll"),
-        (Join-Path $BaseDir "$Config\libtensorcore.dll"),
+        (Join-Path $BaseDir "lib\libtensorcore.dll"),
         (Join-Path $BaseDir "$Config\tensorcore.dll"),
-        (Join-Path $BaseDir "libtensorcore.dll"),
-        (Join-Path $BaseDir "tensorcore.dll")
+        (Join-Path $BaseDir "$Config\libtensorcore.dll"),
+        (Join-Path $BaseDir "tensorcore.dll"),
+        (Join-Path $BaseDir "libtensorcore.dll")
     )
     foreach ($Candidate in $Candidates) {
         if (Test-Path $Candidate) {
