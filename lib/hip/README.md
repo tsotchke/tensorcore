@@ -68,6 +68,11 @@ At runtime: the chipStar runtime (`libCHIP.so`) plus the appropriate ICD
 loader. `clinfo` should show at least one SPIR-V-capable device for the
 backend to come up.
 
+Run `scripts/probe_hip_toolchain.py --json /tmp/hip-toolchain.json` before
+the build on a new machine. The evidence checker can require build-toolchain
+readiness (`hipcc` + HIP CMake config), SPIR-V runtime readiness
+(`llvm-spirv` + OpenCL/Level Zero), or full hipBLAS GEMM readiness.
+
 ## Kernel porting strategy
 
 The Metal kernels in `kernels/metal/` are written in MSL with

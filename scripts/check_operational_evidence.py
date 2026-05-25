@@ -86,7 +86,10 @@ def get_path(value: Any, path: str) -> Any:
 
 
 def normalize_optional_paths(args: argparse.Namespace) -> None:
-    for name in ("release", "sdk26", "cuda", "hip", "pytorch", "windows", "live_mesh"):
+    for name in (
+        "release", "sdk26", "cuda", "hip", "hip_toolchain", "pytorch",
+        "windows", "live_mesh",
+    ):
         path = getattr(args, name)
         if path is not None:
             setattr(args, name, path.expanduser().resolve())
@@ -98,6 +101,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sdk26", type=pathlib.Path)
     parser.add_argument("--cuda", type=pathlib.Path)
     parser.add_argument("--hip", type=pathlib.Path)
+    parser.add_argument("--hip-toolchain", type=pathlib.Path)
     parser.add_argument("--pytorch", type=pathlib.Path)
     parser.add_argument("--windows", type=pathlib.Path)
     parser.add_argument("--live-mesh", type=pathlib.Path)
@@ -107,6 +111,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--require-cuda", action="store_true")
     parser.add_argument("--require-hip", action="store_true")
     parser.add_argument("--require-hip-build", action="store_true")
+    parser.add_argument("--require-hip-toolchain", action="store_true")
+    parser.add_argument("--require-ready-hip-toolchain", action="store_true")
     parser.add_argument("--require-pytorch", action="store_true")
     parser.add_argument("--require-pytorch-backend-allocation", action="store_true")
     parser.add_argument("--require-windows", action="store_true")
@@ -116,6 +122,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--require-sdk26-clean-head", action="store_true")
     parser.add_argument("--require-cuda-clean-head", action="store_true")
     parser.add_argument("--require-hip-clean-head", action="store_true")
+    parser.add_argument("--require-hip-toolchain-clean-head", action="store_true")
     parser.add_argument("--require-pytorch-clean-head", action="store_true")
     parser.add_argument("--require-windows-clean-head", action="store_true")
     parser.add_argument("--require-live-clean-head", action="store_true")
@@ -140,6 +147,10 @@ def main() -> int:
         args.cuda = require_path("--cuda", args.cuda)
     if args.require_hip:
         args.hip = require_path("--hip", args.hip)
+    if args.require_hip_toolchain:
+        args.hip_toolchain = require_path("--hip-toolchain", args.hip_toolchain)
+    if args.require_ready_hip_toolchain:
+        args.hip_toolchain = require_path("--hip-toolchain", args.hip_toolchain)
     if args.require_pytorch:
         args.pytorch = require_path("--pytorch", args.pytorch)
     if args.require_windows:
@@ -185,6 +196,17 @@ def main() -> int:
             cmd.extend(["--git-head", args.git_head or "", "--require-clean-head"])
         run_checker(cmd)
         checked.append("hip")
+
+    if args.hip_toolchain is not None:
+        cmd = ["scripts/check_hip_toolchain_evidence.py", str(args.hip_toolchain)]
+        if args.require_hip_toolchain:
+            cmd.append("--require-build-toolchain")
+        if args.require_ready_hip_toolchain:
+            cmd.append("--require-ready")
+        if args.require_hip_toolchain_clean_head:
+            cmd.extend(["--git-head", args.git_head or "", "--require-clean-head"])
+        run_checker(cmd)
+        checked.append("hip_toolchain")
 
     if args.pytorch is not None:
         cmd = ["scripts/check_pytorch_smoke_evidence.py", str(args.pytorch)]

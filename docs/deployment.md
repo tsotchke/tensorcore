@@ -124,6 +124,28 @@ chipStar's HIP backend dispatches to whichever ICD is installed (Intel
 path does **not** work today (NVIDIA's OpenCL driver lacks SPIR-V
 ingestion); use the direct CUDA backend above instead.
 
+Before building, capture the host's OpenCL/SPIR-V readiness:
+
+```sh
+python3 scripts/probe_hip_toolchain.py --json /tmp/hip-toolchain.json
+python3 scripts/check_hip_toolchain_evidence.py /tmp/hip-toolchain.json
+```
+
+If chipStar is installed outside the default path, export the prefix before
+probing and building:
+
+```sh
+export TC_HIP_PREFIX=$HOME/chipstar-install
+export PATH=$TC_HIP_PREFIX/bin:$PATH
+export CMAKE_PREFIX_PATH=$TC_HIP_PREFIX:$CMAKE_PREFIX_PATH
+export LD_LIBRARY_PATH=$TC_HIP_PREFIX/lib:$LD_LIBRARY_PATH
+```
+
+Use `--require-build-toolchain` when a host must have `hipcc` plus HIP CMake
+config, `--require-spirv-runtime` when it must expose LLVM/SPIR-V plus an
+OpenCL or Level Zero runtime, and `--require-ready` when hipBLAS GEMM is
+required.
+
 `scripts/ci_hip_smoke.sh` is the operational gate for this path. It builds
 with `TC_ENABLE_HIP=ON`, runs CTest, and records whether the host reached
 no HIP runtime, HIP-runtime-only, or full hipBLAS GEMM dispatch. When
@@ -135,6 +157,8 @@ that must have full HIP GEMM working.
 For NVIDIA/chipStar hosts where the runtime target is expected to build but
 the OpenCL/SPIR-V backend may not initialize, validate the evidence with
 `--require-hip-build --require-clean-head` instead of `--require-hip`.
+HIP smoke evidence embeds the same toolchain probe so skipped hosts still
+explain what is missing.
 
 ## 2. Network setup
 

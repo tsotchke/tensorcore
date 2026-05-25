@@ -62,6 +62,9 @@ import pathlib
 import subprocess
 import sys
 
+sys.path.insert(0, str(pathlib.Path(os.environ["TC_ROOT"]) / "scripts"))
+import probe_hip_toolchain
+
 import tensorcore as tc
 
 
@@ -136,6 +139,7 @@ def base_evidence():
         "backend": None,
         "kernel": tc.hip_last_kernel_name(),
         "fallback_backend": None,
+        "toolchain": probe_hip_toolchain.collect_evidence(os.environ["TC_ROOT"]),
     }
 
 

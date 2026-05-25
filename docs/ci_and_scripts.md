@@ -352,10 +352,10 @@ was prepared from the archived checkout during that run.
 ### `check_operational_evidence.py`
 
 Validates a complete operational evidence bundle by delegating to the release,
-SDK26, CUDA, HIP, PyTorch, Windows, and live-mesh evidence checkers, then applying
-bundle-level policy. For production promotion, use the clean-head flags so
-stale or dirty-tree release, SDK26, PyTorch, and live-mesh evidence cannot
-satisfy the current head's deployment gate.
+SDK26, CUDA, HIP, HIP toolchain, PyTorch, Windows, and live-mesh evidence
+checkers, then applying bundle-level policy. For production promotion, use
+the clean-head flags so stale or dirty-tree evidence cannot satisfy the
+current head's deployment gate.
 
 ```sh
 python3 scripts/check_operational_evidence.py \
@@ -381,6 +381,10 @@ subsets that include a required HIP/chipStar accelerator host. Use
 `--require-hip-build --require-hip-clean-head` when the deployment only
 requires proving that chipStar/HIP compiled and initialized far enough to
 emit runtime-unavailable diagnostics.
+Add `--hip-toolchain /tmp/hip-toolchain.json --require-hip-toolchain` when
+the deployment must prove `hipcc` plus HIP CMake config, and add
+`--require-ready-hip-toolchain` when hipBLAS-ready OpenCL/SPIR-V evidence is
+required before scheduling work to that host.
 
 Add `--windows /tmp/windows-host.json --require-windows
 --require-windows-clean-head` when Jack or another Windows node is part of
@@ -435,15 +439,35 @@ when chipStar is outside the default CMake prefix paths. HIP evidence records
 `git_head` and `git_dirty`; archive-based deployments can supply that
 provenance via `TENSORCORE_SOURCE_GIT_HEAD` / `TENSORCORE_SOURCE_GIT_DIRTY`
 or the `.tensorcore_source_head` / `.tensorcore_source_dirty` files written
-by the live-mesh prepare step.
+by the live-mesh prepare step. The JSON also embeds the HIP toolchain probe
+described below, so skipped HIP smoke artifacts still preserve path and
+OpenCL/SPIR-V diagnostics.
 
 ```sh
 TENSORCORE_HIP_SMOKE_EVIDENCE_PATH=/tmp/hip.json scripts/ci_hip_smoke.sh
 python3 scripts/check_hip_smoke_evidence.py /tmp/hip.json
 python3 scripts/check_hip_smoke_evidence.py /tmp/hip.json --require-hip-build
 python3 scripts/check_hip_smoke_evidence.py /tmp/hip.json --require-clean-head
+python3 scripts/check_hip_smoke_evidence.py /tmp/hip.json --require-toolchain
 
 REQUIRE_HIP=1 scripts/ci_hip_smoke.sh  # fails unless HIP dispatch passes
+```
+
+### `probe_hip_toolchain.py`
+
+Captures the chipStar/OpenCL/SPIR-V host setup without building tensorcore.
+The evidence records `hipcc`, `clang`, `llvm-spirv`, `clinfo`, HIP and
+hipBLAS CMake package files, OpenCL ICDs, Level Zero loader discovery, and
+path hints for `TC_HIP_PREFIX`, `PATH`, `CMAKE_PREFIX_PATH`, and
+`LD_LIBRARY_PATH`.
+
+```sh
+python3 scripts/probe_hip_toolchain.py --json /tmp/hip-toolchain.json
+python3 scripts/check_hip_toolchain_evidence.py /tmp/hip-toolchain.json
+python3 scripts/check_hip_toolchain_evidence.py /tmp/hip-toolchain.json \
+  --require-build-toolchain --require-spirv-runtime
+python3 scripts/check_hip_toolchain_evidence.py /tmp/hip-toolchain.json \
+  --require-ready --require-clean-head
 ```
 
 ### `check_public_headers.sh`

@@ -77,6 +77,49 @@ def hip_evidence() -> dict[str, Any]:
     }
 
 
+def hip_toolchain_evidence() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "git_head": TEST_HEAD,
+        "git_dirty": False,
+        "platform": {"system": "Linux", "machine": "x86_64", "release": "test"},
+        "environment": {
+            "TC_HIP_PREFIX": "/opt/chipstar",
+            "CHIPSTAR_HOME": None,
+            "HIP_PATH": None,
+            "ROCM_PATH": None,
+            "CMAKE_PREFIX_PATH": "/opt/chipstar",
+        },
+        "prefixes": ["/opt/chipstar"],
+        "tools": {
+            "hipcc": {"path": "/opt/chipstar/bin/hipcc", "available": True},
+            "llvm-spirv": {"path": "/opt/chipstar/bin/llvm-spirv", "available": True},
+            "clinfo": {"path": "/usr/bin/clinfo", "available": True},
+        },
+        "cmake_packages": {
+            "hip": ["/opt/chipstar/lib/cmake/hip/hip-config.cmake"],
+            "hipblas": ["/opt/chipstar/lib/cmake/hipblas/hipblas-config.cmake"],
+        },
+        "runtime": {
+            "opencl_library": "libOpenCL.so.1",
+            "opencl_icd_files": ["/etc/OpenCL/vendors/chipStar.icd"],
+            "level_zero_library": None,
+            "clinfo_available": True,
+            "clinfo_devices": "Platform #0: chipStar",
+        },
+        "readiness": {
+            "hip_runtime_config": True,
+            "hipcc": True,
+            "spirv_translator": True,
+            "opencl_or_level_zero": True,
+            "hipblas_config": True,
+            "status": "ready_for_hip_gemm",
+            "missing": [],
+        },
+        "path_hints": ["export TC_HIP_PREFIX=/opt/chipstar"],
+    }
+
+
 def hip_runtime_unavailable_evidence() -> dict[str, Any]:
     evidence = hip_evidence()
     evidence.update({
@@ -216,6 +259,9 @@ def main() -> int:
         sdk26_path = write_json(directory, "sdk26.json", sdk26_evidence())
         cuda_path = write_json(directory, "cuda.json", cuda_evidence())
         hip_path = write_json(directory, "hip.json", hip_evidence())
+        hip_toolchain_path = write_json(
+            directory, "hip-toolchain.json", hip_toolchain_evidence()
+        )
         pytorch_path = write_json(directory, "pytorch.json", pytorch_evidence())
         windows_path = write_json(directory, "windows.json", windows_evidence())
 
@@ -224,6 +270,7 @@ def main() -> int:
             "--sdk26", str(sdk26_path),
             "--cuda", str(cuda_path),
             "--hip", str(hip_path),
+            "--hip-toolchain", str(hip_toolchain_path),
             "--pytorch", str(pytorch_path),
             "--windows", str(windows_path),
             "--live-mesh", str(live_path),
@@ -233,6 +280,8 @@ def main() -> int:
             "--require-cuda",
             "--require-hip",
             "--require-hip-build",
+            "--require-hip-toolchain",
+            "--require-ready-hip-toolchain",
             "--require-pytorch",
             "--require-pytorch-backend-allocation",
             "--require-windows",
@@ -242,6 +291,7 @@ def main() -> int:
             "--require-sdk26-clean-head",
             "--require-cuda-clean-head",
             "--require-hip-clean-head",
+            "--require-hip-toolchain-clean-head",
             "--require-pytorch-clean-head",
             "--require-windows-clean-head",
             "--require-live-clean-head",
@@ -254,6 +304,7 @@ def main() -> int:
         assert_fails("no evidence paths were provided")
         assert_fails("--live-mesh evidence is required", "--require-live-mesh")
         assert_fails("--windows evidence is required", "--require-windows")
+        assert_fails("--hip-toolchain evidence is required", "--require-hip-toolchain")
         assert_fails(
             "expected git head is unavailable",
             "--live-mesh", str(live_path),
@@ -359,6 +410,18 @@ def main() -> int:
             "--hip", str(dirty_hip_path),
             "--git-head", TEST_HEAD,
             "--require-hip-clean-head",
+        )
+
+        stale_hip_toolchain = hip_toolchain_evidence()
+        stale_hip_toolchain["git_head"] = "stale"
+        stale_hip_toolchain_path = write_json(
+            directory, "stale-hip-toolchain.fixture", stale_hip_toolchain
+        )
+        assert_fails(
+            "HIP toolchain evidence git_head mismatch",
+            "--hip-toolchain", str(stale_hip_toolchain_path),
+            "--git-head", TEST_HEAD,
+            "--require-hip-toolchain-clean-head",
         )
 
         hip_runtime_unavailable_path = write_json(

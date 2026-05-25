@@ -17,6 +17,11 @@ VALID_STATUSES = {
     "skipped_not_built",
     "skipped_runtime_unavailable",
 }
+VALID_TOOLCHAIN_STATUSES = {
+    "ready_for_hip_gemm",
+    "runtime_only_no_hipblas",
+    "missing_requirements",
+}
 
 
 def fail(message: str) -> int:
@@ -47,6 +52,16 @@ def main() -> int:
         help="Require that TC_ENABLE_HIP found the chipStar/HIP runtime target.",
     )
     parser.add_argument("--require-clean-head", action="store_true")
+    parser.add_argument(
+        "--require-toolchain",
+        action="store_true",
+        help="Require embedded chipStar/OpenCL/SPIR-V toolchain evidence.",
+    )
+    parser.add_argument(
+        "--require-ready-toolchain",
+        action="store_true",
+        help="Require embedded toolchain evidence ready for hipBLAS GEMM.",
+    )
     args = parser.parse_args()
 
     try:
@@ -78,6 +93,24 @@ def main() -> int:
             return fail(
                 "HIP evidence git_head mismatch: "
                 f"{evidence.get('git_head')!r} != {args.git_head!r}"
+            )
+
+    toolchain = evidence.get("toolchain")
+    if args.require_toolchain or args.require_ready_toolchain or toolchain is not None:
+        if not isinstance(toolchain, dict):
+            return fail("toolchain evidence must be an object")
+        if toolchain.get("schema_version") != 1:
+            return fail("toolchain.schema_version must be 1")
+        readiness = toolchain.get("readiness")
+        if not isinstance(readiness, dict):
+            return fail("toolchain.readiness must be an object")
+        toolchain_status = readiness.get("status")
+        if toolchain_status not in VALID_TOOLCHAIN_STATUSES:
+            return fail(f"unexpected toolchain readiness.status={toolchain_status!r}")
+        if args.require_ready_toolchain and toolchain_status != "ready_for_hip_gemm":
+            return fail(
+                "--require-ready-toolchain needs ready_for_hip_gemm, "
+                f"got {toolchain_status}"
             )
 
     if status == "passed":

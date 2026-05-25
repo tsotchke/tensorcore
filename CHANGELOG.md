@@ -90,6 +90,12 @@ every architectural primitive in code and tested:
   `--require-hip-build` requires that chipStar/HIP runtime targets compiled,
   while still accepting explicit runtime-unavailable evidence on hosts such
   as NVIDIA/OpenCL where SPIR-V device initialization is unavailable.
+- HIP/OpenCL/SPIR-V readiness now has a standalone probe:
+  `scripts/probe_hip_toolchain.py` records `hipcc`, LLVM/SPIR-V translator,
+  OpenCL/Level Zero runtime, CMake package, hipBLAS, and path-hint evidence;
+  `scripts/check_hip_toolchain_evidence.py` and the operational bundle can
+  require build-toolchain or ready-for-hipBLAS policy before a host is
+  admitted as a chipStar accelerator.
 - DiLoCo runtime with NONE/FP16/TOPK_1PCT/TOPK_01PCT compression,
   SGD/Nesterov/Adam outer optimizers, async overlap, sparse-on-the-wire
   cross-continent path.
