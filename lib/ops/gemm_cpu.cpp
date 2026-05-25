@@ -211,18 +211,6 @@ float load_b_f32(const float* B, const tc_gemm_desc* d, int k, int n) {
     return d->transpose_b ? B[(size_t)n * ldb + k] : B[(size_t)k * ldb + n];
 }
 
-float load_a_f16(const uint16_t* A, const tc_gemm_desc* d, int m, int k) {
-    const int32_t lda = effective_lda(d);
-    const uint16_t v = d->transpose_a ? A[(size_t)k * lda + m] : A[(size_t)m * lda + k];
-    return f16_to_f32(v);
-}
-
-float load_b_f16(const uint16_t* B, const tc_gemm_desc* d, int k, int n) {
-    const int32_t ldb = effective_ldb(d);
-    const uint16_t v = d->transpose_b ? B[(size_t)n * ldb + k] : B[(size_t)k * ldb + n];
-    return f16_to_f32(v);
-}
-
 /* BF16 <-> FP32: trivially-aligned formats. BF16 is the high 16 bits of an
  * FP32 (sign + 8 exp + 7 mantissa). These helpers are used by both CBLAS
  * bf16 fallback and the always-compiled K==0 short-circuit. */
@@ -528,7 +516,8 @@ tc_status_t gemm_compute(const tc_gemm_desc* d, const void* A, const void* B, vo
                     sum += (int32_t)Ai[ai] * (int32_t)Bi[bi];
                 }
                 const size_t idx = (size_t)m * ldc + n;
-                Ci[idx] = (int32_t)(d->alpha * (float)sum + d->beta * (float)Ci[idx]);
+                const float prior = (d->beta == 0.0f) ? 0.0f : (float)Ci[idx];
+                Ci[idx] = (int32_t)(d->alpha * (float)sum + d->beta * prior);
             }
         }
         return TC_OK;
@@ -545,7 +534,8 @@ tc_status_t gemm_compute(const tc_gemm_desc* d, const void* A, const void* B, vo
                     sum += load_a_f32(Af, d, m, k) * load_b_f32(Bf, d, k, n);
                 }
                 const size_t idx = (size_t)m * ldc + n;
-                Cf[idx] = d->alpha * sum + d->beta * Cf[idx];
+                const float prior = (d->beta == 0.0f) ? 0.0f : Cf[idx];
+                Cf[idx] = d->alpha * sum + d->beta * prior;
             }
         }
         return TC_OK;
@@ -554,15 +544,25 @@ tc_status_t gemm_compute(const tc_gemm_desc* d, const void* A, const void* B, vo
     const uint16_t* Ah = (const uint16_t*)A;
     const uint16_t* Bh = (const uint16_t*)B;
     uint16_t* Ch = (uint16_t*)C;
+    const bool is_bf16 = (d->c_dtype == TC_DTYPE_BF16);
+    const int32_t lda = effective_lda(d);
+    const int32_t ldb = effective_ldb(d);
     for (int m = 0; m < d->M; ++m) {
         for (int n = 0; n < d->N; ++n) {
             float sum = 0.0f;
             for (int k = 0; k < d->K; ++k) {
-                sum += load_a_f16(Ah, d, m, k) * load_b_f16(Bh, d, k, n);
+                const uint16_t av = d->transpose_a ? Ah[(size_t)k * lda + m] : Ah[(size_t)m * lda + k];
+                const uint16_t bv = d->transpose_b ? Bh[(size_t)n * ldb + k] : Bh[(size_t)k * ldb + n];
+                const float af = is_bf16 ? bf16_to_f32(av) : f16_to_f32(av);
+                const float bf = is_bf16 ? bf16_to_f32(bv) : f16_to_f32(bv);
+                sum += af * bf;
             }
             const size_t idx = (size_t)m * ldc + n;
-            const float prev = f16_to_f32(Ch[idx]);
-            Ch[idx] = f32_to_f16(d->alpha * sum + d->beta * prev);
+            const float prev = (d->beta == 0.0f)
+                ? 0.0f
+                : (is_bf16 ? bf16_to_f32(Ch[idx]) : f16_to_f32(Ch[idx]));
+            const float out = d->alpha * sum + d->beta * prev;
+            Ch[idx] = is_bf16 ? f32_to_bf16(out) : f32_to_f16(out);
         }
     }
     return TC_OK;

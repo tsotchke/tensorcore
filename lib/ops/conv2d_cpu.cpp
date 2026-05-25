@@ -64,13 +64,14 @@ void direct_sgemm_f32(bool transpose_a, bool transpose_b,
      * the BLAS path is the fast one, this is the correctness floor. */
     for (int m = 0; m < M; ++m) {
         for (int n = 0; n < N; ++n) {
-            float acc = beta * C[(size_t)m * ldc + n];
+            const size_t idx = (size_t)m * ldc + n;
+            float acc = (beta == 0.0f) ? 0.0f : beta * C[idx];
             for (int k = 0; k < K; ++k) {
                 const float av = transpose_a ? A[(size_t)k * lda + m] : A[(size_t)m * lda + k];
                 const float bv = transpose_b ? B[(size_t)n * ldb + k] : B[(size_t)k * ldb + n];
                 acc += alpha * av * bv;
             }
-            C[(size_t)m * ldc + n] = acc;
+            C[idx] = acc;
         }
     }
 #endif

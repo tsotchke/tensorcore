@@ -301,6 +301,149 @@ static int run_i8_gemm(tc_context* ctx) {
     return rc;
 }
 
+static int run_beta_zero_ignores_c_gemm(tc_context* ctx) {
+    int rc = 0;
+
+    {
+        const int M = 2, N = 2, K = 2;
+        tc_buffer *A = NULL, *B = NULL, *C = NULL;
+        float *Ap = NULL, *Bp = NULL, *Cp = NULL;
+        const float want[] = {19.0f, 22.0f, 43.0f, 50.0f};
+        rc |= expect_status("beta0 f32 A", tc_buffer_alloc(ctx, M * K * sizeof(float), &A), TC_OK);
+        rc |= expect_status("beta0 f32 B", tc_buffer_alloc(ctx, K * N * sizeof(float), &B), TC_OK);
+        rc |= expect_status("beta0 f32 C", tc_buffer_alloc(ctx, M * N * sizeof(float), &C), TC_OK);
+        if (rc == 0 &&
+            tc_buffer_map(A, (void**)&Ap) == TC_OK &&
+            tc_buffer_map(B, (void**)&Bp) == TC_OK &&
+            tc_buffer_map(C, (void**)&Cp) == TC_OK) {
+            const float av[] = {1.0f, 2.0f, 3.0f, 4.0f};
+            const float bv[] = {5.0f, 6.0f, 7.0f, 8.0f};
+            memcpy(Ap, av, sizeof(av));
+            memcpy(Bp, bv, sizeof(bv));
+            for (int i = 0; i < M * N; ++i) Cp[i] = f32_from_bits(0x7fc00000u);
+            tc_gemm_desc d = {0};
+            d.M = M; d.N = N; d.K = K;
+            d.a_dtype = TC_DTYPE_F32; d.b_dtype = TC_DTYPE_F32;
+            d.c_dtype = TC_DTYPE_F32; d.accum_dtype = TC_DTYPE_F32;
+            d.alpha = 1.0f; d.beta = 0.0f;
+            rc |= expect_status("beta0 f32 gemm", tc_gemm(ctx, &d, A, B, C), TC_OK);
+            for (int i = 0; i < M * N; ++i)
+                if (Cp[i] != Cp[i] || fabsf(Cp[i]) > 1e30f || fabsf(Cp[i] - want[i]) > 1e-6f) rc = 1;
+        } else {
+            rc = 1;
+        }
+        if (C) tc_buffer_free(ctx, C);
+        if (B) tc_buffer_free(ctx, B);
+        if (A) tc_buffer_free(ctx, A);
+    }
+
+    {
+        const int M = 2, N = 2, K = 2;
+        tc_buffer *A = NULL, *B = NULL, *C = NULL;
+        uint16_t *Ap = NULL, *Bp = NULL, *Cp = NULL;
+        const float want[] = {3.5f, 3.0f, 7.5f, 5.0f};
+        rc |= expect_status("beta0 f16 A", tc_buffer_alloc(ctx, M * K * sizeof(uint16_t), &A), TC_OK);
+        rc |= expect_status("beta0 f16 B", tc_buffer_alloc(ctx, K * N * sizeof(uint16_t), &B), TC_OK);
+        rc |= expect_status("beta0 f16 C", tc_buffer_alloc(ctx, M * N * sizeof(uint16_t), &C), TC_OK);
+        if (rc == 0 &&
+            tc_buffer_map(A, (void**)&Ap) == TC_OK &&
+            tc_buffer_map(B, (void**)&Bp) == TC_OK &&
+            tc_buffer_map(C, (void**)&Cp) == TC_OK) {
+            const float av[] = {1.0f, 2.0f, 3.0f, 4.0f};
+            const float bv[] = {0.5f, -1.0f, 1.5f, 2.0f};
+            for (int i = 0; i < M * K; ++i) Ap[i] = f32_to_f16(av[i]);
+            for (int i = 0; i < K * N; ++i) Bp[i] = f32_to_f16(bv[i]);
+            for (int i = 0; i < M * N; ++i) Cp[i] = 0x7e00u;
+            tc_gemm_desc d = {0};
+            d.M = M; d.N = N; d.K = K;
+            d.a_dtype = TC_DTYPE_F16; d.b_dtype = TC_DTYPE_F16;
+            d.c_dtype = TC_DTYPE_F16; d.accum_dtype = TC_DTYPE_F32;
+            d.alpha = 1.0f; d.beta = 0.0f;
+            rc |= expect_status("beta0 f16 gemm", tc_gemm(ctx, &d, A, B, C), TC_OK);
+            for (int i = 0; i < M * N; ++i) {
+                const float got = f16_to_f32(Cp[i]);
+                if (got != got || fabsf(got) > 1e30f || fabsf(got - want[i]) > 1e-3f) rc = 1;
+            }
+        } else {
+            rc = 1;
+        }
+        if (C) tc_buffer_free(ctx, C);
+        if (B) tc_buffer_free(ctx, B);
+        if (A) tc_buffer_free(ctx, A);
+    }
+
+    {
+        const int M = 2, N = 2, K = 2;
+        tc_buffer *A = NULL, *B = NULL, *C = NULL;
+        uint16_t *Ap = NULL, *Bp = NULL, *Cp = NULL;
+        const float want[] = {3.5f, 3.0f, 7.5f, 5.0f};
+        rc |= expect_status("beta0 bf16 A", tc_buffer_alloc(ctx, M * K * sizeof(uint16_t), &A), TC_OK);
+        rc |= expect_status("beta0 bf16 B", tc_buffer_alloc(ctx, K * N * sizeof(uint16_t), &B), TC_OK);
+        rc |= expect_status("beta0 bf16 C", tc_buffer_alloc(ctx, M * N * sizeof(uint16_t), &C), TC_OK);
+        if (rc == 0 &&
+            tc_buffer_map(A, (void**)&Ap) == TC_OK &&
+            tc_buffer_map(B, (void**)&Bp) == TC_OK &&
+            tc_buffer_map(C, (void**)&Cp) == TC_OK) {
+            const float av[] = {1.0f, 2.0f, 3.0f, 4.0f};
+            const float bv[] = {0.5f, -1.0f, 1.5f, 2.0f};
+            for (int i = 0; i < M * K; ++i) Ap[i] = f32_to_bf16(av[i]);
+            for (int i = 0; i < K * N; ++i) Bp[i] = f32_to_bf16(bv[i]);
+            for (int i = 0; i < M * N; ++i) Cp[i] = 0x7fc0u;
+            tc_gemm_desc d = {0};
+            d.M = M; d.N = N; d.K = K;
+            d.a_dtype = TC_DTYPE_BF16; d.b_dtype = TC_DTYPE_BF16;
+            d.c_dtype = TC_DTYPE_BF16; d.accum_dtype = TC_DTYPE_F32;
+            d.alpha = 1.0f; d.beta = 0.0f;
+            rc |= expect_status("beta0 bf16 gemm", tc_gemm(ctx, &d, A, B, C), TC_OK);
+            for (int i = 0; i < M * N; ++i) {
+                const float got = bf16_to_f32(Cp[i]);
+                if (got != got || fabsf(got) > 1e30f || fabsf(got - want[i]) > 1e-2f) rc = 1;
+            }
+        } else {
+            rc = 1;
+        }
+        if (C) tc_buffer_free(ctx, C);
+        if (B) tc_buffer_free(ctx, B);
+        if (A) tc_buffer_free(ctx, A);
+    }
+
+    {
+        const int M = 2, N = 2, K = 2;
+        tc_buffer *A = NULL, *B = NULL, *C = NULL;
+        int8_t *Ap = NULL, *Bp = NULL;
+        int32_t *Cp = NULL;
+        const int32_t want[] = {19, 22, 43, 50};
+        rc |= expect_status("beta0 i8 A", tc_buffer_alloc(ctx, M * K, &A), TC_OK);
+        rc |= expect_status("beta0 i8 B", tc_buffer_alloc(ctx, K * N, &B), TC_OK);
+        rc |= expect_status("beta0 i8 C", tc_buffer_alloc(ctx, M * N * sizeof(int32_t), &C), TC_OK);
+        if (rc == 0 &&
+            tc_buffer_map(A, (void**)&Ap) == TC_OK &&
+            tc_buffer_map(B, (void**)&Bp) == TC_OK &&
+            tc_buffer_map(C, (void**)&Cp) == TC_OK) {
+            const int8_t av[] = {1, 2, 3, 4};
+            const int8_t bv[] = {5, 6, 7, 8};
+            memcpy(Ap, av, sizeof(av));
+            memcpy(Bp, bv, sizeof(bv));
+            for (int i = 0; i < M * N; ++i) Cp[i] = 1234567;
+            tc_gemm_desc d = {0};
+            d.M = M; d.N = N; d.K = K;
+            d.a_dtype = TC_DTYPE_I8; d.b_dtype = TC_DTYPE_I8;
+            d.c_dtype = TC_DTYPE_I32; d.accum_dtype = TC_DTYPE_I32;
+            d.alpha = 1.0f; d.beta = 0.0f;
+            rc |= expect_status("beta0 i8 gemm", tc_gemm(ctx, &d, A, B, C), TC_OK);
+            for (int i = 0; i < M * N; ++i)
+                if (Cp[i] != want[i]) rc = 1;
+        } else {
+            rc = 1;
+        }
+        if (C) tc_buffer_free(ctx, C);
+        if (B) tc_buffer_free(ctx, B);
+        if (A) tc_buffer_free(ctx, A);
+    }
+
+    return rc;
+}
+
 static int run_k_zero_gemm(tc_context* ctx) {
     tc_buffer *A = NULL, *B = NULL, *C = NULL;
     int rc = 0;
@@ -919,6 +1062,7 @@ int main(void) {
     rc |= run_padded_f16_gemm(ctx);
     rc |= run_batched_f32_gemm(ctx);
     rc |= run_i8_gemm(ctx);
+    rc |= run_beta_zero_ignores_c_gemm(ctx);
     rc |= run_k_zero_gemm(ctx);
     rc |= run_quantized(ctx);
     rc |= run_distributed(ctx);

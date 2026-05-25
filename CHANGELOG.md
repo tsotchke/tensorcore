@@ -56,6 +56,9 @@ every architectural primitive in code and tested:
   generated DLL export definition from the public ABI list, Windows-safe
   GGUF mapping/autotune helpers, and `scripts/ci_windows_cpu.ps1` for
   Jack's Tailscale machine and hosted Windows CI.
+- Portable CPU GEMM now honors the BLAS `beta == 0` contract without
+  reading stale `C` contents, fixing the Windows conv2d forward NaN
+  regression and adding poisoned-output coverage for f32/f16/bf16/i8.
 - Release-smoke evidence now records clean git-head provenance, and the
   operational bundle checker can require release, SDK26, PyTorch, and
   live-mesh evidence to match the current committed head.
