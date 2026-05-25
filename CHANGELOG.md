@@ -64,6 +64,10 @@ every architectural primitive in code and tested:
   CMake/CTest, and Python, then runs the full Windows portable CPU smoke.
   MinGW-style and MSVC-style DLL names are both accepted by the loader and
   packaging scripts.
+- Windows host smoke is now operational from the Unix side too:
+  `scripts/run_windows_host_smoke.sh` SSHes over Tailscale, clones or
+  fast-forwards the remote checkout, and runs the same bootstrap gate on
+  Jack's machine or any future Windows node.
 - Release-smoke evidence now records clean git-head provenance, and the
   operational bundle checker can require release, SDK26, PyTorch, and
   live-mesh evidence to match the current committed head.

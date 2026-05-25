@@ -212,6 +212,23 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\bootstrap_windows_cp
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\bootstrap_windows_cpu.ps1 -Install
 ```
 
+### `run_windows_host_smoke.sh`
+
+Runs the Windows bootstrap on a Tailscale/SSH-reachable host from a Unix
+controller. It defaults to Jack's machine
+(`tsotchke@100.68.70.96`), clones `https://github.com/tsotchke/tensorcore.git`
+to `src/tensorcore` if needed, fast-forwards `master`, then launches
+`bootstrap_windows_cpu.ps1`.
+
+```sh
+TC_WINDOWS_SSH_KEY="$HOME/.ssh/id_ed25519_jack" scripts/run_windows_host_smoke.sh
+```
+
+Set `TC_WINDOWS_SSH`, `TC_WINDOWS_REPO`, `TC_WINDOWS_REF`, or
+`TC_WINDOWS_REMOTE_URL` for other Windows hosts. The default update is
+non-destructive; set `TC_WINDOWS_RESET=1` only when the remote checkout is a
+dedicated smoke workspace that can be hard-reset to `origin/<ref>`.
+
 ### `run_live_mesh_smoke.sh`
 
 Runs the operational four-rank mesh smoke across Atlas, Enki, old-donkey,

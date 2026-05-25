@@ -174,6 +174,18 @@ cd tensorcore
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ci_windows_cpu.ps1
 ```
 
+From a Unix controller on the same tailnet, use the SSH orchestrator to
+keep the Windows host reproducible:
+
+```sh
+TC_WINDOWS_SSH_KEY="$HOME/.ssh/id_ed25519_jack" scripts/run_windows_host_smoke.sh
+```
+
+By default the script clones the repo if missing, then uses `git pull
+--ff-only` on `master` before running `bootstrap_windows_cpu.ps1`. Set
+`TC_WINDOWS_RESET=1` only for a clean operational gate where it is acceptable
+to hard-reset the remote checkout to `origin/master`.
+
 For an explicit Visual Studio x64 build:
 
 ```powershell
