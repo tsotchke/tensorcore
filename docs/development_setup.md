@@ -137,6 +137,43 @@ What doesn't (returns `TC_ERR_UNSUPPORTED_FAMILY`):
 `tc_last_backend()` reports `portable_cpu` for every served call on
 this build.
 
+## Windows x86 portable CPU setup
+
+Windows is a portable CPU target today. It builds the same public C ABI and
+Python `ctypes` surface, installs `tensorcore.dll`, and skips POSIX-only
+forked GLOO tests with CTest's skip code until a Winsock transport lands.
+
+Jack's Tailscale host is `desktop-jack-blupc` (`100.68.70.96`). The expected
+toolchain on that machine is:
+
+- Visual Studio Build Tools 2022 with **Desktop development with C++**
+  (MSVC, Windows SDK, and CMake tools).
+- Git for Windows.
+- Python 3.11 or 3.12 for the Python binding smoke.
+- Optional Ninja; otherwise use the Visual Studio generator from a Developer
+  PowerShell or x64 Native Tools prompt.
+
+On Jack's machine:
+
+```powershell
+git clone https://github.com/tsotchke/tensorcore.git
+cd tensorcore
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ci_windows_cpu.ps1
+```
+
+For an explicit Visual Studio x64 build:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ci_windows_cpu.ps1 `
+  -Generator "Visual Studio 17 2022" -Platform x64 `
+  -BuildDir build-windows-cpu -Prefix "$env:TEMP\tensorcore-install"
+```
+
+The script configures `TC_ENABLE_METAL=OFF`, builds the portable CPU library
+and CTest suite, installs the native SDK, verifies the installed public
+headers, then imports Python against the produced `tensorcore.dll` with
+`TENSORCORE_LIB` set explicitly.
+
 ## Optional CUDA / HIP Scaffolding
 
 The direct NVIDIA CUDA and chipStar HIP backends are opt-in build paths:

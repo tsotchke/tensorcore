@@ -40,7 +40,7 @@ typedef struct {
     tc_gguf_type_t    type;
     uint64_t          offset;      /* offset from start of tensor data region */
     size_t            n_bytes;     /* total bytes of this tensor */
-    const void*       data;        /* pointer into the mmap */
+    const void*       data;        /* pointer into the mapped file */
 } tc_gguf_tensor_info;
 
 typedef struct {
@@ -73,10 +73,10 @@ typedef struct {
     tc_gguf_type_t   gguf_type;
     tc_quant_t       quant_type;
     size_t           n_bytes;
-    tc_buffer*       buffer;     /* set for loaded tensors, NULL for mmap tensors */
+    tc_buffer*       buffer;     /* set for loaded tensors, NULL for mapped tensors */
 } tc_gguf_quantized_matrix_info;
 
-/* Open a GGUF file: mmap, parse header + metadata + tensor info. */
+/* Open a GGUF file: memory-map, parse header + metadata + tensor info. */
 tc_status_t tc_gguf_open(const char* path, tc_gguf_file** out);
 void        tc_gguf_close(tc_gguf_file* f);
 
@@ -117,7 +117,7 @@ tc_status_t tc_gguf_get_llama_config(const tc_gguf_file* f,
                                      tc_gguf_llama_config* out_config);
 
 /* Allocate a tensorcore buffer and copy the named tensor bytes into it. This is
- * the bridge from mmap-backed GGUF tensor data to Metal kernels. Caller owns
+ * the bridge from mapped GGUF tensor data to Metal kernels. Caller owns
  * the returned buffer and frees it with tc_buffer_free(ctx, buffer). */
 tc_status_t tc_gguf_tensor_to_buffer(tc_context* ctx,
                                      const tc_gguf_file* f,

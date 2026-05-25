@@ -17,7 +17,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#if defined(_WIN32)
+#include <direct.h>
+#else
 #include <sys/stat.h>
+#endif
 
 #if defined(_WIN32)
 #define TC_INTERNAL_SYMBOL
@@ -76,10 +80,18 @@ TC_INTERNAL_SYMBOL tc_gemm_tile tc_autotune_gemm_tile_for_family(tc_family_t fam
 static const char* tc_autotune_cache_dir(void) {
     static char path[1024] = {0};
     if (!path[0]) {
+#if defined(_WIN32)
+        const char* home = getenv("USERPROFILE");
+        if (!home) home = getenv("TEMP");
+        if (!home) home = "C:\\Temp";
+        snprintf(path, sizeof(path), "%s\\.tensorcore", home);
+        _mkdir(path);
+#else
         const char* home = getenv("HOME");
         if (!home) home = "/tmp";
         snprintf(path, sizeof(path), "%s/.tensorcore", home);
         mkdir(path, 0755);
+#endif
     }
     return path;
 }

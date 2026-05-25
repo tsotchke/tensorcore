@@ -13,14 +13,19 @@
 
 #include "tensorcore/gguf.h"
 
+#if defined(_WIN32)
+#include <windows.h>
+#else
 #include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
 #define GGUF_MAGIC 0x46554747u   /* 'GGUF' little-endian */
 #define GGUF_DEFAULT_ALIGNMENT 32
@@ -53,7 +58,12 @@ typedef struct {
 } gguf_kv;
 
 struct tc_gguf_file {
+#if defined(_WIN32)
+    HANDLE    file_handle;
+    HANDLE    mapping_handle;
+#else
     int       fd;
+#endif
     void*     map;
     size_t    map_size;
     /* Header. */
@@ -94,6 +104,85 @@ static tc_status_t gguf_quantized_matrix_info_common(int32_t n_dims,
                                                      size_t n_bytes,
                                                      tc_buffer* buffer,
                                                      tc_gguf_quantized_matrix_info* out_info);
+
+static char* gguf_strdup(const char* src) {
+    if (!src) src = "";
+    const size_t n = strlen(src);
+    char* dst = (char*)malloc(n + 1);
+    if (!dst) return NULL;
+    memcpy(dst, src, n + 1);
+    return dst;
+}
+
+#if defined(_WIN32)
+static tc_status_t map_file_readonly(const char* path,
+                                     void** out_map,
+                                     size_t* out_size,
+                                     HANDLE* out_file,
+                                     HANDLE* out_mapping) {
+    if (!out_map || !out_size || !out_file || !out_mapping) return TC_ERR_INVALID_ARG;
+    *out_map = NULL;
+    *out_size = 0;
+    *out_file = INVALID_HANDLE_VALUE;
+    *out_mapping = NULL;
+
+    HANDLE file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) return TC_ERR_INTERNAL;
+
+    LARGE_INTEGER size;
+    if (!GetFileSizeEx(file, &size) || size.QuadPart <= 0 ||
+        (uint64_t)size.QuadPart > (uint64_t)SIZE_MAX) {
+        CloseHandle(file);
+        return TC_ERR_INTERNAL;
+    }
+
+    HANDLE mapping = CreateFileMappingA(file, NULL, PAGE_READONLY, 0, 0, NULL);
+    if (!mapping) {
+        CloseHandle(file);
+        return TC_ERR_INTERNAL;
+    }
+
+    void* map = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
+    if (!map) {
+        CloseHandle(mapping);
+        CloseHandle(file);
+        return TC_ERR_INTERNAL;
+    }
+
+    *out_map = map;
+    *out_size = (size_t)size.QuadPart;
+    *out_file = file;
+    *out_mapping = mapping;
+    return TC_OK;
+}
+#else
+static tc_status_t map_file_readonly(const char* path,
+                                     void** out_map,
+                                     size_t* out_size,
+                                     int* out_fd) {
+    if (!out_map || !out_size || !out_fd) return TC_ERR_INVALID_ARG;
+    *out_map = NULL;
+    *out_size = 0;
+    *out_fd = -1;
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return TC_ERR_INTERNAL;
+    struct stat st;
+    if (fstat(fd, &st) < 0) { close(fd); return TC_ERR_INTERNAL; }
+    if (st.st_size <= 0 || (uint64_t)st.st_size > SIZE_MAX) {
+        close(fd);
+        return TC_ERR_INTERNAL;
+    }
+    void* map = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (map == MAP_FAILED) { close(fd); return TC_ERR_INTERNAL; }
+
+    *out_map = map;
+    *out_size = (size_t)st.st_size;
+    *out_fd = fd;
+    return TC_OK;
+}
+#endif
 
 /* ----------------- Read helpers ----------------- */
 typedef struct {
@@ -251,29 +340,42 @@ static int type_bytes(tc_gguf_type_t t, uint64_t n_elems, size_t* out_bytes) {
 
 tc_status_t tc_gguf_open(const char* path, tc_gguf_file** out) {
     if (!path || !out) return TC_ERR_INVALID_ARG;
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return TC_ERR_INTERNAL;
-    struct stat st;
-    if (fstat(fd, &st) < 0) { close(fd); return TC_ERR_INTERNAL; }
-    if (st.st_size <= 0 || (uint64_t)st.st_size > SIZE_MAX) {
-        close(fd);
-        return TC_ERR_INTERNAL;
-    }
-    void* map = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-    if (map == MAP_FAILED) { close(fd); return TC_ERR_INTERNAL; }
+    void* map = NULL;
+    size_t map_size = 0;
+#if defined(_WIN32)
+    HANDLE file_handle = INVALID_HANDLE_VALUE;
+    HANDLE mapping_handle = NULL;
+    tc_status_t map_status = map_file_readonly(path, &map, &map_size,
+                                               &file_handle, &mapping_handle);
+#else
+    int fd = -1;
+    tc_status_t map_status = map_file_readonly(path, &map, &map_size, &fd);
+#endif
+    if (map_status != TC_OK) return map_status;
 
     tc_gguf_file* f = (tc_gguf_file*)calloc(1, sizeof(*f));
     if (!f) {
-        munmap(map, (size_t)st.st_size);
+#if defined(_WIN32)
+        if (map) UnmapViewOfFile(map);
+        if (mapping_handle) CloseHandle(mapping_handle);
+        if (file_handle != INVALID_HANDLE_VALUE) CloseHandle(file_handle);
+#else
+        munmap(map, map_size);
         close(fd);
+#endif
         return TC_ERR_ALLOC;
     }
+#if defined(_WIN32)
+    f->file_handle = file_handle;
+    f->mapping_handle = mapping_handle;
+#else
     f->fd = fd;
+#endif
     f->map = map;
-    f->map_size = (size_t)st.st_size;
+    f->map_size = map_size;
     f->alignment = GGUF_DEFAULT_ALIGNMENT;
 
-    reader_t r = { (const uint8_t*)map, 0, (size_t)st.st_size };
+    reader_t r = { (const uint8_t*)map, 0, map_size };
 
     uint32_t magic;
     if (rd_u32(&r, &magic) != 0 || magic != GGUF_MAGIC) goto fail;
@@ -372,8 +474,14 @@ void tc_gguf_close(tc_gguf_file* f) {
         }
         free(f->kvs);
     }
+#if defined(_WIN32)
+    if (f->map) UnmapViewOfFile(f->map);
+    if (f->mapping_handle) CloseHandle(f->mapping_handle);
+    if (f->file_handle && f->file_handle != INVALID_HANDLE_VALUE) CloseHandle(f->file_handle);
+#else
     if (f->map && f->map != MAP_FAILED) munmap(f->map, f->map_size);
     if (f->fd >= 0) close(f->fd);
+#endif
     free(f);
 }
 
@@ -735,7 +843,7 @@ tc_status_t tc_gguf_load_supported_tensors(tc_context* ctx,
         }
 
         loaded_tensor* dst = &model->tensors[model->count];
-        dst->name = strdup(src->name ? src->name : "");
+        dst->name = gguf_strdup(src->name ? src->name : "");
         if (!dst->name) {
             tc_gguf_loaded_model_free(ctx, model);
             return TC_ERR_ALLOC;

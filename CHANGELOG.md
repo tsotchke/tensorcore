@@ -52,6 +52,10 @@ every architectural primitive in code and tested:
 - CUDA training dispatch now covers LayerNorm backward and RoPE
   forward/backward on managed buffers, closing two more transformer-training
   fallbacks in the RTX 3090 path and adding them to CUDA smoke evidence.
+- Windows x86 portable CPU bring-up now has MSVC-safe CMake flags, a
+  generated DLL export definition from the public ABI list, Windows-safe
+  GGUF mapping/autotune helpers, and `scripts/ci_windows_cpu.ps1` for
+  Jack's Tailscale machine and hosted Windows CI.
 - Release-smoke evidence now records clean git-head provenance, and the
   operational bundle checker can require release, SDK26, PyTorch, and
   live-mesh evidence to match the current committed head.

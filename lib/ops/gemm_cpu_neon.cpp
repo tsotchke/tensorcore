@@ -45,6 +45,9 @@
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
+#if defined(_WIN32)
+#include <malloc.h>
+#endif
 
 #if defined(_OPENMP)
 #  include <omp.h>
@@ -228,12 +231,22 @@ inline void micro_kernel_4x16_edge(int kc, int mr, int nr,
 inline float* aligned_alloc_fp32(size_t n_floats) {
     void* p = nullptr;
     const size_t bytes = ((n_floats * sizeof(float) + 63) / 64) * 64;
-#if defined(__APPLE__) || defined(_GNU_SOURCE)
+#if defined(_WIN32)
+    p = _aligned_malloc(bytes, 64);
+#elif defined(__APPLE__) || defined(_GNU_SOURCE)
     if (posix_memalign(&p, 64, bytes) != 0) return nullptr;
 #else
     p = std::aligned_alloc(64, bytes);
 #endif
     return static_cast<float*>(p);
+}
+
+inline void aligned_free_fp32(float* p) {
+#if defined(_WIN32)
+    _aligned_free(p);
+#else
+    std::free(p);
+#endif
 }
 
 }  // namespace
@@ -254,12 +267,12 @@ extern "C" TC_INTERNAL_SYMBOL int tc_neon_gemm_f32(int M, int N, int K,
     const size_t pack_A_size = (size_t)TC_NEON_MC * TC_NEON_KC;
     const size_t pack_B_size = (size_t)TC_NEON_KC * TC_NEON_NC;
     if (tls_packed_A_cap < pack_A_size) {
-        std::free(tls_packed_A);
+        aligned_free_fp32(tls_packed_A);
         tls_packed_A = aligned_alloc_fp32(pack_A_size);
         tls_packed_A_cap = pack_A_size;
     }
     if (tls_packed_B_cap < pack_B_size) {
-        std::free(tls_packed_B);
+        aligned_free_fp32(tls_packed_B);
         tls_packed_B = aligned_alloc_fp32(pack_B_size);
         tls_packed_B_cap = pack_B_size;
     }

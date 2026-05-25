@@ -46,6 +46,18 @@ jobs:
       - name: CPU backend build, tests, and install consumer
         run: scripts/ci_portable_cpu.sh
 
+  portable-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Windows portable CPU build and smoke
+        shell: pwsh
+        run: >
+          ./scripts/ci_windows_cpu.ps1
+          -BuildDir "$env:RUNNER_TEMP/tensorcore-build"
+          -Prefix "$env:RUNNER_TEMP/tensorcore-install"
+
   build-and-test:
     runs-on: macos-14
     steps:

@@ -180,6 +180,23 @@ the Python AMX opt-in path on local Apple-Silicon verification machines;
 set `TC_RUN_AMX_GEMM_TEST=1` when running the direct C AMX regressions on
 known-good local hardware.
 
+### `ci_windows_cpu.ps1`
+
+Builds the Windows x86 portable CPU target with MSVC or another CMake
+Windows generator. It configures `TC_ENABLE_METAL=OFF`, disables CUDA/HIP
+unless explicitly tested elsewhere, runs CTest with `-C Release`, installs
+the native SDK, and imports Python against the produced `tensorcore.dll`.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ci_windows_cpu.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ci_windows_cpu.ps1 `
+  -Generator "Visual Studio 17 2022" -Platform x64
+```
+
+Use `-SkipPython` only for first-pass compiler bring-up on a machine that
+does not have Python installed yet; deployment validation should keep the
+Python smoke enabled.
+
 ### `run_live_mesh_smoke.sh`
 
 Runs the operational four-rank mesh smoke across Atlas, Enki, old-donkey,
