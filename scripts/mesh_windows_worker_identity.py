@@ -107,6 +107,7 @@ def run_remote_powershell(target: str, script: str, *, timeout: float) -> subpro
     try:
         return subprocess.run(
             common + ["-EncodedCommand", ps_encode(run_command)],
+            stdin=subprocess.DEVNULL,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -114,14 +115,18 @@ def run_remote_powershell(target: str, script: str, *, timeout: float) -> subpro
             check=False,
         )
     finally:
-        subprocess.run(
-            common + ["-EncodedCommand", ps_encode(cleanup_command)],
-            text=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=max(1.0, min(timeout, 5.0)),
-            check=False,
-        )
+        try:
+            subprocess.run(
+                common + ["-EncodedCommand", ps_encode(cleanup_command)],
+                stdin=subprocess.DEVNULL,
+                text=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=max(1.0, min(timeout, 5.0)),
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            pass
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
