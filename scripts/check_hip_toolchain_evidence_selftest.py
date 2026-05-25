@@ -50,12 +50,22 @@ def evidence() -> dict[str, Any]:
             "level_zero_library": None,
             "clinfo_available": True,
             "clinfo_devices": "Platform #0: chipStar",
+            "opencl_devices": [{
+                "platform": "chipStar",
+                "name": "SPIR-V GPU",
+                "type": "GPU",
+                "il_version": "SPIR-V_1.2",
+                "extensions": "cl_khr_il_program",
+                "spirv_capable": True,
+            }],
+            "gpu_spirv_device": True,
         },
         "readiness": {
             "hip_runtime_config": True,
             "hipcc": True,
             "spirv_translator": True,
             "opencl_or_level_zero": True,
+            "gpu_spirv_runtime": True,
             "hipblas_config": True,
             "status": "ready_for_hip_gemm",
             "missing": [],
@@ -116,13 +126,28 @@ def main() -> int:
         missing_runtime = copy.deepcopy(evidence())
         missing_runtime["readiness"].update({
             "opencl_or_level_zero": False,
+            "gpu_spirv_runtime": False,
             "status": "missing_requirements",
             "missing": ["OpenCL or Level Zero runtime"],
         })
         missing_runtime_path = write_json(directory, "missing-runtime.json", missing_runtime)
         assert_fails(
             missing_runtime_path,
-            "--require-spirv-runtime needs readiness.opencl_or_level_zero=true",
+            "--require-spirv-runtime needs readiness.gpu_spirv_runtime=true",
+            "--require-spirv-runtime",
+        )
+
+        gpu_missing = copy.deepcopy(evidence())
+        gpu_missing["runtime"]["gpu_spirv_device"] = False
+        gpu_missing["readiness"].update({
+            "gpu_spirv_runtime": False,
+            "status": "missing_requirements",
+            "missing": ["SPIR-V-capable GPU OpenCL or Level Zero runtime"],
+        })
+        gpu_missing_path = write_json(directory, "missing-gpu-spirv.json", gpu_missing)
+        assert_fails(
+            gpu_missing_path,
+            "--require-spirv-runtime needs readiness.gpu_spirv_runtime=true",
             "--require-spirv-runtime",
         )
 

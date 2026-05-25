@@ -39,6 +39,22 @@ def main() -> int:
         got = probe_hip_toolchain.find_tool("llvm-spirv", [str(prefix)])
         if got != str(versioned):
             raise AssertionError(f"versioned llvm-spirv was not found: {got!r}")
+
+        clinfo = """
+  Platform Name                                   NVIDIA CUDA
+  Device Name                                     NVIDIA GeForce RTX 3090
+  Device Type                                     GPU
+    IL version                                    (n/a)
+  Device Extensions                               cl_khr_fp64
+  Platform Name                                   Level Zero
+  Device Name                                     Intel Arc
+  Device Type                                     GPU
+    IL version                                    SPIR-V_1.2
+  Device Extensions                               cl_khr_il_program
+"""
+        devices = probe_hip_toolchain.parse_clinfo_devices(clinfo)
+        if not probe_hip_toolchain.has_gpu_spirv_device(devices):
+            raise AssertionError(f"SPIR-V GPU device was not detected: {devices!r}")
     print("HIP toolchain probe selftest OK")
     return 0
 

@@ -98,7 +98,8 @@ every architectural primitive in code and tested:
   as NVIDIA/OpenCL where SPIR-V device initialization is unavailable.
 - HIP/OpenCL/SPIR-V readiness now has a standalone probe:
   `scripts/probe_hip_toolchain.py` records `hipcc`, LLVM/SPIR-V translator,
-  OpenCL/Level Zero runtime, CMake package, hipBLAS, and path-hint evidence;
+  OpenCL/Level Zero runtime, GPU/SPIR-V device capability, CMake package,
+  hipBLAS, and path-hint evidence;
   `scripts/check_hip_toolchain_evidence.py` and the operational bundle can
   require build-toolchain or ready-for-hipBLAS policy before a host is
   admitted as a chipStar accelerator. Archive-based remote runs now honor

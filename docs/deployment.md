@@ -142,9 +142,9 @@ export LD_LIBRARY_PATH=$TC_HIP_PREFIX/lib:$LD_LIBRARY_PATH
 ```
 
 Use `--require-build-toolchain` when a host must have `hipcc` plus HIP CMake
-config, `--require-spirv-runtime` when it must expose LLVM/SPIR-V plus an
-OpenCL or Level Zero runtime, and `--require-ready` when hipBLAS GEMM is
-required.
+config, `--require-spirv-runtime` when it must expose LLVM/SPIR-V plus a
+SPIR-V-capable GPU OpenCL or Level Zero runtime, and `--require-ready` when
+hipBLAS GEMM is required.
 
 `scripts/ci_hip_smoke.sh` is the operational gate for this path. It builds
 with `TC_ENABLE_HIP=ON`, runs CTest, and records whether the host reached

@@ -177,6 +177,41 @@ def command_version(path: str | None, args: list[str]) -> dict[str, Any]:
         }
 
 
+def command_output(path: str | None, args: list[str], max_lines: int = 240) -> dict[str, Any]:
+    if not path:
+        return {
+            "available": False,
+            "returncode": None,
+            "output": None,
+        }
+    try:
+        result = subprocess.run(
+            [path, *args],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=VERSION_TIMEOUT_SEC,
+        )
+        output = "\n".join(result.stdout.strip().splitlines()[:max_lines])
+        return {
+            "available": result.returncode == 0,
+            "returncode": result.returncode,
+            "output": output,
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "available": False,
+            "returncode": None,
+            "output": "command timed out",
+        }
+    except OSError as exc:
+        return {
+            "available": False,
+            "returncode": None,
+            "output": str(exc),
+        }
+
+
 def collect_tools(prefixes: list[str]) -> dict[str, Any]:
     commands = {
         "cmake": ["--version"],
@@ -191,6 +226,74 @@ def collect_tools(prefixes: list[str]) -> dict[str, Any]:
         name: command_version(find_tool(name, prefixes), args)
         for name, args in commands.items()
     }
+
+
+def parse_clinfo_devices(output: str | None) -> list[dict[str, Any]]:
+    if not output:
+        return []
+
+    devices: list[dict[str, Any]] = []
+    platform: str | None = None
+    current: dict[str, Any] | None = None
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("Platform Name"):
+            platform = line.split("Platform Name", 1)[1].strip()
+            if current is not None and "platform" not in current:
+                current["platform"] = platform
+            continue
+        if line.startswith("Device Name"):
+            if current is not None:
+                devices.append(current)
+            current = {
+                "platform": platform,
+                "name": line.split("Device Name", 1)[1].strip(),
+                "type": None,
+                "il_version": None,
+                "extensions": "",
+                "spirv_capable": False,
+            }
+            continue
+        if current is None:
+            continue
+        if line.startswith("Device Type"):
+            current["type"] = line.split("Device Type", 1)[1].strip()
+        elif line.startswith("IL version"):
+            current["il_version"] = line.split("IL version", 1)[1].strip()
+        elif (
+            line.startswith("Device Extensions")
+            and not line.startswith("Device Extensions with Version")
+        ):
+            current["extensions"] = " ".join(
+                part for part in (
+                    current.get("extensions"),
+                    line.split("Device Extensions", 1)[1].strip(),
+                ) if part
+            )
+
+    if current is not None:
+        devices.append(current)
+
+    for device in devices:
+        haystack = " ".join(
+            str(device.get(key) or "")
+            for key in ("il_version", "extensions")
+        ).lower()
+        device["spirv_capable"] = (
+            "spir-v" in haystack
+            or "spirv" in haystack
+            or "cl_khr_il_program" in haystack
+        )
+    return devices
+
+
+def has_gpu_spirv_device(devices: list[dict[str, Any]]) -> bool:
+    for device in devices:
+        if "gpu" in str(device.get("type") or "").lower() and device.get("spirv_capable"):
+            return True
+    return False
 
 
 def cmake_search_roots(prefix: pathlib.Path) -> list[pathlib.Path]:
@@ -274,12 +377,17 @@ def collect_runtime(tools: dict[str, Any]) -> dict[str, Any]:
     )
 
     clinfo = tools.get("clinfo", {})
+    clinfo_full = command_output(clinfo.get("path"), [], max_lines=1200)
+    opencl_devices = parse_clinfo_devices(clinfo_full.get("output"))
+    gpu_spirv_device = has_gpu_spirv_device(opencl_devices)
     return {
         "opencl_library": opencl_library,
         "opencl_icd_files": icd_files,
         "level_zero_library": level_zero_library,
         "clinfo_available": bool(clinfo.get("path")),
         "clinfo_devices": clinfo.get("version") if clinfo.get("available") else None,
+        "opencl_devices": opencl_devices,
+        "gpu_spirv_device": gpu_spirv_device,
     }
 
 
@@ -311,6 +419,7 @@ def collect_evidence(root: str | pathlib.Path = ROOT) -> dict[str, Any]:
     packages = collect_cmake_packages(prefixes)
     runtime = collect_runtime(tools)
 
+    gpu_spirv_runtime = bool(runtime["gpu_spirv_device"] or runtime["level_zero_library"])
     readiness = {
         "hip_runtime_config": bool(packages["hip"]),
         "hipcc": bool(tools["hipcc"].get("path")),
@@ -320,6 +429,7 @@ def collect_evidence(root: str | pathlib.Path = ROOT) -> dict[str, Any]:
             or runtime["opencl_icd_files"]
             or runtime["level_zero_library"]
         ),
+        "gpu_spirv_runtime": gpu_spirv_runtime,
         "hipblas_config": bool(packages["hipblas"]),
     }
     missing: list[str] = []
@@ -331,12 +441,14 @@ def collect_evidence(root: str | pathlib.Path = ROOT) -> dict[str, Any]:
         missing.append("llvm-spirv")
     if not readiness["opencl_or_level_zero"]:
         missing.append("OpenCL or Level Zero runtime")
+    elif not readiness["gpu_spirv_runtime"]:
+        missing.append("SPIR-V-capable GPU OpenCL or Level Zero runtime")
     if not readiness["hipblas_config"]:
         missing.append("hipBLAS CMake config")
 
     if not missing:
         status = "ready_for_hip_gemm"
-    elif all(readiness[key] for key in ("hip_runtime_config", "hipcc", "spirv_translator", "opencl_or_level_zero")):
+    elif all(readiness[key] for key in ("hip_runtime_config", "hipcc", "spirv_translator", "gpu_spirv_runtime")):
         status = "runtime_only_no_hipblas"
     else:
         status = "missing_requirements"
@@ -397,9 +509,12 @@ def main() -> int:
     ):
         errors.append("--require-build-toolchain needs hip CMake config and hipcc")
     if args.require_spirv_runtime and not (
-        readiness["spirv_translator"] and readiness["opencl_or_level_zero"]
+        readiness["spirv_translator"] and readiness["gpu_spirv_runtime"]
     ):
-        errors.append("--require-spirv-runtime needs llvm-spirv and OpenCL/Level Zero")
+        errors.append(
+            "--require-spirv-runtime needs llvm-spirv and a "
+            "SPIR-V-capable GPU OpenCL/Level Zero runtime"
+        )
     if args.require_hipblas and not readiness["hipblas_config"]:
         errors.append("--require-hipblas needs hipBLAS CMake config")
     if args.require_ready and readiness["status"] != "ready_for_hip_gemm":

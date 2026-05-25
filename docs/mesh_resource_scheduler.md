@@ -158,8 +158,9 @@ produced by the host's smoke jobs. Examples:
 ```
 
 This makes scheduler state explicit: a CUDA training job waits for CUDA
-evidence, a chipStar job waits for OpenCL/SPIR-V readiness, and a Windows job
-can wait for Jack's host-smoke evidence before receiving mesh work.
+evidence, a chipStar job waits for SPIR-V-capable GPU runtime readiness, and
+a Windows job can wait for Jack's host-smoke evidence before receiving mesh
+work.
 
 ## Failure Modes
 

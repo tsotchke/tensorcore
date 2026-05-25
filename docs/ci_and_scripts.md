@@ -386,8 +386,8 @@ requires proving that chipStar/HIP compiled and initialized far enough to
 emit runtime-unavailable diagnostics.
 Add `--hip-toolchain /tmp/hip-toolchain.json --require-hip-toolchain` when
 the deployment must prove `hipcc` plus HIP CMake config, and add
-`--require-ready-hip-toolchain` when hipBLAS-ready OpenCL/SPIR-V evidence is
-required before scheduling work to that host.
+`--require-ready-hip-toolchain` when hipBLAS-ready SPIR-V-capable GPU runtime
+evidence is required before scheduling work to that host.
 
 Add `--windows /tmp/windows-host.json --require-windows
 --require-windows-clean-head` when Jack or another Windows node is part of
@@ -460,9 +460,9 @@ REQUIRE_HIP=1 scripts/ci_hip_smoke.sh  # fails unless HIP dispatch passes
 
 Captures the chipStar/OpenCL/SPIR-V host setup without building tensorcore.
 The evidence records `hipcc`, `clang`, `llvm-spirv`, `clinfo`, HIP and
-hipBLAS CMake package files, OpenCL ICDs, Level Zero loader discovery, and
-path hints for `TC_HIP_PREFIX`, `PATH`, `CMAKE_PREFIX_PATH`, and
-`LD_LIBRARY_PATH`.
+hipBLAS CMake package files, OpenCL ICDs, Level Zero loader discovery,
+`clinfo` GPU/SPIR-V capability summaries, and path hints for
+`TC_HIP_PREFIX`, `PATH`, `CMAKE_PREFIX_PATH`, and `LD_LIBRARY_PATH`.
 
 ```sh
 python3 scripts/probe_hip_toolchain.py --json /tmp/hip-toolchain.json

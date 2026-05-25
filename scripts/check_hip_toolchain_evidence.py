@@ -98,7 +98,7 @@ def main() -> int:
             if error:
                 errors.append(error)
     if args.require_spirv_runtime:
-        for name in ("spirv_translator", "opencl_or_level_zero"):
+        for name in ("spirv_translator", "gpu_spirv_runtime"):
             error = require_bool(readiness, name, "--require-spirv-runtime")
             if error:
                 errors.append(error)
@@ -108,6 +108,14 @@ def main() -> int:
             errors.append(error)
     if args.require_ready and status != "ready_for_hip_gemm":
         errors.append(f"--require-ready needs ready_for_hip_gemm, got {status}")
+    if args.require_ready:
+        for name in (
+            "hip_runtime_config", "hipcc", "spirv_translator",
+            "gpu_spirv_runtime", "hipblas_config",
+        ):
+            error = require_bool(readiness, name, "--require-ready")
+            if error:
+                errors.append(error)
     if errors:
         return fail("; ".join(errors))
 
