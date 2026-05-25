@@ -12,6 +12,7 @@ conservative:
 - Known stale leases are released only when that job's probe says dead.
 - Unknown leases block the resource.
 - A live known job without a lease is adopted by claiming a lease for it.
+- New work is launched only if its optional `admission_cmd` exits 0.
 - A new job is launched only after the scheduler has claimed the resource.
 - If a launch fails, the scheduler releases the lease it just claimed.
 
@@ -63,6 +64,11 @@ The jobs file is JSON:
         "cosbox",
         "/home/tyr/.local/bin/check-georefine-qwen-artifact /path/to/run --max-size-ratio 0.10"
       ],
+      "admission_cmd": [
+        "ssh",
+        "cosbox",
+        "cd /home/tyr/work/tensorcore && python3 scripts/check_operational_evidence.py --cuda /tmp/tensorcore-cuda-smoke.json --require-cuda --require-cuda-clean-head"
+      ],
       "metadata": {
         "project": "georefine"
       }
@@ -85,6 +91,11 @@ Fields:
   complete and should not be relaunched. A nonzero exit code means
   "definitively incomplete"; a timeout is treated as unknown and blocks
   relaunch of that job for the current scheduler pass.
+- `admission_cmd`: optional command that exits 0 only when the target host is
+  currently eligible for this job. Use this for evidence gates such as CUDA,
+  HIP/chipStar, Windows, PyTorch, or live-mesh proof. A nonzero exit code or
+  timeout blocks launching that job for the current scheduler pass, but does
+  not kill or release already-live work.
 - `start_cmd`: command used only when the job is selected for launch.
 - `metadata`: copied into the arbiter lease with `sync_job_id` and `job_id`.
 
@@ -114,11 +125,41 @@ scripts/mesh_resource_scheduler.py \
   --jobs-json ~/.tsotchke/state/mesh-resource-jobs.json \
   --state-json ~/.tsotchke/state/mesh-resource-scheduler-state.json \
   --loop \
+  --admission-timeout-sec 10 \
   --interval-sec 30
 ```
 
 Agents should update the jobs file atomically, then let the scheduler loop make
 the launch decision. They should not kill another agent's process to free CUDA.
+
+## Evidence Admission
+
+Admission commands should be cheap, read-only checks over evidence already
+produced by the host's smoke jobs. Examples:
+
+```json
+{
+  "admission_cmd": [
+    "ssh",
+    "cosbox",
+    "cd /home/tyr/work/tensorcore && python3 scripts/check_operational_evidence.py --cuda /tmp/tensorcore-cuda-smoke.json --require-cuda --require-cuda-clean-head"
+  ]
+}
+```
+
+```json
+{
+  "admission_cmd": [
+    "ssh",
+    "xavier",
+    "cd /home/tyr/work/tensorcore && python3 scripts/check_operational_evidence.py --hip-toolchain /tmp/hip-toolchain.json --require-ready-hip-toolchain --require-hip-toolchain-clean-head"
+  ]
+}
+```
+
+This makes scheduler state explicit: a CUDA training job waits for CUDA
+evidence, a chipStar job waits for OpenCL/SPIR-V readiness, and a Windows job
+can wait for Jack's host-smoke evidence before receiving mesh work.
 
 ## Failure Modes
 
@@ -129,5 +170,8 @@ the launch decision. They should not kill another agent's process to free CUDA.
   resource. The scheduler refuses to pick a victim; stop one job explicitly.
 - `live_holder_blocked_by_known_lease_unknown_liveness`: a known lease has no
   reliable probe result. Fix the probe before scheduling more work.
+- `idle_admission_blocked`: no live holder exists, but every otherwise
+  launchable job failed or timed out its admission check. Refresh the relevant
+  evidence artifact or fix the host/toolchain before relaunching.
 - `claimed_and_launched` with `ok=false`: the start command failed and the
   claimed lease was released.

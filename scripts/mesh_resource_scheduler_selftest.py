@@ -60,6 +60,7 @@ def args_for(path: pathlib.Path, *, dry_run: bool = False) -> argparse.Namespace
         state_json=None,
         timeout_sec=1.0,
         probe_timeout_sec=1.0,
+        admission_timeout_sec=1.0,
         start_timeout_sec=1.0,
         dry_run=dry_run,
         json=False,
@@ -77,6 +78,7 @@ def job(
     owner: str | None = None,
     desired_state: str = "running",
     completion_cmd: bool = False,
+    admission_cmd: bool = False,
 ) -> dict[str, Any]:
     out = {
         "id": job_id,
@@ -91,6 +93,8 @@ def job(
     }
     if completion_cmd:
         out["completion_cmd"] = ["complete", job_id]
+    if admission_cmd:
+        out["admission_cmd"] = ["admit", job_id]
     return out
 
 
@@ -101,11 +105,13 @@ class FakeRuntime:
         leases: list[dict[str, Any]] | None = None,
         live: dict[str, bool] | None = None,
         complete: dict[str, bool | None] | None = None,
+        admitted: dict[str, bool | None] | None = None,
         start_rc: dict[str, int] | None = None,
     ) -> None:
         self.leases = list(leases or [])
         self.live = dict(live or {})
         self.complete = dict(complete or {})
+        self.admitted = dict(admitted or {})
         self.start_rc = dict(start_rc or {})
         self.events: list[tuple[str, str | None]] = []
         self.next_lease = 1
@@ -163,6 +169,14 @@ class FakeRuntime:
                 if rc == 0 else ""
             )
             return subprocess.CompletedProcess(argv, rc, stdout=stdout, stderr="")
+        if op == "admit":
+            state = self.admitted.get(ident, True)
+            if state is None:
+                raise subprocess.TimeoutExpired(argv, timeout)
+            rc = 0 if state else 1
+            stdout = f"{ident} admission ok" if rc == 0 else ""
+            stderr = "" if rc == 0 else f"{ident} admission failed"
+            return subprocess.CompletedProcess(argv, rc, stdout=stdout, stderr=stderr)
         raise AssertionError(f"unexpected command argv: {argv!r}")
 
 
@@ -531,6 +545,83 @@ def test_unknown_completion_does_not_relaunch_job() -> None:
     )
 
 
+def test_admission_failure_skips_blocked_high_priority_job() -> None:
+    runtime = FakeRuntime(
+        live={"qllm-phase1": False, "georefine-m2": False},
+        admitted={"qllm-phase1": False, "georefine-m2": True},
+    )
+    result = run_case(
+        [
+            job("qllm-phase1", priority=100, admission_cmd=True),
+            job("georefine-m2", priority=50, admission_cmd=True),
+        ],
+        runtime,
+    )
+    assert result["ok"] is True
+    assert result["results"][0]["action"] == "claimed_and_launched"
+    assert result["results"][0]["job"] == "georefine-m2"
+    assert result["results"][0]["admission"]["admitted"] is True
+    assert_event_order(
+        runtime,
+        [
+            ("probe", "qllm-phase1"),
+            ("probe", "georefine-m2"),
+            ("admit", "qllm-phase1"),
+            ("admit", "georefine-m2"),
+            ("status", "--json"),
+            ("claim", "cosbox:cuda3090"),
+            ("start", "georefine-m2"),
+        ],
+    )
+
+
+def test_admission_failure_blocks_when_no_admitted_candidate() -> None:
+    runtime = FakeRuntime(
+        live={"qllm-phase1": False},
+        admitted={"qllm-phase1": False},
+    )
+    result = run_case(
+        [job("qllm-phase1", priority=100, admission_cmd=True)],
+        runtime,
+    )
+    assert result["ok"] is True
+    assert result["results"][0]["action"] == "idle_admission_blocked"
+    assert result["results"][0]["jobs"] == ["qllm-phase1"]
+    assert result["results"][0]["admissions"]["qllm-phase1"]["admitted"] is False
+    assert_event_order(
+        runtime,
+        [
+            ("probe", "qllm-phase1"),
+            ("admit", "qllm-phase1"),
+            ("status", "--json"),
+        ],
+    )
+
+
+def test_admission_timeout_blocks_launch_for_that_pass() -> None:
+    runtime = FakeRuntime(
+        live={"qllm-phase1": False},
+        admitted={"qllm-phase1": None},
+    )
+    result = run_case(
+        [job("qllm-phase1", priority=100, admission_cmd=True)],
+        runtime,
+    )
+    assert result["ok"] is True
+    assert result["results"][0]["action"] == "idle_admission_blocked"
+    admission = result["results"][0]["admissions"]["qllm-phase1"]
+    assert admission["admitted"] is None
+    assert admission["reason"] == "admission_timeout"
+    assert_event_order(
+        runtime,
+        [
+            ("probe", "qllm-phase1"),
+            ("admit", "qllm-phase1"),
+            ("status", "--json"),
+        ],
+    )
+
+
 def test_loop_pretty_json_emits_json() -> None:
     scheduler = load_scheduler()
     runtime = FakeRuntime(live={"qllm-phase1": False})
@@ -566,6 +657,9 @@ def main() -> int:
     test_completed_high_priority_job_is_not_relaunched()
     test_completed_stale_lease_is_released_before_next_job()
     test_unknown_completion_does_not_relaunch_job()
+    test_admission_failure_skips_blocked_high_priority_job()
+    test_admission_failure_blocks_when_no_admitted_candidate()
+    test_admission_timeout_blocks_launch_for_that_pass()
     test_loop_pretty_json_emits_json()
     print("mesh resource scheduler selftest OK")
     return 0

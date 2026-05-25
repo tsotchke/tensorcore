@@ -79,6 +79,10 @@ every architectural primitive in code and tested:
   jobs can declare an artifact checker, completed jobs are not relaunched,
   completed stale leases are released, and unknown completion checks block
   relaunch for that scheduler pass.
+- Mesh resource scheduling now supports admission gates: jobs can declare an
+  `admission_cmd` over CUDA/HIP/Windows/live-mesh evidence, and failed or
+  timed-out admission blocks new launches without disturbing already-live
+  holders.
 - Release-smoke evidence now records clean git-head provenance, and the
   operational bundle checker can require release, SDK26, PyTorch, and
   live-mesh evidence to match the current committed head.

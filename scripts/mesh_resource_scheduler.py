@@ -139,6 +139,23 @@ def complete_job(job: dict, *, timeout: float) -> dict:
     }
 
 
+def admit_job(job: dict, *, timeout: float) -> dict:
+    admission_cmd = command(job.get("admission_cmd"))
+    if not admission_cmd:
+        return {"admitted": True, "reason": "missing_admission_cmd", "rc": None}
+    try:
+        proc = run_capture(admission_cmd, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return {"admitted": None, "reason": "admission_timeout", "rc": None}
+    return {
+        "admitted": proc.returncode == 0,
+        "reason": "ok" if proc.returncode == 0 else "admission_failed",
+        "rc": proc.returncode,
+        "stdout_tail": proc.stdout.strip()[-1000:],
+        "stderr_tail": proc.stderr.strip()[-1000:],
+    }
+
+
 def lease_metadata(row: dict) -> dict:
     metadata = row.get("metadata")
     if isinstance(metadata, dict):
@@ -293,6 +310,7 @@ def choose_candidate(
     jobs: list[dict],
     probes: dict[str, dict],
     completions: dict[str, dict],
+    admissions: dict[str, dict],
     resource: str,
 ) -> dict | None:
     candidates = [
@@ -300,6 +318,7 @@ def choose_candidate(
         for job in enabled_running_jobs(jobs, resource)
         if probes[job["id"]]["live"] is False
         and completions[job["id"]]["complete"] is False
+        and admissions[job["id"]]["admitted"] is True
     ]
     if not candidates:
         return None
@@ -496,6 +515,7 @@ def schedule_resource(
     jobs: list[dict],
     probes: dict[str, dict],
     completions: dict[str, dict],
+    admissions: dict[str, dict],
     status: dict,
     args: argparse.Namespace,
     *,
@@ -556,21 +576,8 @@ def schedule_resource(
         })
         return results, errors
 
-    candidate = choose_candidate(jobs, probes, completions, resource)
+    candidate = choose_candidate(jobs, probes, completions, admissions, resource)
     if candidate is None:
-        completed_jobs = [
-            job["id"]
-            for job in enabled_running_jobs(jobs, resource)
-            if completions[job["id"]]["complete"] is True
-        ]
-        if completed_jobs:
-            results.append({
-                "resource": resource,
-                "action": "idle_completed_jobs",
-                "jobs": completed_jobs,
-                "ok": True,
-            })
-            return results, errors
         unknown_completion_jobs = [
             job["id"]
             for job in enabled_running_jobs(jobs, resource)
@@ -585,6 +592,38 @@ def schedule_resource(
                 "ok": True,
             })
             return results, errors
+        admission_blocked_jobs = [
+            job["id"]
+            for job in enabled_running_jobs(jobs, resource)
+            if probes[job["id"]]["live"] is False
+            and completions[job["id"]]["complete"] is False
+            and admissions[job["id"]]["admitted"] is not True
+        ]
+        if admission_blocked_jobs:
+            results.append({
+                "resource": resource,
+                "action": "idle_admission_blocked",
+                "jobs": admission_blocked_jobs,
+                "admissions": {
+                    job_id: admissions[job_id]
+                    for job_id in admission_blocked_jobs
+                },
+                "ok": True,
+            })
+            return results, errors
+        completed_jobs = [
+            job["id"]
+            for job in enabled_running_jobs(jobs, resource)
+            if completions[job["id"]]["complete"] is True
+        ]
+        if completed_jobs:
+            results.append({
+                "resource": resource,
+                "action": "idle_completed_jobs",
+                "jobs": completed_jobs,
+                "ok": True,
+            })
+            return results, errors
         results.append({"resource": resource, "action": "idle_no_candidate", "ok": True})
         return results, errors
 
@@ -595,6 +634,7 @@ def schedule_resource(
             "action": "would_claim_and_launch",
             "probe": probes[candidate["id"]],
             "completion": completions[candidate["id"]],
+            "admission": admissions[candidate["id"]],
             "ok": True,
         })
         return results, errors
@@ -606,6 +646,7 @@ def schedule_resource(
         "action": "claimed_and_launched",
         "arbiter": claim_payload,
         "completion": completions[candidate["id"]],
+        "admission": admissions[candidate["id"]],
         "ok": bool(claim_payload.get("ok")),
     }
     if not claim_payload.get("ok"):
@@ -649,6 +690,10 @@ def schedule_once(args: argparse.Namespace) -> dict:
         job["id"]: complete_job(job, timeout=args.probe_timeout_sec)
         for job in jobs
     }
+    admissions = {
+        job["id"]: admit_job(job, timeout=args.admission_timeout_sec)
+        for job in jobs
+    }
     status = run_json(arbiter_cmd + ["status", "--json"], timeout=args.timeout_sec)
     resources = sorted({job["resource"] for job in jobs})
     results = []
@@ -660,6 +705,7 @@ def schedule_once(args: argparse.Namespace) -> dict:
                 jobs,
                 probes,
                 completions,
+                admissions,
                 status,
                 args,
                 arbiter_cmd=arbiter_cmd,
@@ -739,6 +785,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--state-json")
     parser.add_argument("--timeout-sec", type=float, default=10.0)
     parser.add_argument("--probe-timeout-sec", type=float, default=10.0)
+    parser.add_argument("--admission-timeout-sec", type=float, default=10.0)
     parser.add_argument("--start-timeout-sec", type=float, default=60.0)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", action="store_true")
