@@ -175,10 +175,10 @@ host's 100.x.y.z address:
 
 ```sh
 tailscale status
-# 100.96.130.16  Atlas
-# 100.111.56.36  Enki
-# 100.121.14.68  old-donkey
-# 100.86.83.35   cosbox
+# <rank0-100.x.y.z>  rank0
+# <rank1-100.x.y.z>  rank1
+# <rank2-100.x.y.z>  rank2
+# <rank3-100.x.y.z>  rank3
 ```
 
 The rendezvous URL points at **rank 0's** address.
@@ -266,10 +266,12 @@ For the full training-loop demo instead of the compact transport probe:
 TC_MESH_PREPARE=1 scripts/run_live_mesh_training_demo.sh
 ```
 
-That runs `examples/mesh_training_demo` across the same four ranks with
-DiLoCo outer sync and activation checkpointing enabled. cosbox is built
-with `TC_ENABLE_CUDA=ON` by default so the RTX 3090 rank uses the CUDA
-managed-memory training path when available.
+That runs `examples/mesh_training_demo` across the configured four-rank mesh
+with DiLoCo outer sync and activation checkpointing enabled. Put private
+coordinates in `TC_MESH_CONFIG` or export `TC_MESH_RANK0_HOST` and
+`TC_MESH_RANK{1,2,3}_SSH`; hostnames and tailnet addresses are not source
+defaults. The rank 3 host is built with `TC_ENABLE_CUDA=ON` by default so the
+RTX 3090 rank uses the CUDA managed-memory training path when available.
 If a remote rank needs non-default toolchain paths, set
 `TC_MESH_RANK1_PATH`, `TC_MESH_RANK2_PATH`, or `TC_MESH_RANK3_PATH`; the
 script prepends that value to `PATH` during remote prepare and rank launch.
@@ -340,18 +342,20 @@ python3 scripts/check_operational_evidence.py \
 Launch rank 0 first (must start listening before others try to connect):
 
 ```sh
+url="tcp://$TC_MESH_RANK0_HOST:9000"
+
 # rank 0 (Atlas):
 TC_GLOO_RING=1 TC_GLOO_TRACE=1 TC_METALLIB=... \
-    ./test_dist_remote --rank 0 --world 4 --url tcp://100.96.130.16:9000 &
+    ./test_dist_remote --rank 0 --world 4 --url "$url" &
 
 # rank 1 (Enki):
-ssh enki.local 'TC_GLOO_RING=1 TC_GLOO_TRACE=1 TC_METALLIB=... /tmp/test_dist_remote --rank 1 --world 4 --url tcp://100.96.130.16:9000' &
+ssh "$TC_MESH_RANK1_SSH" "TC_GLOO_RING=1 TC_GLOO_TRACE=1 TC_METALLIB=... /tmp/test_dist_remote --rank 1 --world 4 --url '$url'" &
 
 # rank 2 (old-donkey):
-ssh old-donkey 'cd /tmp/tc && TC_GLOO_RING=1 TC_GLOO_TRACE=1 ./build/tests/test_dist_remote --rank 2 --world 4 --url tcp://100.96.130.16:9000' &
+ssh "$TC_MESH_RANK2_SSH" "cd /tmp/tc && TC_GLOO_RING=1 TC_GLOO_TRACE=1 ./build/tests/test_dist_remote --rank 2 --world 4 --url '$url'" &
 
 # rank 3 (cosbox):
-ssh cosbox 'cd /tmp/tc-cuda && TC_GLOO_RING=1 TC_GLOO_TRACE=1 LD_LIBRARY_PATH=./build ./build/tests/test_dist_remote --rank 3 --world 4 --url tcp://100.96.130.16:9000' &
+ssh "$TC_MESH_RANK3_SSH" "cd /tmp/tc-cuda && TC_GLOO_RING=1 TC_GLOO_TRACE=1 LD_LIBRARY_PATH=./build ./build/tests/test_dist_remote --rank 3 --world 4 --url '$url'" &
 
 wait
 ```
@@ -409,7 +413,7 @@ to the broker path instead of failing `tc_dist_init`.
 
 For Tailscale or other overlay networks, `TC_GLOO_ADVERTISE_HOSTS` can be
 set to a comma-separated rank-indexed list such as
-`100.96.130.16,100.111.56.36,100.121.14.68,100.86.83.35`. Individual
+`<rank0>,<rank1>,<rank2>,<rank3>`. Individual
 ranks can also set `TC_GLOO_ADVERTISE_HOST` to the address peers should
 dial for direct ring links. If unset, each rank reports the local address
 selected for the rendezvous connection.

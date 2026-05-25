@@ -12,7 +12,8 @@ conservative:
 - Known stale leases are released only when that job's probe says dead.
 - Unknown leases block the resource.
 - A live known job without a lease is adopted by claiming a lease for it.
-- New work is launched only if its optional `admission_cmd` exits 0.
+- New CUDA-exclusive work is launched only if its mandatory `admission_cmd`
+  exits 0.
 - CUDA-exclusive work must also pass a post-start probe and report worker
   identity before the launch is considered healthy.
 - A new job is launched only after the scheduler has claimed the resource.
@@ -43,12 +44,12 @@ The jobs file is JSON:
       "start_cmd": [
         "ssh",
         "cosbox",
-        "cd /home/tyr/work/qllm-phase0 && systemd-run --user --unit=qllm-phase1 --collect --property=Restart=always --property=RestartSec=60 /bin/bash scripts/launch_phase1_tf32_cosbox.sh"
+        "systemctl --user start qllm-phase1.service"
       ],
       "admission_cmd": [
         "ssh",
         "cosbox",
-        "cd /home/tyr/work/tensorcore && python3 scripts/check_operational_evidence.py --cuda /tmp/tensorcore-cuda-smoke.json --require-cuda --require-cuda-clean-head && python3 scripts/check_cuda_resource_admission.py --resource cosbox:cuda3090"
+        "cd /home/tyr/work/tensorcore && python3 scripts/check_operational_evidence.py --cuda /tmp/tensorcore-cuda-smoke.json --require-cuda --require-cuda-clean-head && python3 scripts/check_cuda_resource_admission.py --resource cosbox:cuda3090 --allow-process-regex steamwebhelper$ --allowed-process-max-memory-mib 16 --json"
       ],
       "post_start_probe_cmd": [
         "ssh",
@@ -58,7 +59,7 @@ The jobs file is JSON:
       "worker_identity_cmd": [
         "ssh",
         "cosbox",
-        "cd /home/tyr/work/tensorcore && python3 scripts/mesh_cuda_worker_identity.py --unit qllm-phase1.service --process-substring qllm --require-cuda-process"
+        "python3 /home/tyr/work/tensorcore/scripts/mesh_worker_identity.py --resource cosbox:cuda3090 --unit qllm-phase1.service --match-regex qllm.train_geometric_lm_torch --require-active-unit --require-matching-process --require-matched-cuda"
       ],
       "metadata": {
         "project": "semiclassical_qllm"
@@ -68,7 +69,7 @@ The jobs file is JSON:
       "id": "georefine-m2-cosbox",
       "sync_id": "georefine-m2-cosbox",
       "resource": "cosbox:cuda3090",
-      "resource_class": "generic",
+      "resource_class": "cuda_exclusive",
       "owner": "georefine:m2",
       "priority": 100,
       "desired_state": "running",
@@ -86,7 +87,17 @@ The jobs file is JSON:
       "admission_cmd": [
         "ssh",
         "cosbox",
-        "cd /home/tyr/work/tensorcore && python3 scripts/check_operational_evidence.py --cuda /tmp/tensorcore-cuda-smoke.json --require-cuda --require-cuda-clean-head"
+        "cd /home/tyr/work/tensorcore && python3 scripts/check_operational_evidence.py --cuda /tmp/tensorcore-cuda-smoke.json --require-cuda --require-cuda-clean-head && python3 scripts/check_cuda_resource_admission.py --resource cosbox:cuda3090 --allow-process-regex steamwebhelper$ --allowed-process-max-memory-mib 16 --json"
+      ],
+      "post_start_probe_cmd": [
+        "ssh",
+        "cosbox",
+        "pgrep -af 'experiments.georefine.m2_compress' >/dev/null"
+      ],
+      "worker_identity_cmd": [
+        "ssh",
+        "cosbox",
+        "python3 /home/tyr/work/tensorcore/scripts/mesh_worker_identity.py --resource cosbox:cuda3090 --match-regex experiments.georefine.m2_compress --artifact-dir /path/to/run --require-matching-process --require-matched-cuda"
       ],
       "metadata": {
         "project": "georefine"
@@ -113,8 +124,8 @@ Fields:
   complete and should not be relaunched. A nonzero exit code means
   "definitively incomplete"; a timeout is treated as unknown and blocks
   relaunch of that job for the current scheduler pass.
-- `admission_cmd`: optional command that exits 0 only when the target host is
-  currently eligible for this job. Use this for evidence gates such as CUDA,
+- `admission_cmd`: command that exits 0 only when the target host is currently
+  eligible for this job. Use this for evidence gates such as CUDA,
   HIP/chipStar, Windows, PyTorch, or live-mesh proof. A nonzero exit code or
   timeout blocks launching that job for the current scheduler pass, but does
   not kill or release already-live work. Required for `cuda_exclusive` jobs.
@@ -174,7 +185,7 @@ produced by the host's smoke jobs. Examples:
   "admission_cmd": [
     "ssh",
     "cosbox",
-    "cd /home/tyr/work/tensorcore && python3 scripts/check_operational_evidence.py --cuda /tmp/tensorcore-cuda-smoke.json --require-cuda --require-cuda-clean-head && python3 scripts/check_cuda_resource_admission.py --resource cosbox:cuda3090"
+    "cd /home/tyr/work/tensorcore && python3 scripts/check_operational_evidence.py --cuda /tmp/tensorcore-cuda-smoke.json --require-cuda --require-cuda-clean-head && python3 scripts/check_cuda_resource_admission.py --resource cosbox:cuda3090 --allow-process-regex steamwebhelper$ --allowed-process-max-memory-mib 16 --json"
   ]
 }
 ```
@@ -201,22 +212,26 @@ to the admission command so unmanaged CUDA compute applications block a launch:
 python3 scripts/check_cuda_resource_admission.py --resource cosbox:cuda3090
 ```
 
-## CUDA Worker Identity
+## Worker Identity
 
-Use `scripts/mesh_cuda_worker_identity.py` as the `worker_identity_cmd` on
-Linux NVIDIA hosts. It emits `tensorcore.mesh_cuda_worker_identity.v1` JSON
-with hostname, probe PID, cgroup, optional systemd unit metadata, matching
-`nvidia-smi` compute processes, and `cuda_pids`:
+Use `scripts/mesh_worker_identity.py` as the `worker_identity_cmd` on Linux
+hosts. It emits `tensorcore.mesh_worker_identity.v1` JSON with hostname,
+matching worker PIDs, optional user-systemd unit metadata, matching
+`nvidia-smi` compute applications, and `cuda_pids`:
 
 ```sh
-python3 scripts/mesh_cuda_worker_identity.py \
+python3 scripts/mesh_worker_identity.py \
+  --resource cosbox:cuda3090 \
   --unit qllm-phase1.service \
-  --process-substring qllm \
-  --require-cuda-process
+  --match-regex qllm.train_geometric_lm_torch \
+  --require-active-unit \
+  --require-matching-process \
+  --require-matched-cuda
 ```
 
-The command exits nonzero if the requested unit is inactive, `nvidia-smi`
-fails, or `--require-cuda-process` is set and no matching CUDA process exists.
+The command exits nonzero if a required unit is inactive, a required process
+does not match, `--require-cuda` is set and no CUDA process exists, or
+`--require-matched-cuda` is set and no matched worker PID owns CUDA.
 
 ## Failure Modes
 

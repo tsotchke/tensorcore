@@ -249,11 +249,14 @@ times out. It is normally launched by CTest rather than run directly.
 
 ### `run_live_mesh_smoke.sh`
 
-Runs the operational four-rank mesh smoke across Atlas, Enki, old-donkey,
-and cosbox. With `TC_MESH_PREPARE=1`, it uploads the local portable CPU
-rank binary to Enki, archives the current committed checkout to the Linux
-nodes, builds their portable `test_dist_remote` target, launches all four
-ranks, and verifies per-rank logs. The default `TC_MESH_TEST=all` covers
+Runs the operational four-rank mesh smoke across the configured private mesh.
+Set `TC_MESH_CONFIG`, or export `TC_MESH_RANK0_HOST` and
+`TC_MESH_RANK{1,2,3}_SSH`; private hostnames and tailnet addresses are
+intentionally not source defaults. With `TC_MESH_PREPARE=1`, it uploads the
+local portable CPU rank binary to rank 1, archives the current committed
+checkout to the Linux nodes, builds their portable `test_dist_remote` target,
+launches all four ranks, and verifies per-rank logs. The default
+`TC_MESH_TEST=all` covers
 direct GLOO ring fp32 SUM and the DiLoCo sparse TOPK outer-step path.
 `TC_MESH_DILOCO_CYCLES`, `TC_MESH_DILOCO_INNER_STEPS`, and
 `TC_MESH_DILOCO_ELEMENTS` scale the training-sync soak.
@@ -266,8 +269,9 @@ TC_MESH_TEST=diloco scripts/run_live_mesh_smoke.sh      # training-sync only
 
 ### `run_live_mesh_training_demo.sh`
 
-Runs `examples/mesh_training_demo` across the same four-rank mesh: Atlas
-rank 0, Enki rank 1, old-donkey rank 2, and cosbox rank 3. This is the
+Runs `examples/mesh_training_demo` across the same configured four-rank mesh.
+Set `TC_MESH_CONFIG`, or export `TC_MESH_RANK0_HOST` and
+`TC_MESH_RANK{1,2,3}_SSH`, before running against physical hosts. This is the
 full demo loop rather than the compact transport probe: RMSNorm -> GEMM ->
 softmax+CE -> backward -> AdamW, with DiLoCo outer sync and activation
 checkpointing enabled by default. With `TC_MESH_PREPARE=1`, the script
@@ -292,7 +296,7 @@ TC_MESH_LOCAL_ONLY=1 TC_MESH_TRAINING_OUTER=1 \
   TC_MESH_TRAINING_EVIDENCE_PATH=/tmp/live-mesh-training-local.json \
   scripts/run_live_mesh_training_demo.sh
 TC_MESH_TRAINING_EVIDENCE_PATH=/tmp/live-mesh-training.json scripts/run_live_mesh_training_demo.sh
-TC_GLOO_ADVERTISE_HOSTS=100.96.130.16,100.111.56.36,100.121.14.68,100.86.83.35 \
+TC_GLOO_ADVERTISE_HOSTS=<rank0>,<rank1>,<rank2>,<rank3> \
   TC_MESH_TRAINING_EVIDENCE_PATH=/tmp/live-mesh-training.json \
   scripts/run_live_mesh_training_demo.sh
 python3 scripts/check_live_mesh_training_evidence.py /tmp/live-mesh-training.json \
@@ -335,7 +339,10 @@ scripts/mesh_resource_scheduler.py \
   --arbiter-cmd ~/.tsotchke/bin/tsotchke-arbiter \
   --jobs-json ~/.tsotchke/state/mesh-resource-jobs.json \
   --state-json ~/.tsotchke/state/mesh-resource-scheduler-state.json \
-  --loop --interval-sec 30
+  --loop --interval-sec 30 \
+  --admission-timeout-sec 10 \
+  --post-start-timeout-sec 30 \
+  --worker-identity-timeout-sec 10
 ```
 
 Fixture coverage:
@@ -360,24 +367,27 @@ Fixture coverage:
 python3 scripts/check_cuda_resource_admission_selftest.py
 ```
 
-### `mesh_cuda_worker_identity.py`
+### `mesh_worker_identity.py`
 
-Emits Linux NVIDIA worker identity JSON for `cuda_exclusive` scheduler jobs.
-Use it as `worker_identity_cmd` on remote hosts to record hostname, cgroup,
-optional systemd unit metadata, matching `nvidia-smi` compute processes, and
-`cuda_pids`.
+Emits Linux worker identity JSON for `cuda_exclusive` scheduler jobs. Use it
+as `worker_identity_cmd` on remote hosts to record hostname, worker PIDs,
+optional user-systemd unit metadata, matching `nvidia-smi` compute
+applications, and `cuda_pids`.
 
 ```sh
-python3 scripts/mesh_cuda_worker_identity.py \
+python3 scripts/mesh_worker_identity.py \
+  --resource cosbox:cuda3090 \
   --unit qllm-phase1.service \
-  --process-substring qllm \
-  --require-cuda-process
+  --match-regex qllm.train_geometric_lm_torch \
+  --require-active-unit \
+  --require-matching-process \
+  --require-matched-cuda
 ```
 
 Fixture coverage:
 
 ```sh
-python3 scripts/mesh_cuda_worker_identity_selftest.py
+python3 scripts/mesh_worker_identity_selftest.py
 ```
 
 ### `check_live_mesh_training_evidence.py`

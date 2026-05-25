@@ -3,8 +3,15 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+mesh_config="${TC_MESH_CONFIG:-$HOME/.config/tensorcore/live-mesh.env}"
+if [[ -f "$mesh_config" ]]; then
+    # Private machine coordinates belong in local config, never in source.
+    # shellcheck source=/dev/null
+    source "$mesh_config"
+fi
+
 world="${TC_MESH_WORLD:-4}"
-rank0_host="${TC_MESH_RANK0_HOST:-100.96.130.16}"
+rank0_host="${TC_MESH_RANK0_HOST:-}"
 port="${TC_MESH_PORT:-}"
 test_filter="${TC_MESH_TEST:-all}"
 elements="${TC_MESH_ELEMENTS:-65536}"
@@ -20,13 +27,13 @@ remote_jobs="${TC_MESH_REMOTE_JOBS:-8}"
 log_dir="${TC_MESH_LOG_DIR:-${TMPDIR:-/tmp}/tensorcore-live-mesh-$(date +%Y%m%d-%H%M%S)}"
 
 rank0_bin="${TC_MESH_RANK0_BIN:-$ROOT/build-portable-cpu-current/tests/test_dist_remote}"
-rank1_ssh="${TC_MESH_RANK1_SSH:-enki}"
+rank1_ssh="${TC_MESH_RANK1_SSH:-}"
 rank1_dir="${TC_MESH_RANK1_DIR:-/tmp/tensorcore-live-mesh}"
 rank1_bin="${TC_MESH_RANK1_BIN:-$rank1_dir/test_dist_remote_cpu}"
-rank2_ssh="${TC_MESH_RANK2_SSH:-old-donkey}"
+rank2_ssh="${TC_MESH_RANK2_SSH:-}"
 rank2_dir="${TC_MESH_RANK2_DIR:-/tmp/tensorcore-live-mesh}"
 rank2_bin="${TC_MESH_RANK2_BIN:-$rank2_dir/build/tests/test_dist_remote}"
-rank3_ssh="${TC_MESH_RANK3_SSH:-cosbox}"
+rank3_ssh="${TC_MESH_RANK3_SSH:-}"
 rank3_dir="${TC_MESH_RANK3_DIR:-/tmp/tensorcore-live-mesh}"
 rank3_bin="${TC_MESH_RANK3_BIN:-$rank3_dir/build/tests/test_dist_remote}"
 
@@ -34,13 +41,16 @@ usage() {
     cat <<EOF
 Usage: TC_MESH_PREPARE=1 $0
 
-Runs a live 4-rank tensorcore GLOO smoke over the mesh:
-  rank 0 local Atlas: $rank0_bin
-  rank 1 $rank1_ssh: $rank1_bin
-  rank 2 $rank2_ssh: $rank2_bin
-  rank 3 $rank3_ssh: $rank3_bin
+Runs a live 4-rank tensorcore GLOO smoke over the configured private mesh:
+  rank 0 local host: $rank0_bin
+  rank 1 configured SSH target: $rank1_bin
+  rank 2 configured SSH target: $rank2_bin
+  rank 3 configured SSH target: $rank3_bin
 
 Environment:
+  TC_MESH_CONFIG=$mesh_config
+  TC_MESH_RANK0_HOST=$rank0_host
+  TC_MESH_RANK{1,2,3}_SSH=<ssh target>
   TC_MESH_TEST=$test_filter                 all | allreduce | diloco
   TC_MESH_ELEMENTS=$elements                fp32 elements for allreduce probe
   TC_MESH_ITERS=$iters                      timed allreduce iterations
@@ -60,6 +70,22 @@ fi
 
 if [[ "$world" != "4" ]]; then
     echo "run_live_mesh_smoke currently expects TC_MESH_WORLD=4" >&2
+    exit 2
+fi
+
+if [[ -z "$rank0_host" ]]; then
+    echo "run_live_mesh_smoke: TC_MESH_RANK0_HOST is required via env or $mesh_config" >&2
+    exit 2
+fi
+
+missing=()
+[[ -n "$rank1_ssh" ]] || missing+=("TC_MESH_RANK1_SSH")
+[[ -n "$rank2_ssh" ]] || missing+=("TC_MESH_RANK2_SSH")
+[[ -n "$rank3_ssh" ]] || missing+=("TC_MESH_RANK3_SSH")
+if [[ "${#missing[@]}" -gt 0 ]]; then
+    printf 'run_live_mesh_smoke: missing required private mesh config: %s\n' \
+        "${missing[*]}" >&2
+    printf 'set them in env or %s\n' "$mesh_config" >&2
     exit 2
 fi
 
@@ -108,7 +134,7 @@ prepare_linux_rank() {
 }
 
 if [[ "$prepare" == "1" ]]; then
-    echo "[mesh] preparing Enki portable binary"
+    echo "[mesh] preparing rank 1 portable binary"
     ssh "$rank1_ssh" "mkdir -p '$rank1_dir'"
     scp "$rank0_bin" "$rank1_ssh:$rank1_bin"
     ssh "$rank1_ssh" "chmod +x '$rank1_bin'"

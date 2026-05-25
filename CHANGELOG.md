@@ -88,7 +88,8 @@ every architectural primitive in code and tested:
 - Mesh resource scheduling now has a `cuda_exclusive` resource class with
   required admission, post-start, and worker-identity gates, plus
   `scripts/check_cuda_resource_admission.py` and
-  `scripts/mesh_cuda_worker_identity.py` for NVIDIA host process metadata.
+  `scripts/mesh_worker_identity.py` for worker host process, cgroup, and CUDA
+  metadata.
 - Release-smoke evidence now records clean git-head provenance, and the
   operational bundle checker can require release, SDK26, PyTorch, and
   live-mesh evidence to match the current committed head.
@@ -154,6 +155,10 @@ every architectural primitive in code and tested:
 - `Record live mesh launch topology in evidence`: live training evidence now
   includes per-rank launch/prepare metadata, and the checker can require
   rank 1 source preparation with `--require-rank1-source-prepare`.
+- `Move live mesh coordinates to private config`: `run_live_mesh_smoke.sh`
+  and `run_live_mesh_training_demo.sh` now read `TC_MESH_CONFIG` or explicit
+  `TC_MESH_RANK*` environment variables instead of carrying source defaults
+  for private hostnames or tailnet addresses.
 - `Add operational evidence bundle validation`:
   `scripts/check_operational_evidence.py` validates release, SDK26, CUDA,
   HIP, PyTorch, and live-mesh artifacts together, with clean-current-head

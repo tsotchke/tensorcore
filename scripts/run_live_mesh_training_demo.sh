@@ -3,13 +3,20 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+rank0_host_explicit="${TC_MESH_RANK0_HOST+x}"
+mesh_config="${TC_MESH_CONFIG:-$HOME/.config/tensorcore/live-mesh.env}"
+if [[ -f "$mesh_config" ]]; then
+    # Private machine coordinates belong in local config, never in source.
+    # shellcheck source=/dev/null
+    source "$mesh_config"
+fi
+
 local_only="${TC_MESH_LOCAL_ONLY:-0}"
 world="${TC_MESH_WORLD:-4}"
-default_rank0_host="100.96.130.16"
-if [[ "$local_only" == "1" ]]; then
-    default_rank0_host="127.0.0.1"
+rank0_host="${TC_MESH_RANK0_HOST:-}"
+if [[ "$local_only" == "1" && -z "$rank0_host_explicit" ]]; then
+    rank0_host="127.0.0.1"
 fi
-rank0_host="${TC_MESH_RANK0_HOST:-$default_rank0_host}"
 port="${TC_MESH_PORT:-}"
 inner_steps="${TC_MESH_TRAINING_INNER:-3}"
 outer_steps="${TC_MESH_TRAINING_OUTER:-2}"
@@ -26,7 +33,7 @@ evidence_path="${TC_MESH_TRAINING_EVIDENCE_PATH:-}"
 
 local_build_dir="${TC_MESH_TRAINING_LOCAL_BUILD_DIR:-$ROOT/build-live-mesh-training-cpu}"
 rank0_bin="${TC_MESH_RANK0_BIN:-$local_build_dir/examples/mesh_training_demo}"
-rank1_ssh="${TC_MESH_RANK1_SSH:-enki}"
+rank1_ssh="${TC_MESH_RANK1_SSH:-}"
 rank1_dir="${TC_MESH_RANK1_DIR:-/tmp/tensorcore-live-mesh-training}"
 rank1_prepare="${TC_MESH_RANK1_PREPARE:-copy-local}"
 rank1_bin="${TC_MESH_RANK1_BIN:-}"
@@ -38,11 +45,11 @@ if [[ -z "$rank1_bin" ]]; then
     fi
 fi
 rank1_path="${TC_MESH_RANK1_PATH:-}"
-rank2_ssh="${TC_MESH_RANK2_SSH:-old-donkey}"
+rank2_ssh="${TC_MESH_RANK2_SSH:-}"
 rank2_dir="${TC_MESH_RANK2_DIR:-/tmp/tensorcore-live-mesh-training}"
 rank2_bin="${TC_MESH_RANK2_BIN:-$rank2_dir/build/examples/mesh_training_demo}"
 rank2_path="${TC_MESH_RANK2_PATH:-}"
-rank3_ssh="${TC_MESH_RANK3_SSH:-cosbox}"
+rank3_ssh="${TC_MESH_RANK3_SSH:-}"
 rank3_dir="${TC_MESH_RANK3_DIR:-/tmp/tensorcore-live-mesh-training}"
 rank3_bin="${TC_MESH_RANK3_BIN:-$rank3_dir/build/examples/mesh_training_demo}"
 rank3_path="${TC_MESH_RANK3_PATH:-}"
@@ -51,13 +58,16 @@ usage() {
     cat <<EOF
 Usage: TC_MESH_PREPARE=1 $0
 
-Runs the full mesh_training_demo across Atlas, Enki, old-donkey, and cosbox.
+Runs the full mesh_training_demo across configured private mesh ranks.
 Rank 3 is built with CUDA by default; set TC_MESH_RANK3_CUDA=0 for CPU-only.
 Set TC_MESH_LOCAL_ONLY=1 to run all ranks on this host for regression evidence.
 
 Environment:
+  TC_MESH_CONFIG=$mesh_config
   TC_MESH_LOCAL_ONLY=$local_only
   TC_MESH_WORLD=$world
+  TC_MESH_RANK0_HOST=$rank0_host
+  TC_MESH_RANK{1,2,3}_SSH=<ssh target>
   TC_MESH_TRAINING_INNER=$inner_steps
   TC_MESH_TRAINING_OUTER=$outer_steps
   TC_MESH_TRAINING_CHECKPOINT=$checkpoint
@@ -80,6 +90,24 @@ fi
 if [[ "$world" != "4" && "$local_only" != "1" ]]; then
     echo "run_live_mesh_training_demo expects TC_MESH_WORLD=4 unless TC_MESH_LOCAL_ONLY=1" >&2
     exit 2
+fi
+
+if [[ -z "$rank0_host" ]]; then
+    echo "run_live_mesh_training_demo: TC_MESH_RANK0_HOST is required via env or $mesh_config" >&2
+    exit 2
+fi
+
+if [[ "$local_only" != "1" ]]; then
+    missing=()
+    [[ -n "$rank1_ssh" ]] || missing+=("TC_MESH_RANK1_SSH")
+    [[ -n "$rank2_ssh" ]] || missing+=("TC_MESH_RANK2_SSH")
+    [[ -n "$rank3_ssh" ]] || missing+=("TC_MESH_RANK3_SSH")
+    if [[ "${#missing[@]}" -gt 0 ]]; then
+        printf 'run_live_mesh_training_demo: missing required private mesh config: %s\n' \
+            "${missing[*]}" >&2
+        printf 'set them in env or %s\n' "$mesh_config" >&2
+        exit 2
+    fi
 fi
 
 mkdir -p "$log_dir"

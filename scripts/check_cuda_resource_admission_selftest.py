@@ -1,77 +1,112 @@
 #!/usr/bin/env python3
-"""Selftest for scripts/check_cuda_resource_admission.py."""
+"""Selftests for scripts/check_cuda_resource_admission.py."""
 
 from __future__ import annotations
 
-import json
+import importlib.machinery
+import importlib.util
 import pathlib
-import subprocess
-import sys
 import tempfile
+from types import ModuleType
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "check_cuda_resource_admission.py"
 
 
-def fake_nvidia_smi(directory: pathlib.Path, rows: list[str]) -> pathlib.Path:
+def load_module() -> ModuleType:
+    loader = importlib.machinery.SourceFileLoader(
+        "check_cuda_resource_admission_under_test",
+        str(SCRIPT),
+    )
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def fake_nvidia_smi(directory: pathlib.Path, stdout: str, rc: int = 0) -> pathlib.Path:
     path = directory / "nvidia-smi"
-    lines = ["#!/bin/sh\n"]
-    for row in rows:
-        lines.append(f"printf '%s\\n' {row!r}\n")
-    path.write_text("".join(lines), encoding="utf-8")
+    path.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        f"sys.stdout.write({stdout!r})\n"
+        f"raise SystemExit({rc})\n",
+        encoding="utf-8",
+    )
     path.chmod(0o755)
     return path
 
 
-def run_gate(nvidia_smi: pathlib.Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [
-            sys.executable,
-            str(SCRIPT),
-            "--nvidia-smi",
-            str(nvidia_smi),
-            "--json",
-            *args,
-        ],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
+def test_empty_gpu_is_admitted() -> None:
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        smi = fake_nvidia_smi(pathlib.Path(tmp), "")
+        args = mod.parse_args(["--nvidia-smi", str(smi), "--json"])
+        payload = mod.build_payload(args)
+    assert payload["ok"] is True
+    assert payload["compute_app_count"] == 0
+
+
+def test_unmanaged_cuda_process_blocks() -> None:
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        smi = fake_nvidia_smi(pathlib.Path(tmp), "1234, /opt/train.py, 1024\n")
+        args = mod.parse_args(["--nvidia-smi", str(smi), "--json"])
+        payload = mod.build_payload(args)
+    assert payload["ok"] is False
+    assert payload["reason"] == "blocked_cuda_compute_apps"
+    assert payload["blocked"][0]["pid"] == 1234
+
+
+def test_explicit_small_allowlist_is_admitted() -> None:
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        smi = fake_nvidia_smi(pathlib.Path(tmp), "99, /usr/bin/steamwebhelper, 9\n")
+        args = mod.parse_args(
+            [
+                "--nvidia-smi",
+                str(smi),
+                "--allow-process-regex",
+                "steamwebhelper$",
+                "--allowed-process-max-memory-mib",
+                "16",
+                "--json",
+            ]
+        )
+        payload = mod.build_payload(args)
+    assert payload["ok"] is True
+    assert payload["allowed"][0]["pid"] == 99
+
+
+def test_allowlist_memory_cap_still_blocks() -> None:
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        smi = fake_nvidia_smi(pathlib.Path(tmp), "99, /usr/bin/steamwebhelper, 128\n")
+        args = mod.parse_args(
+            [
+                "--nvidia-smi",
+                str(smi),
+                "--allow-process-regex",
+                "steamwebhelper$",
+                "--allowed-process-max-memory-mib",
+                "16",
+                "--json",
+            ]
+        )
+        payload = mod.build_payload(args)
+    assert payload["ok"] is False
+    assert payload["blocked"][0]["used_memory_mib"] == 128
 
 
 def main() -> int:
-    with tempfile.TemporaryDirectory() as tmp:
-        root = pathlib.Path(tmp)
-        idle = run_gate(fake_nvidia_smi(root, []))
-        if idle.returncode != 0:
-            raise AssertionError(idle.stdout + idle.stderr)
-        if json.loads(idle.stdout)["reason"] != "ok":
-            raise AssertionError("idle admission should pass")
-
-        busy = run_gate(fake_nvidia_smi(root, ["1234, python qllm trainer, 8192"]))
-        if busy.returncode == 0:
-            raise AssertionError("unmanaged CUDA process should block admission")
-        busy_payload = json.loads(busy.stdout)
-        if busy_payload["reason"] != "blocked_cuda_compute_apps":
-            raise AssertionError("unexpected busy reason")
-        if busy_payload["blocked"][0]["used_memory_mib"] != 8192:
-            raise AssertionError("GPU memory parse failed")
-
-        allowed = run_gate(
-            fake_nvidia_smi(root, ["4321, tensorcore-admission-probe, 16"]),
-            "--allow-process-regex",
-            "tensorcore-admission-probe",
-            "--allowed-process-max-memory-mib",
-            "64",
-        )
-        if allowed.returncode != 0:
-            raise AssertionError(allowed.stdout + allowed.stderr)
-        if json.loads(allowed.stdout)["allowed"][0]["pid"] != 4321:
-            raise AssertionError("allowlist parse failed")
-
-    print("CUDA resource admission selftest OK")
+    test_empty_gpu_is_admitted()
+    test_unmanaged_cuda_process_blocks()
+    test_explicit_small_allowlist_is_admitted()
+    test_allowlist_memory_cap_still_blocks()
+    print("cuda resource admission selftest OK")
     return 0
 
 
