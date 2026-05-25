@@ -328,7 +328,9 @@ releases only verified-stale leases, adopts live known holders, and launches
 new jobs only after claiming the requested resource. CUDA-exclusive jobs add
 admission, post-start, and worker-identity gates before a launch is considered
 healthy. Unknown leases and unknown liveness block scheduling instead of
-killing another agent's work.
+killing another agent's work. When `--inventory-json` is supplied, inventory
+rows with `backend: "cuda"` infer `cuda_exclusive` for omitted job classes and
+reject explicit `generic` CUDA jobs before any lease can be claimed.
 
 Run one dry pass:
 

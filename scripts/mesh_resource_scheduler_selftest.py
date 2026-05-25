@@ -53,6 +53,20 @@ def write_jobs(directory: pathlib.Path, jobs: list[dict[str, Any]]) -> pathlib.P
     return path
 
 
+def write_inventory(directory: pathlib.Path, resources: list[dict[str, Any]]) -> pathlib.Path:
+    path = directory / "inventory.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "tensorcore.mesh_resources.v1",
+                "resources": resources,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def args_for(path: pathlib.Path, *, dry_run: bool = False) -> argparse.Namespace:
     return argparse.Namespace(
         arbiter_cmd="arbiter",
@@ -817,6 +831,59 @@ def test_inventory_blocks_non_general_resource_without_allowlist() -> None:
         raise AssertionError("non-general resource without allow-list accepted a job")
 
 
+def test_inventory_cuda_backend_infers_exclusive_resource_class() -> None:
+    scheduler = load_scheduler()
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        jobs_path = write_jobs(
+            root,
+            [
+                job(
+                    "jack-cuda",
+                    priority=50,
+                    resource="jack-blupc:rtx3060",
+                    resource_class=None,
+                    admission_cmd=True,
+                    post_start_probe_cmd=True,
+                    worker_identity_cmd=True,
+                )
+            ],
+        )
+        inventory_path = write_inventory(
+            root,
+            [
+                {
+                    "id": "jack-blupc:rtx3060",
+                    "backend": "cuda",
+                    "status": "active",
+                    "capacity": 1,
+                }
+            ],
+        )
+        inventory = scheduler.load_inventory(str(inventory_path))
+        jobs = scheduler.load_jobs(str(jobs_path), inventory=inventory)
+    assert jobs[0]["resource_class"] == "cuda_exclusive"
+
+
+def test_inventory_cuda_backend_rejects_generic_running_job() -> None:
+    scheduler = load_scheduler()
+    jobs = [job("bad-cuda", priority=50, resource="jack-blupc:rtx3060")]
+    inventory = {
+        "jack-blupc:rtx3060": {
+            "id": "jack-blupc:rtx3060",
+            "backend": "cuda",
+            "status": "active",
+            "capacity": 1,
+        }
+    }
+    try:
+        scheduler.validate_jobs_against_inventory(jobs, inventory)
+    except ValueError as exc:
+        assert "resource_class is not cuda_exclusive" in str(exc)
+    else:
+        raise AssertionError("CUDA inventory resource accepted a generic running job")
+
+
 def test_cuda_launch_runs_post_start_and_identity() -> None:
     runtime = FakeRuntime(live={"qllm-phase1": False})
     result = run_case(
@@ -963,6 +1030,8 @@ def main() -> int:
     test_inventory_blocks_running_job_on_blocked_resource()
     test_inventory_rejects_bad_resource_rows()
     test_inventory_blocks_non_general_resource_without_allowlist()
+    test_inventory_cuda_backend_infers_exclusive_resource_class()
+    test_inventory_cuda_backend_rejects_generic_running_job()
     test_cuda_launch_runs_post_start_and_identity()
     test_cuda_post_start_failure_releases_claimed_lease()
     test_cuda_live_adoption_records_worker_identity_in_claim()

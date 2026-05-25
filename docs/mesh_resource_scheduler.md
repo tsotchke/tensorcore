@@ -35,7 +35,10 @@ the source of truth for accelerator ownership and scheduling eligibility:
 
 Run the scheduler with `--inventory-json configs/mesh_resources.json` so jobs
 targeting unknown, blocked, or reserved resources fail validation before they
-can claim an arbiter lease.
+can claim an arbiter lease. Inventory rows with `backend: "cuda"` are also
+forced through the `cuda_exclusive` job policy; a CUDA job cannot downgrade
+itself to `generic` and bypass admission, post-start, or worker-identity
+checks.
 Validate inventory edits with:
 
 ```sh

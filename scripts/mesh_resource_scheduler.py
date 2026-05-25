@@ -74,7 +74,7 @@ def write_json(path: str, payload: dict) -> None:
     tmp.replace(out)
 
 
-def load_jobs(path: str) -> list[dict]:
+def load_jobs(path: str, inventory: dict[str, dict] | None = None) -> list[dict]:
     raw = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
     if isinstance(raw, dict):
         jobs = raw.get("jobs")
@@ -82,7 +82,7 @@ def load_jobs(path: str) -> list[dict]:
         jobs = raw
     if not isinstance(jobs, list):
         raise SystemExit("--jobs-json must contain a list or an object with jobs")
-    return [normalize_job(job) for job in jobs]
+    return [normalize_job(job, inventory=inventory) for job in jobs]
 
 
 def load_inventory(path: str | None) -> dict[str, dict]:
@@ -113,6 +113,9 @@ def load_inventory(path: str | None) -> dict[str, dict]:
             raise ValueError(
                 f"resource {resource_id!r} status must be one of {sorted(INVENTORY_STATUSES)!r}"
             )
+        backend = row.get("backend")
+        if backend is not None and (not isinstance(backend, str) or not backend.strip()):
+            raise ValueError(f"resource {resource_id!r} backend must be a non-empty string when set")
         if status == "blocked" and not str(row.get("blocked_reason") or "").strip():
             raise ValueError(f"resource {resource_id!r} status=blocked requires blocked_reason")
         general = row.get("general_queue_eligible", True)
@@ -163,11 +166,24 @@ def validate_jobs_against_inventory(jobs: list[dict], inventory: dict[str, dict]
                 f"job {job['id']!r} targets non-general resource {job['resource']!r} "
                 "with no reserved_for allow-list"
             )
+        backend = str(resource.get("backend") or "").lower()
+        if (
+            backend == "cuda"
+            and job["desired_state"] == "running"
+            and job["resource_class"] != "cuda_exclusive"
+        ):
+            errors.append(
+                f"job {job['id']!r} targets CUDA inventory resource {job['resource']!r} "
+                "but resource_class is not cuda_exclusive"
+            )
     if errors:
         raise ValueError("; ".join(errors))
 
 
-def infer_resource_class(resource: str) -> str:
+def infer_resource_class(resource: str, inventory: dict[str, dict] | None = None) -> str:
+    row = inventory.get(resource) if inventory else None
+    if row and str(row.get("backend") or "").lower() == "cuda":
+        return "cuda_exclusive"
     if ":cuda" in resource or resource.startswith("cuda"):
         return "cuda_exclusive"
     return "generic"
@@ -202,7 +218,7 @@ def validate_command_field(job: dict, key: str, *, required: bool) -> None:
     raise ValueError(f"job {job['id']!r} field {key!r} must be a non-empty string or string list")
 
 
-def normalize_job(job: Any) -> dict:
+def normalize_job(job: Any, inventory: dict[str, dict] | None = None) -> dict:
     if not isinstance(job, dict):
         raise SystemExit("--jobs-json contains a non-object job")
     out = dict(job)
@@ -220,7 +236,9 @@ def normalize_job(job: Any) -> dict:
         raise ValueError(
             f"job {out['id']!r} desired_state must be one of {sorted(DESIRED_STATES)!r}"
         )
-    out["resource_class"] = str(out.get("resource_class") or infer_resource_class(out["resource"]))
+    out["resource_class"] = str(
+        out.get("resource_class") or infer_resource_class(out["resource"], inventory)
+    )
     if out["resource_class"] not in RESOURCE_CLASSES:
         raise ValueError(
             f"job {out['id']!r} resource_class must be one of {sorted(RESOURCE_CLASSES)!r}"
@@ -949,8 +967,9 @@ def schedule_once(args: argparse.Namespace) -> dict:
     arbiter_cmd = command(args.arbiter_cmd)
     if not arbiter_cmd:
         raise SystemExit("--arbiter-cmd resolved to an empty command")
-    jobs = load_jobs(args.jobs_json)
-    validate_jobs_against_inventory(jobs, load_inventory(args.inventory_json))
+    inventory = load_inventory(args.inventory_json)
+    jobs = load_jobs(args.jobs_json, inventory=inventory)
+    validate_jobs_against_inventory(jobs, inventory)
     probes = {job["id"]: probe_job(job, timeout=args.probe_timeout_sec) for job in jobs}
     completions = {
         job["id"]: complete_job(job, timeout=args.probe_timeout_sec)

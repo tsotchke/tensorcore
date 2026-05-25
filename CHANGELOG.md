@@ -94,6 +94,9 @@ every architectural primitive in code and tested:
   (`configs/mesh_resources.json`) plus validation and arbiter-capacity
   wrapper tools, so blocked hosts and reserved slots such as Enki's
   Tsotchke-chan M4 lane are rejected before any lease is claimed.
+- Mesh inventory `backend: "cuda"` rows now force `cuda_exclusive` scheduler
+  semantics, preventing jobs from downgrading CUDA accelerators to generic
+  resources and bypassing admission/post-start/worker-identity gates.
 - Release-smoke evidence now records clean git-head provenance, and the
   operational bundle checker can require release, SDK26, PyTorch, and
   live-mesh evidence to match the current committed head.
