@@ -240,6 +240,26 @@ dedicated smoke workspace that can be hard-reset to `origin/<ref>`.
 `TC_WINDOWS_EVIDENCE_PATH` writes
 `tensorcore.windows_host_smoke.evidence.v1` after the remote bootstrap passes.
 
+### `run_windows_cuda_probe.sh`
+
+Runs a non-destructive CUDA readiness probe on a Tailscale/SSH-reachable
+Windows host. It fast-forwards the remote checkout like
+`run_windows_host_smoke.sh`, then records NVIDIA driver/device visibility,
+`nvidia-smi` compute-app admission state, and CUDA toolkit / `nvcc` discovery.
+This is the scheduling gate for Jack's RTX lane before any GPU work is allowed.
+
+```sh
+TC_WINDOWS_CUDA_EVIDENCE_PATH=/tmp/windows-cuda.json \
+  scripts/run_windows_cuda_probe.sh
+python3 scripts/check_windows_cuda_probe_evidence.py /tmp/windows-cuda.json \
+  --require-driver --require-admission-clear --require-clean-head
+```
+
+Use `--require-toolchain` or `--require-ready` only after the CUDA Toolkit is
+installed and `nvcc` is visible on the remote PATH. Driver-only evidence is
+still useful: it proves the GPU/driver and admission state while keeping the
+inventory lane blocked until the build toolchain is complete.
+
 ### `run_windows_gloo_smoke.ps1`
 
 CTest helper for Windows portable CPU builds. It reserves a loopback TCP
@@ -325,12 +345,17 @@ fallback ranks, and per-rank launch/prepare metadata.
 Coordinates shared mesh resources such as `cosbox:cuda3090` through the
 Tsotchke arbiter. It reads a small jobs JSON, probes known live work,
 releases only verified-stale leases, adopts live known holders, and launches
-new jobs only after claiming the requested resource. CUDA-exclusive jobs add
-admission, post-start, and worker-identity gates before a launch is considered
-healthy. Unknown leases and unknown liveness block scheduling instead of
-killing another agent's work. When `--inventory-json` is supplied, inventory
-rows with `backend: "cuda"` infer `cuda_exclusive` for omitted job classes and
-reject explicit `generic` CUDA jobs before any lease can be claimed.
+new jobs only after claiming the selected resource. Jobs can target an exact
+`resource`, a `resources` list, or a `resource_pool` selector over the checked
+inventory; pool jobs expand into per-resource placements and can use command
+templates such as `{resource}` and `{node}`. Tenant counts are tracked across
+resources so idle machines are assigned fair-share first, then by priority.
+CUDA-exclusive jobs add admission, post-start, and worker-identity gates before
+a launch is considered healthy. Unknown leases and unknown liveness block
+scheduling instead of killing another agent's work. When `--inventory-json` is
+supplied, inventory rows with `backend: "cuda"` infer `cuda_exclusive` for
+omitted job classes and reject explicit `generic` CUDA jobs before any lease can
+be claimed.
 
 Run one dry pass:
 
@@ -422,10 +447,10 @@ was prepared from the archived checkout during that run.
 ### `check_operational_evidence.py`
 
 Validates a complete operational evidence bundle by delegating to the release,
-SDK26, CUDA, HIP, HIP toolchain, PyTorch, Windows, and live-mesh evidence
-checkers, then applying bundle-level policy. For production promotion, use
-the clean-head flags so stale or dirty-tree evidence cannot satisfy the
-current head's deployment gate.
+SDK26, CUDA, HIP, HIP toolchain, PyTorch, Windows, Windows CUDA probe, and
+live-mesh evidence checkers, then applying bundle-level policy. For production
+promotion, use the clean-head flags so stale or dirty-tree evidence cannot
+satisfy the current head's deployment gate.
 
 ```sh
 python3 scripts/check_operational_evidence.py \
@@ -434,13 +459,15 @@ python3 scripts/check_operational_evidence.py \
   --cuda /tmp/cuda-smoke.json \
   --pytorch /tmp/pytorch.json \
   --windows /tmp/windows-host.json \
+  --windows-cuda /tmp/windows-cuda.json \
   --live-mesh /tmp/live-mesh-training.json \
   --require-release --require-sdk26 --require-cuda --require-pytorch \
   --require-pytorch-backend-allocation --require-windows \
-  --require-windows-python --require-live-mesh \
+  --require-windows-python --require-windows-cuda-driver \
+  --require-windows-cuda-admission-clear --require-live-mesh \
   --require-release-clean-head --require-sdk26-clean-head \
   --require-cuda-clean-head --require-pytorch-clean-head \
-  --require-windows-clean-head \
+  --require-windows-clean-head --require-windows-cuda-clean-head \
   --require-live-clean-head \
   --min-live-outer-steps 2 \
   --require-direct-ring --require-checkpoint --require-cuda-rank3 \
@@ -463,6 +490,11 @@ Add `--windows /tmp/windows-host.json --require-windows
 --require-windows-clean-head` when Jack or another Windows node is part of
 the deployment proof. Add `--require-windows-python` when the Windows Python
 binding smoke must be present, not skipped.
+Add `--windows-cuda /tmp/windows-cuda.json --require-windows-cuda-driver
+--require-windows-cuda-admission-clear --require-windows-cuda-clean-head`
+to prove a Windows NVIDIA lane is visible and not currently occupied; add
+`--require-windows-cuda-toolchain` or `--require-windows-cuda-ready` before
+unblocking that lane for CUDA builds.
 
 ### `ci_cuda_smoke.sh`
 

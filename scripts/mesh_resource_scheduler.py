@@ -29,11 +29,33 @@ RESOURCE_CLASSES = {"generic", "cuda_exclusive"}
 DESIRED_STATES = {"running", "paused"}
 
 
-def command(value: Any) -> list[str]:
+def render_command_part(value: str, job: dict | None = None) -> str:
+    if job is None:
+        return value
+    replacements = {
+        "backend": job.get("resource_backend"),
+        "id": job.get("id"),
+        "job_id": job.get("id"),
+        "logical_id": job.get("logical_id"),
+        "node": job.get("resource_node"),
+        "owner": job.get("owner"),
+        "resource": job.get("resource"),
+        "resource_class": job.get("resource_class"),
+        "sync_id": job.get("sync_id"),
+        "tenant": job.get("tenant"),
+    }
+    out = value
+    for key, replacement in replacements.items():
+        if replacement is not None:
+            out = out.replace("{" + key + "}", str(replacement))
+    return out
+
+
+def command(value: Any, job: dict | None = None) -> list[str]:
     if isinstance(value, list):
-        argv = [str(part) for part in value]
+        argv = [render_command_part(str(part), job) for part in value]
     elif isinstance(value, str):
-        argv = shlex.split(value)
+        argv = shlex.split(render_command_part(value, job))
     else:
         return []
     if argv and argv[0].startswith("~"):
@@ -82,7 +104,10 @@ def load_jobs(path: str, inventory: dict[str, dict] | None = None) -> list[dict]
         jobs = raw
     if not isinstance(jobs, list):
         raise SystemExit("--jobs-json must contain a list or an object with jobs")
-    return [normalize_job(job, inventory=inventory) for job in jobs]
+    expanded = []
+    for job in jobs:
+        expanded.extend(expand_job_resources(job, inventory or {}))
+    return [normalize_job(job, inventory=inventory) for job in expanded]
 
 
 def load_inventory(path: str | None) -> dict[str, dict]:
@@ -130,14 +155,174 @@ def load_inventory(path: str | None) -> dict[str, dict]:
     return out
 
 
+def ensure_string_list(value: Any, *, field: str) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        return list(value)
+    raise ValueError(f"{field} must be a string or string list")
+
+
+def optional_string_list(value: Any, *, field: str) -> list[str] | None:
+    if value is None:
+        return None
+    return ensure_string_list(value, field=field)
+
+
+def resource_tags(row: dict) -> set[str]:
+    tags = row.get("tags", [])
+    if tags is None:
+        return set()
+    if not isinstance(tags, list) or not all(isinstance(item, str) for item in tags):
+        raise ValueError(f"resource {row.get('id', '<unknown>')!r} tags must be a string list")
+    return set(tags)
+
+
+def job_owner_and_tenant(job: dict) -> tuple[str, str]:
+    owner = require_str(job, "owner")
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    tenant = str(job.get("tenant") or metadata.get("tenant") or owner.split(":", 1)[0]).strip()
+    if not tenant:
+        raise ValueError(f"job {job.get('id', '<unknown>')!r} field 'tenant' must be a non-empty string")
+    return owner, tenant
+
+
+def principal_allowed_for_reserved_resource(owner: str, tenant: str, rules: list[str]) -> bool:
+    return any(
+        owner_matches_rule(owner, rule) or owner_matches_rule(tenant, rule)
+        for rule in rules
+    )
+
+
+def resource_allowed_for_job(row: dict, job: dict, *, include_reserved: bool) -> bool:
+    status = str(row.get("status", "active"))
+    if status == "blocked":
+        return False
+    owner, tenant = job_owner_and_tenant(job)
+    general = row.get("general_queue_eligible", True)
+    reserved_for = row.get("reserved_for") or []
+    if general is False:
+        if not reserved_for:
+            return False
+        if not principal_allowed_for_reserved_resource(owner, tenant, reserved_for):
+            return False
+    if status == "reserved" and not include_reserved:
+        return bool(reserved_for and principal_allowed_for_reserved_resource(owner, tenant, reserved_for))
+    return True
+
+
+def resource_matches_pool(resource_id: str, row: dict, pool: Any) -> bool:
+    if isinstance(pool, str):
+        return (
+            resource_id == pool
+            or row.get("backend") == pool
+            or row.get("class") == pool
+            or pool in resource_tags(row)
+        )
+    if isinstance(pool, list):
+        if not all(isinstance(item, str) for item in pool):
+            raise ValueError("resource_pool list must contain only strings")
+        return resource_id in pool
+    if not isinstance(pool, dict):
+        raise ValueError("resource_pool must be a string, string list, or object")
+
+    exact = optional_string_list(
+        pool.get("resource") if "resource" in pool else pool.get("resources"),
+        field="resource_pool.resources",
+    )
+    if exact is not None and resource_id not in exact:
+        return False
+
+    backends = optional_string_list(pool.get("backend") or pool.get("backends"), field="resource_pool.backend")
+    if backends is not None and str(row.get("backend") or "") not in backends:
+        return False
+
+    classes = optional_string_list(pool.get("class") or pool.get("classes"), field="resource_pool.class")
+    if classes is not None and str(row.get("class") or "") not in classes:
+        return False
+
+    nodes = optional_string_list(pool.get("node") or pool.get("nodes"), field="resource_pool.node")
+    if nodes is not None and str(row.get("node") or "") not in nodes:
+        return False
+
+    tags = optional_string_list(pool.get("tag") or pool.get("tags"), field="resource_pool.tags")
+    if tags is not None and not set(tags).issubset(resource_tags(row)):
+        return False
+
+    min_memory = pool.get("min_memory_gib")
+    if min_memory is not None:
+        try:
+            required = float(min_memory)
+            available = float(row.get("memory_gib", 0))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("resource_pool.min_memory_gib must be numeric") from exc
+        if available < required:
+            return False
+
+    return True
+
+
+def resource_candidates_for_job(job: Any, inventory: dict[str, dict]) -> tuple[list[str], bool]:
+    if not isinstance(job, dict):
+        raise SystemExit("--jobs-json contains a non-object job")
+    selectors = [
+        key
+        for key in ("resource", "resources", "resource_pool", "resource_selector")
+        if key in job and job.get(key) not in (None, "")
+    ]
+    if not selectors:
+        raise ValueError(f"job {job.get('id', '<unknown>')!r} requires resource, resources, or resource_pool")
+    if len(selectors) > 1:
+        raise ValueError(
+            f"job {job.get('id', '<unknown>')!r} must use only one of resource, resources, resource_pool"
+        )
+    selector = selectors[0]
+    if selector == "resource":
+        return [require_str(job, "resource")], False
+    if selector == "resources":
+        resources = ensure_string_list(job["resources"], field="resources")
+        if not resources:
+            raise ValueError(f"job {job.get('id', '<unknown>')!r} resources must not be empty")
+        return resources, True
+    if not inventory:
+        raise ValueError(f"job {job.get('id', '<unknown>')!r} uses resource_pool but no inventory is loaded")
+
+    pool = job.get(selector)
+    include_reserved = bool(pool.get("include_reserved", False)) if isinstance(pool, dict) else False
+    resources = [
+        resource_id
+        for resource_id, row in inventory.items()
+        if resource_matches_pool(resource_id, row, pool)
+        and resource_allowed_for_job(row, job, include_reserved=include_reserved)
+    ]
+    if not resources:
+        raise ValueError(f"job {job.get('id', '<unknown>')!r} resource_pool matched no eligible resources")
+    return resources, True
+
+
+def expand_job_resources(job: Any, inventory: dict[str, dict]) -> list[dict]:
+    resources, pooled = resource_candidates_for_job(job, inventory)
+    if len(set(resources)) != len(resources):
+        raise ValueError(f"job {job.get('id', '<unknown>')!r} has duplicate resource candidates")
+    logical_id = require_str(job, "id")
+    out = []
+    for resource in resources:
+        clone = dict(job)
+        clone["logical_id"] = str(clone.get("logical_id") or logical_id)
+        clone["resource"] = resource
+        clone.pop("resources", None)
+        clone.pop("resource_selector", None)
+        if pooled:
+            clone["id"] = f"{logical_id}@{resource}"
+            clone.setdefault("sync_id", logical_id)
+        out.append(clone)
+    return out
+
+
 def owner_matches_rule(owner: str, rule: str) -> bool:
     if rule.endswith("*"):
         return owner.startswith(rule[:-1])
     return owner == rule
-
-
-def owner_allowed_for_reserved_resource(owner: str, rules: list[str]) -> bool:
-    return any(owner_matches_rule(owner, rule) for rule in rules)
 
 
 def validate_jobs_against_inventory(jobs: list[dict], inventory: dict[str, dict]) -> None:
@@ -156,9 +341,9 @@ def validate_jobs_against_inventory(jobs: list[dict], inventory: dict[str, dict]
         general = resource.get("general_queue_eligible", True)
         reserved_for = resource.get("reserved_for") or []
         if general is False and reserved_for:
-            if not owner_allowed_for_reserved_resource(job["owner"], reserved_for):
+            if not principal_allowed_for_reserved_resource(job["owner"], job["tenant"], reserved_for):
                 errors.append(
-                    f"job {job['id']!r} owner {job['owner']!r} is not allowed "
+                    f"job {job['id']!r} tenant {job['tenant']!r} owner {job['owner']!r} is not allowed "
                     f"to use reserved resource {job['resource']!r}"
                 )
         elif general is False and status != "blocked" and job["desired_state"] == "running":
@@ -223,10 +408,23 @@ def normalize_job(job: Any, inventory: dict[str, dict] | None = None) -> dict:
         raise SystemExit("--jobs-json contains a non-object job")
     out = dict(job)
     out["id"] = require_str(out, "id")
+    out["logical_id"] = str(out.get("logical_id") or out["id"])
     out["sync_id"] = str(out.get("sync_id") or out["id"])
     out["resource"] = require_str(out, "resource")
     out["owner"] = require_str(out, "owner")
+    metadata = out.get("metadata") if isinstance(out.get("metadata"), dict) else {}
+    out["tenant"] = str(out.get("tenant") or metadata.get("tenant") or out["owner"].split(":", 1)[0]).strip()
+    if not out["tenant"]:
+        raise ValueError(f"job {out['id']!r} field 'tenant' must be a non-empty string")
     out["priority"] = int(out.get("priority", 0))
+    out["max_parallel"] = int(out.get("max_parallel", 1))
+    if out["max_parallel"] < 1:
+        raise ValueError(f"job {out['id']!r} field 'max_parallel' must be >= 1")
+    tenant_max_parallel = out.get("tenant_max_parallel")
+    if tenant_max_parallel is not None:
+        out["tenant_max_parallel"] = int(tenant_max_parallel)
+        if out["tenant_max_parallel"] < 1:
+            raise ValueError(f"job {out['id']!r} field 'tenant_max_parallel' must be >= 1")
     out["enabled"] = require_bool(out, "enabled", True)
     out["ttl_sec"] = float(out.get("ttl_sec", 900.0))
     if out["ttl_sec"] <= 0:
@@ -243,6 +441,15 @@ def normalize_job(job: Any, inventory: dict[str, dict] | None = None) -> dict:
         raise ValueError(
             f"job {out['id']!r} resource_class must be one of {sorted(RESOURCE_CLASSES)!r}"
         )
+    inventory_row = inventory.get(out["resource"]) if inventory else None
+    if inventory_row:
+        out["resource_node"] = str(inventory_row.get("node") or out["resource"].split(":", 1)[0])
+        out["resource_backend"] = str(inventory_row.get("backend") or "")
+        out["inventory_class"] = str(inventory_row.get("class") or "")
+    else:
+        out["resource_node"] = str(out.get("resource_node") or out["resource"].split(":", 1)[0])
+        out["resource_backend"] = str(out.get("resource_backend") or "")
+        out["inventory_class"] = str(out.get("inventory_class") or "")
     requires_host_gate = out["resource_class"] == "cuda_exclusive"
     validate_command_field(out, "probe_cmd", required=False)
     validate_command_field(out, "start_cmd", required=out["desired_state"] == "running")
@@ -251,12 +458,16 @@ def normalize_job(job: Any, inventory: dict[str, dict] | None = None) -> dict:
     validate_command_field(out, "post_start_probe_cmd", required=requires_host_gate)
     validate_command_field(out, "worker_identity_cmd", required=requires_host_gate)
 
-    metadata = out.get("metadata") if isinstance(out.get("metadata"), dict) else {}
     metadata = dict(metadata)
     metadata.setdefault("surface", "tensorcore_mesh_scheduler")
     metadata["sync_job_id"] = out["sync_id"]
     metadata["job_id"] = out["id"]
+    metadata["logical_job_id"] = out["logical_id"]
     metadata["resource_class"] = out["resource_class"]
+    metadata["tenant"] = out["tenant"]
+    metadata["resource"] = out["resource"]
+    metadata["resource_backend"] = out["resource_backend"]
+    metadata["resource_node"] = out["resource_node"]
     metadata["scheduler_host"] = os.uname().nodename
     metadata["worker_identity_pending"] = requires_host_gate
     out["metadata"] = metadata
@@ -264,7 +475,7 @@ def normalize_job(job: Any, inventory: dict[str, dict] | None = None) -> dict:
 
 
 def probe_job(job: dict, *, timeout: float) -> dict:
-    probe_cmd = command(job.get("probe_cmd"))
+    probe_cmd = command(job.get("probe_cmd"), job)
     if not probe_cmd:
         return {"live": None, "reason": "missing_probe_cmd", "rc": None}
     try:
@@ -281,7 +492,7 @@ def probe_job(job: dict, *, timeout: float) -> dict:
 
 
 def complete_job(job: dict, *, timeout: float) -> dict:
-    completion_cmd = command(job.get("completion_cmd"))
+    completion_cmd = command(job.get("completion_cmd"), job)
     if not completion_cmd:
         return {"complete": False, "reason": "missing_completion_cmd", "rc": None}
     try:
@@ -298,7 +509,7 @@ def complete_job(job: dict, *, timeout: float) -> dict:
 
 
 def admit_job(job: dict, *, timeout: float) -> dict:
-    admission_cmd = command(job.get("admission_cmd"))
+    admission_cmd = command(job.get("admission_cmd"), job)
     if not admission_cmd:
         return {"admitted": True, "reason": "missing_admission_cmd", "rc": None}
     try:
@@ -449,7 +660,7 @@ def release_many(
 
 
 def start_job(job: dict, *, timeout: float) -> dict:
-    start_cmd = command(job.get("start_cmd"))
+    start_cmd = command(job.get("start_cmd"), job)
     if not start_cmd:
         raise RuntimeError(f"job {job['id']} has no start_cmd")
     proc = run_capture(start_cmd, timeout=timeout)
@@ -467,7 +678,7 @@ def post_start_probe_job(
     timeout: float,
     interval: float,
 ) -> dict:
-    probe_cmd = command(job.get("post_start_probe_cmd"))
+    probe_cmd = command(job.get("post_start_probe_cmd"), job)
     if not probe_cmd:
         if job.get("resource_class") != "cuda_exclusive":
             return {"verified": True, "reason": "not_required", "rc": None}
@@ -511,7 +722,7 @@ def post_start_probe_job(
 
 
 def collect_worker_identity(job: dict, *, timeout: float) -> dict:
-    identity_cmd = command(job.get("worker_identity_cmd"))
+    identity_cmd = command(job.get("worker_identity_cmd"), job)
     if not identity_cmd:
         if job.get("resource_class") != "cuda_exclusive":
             return {"ok": True, "reason": "not_required", "rc": None, "identity": {}}
@@ -557,12 +768,69 @@ def enabled_jobs(jobs: list[dict], resource: str) -> list[dict]:
     ]
 
 
+def initial_scheduler_counts(
+    jobs: list[dict],
+    probes: dict[str, dict],
+    status: dict,
+) -> dict[str, dict[str, int]]:
+    tenant_counts: dict[str, int] = {}
+    logical_counts: dict[str, int] = {}
+    seen: set[tuple[str, str]] = set()
+
+    def note(job: dict) -> None:
+        key = (job["resource"], job["logical_id"])
+        if key in seen:
+            return
+        seen.add(key)
+        tenant_counts[job["tenant"]] = tenant_counts.get(job["tenant"], 0) + 1
+        logical_counts[job["logical_id"]] = logical_counts.get(job["logical_id"], 0) + 1
+
+    for job in jobs:
+        if probes[job["id"]]["live"] is True:
+            note(job)
+    for lease in status.get("leases") or []:
+        if not isinstance(lease, dict):
+            continue
+        job = job_for_lease(lease, jobs)
+        if job is not None and probes[job["id"]]["live"] is not False:
+            note(job)
+    return {"tenant": tenant_counts, "logical": logical_counts}
+
+
+def logical_parallel_available(job: dict, counts: dict[str, dict[str, int]]) -> bool:
+    return counts["logical"].get(job["logical_id"], 0) < job["max_parallel"]
+
+
+def tenant_parallel_limit(job: dict, max_running_per_tenant: int) -> int:
+    return int(job.get("tenant_max_parallel") or max_running_per_tenant or 0)
+
+
+def tenant_parallel_available(
+    job: dict,
+    counts: dict[str, dict[str, int]],
+    *,
+    max_running_per_tenant: int,
+) -> bool:
+    limit = tenant_parallel_limit(job, max_running_per_tenant)
+    if limit <= 0:
+        return True
+    return counts["tenant"].get(job["tenant"], 0) < limit
+
+
+def mark_planned(job: dict, counts: dict[str, dict[str, int]]) -> None:
+    counts["tenant"][job["tenant"]] = counts["tenant"].get(job["tenant"], 0) + 1
+    counts["logical"][job["logical_id"]] = counts["logical"].get(job["logical_id"], 0) + 1
+
+
 def choose_candidate(
     jobs: list[dict],
     probes: dict[str, dict],
     completions: dict[str, dict],
     admissions: dict[str, dict],
     resource: str,
+    counts: dict[str, dict[str, int]],
+    *,
+    max_running_per_tenant: int,
 ) -> dict | None:
     candidates = [
         job
@@ -570,10 +838,23 @@ def choose_candidate(
         if probes[job["id"]]["live"] is False
         and completions[job["id"]]["complete"] is False
         and admissions[job["id"]]["admitted"] is True
+        and logical_parallel_available(job, counts)
+        and tenant_parallel_available(
+            job,
+            counts,
+            max_running_per_tenant=max_running_per_tenant,
+        )
     ]
     if not candidates:
         return None
-    return sorted(candidates, key=lambda item: (-item["priority"], item["id"]))[0]
+    return sorted(
+        candidates,
+        key=lambda item: (
+            counts["tenant"].get(item["tenant"], 0),
+            -item["priority"],
+            item["id"],
+        ),
+    )[0]
 
 
 def reconcile_stale_leases(
@@ -786,6 +1067,7 @@ def schedule_resource(
     args: argparse.Namespace,
     *,
     arbiter_cmd: list[str],
+    counts: dict[str, dict[str, int]],
 ) -> tuple[list[dict], list[dict]]:
     results, errors = reconcile_stale_leases(
         jobs,
@@ -843,8 +1125,53 @@ def schedule_resource(
         })
         return results, errors
 
-    candidate = choose_candidate(jobs, probes, completions, admissions, resource)
+    candidate = choose_candidate(
+        jobs,
+        probes,
+        completions,
+        admissions,
+        resource,
+        counts,
+        max_running_per_tenant=args.max_running_per_tenant,
+    )
     if candidate is None:
+        parallel_blocked_jobs = [
+            job["id"]
+            for job in enabled_running_jobs(jobs, resource)
+            if probes[job["id"]]["live"] is False
+            and completions[job["id"]]["complete"] is False
+            and admissions[job["id"]]["admitted"] is True
+            and not logical_parallel_available(job, counts)
+        ]
+        if parallel_blocked_jobs:
+            results.append({
+                "resource": resource,
+                "action": "idle_logical_parallel_limit",
+                "jobs": parallel_blocked_jobs,
+                "ok": True,
+            })
+            return results, errors
+        tenant_blocked_jobs = [
+            job["id"]
+            for job in enabled_running_jobs(jobs, resource)
+            if probes[job["id"]]["live"] is False
+            and completions[job["id"]]["complete"] is False
+            and admissions[job["id"]]["admitted"] is True
+            and logical_parallel_available(job, counts)
+            and not tenant_parallel_available(
+                job,
+                counts,
+                max_running_per_tenant=args.max_running_per_tenant,
+            )
+        ]
+        if tenant_blocked_jobs:
+            results.append({
+                "resource": resource,
+                "action": "idle_tenant_parallel_limit",
+                "jobs": tenant_blocked_jobs,
+                "ok": True,
+            })
+            return results, errors
         unknown_completion_jobs = [
             job["id"]
             for job in enabled_running_jobs(jobs, resource)
@@ -904,6 +1231,7 @@ def schedule_resource(
             "admission": admissions[candidate["id"]],
             "ok": True,
         })
+        mark_planned(candidate, counts)
         return results, errors
 
     claim_payload = claim_job(candidate, arbiter_cmd=arbiter_cmd, timeout=args.timeout_sec)
@@ -959,6 +1287,8 @@ def schedule_resource(
                     "job": candidate["id"],
                     "error": f"failed to release lease after failed start: {exc}",
                 })
+    if result["ok"]:
+        mark_planned(candidate, counts)
     results.append(result)
     return results, errors
 
@@ -981,6 +1311,7 @@ def schedule_once(args: argparse.Namespace) -> dict:
     }
     status = run_json(arbiter_cmd + ["status", "--json"], timeout=args.timeout_sec)
     resources = sorted({job["resource"] for job in jobs})
+    counts = initial_scheduler_counts(jobs, probes, status)
     results = []
     errors = []
     for resource in resources:
@@ -994,6 +1325,7 @@ def schedule_once(args: argparse.Namespace) -> dict:
                 status,
                 args,
                 arbiter_cmd=arbiter_cmd,
+                counts=counts,
             )
             results.extend(resource_results)
             errors.extend(resource_errors)
@@ -1076,6 +1408,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--post-start-timeout-sec", type=float, default=30.0)
     parser.add_argument("--post-start-interval-sec", type=float, default=2.0)
     parser.add_argument("--worker-identity-timeout-sec", type=float, default=10.0)
+    parser.add_argument("--max-running-per-tenant", type=int, default=0)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--pretty-json", action="store_true")
@@ -1091,6 +1424,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error("--post-start-interval-sec must be >= 0")
     if args.worker_identity_timeout_sec <= 0:
         parser.error("--worker-identity-timeout-sec must be > 0")
+    if args.max_running_per_tenant < 0:
+        parser.error("--max-running-per-tenant must be >= 0")
     return args
 
 

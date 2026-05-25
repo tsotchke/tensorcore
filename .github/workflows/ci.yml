@@ -27,6 +27,9 @@ jobs:
       - name: Windows host smoke evidence checker fixtures
         run: python3 scripts/check_windows_host_smoke_evidence_selftest.py
 
+      - name: Windows CUDA probe evidence checker fixtures
+        run: python3 scripts/check_windows_cuda_probe_evidence_selftest.py
+
       - name: HIP toolchain probe fixtures
         run: python3 scripts/probe_hip_toolchain_selftest.py
 
@@ -48,7 +51,7 @@ jobs:
           python3 scripts/check_mesh_resource_inventory.py
 
       - name: Live mesh launcher shell syntax
-        run: bash -n scripts/run_live_mesh_smoke.sh scripts/run_live_mesh_training_demo.sh
+        run: bash -n scripts/run_live_mesh_smoke.sh scripts/run_live_mesh_training_demo.sh scripts/run_windows_cuda_probe.sh
 
       - name: CUDA resource admission fixtures
         run: python3 scripts/check_cuda_resource_admission_selftest.py

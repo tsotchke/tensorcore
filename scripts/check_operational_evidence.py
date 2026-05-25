@@ -88,7 +88,7 @@ def get_path(value: Any, path: str) -> Any:
 def normalize_optional_paths(args: argparse.Namespace) -> None:
     for name in (
         "release", "sdk26", "cuda", "hip", "hip_toolchain", "pytorch",
-        "windows", "live_mesh",
+        "windows", "windows_cuda", "live_mesh",
     ):
         path = getattr(args, name)
         if path is not None:
@@ -104,6 +104,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hip-toolchain", type=pathlib.Path)
     parser.add_argument("--pytorch", type=pathlib.Path)
     parser.add_argument("--windows", type=pathlib.Path)
+    parser.add_argument("--windows-cuda", type=pathlib.Path)
     parser.add_argument("--live-mesh", type=pathlib.Path)
     parser.add_argument("--git-head", default=git_head())
     parser.add_argument("--require-release", action="store_true")
@@ -118,6 +119,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--require-pytorch-backend-allocation", action="store_true")
     parser.add_argument("--require-windows", action="store_true")
     parser.add_argument("--require-windows-python", action="store_true")
+    parser.add_argument("--require-windows-cuda-driver", action="store_true")
+    parser.add_argument("--require-windows-cuda-toolchain", action="store_true")
+    parser.add_argument("--require-windows-cuda-admission-clear", action="store_true")
+    parser.add_argument("--require-windows-cuda-ready", action="store_true")
     parser.add_argument("--require-live-mesh", action="store_true")
     parser.add_argument("--require-release-clean-head", action="store_true")
     parser.add_argument("--require-sdk26-clean-head", action="store_true")
@@ -126,6 +131,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--require-hip-toolchain-clean-head", action="store_true")
     parser.add_argument("--require-pytorch-clean-head", action="store_true")
     parser.add_argument("--require-windows-clean-head", action="store_true")
+    parser.add_argument("--require-windows-cuda-clean-head", action="store_true")
     parser.add_argument("--require-live-clean-head", action="store_true")
     parser.add_argument("--min-live-outer-steps", type=int, default=1)
     parser.add_argument("--require-direct-ring", action="store_true")
@@ -160,6 +166,13 @@ def main() -> int:
         args.pytorch = require_path("--pytorch", args.pytorch)
     if args.require_windows:
         args.windows = require_path("--windows", args.windows)
+    if (
+        args.require_windows_cuda_driver
+        or args.require_windows_cuda_toolchain
+        or args.require_windows_cuda_admission_clear
+        or args.require_windows_cuda_ready
+    ):
+        args.windows_cuda = require_path("--windows-cuda", args.windows_cuda)
     if args.require_live_mesh:
         args.live_mesh = require_path("--live-mesh", args.live_mesh)
     normalize_optional_paths(args)
@@ -242,6 +255,21 @@ def main() -> int:
             cmd.extend(["--git-head", args.git_head or "", "--require-clean-head"])
         run_checker(cmd)
         checked.append("windows")
+
+    if args.windows_cuda is not None:
+        cmd = ["scripts/check_windows_cuda_probe_evidence.py", str(args.windows_cuda)]
+        if args.require_windows_cuda_driver:
+            cmd.append("--require-driver")
+        if args.require_windows_cuda_toolchain:
+            cmd.append("--require-toolchain")
+        if args.require_windows_cuda_admission_clear:
+            cmd.append("--require-admission-clear")
+        if args.require_windows_cuda_ready:
+            cmd.append("--require-ready")
+        if args.require_windows_cuda_clean_head:
+            cmd.extend(["--git-head", args.git_head or "", "--require-clean-head"])
+        run_checker(cmd)
+        checked.append("windows_cuda")
 
     if args.live_mesh is not None:
         cmd = [

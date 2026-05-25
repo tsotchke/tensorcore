@@ -67,11 +67,17 @@ def write_inventory(directory: pathlib.Path, resources: list[dict[str, Any]]) ->
     return path
 
 
-def args_for(path: pathlib.Path, *, dry_run: bool = False) -> argparse.Namespace:
+def args_for(
+    path: pathlib.Path,
+    *,
+    dry_run: bool = False,
+    inventory_json: pathlib.Path | None = None,
+    max_running_per_tenant: int = 0,
+) -> argparse.Namespace:
     return argparse.Namespace(
         arbiter_cmd="arbiter",
         jobs_json=str(path),
-        inventory_json=None,
+        inventory_json=str(inventory_json) if inventory_json else None,
         state_json=None,
         timeout_sec=1.0,
         probe_timeout_sec=1.0,
@@ -80,6 +86,7 @@ def args_for(path: pathlib.Path, *, dry_run: bool = False) -> argparse.Namespace
         post_start_timeout_sec=1.0,
         post_start_interval_sec=0.0,
         worker_identity_timeout_sec=1.0,
+        max_running_per_tenant=max_running_per_tenant,
         dry_run=dry_run,
         json=False,
         pretty_json=False,
@@ -101,12 +108,14 @@ def job(
     worker_identity_cmd: bool = False,
     resource: str = "cosbox:cuda3090",
     resource_class: str | None = "generic",
+    tenant: str | None = None,
 ) -> dict[str, Any]:
     out = {
         "id": job_id,
         "sync_id": job_id,
         "resource": resource,
         "owner": owner or f"{job_id}:cosbox",
+        "tenant": tenant or (owner.split(":", 1)[0] if owner else job_id),
         "priority": priority,
         "desired_state": desired_state,
         "ttl_sec": 60,
@@ -240,13 +249,24 @@ def run_case(
     runtime: FakeRuntime,
     *,
     dry_run: bool = False,
+    inventory: list[dict[str, Any]] | None = None,
+    max_running_per_tenant: int = 0,
 ) -> dict:
     scheduler = load_scheduler()
     scheduler.run_json = runtime.run_json
     scheduler.run_capture = runtime.run_capture
     with tempfile.TemporaryDirectory() as tmp:
-        path = write_jobs(pathlib.Path(tmp), jobs)
-        return scheduler.schedule_once(args_for(path, dry_run=dry_run))
+        root = pathlib.Path(tmp)
+        path = write_jobs(root, jobs)
+        inventory_path = write_inventory(root, inventory) if inventory is not None else None
+        return scheduler.schedule_once(
+            args_for(
+                path,
+                dry_run=dry_run,
+                inventory_json=inventory_path,
+                max_running_per_tenant=max_running_per_tenant,
+            )
+        )
 
 
 def assert_event_order(runtime: FakeRuntime, expected: list[tuple[str, str | None]]) -> None:
@@ -884,6 +904,213 @@ def test_inventory_cuda_backend_rejects_generic_running_job() -> None:
         raise AssertionError("CUDA inventory resource accepted a generic running job")
 
 
+def service_pool_inventory() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": "atlas:validation",
+            "node": "atlas",
+            "backend": "service",
+            "class": "validation",
+            "status": "active",
+            "capacity": 1,
+        },
+        {
+            "id": "old-donkey:kimi_native",
+            "node": "old-donkey",
+            "backend": "service",
+            "class": "llm-generation",
+            "status": "active",
+            "capacity": 1,
+        },
+    ]
+
+
+def pooled_job(
+    job_id: str,
+    *,
+    tenant: str,
+    priority: int,
+    max_parallel: int = 1,
+) -> dict[str, Any]:
+    return {
+        "id": job_id,
+        "owner": f"{tenant}:{job_id}",
+        "tenant": tenant,
+        "priority": priority,
+        "desired_state": "running",
+        "ttl_sec": 60,
+        "resource_pool": {"backend": "service"},
+        "max_parallel": max_parallel,
+        "probe_cmd": ["probe", "{logical_id}"],
+        "start_cmd": ["start", "{logical_id}"],
+    }
+
+
+def test_resource_pool_defaults_to_one_placement_for_logical_job() -> None:
+    runtime = FakeRuntime()
+    result = run_case(
+        [pooled_job("eval-sweep", tenant="alice", priority=100)],
+        runtime,
+        inventory=service_pool_inventory(),
+    )
+    assert result["ok"] is True
+    assert [row["action"] for row in result["results"]] == [
+        "claimed_and_launched",
+        "idle_logical_parallel_limit",
+    ]
+    assert result["results"][0]["resource"] == "atlas:validation"
+    assert_event_order(
+        runtime,
+        [
+            ("probe", "eval-sweep"),
+            ("probe", "eval-sweep"),
+            ("status", "--json"),
+            ("claim", "atlas:validation"),
+            ("start", "eval-sweep"),
+        ],
+    )
+
+
+def test_resource_pool_max_parallel_launches_multiple_machines() -> None:
+    runtime = FakeRuntime()
+    result = run_case(
+        [pooled_job("eval-sweep", tenant="alice", priority=100, max_parallel=2)],
+        runtime,
+        inventory=service_pool_inventory(),
+    )
+    assert result["ok"] is True
+    assert [row["action"] for row in result["results"]] == [
+        "claimed_and_launched",
+        "claimed_and_launched",
+    ]
+    assert [row["resource"] for row in result["results"]] == [
+        "atlas:validation",
+        "old-donkey:kimi_native",
+    ]
+    assert_event_order(
+        runtime,
+        [
+            ("probe", "eval-sweep"),
+            ("probe", "eval-sweep"),
+            ("status", "--json"),
+            ("claim", "atlas:validation"),
+            ("start", "eval-sweep"),
+            ("claim", "old-donkey:kimi_native"),
+            ("start", "eval-sweep"),
+        ],
+    )
+
+
+def test_resource_pool_fair_shares_between_tenants() -> None:
+    runtime = FakeRuntime()
+    result = run_case(
+        [
+            pooled_job("alice-eval", tenant="alice", priority=100, max_parallel=2),
+            pooled_job("bob-eval", tenant="bob", priority=50, max_parallel=2),
+        ],
+        runtime,
+        inventory=service_pool_inventory(),
+    )
+    assert result["ok"] is True
+    assert [(row["resource"], row["job"]) for row in result["results"]] == [
+        ("atlas:validation", "alice-eval@atlas:validation"),
+        ("old-donkey:kimi_native", "bob-eval@old-donkey:kimi_native"),
+    ]
+    assert_event_order(
+        runtime,
+        [
+            ("probe", "alice-eval"),
+            ("probe", "alice-eval"),
+            ("probe", "bob-eval"),
+            ("probe", "bob-eval"),
+            ("status", "--json"),
+            ("claim", "atlas:validation"),
+            ("start", "alice-eval"),
+            ("claim", "old-donkey:kimi_native"),
+            ("start", "bob-eval"),
+        ],
+    )
+
+
+def test_resource_pool_filters_blocked_and_unowned_reserved_resources() -> None:
+    scheduler = load_scheduler()
+    inventory_rows = [
+        *service_pool_inventory(),
+        {
+            "id": "jack-blupc:blocked_service",
+            "node": "jack-blupc",
+            "backend": "service",
+            "class": "validation",
+            "status": "blocked",
+            "blocked_reason": "maintenance",
+            "capacity": 1,
+        },
+        {
+            "id": "enki:reserved_service",
+            "node": "enki",
+            "backend": "service",
+            "class": "validation",
+            "status": "reserved",
+            "general_queue_eligible": False,
+            "reserved_for": ["tsotchke-chan:*"],
+            "capacity": 1,
+        },
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        jobs_path = write_jobs(
+            root,
+            [pooled_job("alice-eval", tenant="alice", priority=100, max_parallel=4)],
+        )
+        inventory_path = write_inventory(root, inventory_rows)
+        inventory = scheduler.load_inventory(str(inventory_path))
+        jobs = scheduler.load_jobs(str(jobs_path), inventory=inventory)
+    assert [job["resource"] for job in jobs] == [
+        "atlas:validation",
+        "old-donkey:kimi_native",
+    ]
+
+
+def test_resource_pool_command_templates_receive_placement_context() -> None:
+    pooled = pooled_job("render", tenant="alice", priority=100, max_parallel=1)
+    pooled["probe_cmd"] = ["probe", "{id}"]
+    pooled["start_cmd"] = ["start", "{resource}"]
+    runtime = FakeRuntime()
+    result = run_case(
+        [pooled],
+        runtime,
+        inventory=service_pool_inventory(),
+    )
+    assert result["ok"] is True
+    assert result["results"][0]["job"] == "render@atlas:validation"
+    assert_event_order(
+        runtime,
+        [
+            ("probe", "render@atlas:validation"),
+            ("probe", "render@old-donkey:kimi_native"),
+            ("status", "--json"),
+            ("claim", "atlas:validation"),
+            ("start", "atlas:validation"),
+        ],
+    )
+
+
+def test_resource_pool_respects_global_tenant_parallel_limit() -> None:
+    runtime = FakeRuntime()
+    result = run_case(
+        [pooled_job("eval-sweep", tenant="alice", priority=100, max_parallel=2)],
+        runtime,
+        inventory=service_pool_inventory(),
+        max_running_per_tenant=1,
+    )
+    assert result["ok"] is True
+    assert [row["action"] for row in result["results"]] == [
+        "claimed_and_launched",
+        "idle_tenant_parallel_limit",
+    ]
+    assert result["results"][1]["jobs"] == ["eval-sweep@old-donkey:kimi_native"]
+
+
 def test_cuda_launch_runs_post_start_and_identity() -> None:
     runtime = FakeRuntime(live={"qllm-phase1": False})
     result = run_case(
@@ -1032,6 +1259,12 @@ def main() -> int:
     test_inventory_blocks_non_general_resource_without_allowlist()
     test_inventory_cuda_backend_infers_exclusive_resource_class()
     test_inventory_cuda_backend_rejects_generic_running_job()
+    test_resource_pool_defaults_to_one_placement_for_logical_job()
+    test_resource_pool_max_parallel_launches_multiple_machines()
+    test_resource_pool_fair_shares_between_tenants()
+    test_resource_pool_filters_blocked_and_unowned_reserved_resources()
+    test_resource_pool_command_templates_receive_placement_context()
+    test_resource_pool_respects_global_tenant_parallel_limit()
     test_cuda_launch_runs_post_start_and_identity()
     test_cuda_post_start_failure_releases_claimed_lease()
     test_cuda_live_adoption_records_worker_identity_in_claim()

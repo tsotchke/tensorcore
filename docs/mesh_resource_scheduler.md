@@ -9,6 +9,11 @@ The scheduler uses the Tsotchke arbiter as the lease backend. Its policy is
 conservative:
 
 - Live work is never killed for priority alone.
+- Jobs may target one resource, an explicit `resources` list, or an inventory
+  `resource_pool`; pool jobs are resolved to per-resource placements.
+- Tenant counts are tracked across resources, so idle resources are assigned
+  to the least-scheduled tenant first, with `priority` used inside that fair
+  share.
 - Known stale leases are released only when that job's probe says dead.
 - Unknown leases block the resource.
 - A live known job without a lease is adopted by claiming a lease for it.
@@ -27,8 +32,9 @@ the source of truth for accelerator ownership and scheduling eligibility:
 - `cosbox:cuda3090` is the primary exclusive CUDA artifact lane.
 - `old-donkey:cuda3050` is the low-VRAM CUDA precompute lane.
 - `jack-blupc:cuda3060` is registered but marked `blocked`; Windows
-  SSH/bootstrap and portable CPU smoke are healthy, but CUDA admission and
-  worker-identity probes still need validation before scheduling GPU work.
+  SSH/bootstrap and portable CPU smoke are healthy, and the RTX 3060 driver is
+  visible. `scripts/run_windows_cuda_probe.sh` currently keeps the lane blocked
+  until exclusive admission is clear and the CUDA Toolkit / `nvcc` is installed.
 - `atlas:metal_m2ultra` is active Metal capacity for validation, evaluation,
   generation support, and Tensorcore Metal workloads.
 - `enki:metal_m4_tsotchke_chan` is `reserved`; only `tsotchke-chan` owners may
@@ -147,12 +153,29 @@ The jobs file is JSON:
 Fields:
 
 - `id`: stable scheduler job name.
+- `logical_id`: optional stable logical job name. Pool placements use
+  `id@resource` as their placement id and keep `logical_id` as the unsuffixed
+  job id.
 - `sync_id`: stable lease identity. Keep this stable across PID churn.
 - `resource`: arbiter resource name, for example `cosbox:cuda3090`.
+- `resources`: optional explicit list of candidate resource names. The
+  scheduler expands this into one placement per resource.
+- `resource_pool`: optional inventory selector. It can be a class/backend/tag
+  string such as `validation`, a list of exact resource ids, or an object with
+  fields such as `backend`, `class`/`classes`, `node`/`nodes`, `tags`,
+  `resources`, and `min_memory_gib`.
 - `resource_class`: `generic` or `cuda_exclusive`. If omitted, resources
   containing `:cuda` or starting with `cuda` are treated as `cuda_exclusive`.
 - `owner`: human-readable lease owner.
-- `priority`: tie-breaker used only when the resource is idle.
+- `tenant`: user or service principal for fair-share accounting. If omitted,
+  it defaults to the part of `owner` before the first `:`.
+- `priority`: tie-breaker used only when the resource is idle and tenant
+  fair-share counts are equal.
+- `max_parallel`: maximum number of placements for the same logical job that
+  may be active or planned in one scheduler pass. Defaults to `1`; raise it for
+  sharded jobs that should use multiple machines.
+- `tenant_max_parallel`: optional per-job tenant concurrency cap. The scheduler
+  also supports a global `--max-running-per-tenant` cap.
 - `desired_state`: `running` makes the job launchable; `paused` prevents new
   launches but still lets a live job be adopted and protected.
 - `probe_cmd`: optional command that exits 0 when the job is live. If omitted
@@ -174,7 +197,36 @@ Fields:
   `cuda_exclusive` jobs and stored in adopted lease metadata.
 - `start_cmd`: command used only when the job is selected for launch.
 - `metadata`: copied into the arbiter lease with `sync_job_id`, `job_id`,
-  `resource_class`, scheduler host, and worker identity status.
+  `logical_job_id`, `tenant`, `resource_class`, scheduler host, and worker
+  identity status.
+
+Command arrays and command strings may use these placement placeholders:
+`{resource}`, `{node}`, `{backend}`, `{tenant}`, `{owner}`, `{id}`,
+`{logical_id}`, `{sync_id}`, and `{resource_class}`. This lets one pool job use
+the same command template across Atlas, old-donkey, Jack, or future nodes.
+
+Example multi-user pool job:
+
+```json
+{
+  "id": "heldout-eval",
+  "owner": "alice:evaluator",
+  "tenant": "alice",
+  "resource_pool": {
+    "backend": "service",
+    "classes": ["validation", "llm-generation"]
+  },
+  "max_parallel": 2,
+  "priority": 40,
+  "desired_state": "running",
+  "ttl_sec": 600,
+  "probe_cmd": ["ssh", "{node}", "/opt/tensorcore/bin/heldout-eval-live {logical_id}"],
+  "start_cmd": ["ssh", "{node}", "/opt/tensorcore/bin/start-heldout-eval {logical_id} {resource}"],
+  "metadata": {
+    "project": "semiclassical_qllm"
+  }
+}
+```
 
 For the current GeoRefine Qwen target, completion means the run's
 `m2_certificate.json` has `completed=true`, a positive final held-out PPL

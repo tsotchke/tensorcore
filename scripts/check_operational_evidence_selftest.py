@@ -230,6 +230,52 @@ def windows_evidence() -> dict[str, Any]:
     }
 
 
+def windows_cuda_evidence() -> dict[str, Any]:
+    return {
+        "schema": "tensorcore.windows_cuda_probe.evidence.v1",
+        "schema_version": 1,
+        "runtime_status": "driver_only",
+        "checked_at_unix": 123,
+        "git_head": TEST_HEAD,
+        "git_dirty": False,
+        "ref": "master",
+        "repo": "src/tensorcore",
+        "remote_url": "https://github.com/tsotchke/tensorcore.git",
+        "host": {
+            "computer_name": "DESKTOP-JACK-BLUPC",
+            "user": "tsotchke",
+            "os": "Microsoft Windows 11 Pro",
+        },
+        "nvidia_smi": {
+            "found": True,
+            "path": "C:/Windows/System32/nvidia-smi.exe",
+            "query_rc": 0,
+            "stderr_tail": "",
+        },
+        "device_count": 1,
+        "devices": [{
+            "name": "NVIDIA GeForce RTX 3060",
+            "driver_version": "560.94",
+            "memory_total_mib": 12288,
+            "compute_capability": "8.6",
+        }],
+        "cuda_toolkit": {
+            "nvcc_found": False,
+            "nvcc_path": None,
+            "nvcc_version": "",
+            "cuda_path": None,
+            "toolkit_dirs": [],
+        },
+        "admission": {
+            "ok": True,
+            "reason": "ok",
+            "allowed_process_max_memory_mib": 64,
+            "compute_app_count": 0,
+            "blocked": [],
+        },
+    }
+
+
 def write_json(directory: pathlib.Path, name: str, data: dict[str, Any]) -> pathlib.Path:
     path = directory / name
     path.write_text(json.dumps(data), encoding="utf-8")
@@ -274,6 +320,9 @@ def main() -> int:
         )
         pytorch_path = write_json(directory, "pytorch.json", pytorch_evidence())
         windows_path = write_json(directory, "windows.json", windows_evidence())
+        windows_cuda_path = write_json(
+            directory, "windows-cuda.json", windows_cuda_evidence()
+        )
 
         assert_passes(
             "--release", str(release_path),
@@ -283,6 +332,7 @@ def main() -> int:
             "--hip-toolchain", str(hip_toolchain_path),
             "--pytorch", str(pytorch_path),
             "--windows", str(windows_path),
+            "--windows-cuda", str(windows_cuda_path),
             "--live-mesh", str(live_path),
             "--git-head", TEST_HEAD,
             "--require-release",
@@ -297,6 +347,8 @@ def main() -> int:
             "--require-pytorch-backend-allocation",
             "--require-windows",
             "--require-windows-python",
+            "--require-windows-cuda-driver",
+            "--require-windows-cuda-admission-clear",
             "--require-live-mesh",
             "--require-release-clean-head",
             "--require-sdk26-clean-head",
@@ -305,6 +357,7 @@ def main() -> int:
             "--require-hip-toolchain-clean-head",
             "--require-pytorch-clean-head",
             "--require-windows-clean-head",
+            "--require-windows-cuda-clean-head",
             "--require-live-clean-head",
             "--min-live-outer-steps", "5",
             "--require-direct-ring",
@@ -317,6 +370,10 @@ def main() -> int:
         assert_fails("no evidence paths were provided")
         assert_fails("--live-mesh evidence is required", "--require-live-mesh")
         assert_fails("--windows evidence is required", "--require-windows")
+        assert_fails(
+            "--windows-cuda evidence is required",
+            "--require-windows-cuda-driver",
+        )
         assert_fails("--hip-toolchain evidence is required", "--require-hip-toolchain")
         assert_fails(
             "--hip-toolchain evidence is required",
@@ -387,6 +444,30 @@ def main() -> int:
             "--windows", str(dirty_windows_path),
             "--git-head", TEST_HEAD,
             "--require-windows-clean-head",
+        )
+
+        stale_windows_cuda = windows_cuda_evidence()
+        stale_windows_cuda["git_head"] = "stale"
+        stale_windows_cuda_path = write_json(
+            directory, "stale-windows-cuda.fixture", stale_windows_cuda
+        )
+        assert_fails(
+            "Windows CUDA evidence git_head mismatch",
+            "--windows-cuda", str(stale_windows_cuda_path),
+            "--git-head", TEST_HEAD,
+            "--require-windows-cuda-clean-head",
+        )
+
+        missing_windows_cuda_toolchain = windows_cuda_evidence()
+        missing_windows_cuda_toolchain_path = write_json(
+            directory,
+            "missing-windows-cuda-toolchain.fixture",
+            missing_windows_cuda_toolchain,
+        )
+        assert_fails(
+            "--require-toolchain needs nvcc on PATH",
+            "--windows-cuda", str(missing_windows_cuda_toolchain_path),
+            "--require-windows-cuda-toolchain",
         )
 
         stale_cuda = cuda_evidence()
