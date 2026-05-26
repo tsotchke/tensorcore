@@ -214,6 +214,18 @@ back, and validates:
 - bulk load picks up all supported tensors and counts the skipped one
 - the matrix descriptor maps GGUF dims to N/K correctly
 
+For ICC/runtime readiness, use:
+
+```sh
+python3 scripts/run_quantized_gguf_runtime_evidence.py --require-pass
+python3 scripts/check_quantized_gguf_runtime_evidence.py \
+  build/quantized_gguf_runtime_evidence.json --require-pass
+```
+
+That runner still uses the synthetic `tests/test_gguf.c` fixture; it is proof
+for GGUF parsing, quantized-matrix descriptors, buffer materialization, and a
+GGUF-backed Q4 GEMV smoke, not full real-model inference.
+
 `examples/gguf_inspect.c` plus a real `tinyllama-1.1b-q4_0.gguf` is the
 manual smoke. The bulk-load mode (`--load-supported`) is the path most
 downstream runtimes will actually take.

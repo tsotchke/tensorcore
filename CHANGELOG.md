@@ -178,6 +178,11 @@ every architectural primitive in code and tested:
   Conv2D `conv_bytes` while leaving shader-internal async-copy coverage
   explicitly blocked until selected-kernel or shader-line instrumentation
   exists.
+- Quantized/GGUF runtime evidence now wraps `test_quantized` and `test_gguf`,
+  emitting ICC-readable coverage for the Metal `gemv_quant_encode` helper and
+  the GGUF quantized-matrix descriptor helper while reporting explicit
+  `metal_device_unavailable` blocked states when the host sandbox hides the
+  Metal device.
 - Eshkol bridge runtime evidence now has a repo-owned smoke/checker pair:
   `scripts/run_eshkol_tensorcore_bridge_smoke.py` records the real local
   `eshkol-run` compile/runtime state for `hello_tensorcore.esk` and the new

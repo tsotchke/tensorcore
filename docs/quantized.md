@@ -161,6 +161,19 @@ back to fp16, then does an fp32 GEMV. The kernel result must agree to ≤
 2e-4 RMS-scaled — quantization error is the dominant term, and we get it
 right to that precision.
 
+For ICC/runtime readiness, use:
+
+```sh
+python3 scripts/run_quantized_gguf_runtime_evidence.py --require-pass
+python3 scripts/check_quantized_gguf_runtime_evidence.py \
+  build/quantized_gguf_runtime_evidence.json --require-pass
+```
+
+That evidence path wraps `test_quantized` and `test_gguf`, so it proves the
+Metal `gemv_quant_encode` helper and the GGUF-loaded quantized GEMV path from
+one deterministic artifact. It reports `metal_device_unavailable` as blocked
+when the host sandbox hides the Metal device.
+
 ## Patterns
 
 ### Per-layer decode

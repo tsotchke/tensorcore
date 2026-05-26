@@ -344,6 +344,33 @@ check. Existing host traces show public ops/backends, not Metal shader
 function-line execution, so `async_copy` remains unclaimed until a Metal
 capture, shader instrumentation, or selected-kernel trace exists.
 
+### `run_quantized_gguf_runtime_evidence.py`
+
+Focused evidence for local quantized GEMV and GGUF quantized-matrix paths. The
+runner executes the Metal-build `test_quantized` and `test_gguf` binaries with
+`TC_TRACE=1`, then emits ICC-readable coverage for:
+
+- `lib/ops/quantized.mm:gemv_quant_encode`
+- `lib/io/gguf.c:gguf_quantized_matrix_info_common`
+
+The default artifact is `build/quantized_gguf_runtime_evidence.json`. Validate
+it with:
+
+```sh
+python3 scripts/check_quantized_gguf_runtime_evidence.py \
+  build/quantized_gguf_runtime_evidence.json --require-pass
+```
+
+Run locally after building the Metal test suite:
+
+```sh
+python3 scripts/run_quantized_gguf_runtime_evidence.py --require-pass
+```
+
+On hosts where the Metal device is unavailable to the test process, the
+artifact reports `status=blocked` with `metal_device_unavailable` rather than
+claiming GGUF-backed quantized GEMV coverage.
+
 ### `run_eshkol_tensorcore_bridge_smoke.py`
 
 Focused evidence for the Eshkol bridge surface. The script uses a local
@@ -1167,6 +1194,7 @@ workflow will pass too.
 | Prove local AMX and GEMM benchmark paths | `python3 scripts/run_amx_bench_evidence.py --require-pass` |
 | Prove portable CPU GEMM and Conv2D helpers | `python3 scripts/run_cpu_ops_runtime_evidence.py --require-pass` |
 | Prove Metal attention and Conv2D dispatch helpers | `python3 scripts/run_metal_ops_runtime_evidence.py --require-pass` |
+| Prove quantized GEMV and GGUF matrix metadata helpers | `python3 scripts/run_quantized_gguf_runtime_evidence.py --require-pass` |
 | Probe Eshkol bridge runtime evidence | `python3 scripts/run_eshkol_tensorcore_bridge_smoke.py --build-dir build-portable-cpu-current --require-pass` |
 | Pre-release wide smoke | `scripts/release_smoke.sh` (add `REQUIRE_GPU=1` if you have one) |
 | Cross-check version triple | `scripts/check_version_consistency.sh` |

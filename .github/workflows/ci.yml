@@ -48,6 +48,9 @@ jobs:
       - name: Metal ops runtime evidence checker fixtures
         run: python3 scripts/check_metal_ops_runtime_evidence_selftest.py
 
+      - name: Quantized and GGUF runtime evidence checker fixtures
+        run: python3 scripts/check_quantized_gguf_runtime_evidence_selftest.py
+
       - name: Windows host smoke evidence checker fixtures
         run: python3 scripts/check_windows_host_smoke_evidence_selftest.py
 
