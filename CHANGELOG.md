@@ -80,6 +80,9 @@ every architectural primitive in code and tested:
 - Eshkol bridge diagnostics now expose C-string device/backend/version/status
   pointers through real `tc_eshkol_*` C shims, exported with the existing
   bridge ABI and exercised by the Scheme bridge smoke.
+- Metal kernel builds now track local Metal headers, emit collision-resistant
+  AIR filenames, and fail early with explicit `xcrun metal`/`metallib`
+  discovery diagnostics.
 - Mesh resource scheduling now supports completion gates: GeoRefine Qwen
   jobs can declare an artifact checker, completed jobs are not relaunched,
   completed stale leases are released, and unknown completion checks block
