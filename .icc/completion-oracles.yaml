@@ -4,6 +4,7 @@ oracles:
     aliases:
       - cuda-for-apple
       - tensorcore-public-integration
+      - continue Tensorcore production readiness build-out
     criteria:
       - id: release_smoke_runtime_evidence
         runtime_check: runtime_evidence_present
