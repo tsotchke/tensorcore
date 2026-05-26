@@ -346,8 +346,8 @@ neural accelerator adds `mpp::tensor_ops`.
 ### `tc_*` (prefix)
 
 Public C ABI prefix. All entry points in `include/tensorcore/*.h` begin
-with `tc_`. The Eshkol bindings use `__tc-*` for the underlying
-builtins and `tc-*` for the user-facing wrappers (see
+with `tc_`. The Eshkol bindings use `__tc-*` for internal extern declarations
+mapped to `tc_eshkol_*` helpers, and `tc-*` for the user-facing wrappers (see
 [eshkol_integration.md](eshkol_integration.md)).
 
 ### TFLOPS

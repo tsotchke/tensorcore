@@ -6,8 +6,8 @@
 ;; needs to see in runtime evidence.
 ;;
 ;; Run via:
-;;   ESHKOL_ENABLE_TENSORCORE=1 ESHKOL_PATH=eshkol eshkol-run -I eshkol \
-;;     tensorcore_bridge_smoke.esk
+;;   eshkol-run -I eshkol --lib-path build-portable-cpu-current --lib tensorcore \
+;;     eshkol/tensorcore_bridge_smoke.esk
 ;;
 
 (require stdlib)
@@ -37,14 +37,24 @@
         (display "buffer map NULL"))
     (newline)
 
-    (tc-gemm ctx 'f32 A B C M N K 1.0 0.0 #f #f)
-    (tc-gemm-fp16 ctx A B C M N K)
-    (tc-gemm-bf16 ctx A B C M N K)
-    (tc-attention-forward ctx Q KV V O 1 1 4 4 64 0.125 #f)
-
-    (display "TENSORCORE_BRIDGE_OK backend=")
-    (display (tc-last-backend))
-    (newline)
+    (let* ((s-f32 (tc-gemm ctx 'f32 A B C M N K 1.0 0.0 #f #f))
+           (s-f32-wrapper (tc-gemm-fp32 ctx A B C M N K))
+           (s-f16 (tc-gemm-fp16 ctx A B C M N K))
+           (s-bf16 (tc-gemm-bf16 ctx A B C M N K))
+           (s-attn (tc-attention-forward ctx Q KV V O 1 1 4 4 64 0.125 #f)))
+      (if (and (= s-f32 0)
+               (= s-f32-wrapper 0)
+               (= s-f16 0)
+               (= s-bf16 0)
+               (= s-attn 0))
+          (begin
+            (display "TENSORCORE_BRIDGE_OK backend=")
+            (display (tc-last-backend))
+            (newline))
+          (begin
+            (display "TENSORCORE_BRIDGE_FAIL statuses=")
+            (display (list s-f32 s-f32-wrapper s-f16 s-bf16 s-attn))
+            (newline))))
 
     (tc-buffer-free ctx A)
     (tc-buffer-free ctx B)

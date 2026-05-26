@@ -79,12 +79,14 @@ Then in Eshkol code:
 
 ## What the bridge does
 
-The bridge declares 14 external functions (the full tensorcore C ABI) in
-the Eshkol LLVM module via `llvm::Function::Create` with `ExternalLinkage`.
-When the Eshkol JIT or AOT compiler emits IR that calls one of these
-names, the linker resolves the symbol against `libtensorcore.a` —
-identical to how Eshkol's existing `eshkol_deep_equal`, `tensor_matmul`,
-etc., are wired.
+The runtime-proven path is now `eshkol/tensorcore.esk`: it declares `__tc-*`
+with Eshkol's `extern` form and links them to the `tc_eshkol_*` helpers exported
+by `libtensorcore`. Those helpers flatten tensorcore's out-parameter and
+descriptor-heavy C ABI into pointer/scalar calls that Eshkol can emit directly.
+
+`eshkol/bridge/tensorcore_codegen.cpp` is kept as an optional compiler-side
+declaration file for Eshkol integrations that want raw `tc_*` external symbols
+in the LLVM module.
 
 Once integrated, `tc_*` calls from Eshkol code dispatch into the
 simdgroup_matrix kernels (or the Metal 4 / TensorOps path on M5+) with
@@ -94,7 +96,7 @@ zero overhead — direct LLVM IR call into the linked C ABI.
 
 After integration:
 
-1. **Smoke test**: Run `ESHKOL_ENABLE_TENSORCORE=1 ESHKOL_PATH=~/Desktop/tensorcore/eshkol eshkol-run -I ~/Desktop/tensorcore/eshkol ~/Desktop/tensorcore/eshkol/hello_tensorcore.esk`. Should print device info + `gemm OK backend=simdgroup-matrix`.
+1. **Smoke test**: Run `python3 scripts/run_eshkol_tensorcore_bridge_smoke.py --build-dir build-portable-cpu-current --require-pass`. Should emit `status=passed` with `backend=portable-cpu`. Use the Metal build dir when validating local Apple GPU dispatch.
 2. **Cross-check vs eshkol-platform's existing GEMM**: Run both paths on identical inputs, compare element-wise. Should match within fp16 tolerance.
 3. **Bench**: Compare tensorcore-via-Eshkol vs eshkol-platform's `gpu_memory.mm` matmul. tensorcore should be ≥1.2× on shapes ≥1024³ (because it uses `simdgroup_matrix` with fp32 accum while gpu_memory.mm uses f32-only simdgroup).
 

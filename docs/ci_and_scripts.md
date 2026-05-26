@@ -190,10 +190,10 @@ available, and tries to compile and run:
 
 It emits `build/eshkol_tensorcore_bridge_evidence.json` with structured
 compile/runtime attempts, source module-load checks, and ICC-readable function
-coverage once the bridge actually runs. Until the Eshkol-side `__tc-*` wrappers
-resolve, the evidence is expected to be `status=blocked` with
-`summary.missing_builtins` listing the unresolved bridge functions. Validate
-the artifact with:
+coverage once the bridge actually runs. The Scheme module resolves `__tc-*`
+through the `tc_eshkol_*` C shims exported by `libtensorcore`; if the selected
+native backend cannot initialize, the smoke omits the success markers and the
+artifact records a failed runtime attempt. Validate the artifact with:
 
 ```sh
 python3 scripts/check_eshkol_tensorcore_bridge_evidence.py \
@@ -203,14 +203,15 @@ python3 scripts/check_eshkol_tensorcore_bridge_evidence.py \
 Run locally:
 
 ```sh
-python3 scripts/run_eshkol_tensorcore_bridge_smoke.py
+python3 scripts/run_eshkol_tensorcore_bridge_smoke.py \
+  --build-dir build-portable-cpu-current --require-pass
 python3 scripts/check_eshkol_tensorcore_bridge_evidence.py \
   build/eshkol_tensorcore_bridge_evidence.json --require-pass
 ```
 
-The first command is useful even before the bridge is complete because it
-records the exact Eshkol compiler/runtime blocker. The second command is the
-promotion gate for real runtime evidence.
+Use the portable CPU build when you need backend-independent bridge evidence.
+Use the default Metal build when specifically validating the local Apple GPU
+path.
 
 ### `ci_portable_cpu.sh`
 
@@ -995,6 +996,6 @@ workflow will pass too.
 | Build and verify a native SDK tarball | `scripts/create_native_sdk_archive.sh && scripts/check_native_sdk_archive.sh` |
 | Run the CI Python smoke locally | `cmake --install build --prefix /tmp/tensorcore-install && scripts/ci_python_smoke.sh` |
 | Emit ICC-readable fallback runtime evidence | `python3 scripts/run_fallback_runtime_smoke.py --require-pass` |
-| Probe Eshkol bridge runtime evidence | `python3 scripts/run_eshkol_tensorcore_bridge_smoke.py` |
+| Probe Eshkol bridge runtime evidence | `python3 scripts/run_eshkol_tensorcore_bridge_smoke.py --build-dir build-portable-cpu-current --require-pass` |
 | Pre-release wide smoke | `scripts/release_smoke.sh` (add `REQUIRE_GPU=1` if you have one) |
 | Cross-check version triple | `scripts/check_version_consistency.sh` |

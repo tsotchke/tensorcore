@@ -381,6 +381,7 @@ set(TC_COMMON_SOURCES
     lib/cuda/device.cpp
     lib/cuda/buffer.cpp
     lib/cuda/gemm.cpp
+    lib/c_api/eshkol_bridge.c
     lib/core/memory_tier_stub.cpp
     lib/core/checkpoint_stub.cpp
 )

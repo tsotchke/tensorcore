@@ -351,13 +351,12 @@ Bit-exact validated for 4 ranks × 1024 fp32.
 
 ## Eshkol bridge
 
-`eshkol/bridge/tensorcore_codegen.cpp` is the FFI shim. It declares the C
-ABI as external linkage and is compiled into the Eshkol LLVM module.
-Activation is opt-in via `ESHKOL_ENABLE_TENSORCORE=1`. With the env unset,
-Eshkol builds clean as before; with it set, `__tc-*` builtins resolve to
-the corresponding `tc_*` C ABI calls. See
+`eshkol/tensorcore.esk` is the runtime bridge. It declares `__tc-*` names
+through Eshkol's `extern` form and links them to the `tc_eshkol_*` C helpers
+exported by `libtensorcore`. `eshkol/bridge/tensorcore_codegen.cpp` remains as
+an optional raw-ABI declaration file for compiler-side integrations. See
 [eshkol_integration.md](eshkol_integration.md) and `eshkol/bridge/INTEGRATION.md`
-for the drop-in steps.
+for the usage steps.
 
 ## Build-time gates
 

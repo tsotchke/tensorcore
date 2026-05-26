@@ -18,6 +18,7 @@
 #include "tensorcore/memory_tier.h"
 #include "tensorcore/quantized.h"
 #include "tensorcore/gguf.h"
+#include "tensorcore/eshkol_bridge.h"
 
 #ifdef __cplusplus
 extern "C" {

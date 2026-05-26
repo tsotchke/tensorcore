@@ -27,14 +27,18 @@ REQUIRED_CHECKS = {
 REQUIRED_FUNCTIONS = {
     "eshkol/hello_tensorcore.esk": {"main"},
     "eshkol/tensorcore.esk": {
+        "tc-init",
+        "tc-shutdown",
         "tc-device-info",
         "tc-buffer-alloc",
         "tc-buffer-free",
         "tc-buffer-map",
         "tc-gemm",
+        "tc-gemm-fp32",
         "tc-gemm-fp16",
         "tc-gemm-bf16",
         "tc-attention-forward",
+        "tc-last-backend",
     },
 }
 

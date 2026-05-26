@@ -149,8 +149,10 @@ every architectural primitive in code and tested:
 - Eshkol bridge runtime evidence now has a repo-owned smoke/checker pair:
   `scripts/run_eshkol_tensorcore_bridge_smoke.py` records the real local
   `eshkol-run` compile/runtime state for `hello_tensorcore.esk` and the new
-  broader `tensorcore_bridge_smoke.esk`, while the checker accepts explicit
-  blocked evidence until Eshkol resolves the `__tc-*` wrapper builtins.
+  broader `tensorcore_bridge_smoke.esk`. The Scheme bindings now resolve
+  `__tc-*` through repo-owned `tc_eshkol_*` C shims, so the bridge smoke can
+  pass end-to-end against the portable CPU backend while still failing cleanly
+  on hosts where the selected native backend cannot initialize.
 - CUDA smoke evidence now participates in the same clean-head gate, including
   archive-based remote builds prepared by the live mesh runner.
 - HIP smoke evidence now uses the same source-head override/marker mechanism

@@ -4,9 +4,10 @@
  * Drop-in to eshkol-platform/lib/backend/.  Models the same pattern used by
  * builtin_declarations.cpp and tensor_codegen.cpp: declares the tensorcore
  * C ABI as ExternalLinkage functions in the Eshkol LLVM module. The
- * Scheme-side `tensorcore.esk` wrappers call `__tc-*` builtins; runtime
- * evidence must prove that the Eshkol integration resolves those wrappers
- * to the native `tc_*` declarations.
+ * runtime-proven bridge path now lives in eshkol/tensorcore.esk, which maps
+ * `__tc-*` names to the flatter `tc_eshkol_*` C shims with Eshkol's `extern`
+ * form. This file remains useful for compiler integrations that want raw
+ * `tc_*` symbols declared up front.
  *
  * Integration steps in eshkol-platform:
  *   1. Drop this file into lib/backend/.

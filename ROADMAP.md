@@ -222,8 +222,8 @@ some still queued.
       CI, macOS 15 CI, Ubuntu portable CPU CI, and macOS portable CPU CI
       pass on every push
 - [x] TFLOPS bench harness (GEMM sweep, attention sweep, 7B Q4_0 inference)
-- [x] Eshkol binding skeleton + bridge file dropped into both `eshkol/` and
-      `eshkol-platform/`, opt-in via `ESHKOL_ENABLE_TENSORCORE=1`
+- [x] Eshkol binding skeleton + runtime-proven `extern` bridge through
+      `tc_eshkol_*` helpers, with optional raw-codegen declaration file
 - [x] **Native SDK release artifact** — headers + libraries + metallib +
       CMake config + pkg-config tarball, with consumer verification in CI
 - [x] **Wheel packaging** — `tensorcore_apple-*.whl` with dylib + metallib
@@ -260,7 +260,8 @@ some still queued.
 
 ### v0.4 — Eshkol consolidation (closes the three-backend tax)
 
-- `eshkol-platform/lib/ffi/tensorcore_ffi.cpp` — register `__tc-*` builtins
+- `eshkol/tensorcore.esk` + `tc_eshkol_*` C shims — keep `__tc-*` bridge calls
+  runtime-proven through Eshkol's `extern` path
 - Redirect `eshkol-platform/lib/backend/tensor_*_codegen.cpp` to emit calls
   to `tc_gemm` / `tc_attention_forward` instead of bespoke gpu_memory.mm dispatch
 - Migrate `quantum_geometric_tensor/src/metal/` kernels (45+ kernels) onto tensorcore

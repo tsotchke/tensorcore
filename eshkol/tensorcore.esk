@@ -2,15 +2,11 @@
 ;; tensorcore.esk — Eshkol bindings for tensorcore.
 ;;
 ;; tensorcore exposes a C ABI (see include/tensorcore/tensorcore.h). This file
-;; wraps the C entry points as Eshkol builtins.  To install:
+;; wraps the Eshkol-friendly bridge entry points as Eshkol builtins. To install:
 ;;
 ;;   1. Build tensorcore (CMake) → libtensorcore.a + tensorcore.metallib.
-;;   2. In eshkol-platform, link against -ltensorcore and add the bridge file
-;;      `lib/ffi/tensorcore_ffi.cpp` (see docs/eshkol_integration.md).  That
-;;      file registers __tc-* builtins.
+;;   2. Link Eshkol programs with -ltensorcore.
 ;;   3. (require tensorcore) from any Eshkol source.
-;;
-;; Until the bridge lands, this file documents the planned API.
 ;;
 
 (provide tc-init tc-shutdown tc-device-info
@@ -18,6 +14,24 @@
          tc-gemm tc-gemm-fp16 tc-gemm-fp32 tc-gemm-bf16
          tc-attention-forward
          tc-last-backend)
+
+(extern ptr __tc-init :real tc_eshkol_init)
+(extern i32 __tc-shutdown ptr :real tc_eshkol_shutdown)
+
+(extern ptr __tc-device-name ptr :real tc_eshkol_device_name)
+(extern i32 __tc-device-family ptr :real tc_eshkol_device_family)
+(extern i32 __tc-device-unified-memory ptr :real tc_eshkol_device_unified_memory)
+(extern i32 __tc-device-supports-bf16 ptr :real tc_eshkol_device_supports_bf16)
+(extern i32 __tc-device-supports-i8 ptr :real tc_eshkol_device_supports_i8)
+(extern i32 __tc-device-supports-tensorops-m5 ptr :real tc_eshkol_device_supports_tensorops_m5)
+
+(extern ptr __tc-buffer-alloc ptr i64 :real tc_eshkol_buffer_alloc)
+(extern i32 __tc-buffer-free ptr ptr :real tc_eshkol_buffer_free)
+(extern ptr __tc-buffer-map ptr :real tc_eshkol_buffer_map)
+
+(extern i32 __tc-gemm ptr i32 ptr ptr ptr i32 i32 i32 double double i32 i32 :real tc_eshkol_gemm)
+(extern i32 __tc-attention-forward ptr ptr ptr ptr ptr i32 i32 i32 i32 i32 double i32 :real tc_eshkol_attention_forward)
+(extern i32 __tc-last-backend :real tc_eshkol_last_backend_code)
 
 ;;; ----------------------------------------------------------------
 ;;;  Lifecycle
@@ -33,7 +47,12 @@
 
 (define (tc-device-info ctx)
   "Return an alist of (family name unified-memory? bf16? i8? tensorops-m5?)."
-  (__tc-device-info ctx))
+  (list (cons 'family (__tc-device-family ctx))
+        (cons 'name "tensorcore")
+        (cons 'unified-memory? (= (__tc-device-unified-memory ctx) 1))
+        (cons 'bf16? (= (__tc-device-supports-bf16 ctx) 1))
+        (cons 'i8? (= (__tc-device-supports-i8 ctx) 1))
+        (cons 'tensorops-m5? (= (__tc-device-supports-tensorops-m5 ctx) 1))))
 
 ;;; ----------------------------------------------------------------
 ;;;  Buffers — unified-memory MTLBuffer handles
@@ -56,9 +75,16 @@
 ;;; ----------------------------------------------------------------
 
 ;; Generic GEMM. dtype is a symbol: 'f16 'bf16 'f32 'i8
+(define (tc-dtype-code dtype)
+  (cond ((eq? dtype 'f16) 0)
+        ((eq? dtype 'bf16) 1)
+        ((eq? dtype 'f32) 2)
+        ((eq? dtype 'i8) 3)
+        (else -1)))
+
 (define (tc-gemm ctx dtype A B C M N K
                  alpha beta transpose-a transpose-b)
-  (__tc-gemm ctx dtype A B C M N K alpha beta
+  (__tc-gemm ctx (tc-dtype-code dtype) A B C M N K alpha beta
              (if transpose-a 1 0)
              (if transpose-b 1 0)))
 
@@ -92,7 +118,20 @@
 ;;;  Diagnostics
 ;;; ----------------------------------------------------------------
 
+(define (tc-backend-symbol code)
+  (cond ((= code 1) 'simdgroup-matrix)
+        ((= code 2) 'tensorops-m5)
+        ((= code 3) 'mps)
+        ((= code 4) 'accelerate-cpu)
+        ((= code 5) 'sf64-emulated)
+        ((= code 6) 'ozaki-ii)
+        ((= code 7) 'portable-cpu)
+        ((= code 8) 'metal-compute)
+        ((= code 9) 'cuda)
+        ((= code 10) 'hip)
+        (else 'none)))
+
 (define (tc-last-backend)
   "Symbol describing which backend served the most recent call from this
    thread: 'simdgroup-matrix 'tensorops-m5 'mps 'accelerate-cpu 'none."
-  (__tc-last-backend))
+  (tc-backend-symbol (__tc-last-backend)))
