@@ -186,6 +186,9 @@ every architectural primitive in code and tested:
 - HIP smoke evidence now proves both fp32 `hip_gemm_sgemm` and fp16
   `hip_gemm_hgemm`, records per-kernel `gemm_kernels`, and emits
   ICC-readable source coverage for remote chipStar/HIP runs.
+- CUDA smoke evidence now records per-kernel fp32/fp16/bf16/int8 GEMM status,
+  AdamW dispatch coverage, and ICC-readable source coverage for remote NVIDIA
+  runs that support those paths.
 - Eshkol bridge runtime evidence now has a repo-owned smoke/checker pair:
   `scripts/run_eshkol_tensorcore_bridge_smoke.py` records the real local
   `eshkol-run` compile/runtime state for `hello_tensorcore.esk` and the new

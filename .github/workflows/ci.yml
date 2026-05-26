@@ -57,6 +57,9 @@ jobs:
       - name: Windows CUDA probe evidence checker fixtures
         run: python3 scripts/check_windows_cuda_probe_evidence_selftest.py
 
+      - name: CUDA smoke evidence checker fixtures
+        run: python3 scripts/check_cuda_smoke_evidence_selftest.py
+
       - name: HIP toolchain probe fixtures
         run: python3 scripts/probe_hip_toolchain_selftest.py
 

@@ -55,10 +55,74 @@ def cuda_evidence() -> dict[str, Any]:
         "backend": "cuda",
         "f32_kernel": "cublas_sgemm_managed",
         "f16_kernel": "cublas_gemmex_fp16_tensorop_managed",
+        "device": {
+            "device_name": "RTX test",
+            "supports_bf16": True,
+            "supports_int8_tensor_core": True,
+        },
+        "gemm_kernels": {
+            "cuda_gemm_sgemm": {
+                "status": "passed",
+                "backend": "cuda",
+                "kernel": "cublas_sgemm_managed",
+            },
+            "cuda_gemm_hgemm": {
+                "status": "passed",
+                "backend": "cuda",
+                "kernel": "cublas_gemmex_fp16_tensorop_managed",
+            },
+            "cuda_gemm_bf16": {
+                "status": "passed",
+                "backend": "cuda",
+                "kernel": "cublas_gemmex_bf16_tensorop_managed",
+            },
+            "cuda_gemm_i8": {
+                "status": "passed",
+                "backend": "cuda",
+                "kernel": "cublas_gemmex_i8_tensorop_managed",
+            },
+        },
         "fallback_backend": "portable_cpu",
         "training_kernels": {
             op: {"backend": "cuda", "kernel": kernel}
             for op, kernel in EXPECTED_TRAINING_KERNELS.items()
+        },
+        "files": {
+            "lib/cuda/gemm.cpp": {
+                "executed_lines": [116, 190, 290, 374],
+                "functions": {
+                    "cuda_gemm_sgemm": {"start_line": 116, "executed_lines": [116]},
+                    "cuda_gemm_hgemm": {"start_line": 190, "executed_lines": [190]},
+                    "cuda_gemm_bf16": {"start_line": 290, "executed_lines": [290]},
+                    "cuda_gemm_i8": {"start_line": 374, "executed_lines": [374]},
+                },
+            },
+            "lib/cuda/training.cu": {
+                "executed_lines": [128, 156],
+                "functions": {
+                    "adamw_step_fp32_kernel": {"start_line": 128, "executed_lines": [128]},
+                    "adamw_step_fp16_kernel": {"start_line": 156, "executed_lines": [156]},
+                },
+            },
+        },
+        "summary": {
+            "required_functions": [
+                "lib/cuda/gemm.cpp:cuda_gemm_bf16",
+                "lib/cuda/gemm.cpp:cuda_gemm_hgemm",
+                "lib/cuda/gemm.cpp:cuda_gemm_i8",
+                "lib/cuda/gemm.cpp:cuda_gemm_sgemm",
+                "lib/cuda/training.cu:adamw_step_fp16_kernel",
+                "lib/cuda/training.cu:adamw_step_fp32_kernel",
+            ],
+            "covered_functions": [
+                "lib/cuda/gemm.cpp:cuda_gemm_bf16",
+                "lib/cuda/gemm.cpp:cuda_gemm_hgemm",
+                "lib/cuda/gemm.cpp:cuda_gemm_i8",
+                "lib/cuda/gemm.cpp:cuda_gemm_sgemm",
+                "lib/cuda/training.cu:adamw_step_fp16_kernel",
+                "lib/cuda/training.cu:adamw_step_fp32_kernel",
+            ],
+            "missing_functions": [],
         },
     }
 

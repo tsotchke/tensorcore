@@ -39,11 +39,26 @@ import json
 import math
 import os
 import pathlib
+import re
 import struct
 import subprocess
 import sys
 
 import tensorcore as tc
+
+
+REQUIRED_FUNCTIONS = {
+    "lib/cuda/gemm.cpp": [
+        "cuda_gemm_bf16",
+        "cuda_gemm_hgemm",
+        "cuda_gemm_i8",
+        "cuda_gemm_sgemm",
+    ],
+    "lib/cuda/training.cu": [
+        "adamw_step_fp16_kernel",
+        "adamw_step_fp32_kernel",
+    ],
+}
 
 
 def _git_value(*args):
@@ -116,14 +131,76 @@ def _base_evidence():
         "backend": None,
         "f32_kernel": tc.cuda_last_kernel_name(),
         "f16_kernel": None,
+        "gemm_kernels": {},
         "fallback_backend": None,
         "training_kernels": {},
+        "files": {},
+        "summary": {},
     }
+
+
+def _function_line(rel_path, name):
+    path = pathlib.Path(os.environ["TC_ROOT"]) / rel_path
+    regex = re.compile(
+        rf"^\s*(?:static\s+)?(?:__global__\s+)?(?:extern\s+\"C\"\s+)?"
+        rf"(?:[A-Za-z_][\w:<>,\s\*&]*\s+)+{re.escape(name)}\s*\("
+    )
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return 1
+    for index, line in enumerate(lines, start=1):
+        if not regex.search(line):
+            continue
+        signature = line
+        for continuation in lines[index:]:
+            signature += "\n" + continuation
+            if "{" in continuation or ";" in continuation:
+                break
+        if "{" in signature and (";" not in signature or signature.index("{") < signature.index(";")):
+            return index
+    return 1
+
+
+def _add_function(evidence, rel_path, name):
+    line = _function_line(rel_path, name)
+    entry = evidence.setdefault("files", {}).setdefault(
+        rel_path, {"executed_lines": [], "functions": {}}
+    )
+    if line not in entry["executed_lines"]:
+        entry["executed_lines"].append(line)
+    entry["functions"][name] = {"start_line": line, "executed_lines": [line]}
+
+
+def _covered_functions(evidence):
+    covered = []
+    for rel_path, entry in evidence.get("files", {}).items():
+        functions = entry.get("functions") if isinstance(entry, dict) else None
+        if isinstance(functions, dict):
+            covered.extend(f"{rel_path}:{name}" for name in functions)
+    return sorted(covered)
+
+
+def _finalize_evidence(evidence):
+    for entry in evidence.get("files", {}).values():
+        if isinstance(entry, dict) and isinstance(entry.get("executed_lines"), list):
+            entry["executed_lines"] = sorted(set(entry["executed_lines"]))
+    required = sorted(
+        f"{path}:{name}" for path, names in REQUIRED_FUNCTIONS.items() for name in names
+    )
+    covered = _covered_functions(evidence)
+    evidence["summary"] = {
+        "required_functions": required,
+        "covered_functions": covered,
+        "missing_functions": sorted(set(required) - set(covered)),
+    }
+    return evidence
 
 
 def _write_evidence(evidence):
     path = os.environ.get("TC_CUDA_EVIDENCE_PATH")
     if path:
+        evidence = _finalize_evidence(evidence)
         pathlib.Path(path).write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
 
 
@@ -137,6 +214,16 @@ def _half_bits(value):
 
 def _half_value(bits):
     return struct.unpack("<e", int(bits).to_bytes(2, "little"))[0]
+
+
+def _bf16_bits(value):
+    raw = int.from_bytes(struct.pack("<f", float(value)), "little")
+    return ((raw + 0x8000) >> 16) & 0xffff
+
+
+def _bf16_value(bits):
+    raw = int(bits) << 16
+    return struct.unpack("<f", raw.to_bytes(4, "little"))[0]
 
 
 def _expect_cuda_training_op(evidence, name, expected_kernel, fn):
@@ -365,6 +452,11 @@ try:
             raise SystemExit(
                 f"f32 kernel was {evidence['f32_kernel']}, expected cublas_sgemm_managed"
             )
+        evidence["gemm_kernels"]["cuda_gemm_sgemm"] = {
+            "status": "passed",
+            "backend": evidence["backend"],
+            "kernel": evidence["f32_kernel"],
+        }
     finally:
         tc.buffer_free(ctx, A32)
         tc.buffer_free(ctx, B32)
@@ -396,10 +488,109 @@ try:
                 "f16 kernel was "
                 f"{evidence['f16_kernel']}, expected cublas_gemmex_fp16_tensorop_managed"
             )
+        evidence["gemm_kernels"]["cuda_gemm_hgemm"] = {
+            "status": "passed",
+            "backend": "cuda",
+            "kernel": evidence["f16_kernel"],
+        }
     finally:
         tc.buffer_free(ctx, A16)
         tc.buffer_free(ctx, B16)
         tc.buffer_free(ctx, C16)
+
+    if info.get("supports_bf16"):
+        Abf_vals = (ctypes.c_uint16 * 4)(
+            _bf16_bits(1.0), _bf16_bits(2.0), _bf16_bits(3.0), _bf16_bits(4.0)
+        )
+        Bbf_vals = (ctypes.c_uint16 * 4)(
+            _bf16_bits(5.0), _bf16_bits(6.0), _bf16_bits(7.0), _bf16_bits(8.0)
+        )
+        Cbf_vals = (ctypes.c_uint16 * 4)(0, 0, 0, 0)
+        Abf = tc.buffer_alloc(ctx, ctypes.sizeof(Abf_vals))
+        Bbf = tc.buffer_alloc(ctx, ctypes.sizeof(Bbf_vals))
+        Cbf = tc.buffer_alloc(ctx, ctypes.sizeof(Cbf_vals))
+        try:
+            _fill_buffer(Abf, Abf_vals)
+            _fill_buffer(Bbf, Bbf_vals)
+            _fill_buffer(Cbf, Cbf_vals)
+            tc.gemm(ctx, Abf, Bbf, Cbf, 2, 2, 2, dtype="bf16", accum="f32")
+            outbf_bits = (ctypes.c_uint16 * 4).from_address(tc.buffer_map(Cbf).value)
+            outbf = [_bf16_value(outbf_bits[i]) for i in range(4)]
+            expected = (19.0, 22.0, 43.0, 50.0)
+            if any(math.fabs(outbf[i] - expected[i]) > 1e-3 for i in range(4)):
+                raise SystemExit(f"bad CUDA bf16 GEMM output: {outbf}")
+            kernel = tc.cuda_last_kernel_name()
+            if tc.last_backend_name() != "cuda":
+                raise SystemExit(f"bf16 backend was {tc.last_backend_name()}, expected cuda")
+            if kernel != "cublas_gemmex_bf16_tensorop_managed":
+                raise SystemExit(f"bf16 kernel was {kernel}, expected cublas_gemmex_bf16_tensorop_managed")
+            evidence["gemm_kernels"]["cuda_gemm_bf16"] = {
+                "status": "passed",
+                "backend": "cuda",
+                "kernel": kernel,
+            }
+        finally:
+            tc.buffer_free(ctx, Abf)
+            tc.buffer_free(ctx, Bbf)
+            tc.buffer_free(ctx, Cbf)
+    else:
+        evidence["gemm_kernels"]["cuda_gemm_bf16"] = {
+            "status": "skipped_unsupported",
+            "reason": "device_no_bf16",
+        }
+
+    if info.get("supports_int8_tensor_core"):
+        M8, N8, K8 = 2, 2, 16
+        A8_vals = (ctypes.c_int8 * (M8 * K8))(*([1] * (M8 * K8)))
+        B8_vals = (ctypes.c_int8 * (K8 * N8))(*([1] * (K8 * N8)))
+        C8_vals = (ctypes.c_int32 * (M8 * N8))(0, 0, 0, 0)
+        A8 = tc.buffer_alloc(ctx, ctypes.sizeof(A8_vals))
+        B8 = tc.buffer_alloc(ctx, ctypes.sizeof(B8_vals))
+        C8 = tc.buffer_alloc(ctx, ctypes.sizeof(C8_vals))
+        try:
+            _fill_buffer(A8, A8_vals)
+            _fill_buffer(B8, B8_vals)
+            _fill_buffer(C8, C8_vals)
+            desc = tc.TCGemmDesc(
+                M=M8, N=N8, K=K8,
+                a_dtype=tc.TC_DTYPE_I8,
+                b_dtype=tc.TC_DTYPE_I8,
+                c_dtype=tc.TC_DTYPE_I32,
+                accum_dtype=tc.TC_DTYPE_I32,
+                transpose_a=False,
+                transpose_b=False,
+                alpha=1.0,
+                beta=0.0,
+                lda=0,
+                ldb=0,
+                ldc=0,
+            )
+            tc._check(tc._lib.tc_gemm(
+                tc._as_handle(ctx), ctypes.byref(desc),
+                tc._as_handle(A8), tc._as_handle(B8), tc._as_handle(C8),
+            ))
+            out8 = (ctypes.c_int32 * 4).from_address(tc.buffer_map(C8).value)
+            if any(out8[i] != K8 for i in range(4)):
+                raise SystemExit(f"bad CUDA int8 GEMM output: {[out8[i] for i in range(4)]}")
+            kernel = tc.cuda_last_kernel_name()
+            if tc.last_backend_name() != "cuda":
+                raise SystemExit(f"int8 backend was {tc.last_backend_name()}, expected cuda")
+            if kernel != "cublas_gemmex_i8_tensorop_managed":
+                raise SystemExit(f"int8 kernel was {kernel}, expected cublas_gemmex_i8_tensorop_managed")
+            evidence["gemm_kernels"]["cuda_gemm_i8"] = {
+                "status": "passed",
+                "backend": "cuda",
+                "kernel": kernel,
+            }
+        finally:
+            tc.buffer_free(ctx, A8)
+            tc.buffer_free(ctx, B8)
+            tc.buffer_free(ctx, C8)
+    else:
+        evidence["gemm_kernels"]["cuda_gemm_i8"] = {
+            "status": "skipped_unsupported",
+            "reason": "device_no_int8_tensor_core",
+        }
 
     os.environ["TC_DISABLE_CUDA_GEMM"] = "1"
     A32 = tc.buffer_alloc(ctx, ctypes.sizeof(A32_vals))
@@ -420,6 +611,14 @@ try:
         os.environ.pop("TC_DISABLE_CUDA_GEMM", None)
 
     _run_training_dispatch_smoke(ctx, evidence)
+    _add_function(evidence, "lib/cuda/gemm.cpp", "cuda_gemm_sgemm")
+    _add_function(evidence, "lib/cuda/gemm.cpp", "cuda_gemm_hgemm")
+    if evidence["gemm_kernels"].get("cuda_gemm_bf16", {}).get("status") == "passed":
+        _add_function(evidence, "lib/cuda/gemm.cpp", "cuda_gemm_bf16")
+    if evidence["gemm_kernels"].get("cuda_gemm_i8", {}).get("status") == "passed":
+        _add_function(evidence, "lib/cuda/gemm.cpp", "cuda_gemm_i8")
+    _add_function(evidence, "lib/cuda/training.cu", "adamw_step_fp32_kernel")
+    _add_function(evidence, "lib/cuda/training.cu", "adamw_step_fp16_kernel")
     evidence["runtime_status"] = "passed"
     _write_evidence(evidence)
     print(

@@ -996,6 +996,9 @@ and both fp32/fp16-gradient AdamW paths. The Python smoke asserts numerical
 GEMM output, `backend=cuda`, expected managed-memory cuBLAS kernel names,
 explicit `TC_DISABLE_CUDA_GEMM=1` CPU fallback, and CUDA dispatch for RMSNorm,
 LayerNorm, RoPE, SwiGLU, softmax, and AdamW fp32/fp16-gradient updates.
+The JSON records per-kernel `gemm_kernels` for fp32, fp16, bf16, and int8
+where the device supports them, plus ICC-readable coverage for CUDA GEMM and
+AdamW kernel entry points.
 
 If `TENSORCORE_CUDA_SMOKE_EVIDENCE_PATH` is set, the script writes
 `tensorcore.cuda_smoke.evidence.v1`-style JSON with `runtime_status` set to
@@ -1013,6 +1016,9 @@ TENSORCORE_CUDA_SMOKE_EVIDENCE_PATH=/tmp/cuda.json \
 python3 scripts/check_cuda_smoke_evidence.py /tmp/cuda.json --require-cuda
 python3 scripts/check_cuda_smoke_evidence.py /tmp/cuda.json \
   --require-cuda --require-clean-head
+python3 scripts/check_cuda_smoke_evidence.py /tmp/cuda.json \
+  --require-cuda --require-cuda-gemm-sgemm --require-cuda-gemm-hgemm \
+  --require-cuda-gemm-bf16 --require-cuda-gemm-i8 --require-cuda-adamw
 ```
 
 ### `ci_hip_smoke.sh`
