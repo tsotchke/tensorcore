@@ -128,6 +128,9 @@ For releases that touch the M5 / TensorOps path, manually dispatch the
 The self-hosted runner exercises the deepest hardware path and emits a
 `tensorcore-hardware-evidence` artifact (JSON evidence of chip / family
 / TensorOps availability / backend chosen per representative call).
+The workflow first emits a GitHub-hosted
+`tensorcore-hardware-runner-preflight` artifact that records the required
+self-hosted labels and whether a matching runner was visible.
 
 ## Running the release pipeline locally
 
@@ -187,7 +190,7 @@ v0.1 series has not removed or renamed any public symbol.
 | Wheel build fails to find native artifacts | `release.yml` "Build wheel" step | Check `TENSORCORE_NATIVE_DIR` setting |
 | Wheel reinstall fails | `release.yml` "Verify wheel" step | The dylib + metallib weren't vendored — re-check `pyproject.toml` `[tool.setuptools.package-data]` |
 | GitHub release upload fails | `release.yml` final step | Usually the tag already has a release — `gh release delete v$NEW && retry` |
-| Self-hosted runner offline | `hardware-evidence.yml` queues forever | Bring the runner online; cancel the queued run |
+| Self-hosted runner offline | `hardware-evidence.yml` preflight artifact reports no online `[self-hosted, macOS, ARM64]` runner, then the hardware job queues | Bring the runner online; cancel/re-run the queued hardware job |
 
 ## CI workflows that gate
 

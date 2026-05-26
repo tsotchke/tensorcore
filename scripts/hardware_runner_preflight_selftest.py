@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Fixture tests for hardware_runner_preflight.py."""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import pathlib
+import tempfile
+from typing import Any
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / "scripts" / "hardware_runner_preflight.py"
+
+spec = importlib.util.spec_from_file_location("hardware_runner_preflight", SCRIPT)
+if spec is None or spec.loader is None:
+    raise RuntimeError("could not load hardware_runner_preflight.py")
+preflight = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(preflight)
+
+
+def runner(name: str, status: str, labels: list[str]) -> dict[str, Any]:
+    return {
+        "name": name,
+        "status": status,
+        "busy": False,
+        "labels": [{"name": label} for label in labels],
+    }
+
+
+def write_json(path: pathlib.Path, data: dict[str, Any]) -> None:
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def build(tmp: pathlib.Path, api_rc: int, runners: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    api_json = tmp / "runners.json"
+    api_error = tmp / "runners.err"
+    if runners is not None:
+        write_json(api_json, {"total_count": len(runners), "runners": runners})
+    else:
+        api_json.write_text("", encoding="utf-8")
+    api_error.write_text("permission denied" if api_rc else "", encoding="utf-8")
+    return preflight.build_evidence(
+        api_json=api_json,
+        api_error=api_error,
+        api_rc=api_rc,
+        repository="owner/repo",
+        require_metal4_tensorops="true",
+        required_labels=["self-hosted", "macOS", "ARM64"],
+    )
+
+
+def main() -> int:
+    with tempfile.TemporaryDirectory() as raw_tmp:
+        tmp = pathlib.Path(raw_tmp)
+
+        unavailable = build(tmp, 1, None)
+        assert unavailable["status"] == "runner_api_unavailable"
+        assert "permission denied" in unavailable["runner_api_error"]
+
+        missing = build(tmp, 0, [runner("linux", "online", ["self-hosted", "Linux", "X64"])])
+        assert missing["status"] == "blocked_no_matching_runner"
+        assert missing["registered_runner_count"] == 1
+
+        offline = build(tmp, 0, [runner("m5", "offline", ["self-hosted", "macOS", "ARM64"])])
+        assert offline["status"] == "matching_runner_offline"
+        assert offline["matching_runner_count"] == 1
+
+        online = build(tmp, 0, [runner("m5", "online", ["self-hosted", "macOS", "ARM64"])])
+        assert online["status"] == "matching_runner_online"
+        assert online["online_matching_runner_count"] == 1
+
+        summary = tmp / "summary.md"
+        preflight.append_summary(summary, online)
+        text = summary.read_text(encoding="utf-8")
+        assert "Hardware Evidence runner preflight" in text
+        assert "matching_runner_online" in text
+
+    print("hardware runner preflight selftest OK")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

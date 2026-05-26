@@ -55,7 +55,21 @@ runner with real GPU exposure. Executes `scripts/release_smoke.sh` with
 machine-readable record of (chip, family, TensorOps availability, backend
 chosen per call) that downstream integrators can consume.
 
+The workflow also starts with a GitHub-hosted runner preflight job. That job
+emits `tensorcore-hardware-runner-preflight` with the required labels and any
+visible matching runner status so a missing self-hosted runner shows up as an
+artifact and job summary instead of only as a queued hardware job.
+
 ## Scripts
+
+### `hardware_runner_preflight.py`
+
+Writes the `tensorcore-hardware-runner-preflight` diagnostic used by
+`hardware-evidence.yml`. The workflow passes the GitHub runner API response
+and the required self-hosted labels to this script; it emits JSON with
+`matching_runner_online`, `matching_runner_offline`,
+`blocked_no_matching_runner`, or `runner_api_unavailable`, plus a concise job
+summary.
 
 ### `check_version_consistency.sh`
 

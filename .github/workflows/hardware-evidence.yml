@@ -13,10 +13,48 @@ on:
           - "true"
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
+  hardware-runner-preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Probe hardware runner registration
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUIRE_METAL4_TENSOROPS: ${{ inputs.require_metal4_tensorops }}
+        run: |
+          set +e
+          mkdir -p build
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runners" \
+            > build/hardware_runner_api.json \
+            2> build/hardware_runner_api.err
+          api_rc=$?
+          python3 scripts/hardware_runner_preflight.py \
+            --api-json build/hardware_runner_api.json \
+            --api-error build/hardware_runner_api.err \
+            --api-rc "$api_rc" \
+            --output build/hardware_runner_preflight.json \
+            --summary "$GITHUB_STEP_SUMMARY" \
+            --repository "$GITHUB_REPOSITORY" \
+            --require-metal4-tensorops "$REQUIRE_METAL4_TENSOROPS"
+
+      - name: Upload runner preflight
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: tensorcore-hardware-runner-preflight
+          path: |
+            build/hardware_runner_preflight.json
+            build/hardware_runner_api.json
+            build/hardware_runner_api.err
+          if-no-files-found: error
+
   apple-gpu-release-smoke:
+    needs: hardware-runner-preflight
     runs-on: [self-hosted, macOS, ARM64]
     steps:
       - uses: actions/checkout@v6

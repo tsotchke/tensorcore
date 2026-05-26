@@ -75,6 +75,9 @@ jobs:
           python3 scripts/check_mesh_resource_preflight_evidence_selftest.py
           python3 scripts/check_windows_cuda_scheduled_smoke_evidence_selftest.py
 
+      - name: Hardware runner preflight fixtures
+        run: python3 scripts/hardware_runner_preflight_selftest.py
+
       - name: Mesh resource scheduler fixtures
         run: python3 scripts/mesh_resource_scheduler_selftest.py
 
