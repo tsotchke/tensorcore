@@ -261,6 +261,35 @@ If the host cannot bind loopback sockets, the artifact reports
 `status=blocked` with `loopback_unavailable` instead of treating the test skip
 as a code failure.
 
+### `run_amx_bench_evidence.py`
+
+Focused evidence for local AMX and GEMM benchmark paths. The runner executes
+the AMX metadata probe, the opt-in direct AMX GEMM regression, and a tiny
+`bench_gemm` run with `TC_BENCH_SIZES=16`, `TC_BENCH_DTYPES=f32`,
+`TC_BENCH_WARMUP=0`, and `TC_BENCH_ITERS=1`. It records ICC-readable coverage
+for:
+
+- `lib/ops/gemm_cpu_amx.cpp`
+- `bench/bench_gemm.c`
+
+The default artifact is `build/amx_bench_evidence.json`. Validate it with:
+
+```sh
+python3 scripts/check_amx_bench_evidence.py \
+  build/amx_bench_evidence.json --require-pass
+```
+
+Run locally after building the portable CPU AMX tests and GEMM benchmark:
+
+```sh
+python3 scripts/run_amx_bench_evidence.py --require-pass
+```
+
+TensorOps M5 layout helpers are probed as an optional layout check. On current
+non-SDK26 or non-M5 hosts the artifact stays `status=passed` for AMX/bench
+coverage while recording `summary.optional_blocked_reasons` such as
+`tensorops_layout:skipped_no_metal4_sdk` or `tensorops_layout:skipped_no_m5`.
+
 ### `run_eshkol_tensorcore_bridge_smoke.py`
 
 Focused evidence for the Eshkol bridge surface. The script uses a local
@@ -1081,6 +1110,7 @@ workflow will pass too.
 | Prove the Metal library build rule | `python3 scripts/run_metallib_build_rule_evidence.py --require-pass` |
 | Prove Python native packaging paths | `python3 scripts/run_python_packaging_evidence.py --require-pass` |
 | Prove local distributed runtime paths | `python3 scripts/run_distributed_runtime_evidence.py --require-pass` |
+| Prove local AMX and GEMM benchmark paths | `python3 scripts/run_amx_bench_evidence.py --require-pass` |
 | Probe Eshkol bridge runtime evidence | `python3 scripts/run_eshkol_tensorcore_bridge_smoke.py --build-dir build-portable-cpu-current --require-pass` |
 | Pre-release wide smoke | `scripts/release_smoke.sh` (add `REQUIRE_GPU=1` if you have one) |
 | Cross-check version triple | `scripts/check_version_consistency.sh` |

@@ -164,6 +164,11 @@ every architectural primitive in code and tested:
   and sparse DiLoCo smokes, recording explicit loopback-blocked states when
   local TCP sockets are unavailable and ICC-readable coverage for the GLOO
   ring connection helpers plus DiLoCo outer-step core.
+- AMX and GEMM benchmark evidence now wraps the AMX metadata probe, direct AMX
+  GEMM regression, and a tiny `bench_gemm` run, emitting ICC-readable coverage
+  for AMX worker/core entry points plus `bench_one` while recording TensorOps
+  M5 layout helpers as optional `skipped_no_metal4_sdk`/`skipped_no_m5`
+  blockers when the host cannot genuinely execute them.
 - Eshkol bridge runtime evidence now has a repo-owned smoke/checker pair:
   `scripts/run_eshkol_tensorcore_bridge_smoke.py` records the real local
   `eshkol-run` compile/runtime state for `hello_tensorcore.esk` and the new
