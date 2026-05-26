@@ -76,7 +76,9 @@ describe the intended Eshkol-side interface and a sample program.
 `scripts/run_eshkol_tensorcore_bridge_smoke.py` records the current runtime
 state in `build/eshkol_tensorcore_bridge_evidence.json`. Run it with
 `--build-dir build-portable-cpu-current --require-pass` for backend-independent
-runtime evidence.
+runtime evidence. On a Metal build where the host exposes no usable Metal
+device, the artifact stays `status=blocked` with `skipped_no_gpu` runtime
+checks instead of reporting a bridge failure.
 
 ## Compile evidence
 

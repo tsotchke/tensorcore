@@ -231,6 +231,66 @@ def unknown_functions(*attempts: dict[str, Any]) -> list[str]:
     return sorted(seen)
 
 
+def command_output(attempt: dict[str, Any]) -> str:
+    return "\n".join(
+        [
+            str(attempt.get("stdout_tail", "")),
+            str(attempt.get("stderr_tail", "")),
+        ]
+    )
+
+
+def metal_device_available(
+    build_dir: pathlib.Path,
+    env: dict[str, str],
+    timeout_sec: float,
+) -> tuple[bool | None, dict[str, Any]]:
+    binary = build_dir / "tests" / "test_device"
+    if not binary.exists():
+        return None, {
+            "status": "skipped",
+            "reason": "test_device_missing",
+            "path": str(binary),
+        }
+    attempt = run_cmd([str(binary)], env, timeout_sec)
+    output = command_output(attempt)
+    if "No usable Metal device" in output or "tc_init failed: no Metal device" in output:
+        return False, {
+            "status": "skipped_no_gpu",
+            "attempt": attempt,
+        }
+    if attempt.get("rc") == 0:
+        return True, {
+            "status": "passed",
+            "attempt": attempt,
+        }
+    return None, {
+        "status": "failed",
+        "attempt": attempt,
+    }
+
+
+def classify_runtime_status(
+    source_name: str,
+    runtime_attempt: dict[str, Any],
+    required_output: tuple[str, ...],
+    device_available: bool | None,
+) -> str:
+    output = command_output(runtime_attempt)
+    if runtime_attempt.get("rc") == 0 and all(marker in output for marker in required_output):
+        return "passed"
+    no_gpu_failure = (
+        source_name == "hello_tensorcore"
+        and "gemm FAIL status=-1" in output
+    ) or (
+        source_name == "tensorcore_bridge_smoke"
+        and "TENSORCORE_BRIDGE_FAIL statuses=" in output
+    )
+    if runtime_attempt.get("rc") == 0 and device_available is False and no_gpu_failure:
+        return "skipped_no_gpu"
+    return "failed"
+
+
 def source_has_require(rel_path: str, module: str) -> bool:
     try:
         text = (ROOT / rel_path).read_text(encoding="utf-8")
@@ -268,6 +328,8 @@ def build_evidence(args: argparse.Namespace) -> dict[str, Any]:
     env = bridge_env(args.build_dir)
     checks: dict[str, Any] = {}
     attempts: dict[str, Any] = {}
+    device_available, device_probe = metal_device_available(args.build_dir, env, args.timeout_sec)
+    checks["metal_device_probe"] = device_probe
 
     if eshkol_run is None:
         status = "blocked"
@@ -324,18 +386,12 @@ def build_evidence(args: argparse.Namespace) -> dict[str, Any]:
                     attempts[f"{source_name}_link"] = link_attempt
                     if link_attempt.get("rc") == 0 and exe_path.exists():
                         runtime_attempt = run_cmd([str(exe_path)], env, args.timeout_sec)
-                        output = "\n".join(
-                            [
-                                runtime_attempt.get("stdout_tail", ""),
-                                runtime_attempt.get("stderr_tail", ""),
-                            ]
-                        )
                         required_output = tuple(str(item) for item in spec["required_output"])
-                        runtime_status = (
-                            "passed"
-                            if runtime_attempt.get("rc") == 0
-                            and all(marker in output for marker in required_output)
-                            else "failed"
+                        runtime_status = classify_runtime_status(
+                            source_name,
+                            runtime_attempt,
+                            required_output,
+                            device_available,
                         )
                     else:
                         runtime_status = "failed_link"
@@ -379,10 +435,30 @@ def build_evidence(args: argparse.Namespace) -> dict[str, Any]:
         or key.endswith("_runtime")
         or key in ("eshkol_run_available", "source_module_load", "bridge_builtin_resolution")
     )
-    status = "passed" if all_runtime_passed else ("blocked" if missing_builtins or eshkol_run is None else "failed")
+    runtime_statuses = {
+        str(item.get("status"))
+        for key, item in checks.items()
+        if key.endswith("_runtime")
+    }
+    blocked_reasons: list[str] = []
+    if missing_builtins:
+        blocked_reasons.append("missing_builtins")
+    if eshkol_run is None:
+        blocked_reasons.append("eshkol_run_missing")
+    if "skipped_no_gpu" in runtime_statuses:
+        blocked_reasons.append("runtime_skipped_no_gpu")
+    status = "passed" if all_runtime_passed else ("blocked" if blocked_reasons else "failed")
 
     files: dict[str, Any] = {}
-    if status == "passed":
+    runtime_invoked = runtime_statuses and runtime_statuses.issubset({"passed", "skipped_no_gpu"})
+    bridge_resolved = checks["bridge_builtin_resolution"]["status"] == "passed"
+    source_loaded = checks["source_module_load"]["status"] == "passed"
+    compiled = all(
+        item.get("status") == "passed"
+        for key, item in checks.items()
+        if key.endswith("_compile")
+    )
+    if status == "passed" or (bridge_resolved and source_loaded and compiled and runtime_invoked):
         for rel_path, names in REQUIRED_FUNCTIONS.items():
             for name in names:
                 add_function(files, rel_path, name)
@@ -419,6 +495,7 @@ def build_evidence(args: argparse.Namespace) -> dict[str, Any]:
             "missing_functions": missing_functions,
             "missing_builtins": missing_builtins,
             "missing_public_wrappers": missing_wrappers,
+            "blocked_reasons": blocked_reasons,
         },
     }
 

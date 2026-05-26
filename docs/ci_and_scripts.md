@@ -384,8 +384,9 @@ It emits `build/eshkol_tensorcore_bridge_evidence.json` with structured
 compile/runtime attempts, source module-load checks, and ICC-readable function
 coverage once the bridge actually runs. The Scheme module resolves `__tc-*`
 through the `tc_eshkol_*` C shims exported by `libtensorcore`; if the selected
-native backend cannot initialize, the smoke omits the success markers and the
-artifact records a failed runtime attempt. Validate the artifact with:
+native backend cannot initialize, the smoke records `status=blocked` with
+`skipped_no_gpu` runtime checks while still recording bridge function coverage.
+Validate the artifact with:
 
 ```sh
 python3 scripts/check_eshkol_tensorcore_bridge_evidence.py \
