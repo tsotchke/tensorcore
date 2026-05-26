@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import importlib.machinery
 import importlib.util
 import json
@@ -65,6 +66,14 @@ def test_success_payload_passes_through() -> None:
     assert payload["toolchain_ok"] is True
 
 
+def test_remote_upload_uses_scp_not_ssh_stdin() -> None:
+    mod = load_module()
+    source = inspect.getsource(mod.run_remote_powershell)
+    assert '"scp"' in source
+    assert "In.ReadToEnd" not in source
+    assert "input=script" not in source
+
+
 def test_invalid_json_fails_closed() -> None:
     mod = load_module()
 
@@ -90,10 +99,24 @@ def test_remote_failure_reports_tail() -> None:
     assert "ssh failed" in payload["stderr_tail"]
 
 
+def test_timeout_fails_closed() -> None:
+    mod = load_module()
+
+    def fake_run(target: str, script: str, *, timeout: float) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(["scp"], timeout)
+
+    mod.run_remote_powershell = fake_run
+    payload = mod.run_probe(args())
+    assert payload["ok"] is False
+    assert payload["reason"] == "probe_timeout"
+
+
 def main() -> int:
     test_success_payload_passes_through()
+    test_remote_upload_uses_scp_not_ssh_stdin()
     test_invalid_json_fails_closed()
     test_remote_failure_reports_tail()
+    test_timeout_fails_closed()
     print("Windows CUDA resource admission selftest OK")
     return 0
 

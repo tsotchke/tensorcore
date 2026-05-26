@@ -7,6 +7,7 @@ import argparse
 import importlib.machinery
 import importlib.util
 import pathlib
+import shlex
 from types import ModuleType
 from typing import Any
 
@@ -14,6 +15,18 @@ from typing import Any
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 DEFAULT_INVENTORY = ROOT / "configs" / "mesh_resources.json"
 CONTROL_PLANES = {"tensorcore_scheduler", "direct_lease", "reserved", "blocked"}
+PRIVATE_COMMAND_PATTERNS = (
+    "~/.tsotchke/bin",
+    "/.tsotchke/bin",
+    "/Users/",
+    "/home/tyr/.local/bin/",
+    "/.local/bin/",
+)
+HOST_LOCAL_SCRIPT_PREFIXES = (
+    "/data/qllm/runs/",
+    "/home/tyr/bytehole/qllm/runs/",
+)
+REPO_RELATIVE_PREFIXES = ("scripts/", "configs/")
 SCHEDULER_CANDIDATES = [
     ROOT / "scripts" / "mesh_resource_scheduler.py",
     pathlib.Path(__file__).with_name("mesh-resource-scheduler"),
@@ -50,6 +63,50 @@ def parse_args() -> argparse.Namespace:
 def require(errors: list[str], condition: bool, message: str) -> None:
     if not condition:
         errors.append(message)
+
+
+def raw_command(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(part) for part in value]
+    if isinstance(value, str):
+        return shlex.split(value)
+    return []
+
+
+def command_parts(value: Any) -> list[str]:
+    parts = [str(value)]
+    argv = raw_command(value)
+    parts.extend(argv)
+    for item in argv:
+        if " " not in item and "&&" not in item and ";" not in item:
+            continue
+        try:
+            parts.extend(shlex.split(item))
+        except ValueError:
+            pass
+    return parts
+
+
+def validate_checked_in_command(
+    errors: list[str],
+    resource_id: str,
+    field: str,
+    value: Any,
+) -> None:
+    parts = command_parts(value)
+    if len(parts) <= 1:
+        return
+    for part in parts:
+        if any(pattern in part for pattern in PRIVATE_COMMAND_PATTERNS):
+            errors.append(
+                f"{resource_id}: {field} must use git-checkout commands, not private wrapper path {part!r}"
+            )
+        if part.endswith(".sh") and part.startswith(HOST_LOCAL_SCRIPT_PREFIXES):
+            errors.append(
+                f"{resource_id}: {field} must launch repo-owned scripts, not host-local script {part!r}"
+            )
+        if part.startswith(REPO_RELATIVE_PREFIXES) and not (ROOT / part).exists():
+            errors.append(f"{resource_id}: {field} references missing repo path {part!r}")
 
 
 def validate_inventory(path: pathlib.Path) -> list[str]:
@@ -100,6 +157,8 @@ def validate_inventory(path: pathlib.Path) -> list[str]:
         control_plane = row.get("control_plane")
         require(errors, control_plane in CONTROL_PLANES,
                 f"{resource_id}: control_plane must be one of {sorted(CONTROL_PLANES)!r}")
+        if "cuda_probe_cmd" in row:
+            validate_checked_in_command(errors, resource_id, "cuda_probe_cmd", row["cuda_probe_cmd"])
         if row.get("status") == "blocked":
             require(errors, control_plane == "blocked",
                     f"{resource_id}: blocked resources must use control_plane=blocked")

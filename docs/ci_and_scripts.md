@@ -379,13 +379,15 @@ supplied, inventory rows with `backend: "cuda"` infer `cuda_exclusive` for
 omitted job classes and reject explicit `generic` CUDA jobs before any lease can
 be claimed. The checked-in default job set lives at
 `configs/mesh_resource_jobs.json`; deploy that file to the live state path when
-the control-plane contract changes.
+the control-plane contract changes. Checked-in running jobs must launch through
+repo-owned starters; host-local systemd starts belong in paused adoption-only
+rows until the unit or equivalent launcher is installed from a git checkout.
 
 Run one dry pass:
 
 ```sh
 scripts/mesh_resource_scheduler.py \
-  --arbiter-cmd ~/.tsotchke/bin/tsotchke-arbiter \
+  --arbiter-cmd tsotchke-arbiter \
   --inventory-json configs/mesh_resources.json \
   --jobs-json configs/mesh_resource_jobs.json \
   --dry-run --pretty-json
@@ -395,7 +397,7 @@ Run the daemon loop and persist last-state evidence:
 
 ```sh
 scripts/mesh_resource_scheduler.py \
-  --arbiter-cmd ~/.tsotchke/bin/tsotchke-arbiter \
+  --arbiter-cmd tsotchke-arbiter \
   --inventory-json configs/mesh_resources.json \
   --jobs-json ~/.tsotchke/state/mesh-resource-jobs.json \
   --state-json ~/.tsotchke/state/mesh-resource-scheduler-state.json \
@@ -410,6 +412,15 @@ Fixture coverage:
 ```sh
 python3 scripts/mesh_resource_scheduler_selftest.py
 python3 scripts/mesh_arbiter_with_inventory_selftest.py
+python3 scripts/mesh_deploy_git_checkout_selftest.py
+python3 scripts/check_mesh_git_access_selftest.py
+python3 scripts/check_mesh_resource_preflights_selftest.py
+python3 scripts/check_mesh_resource_preflight_evidence_selftest.py
+python3 scripts/check_mesh_resource_config_selftest.py
+python3 scripts/check_georefine_qwen_live_selftest.py
+python3 scripts/check_georefine_qwen_artifact_selftest.py
+python3 scripts/start_georefine_qwen_cr025_selftest.py
+python3 scripts/start_qllm_olddonkey_precompute_chain_selftest.py
 python3 scripts/check_mesh_resource_inventory.py
 python3 scripts/check_mesh_resource_jobs.py
 python3 scripts/mesh_system_audit_selftest.py
@@ -418,6 +429,132 @@ python3 scripts/mesh_system_audit_selftest.py
 Use `scripts/mesh_arbiter_with_inventory.py` when arbiter capacity/status
 output should be seeded from `configs/mesh_resources.json` before the scheduler
 claims leases.
+
+### `mesh_deploy_git_checkout.py`
+
+Clones or fast-forwards a git checkout on a mesh node over SSH. Use it when
+adding a new machine or rebuilding an existing one, so scheduler commands can
+call repo-local scripts from `~/src/tensorcore` instead of private wrapper
+paths.
+The helper uploads its remote shell script without depending on stdin streaming;
+if `scp` is blocked, it falls back to short chunked SSH commands.
+
+```sh
+python3 scripts/mesh_deploy_git_checkout.py \
+  --target old-donkey \
+  --repo-url https://github.com/tsotchke/tensorcore.git \
+  --repo-dir '~/src/tensorcore' \
+  --ref master \
+  --require-clean \
+  --json
+```
+
+Use the same command for the `computer_mesh` repo, then put its `tsotchke/bin`
+directory on `PATH` for the scheduler service so `tsotchke-arbiter` resolves
+from a git checkout.
+
+Fixture coverage:
+
+```sh
+python3 scripts/mesh_deploy_git_checkout_selftest.py
+```
+
+### `check_mesh_git_access.py`
+
+Checks that a mesh node can run `git ls-remote` against a repo without
+interactive credentials. Use it before unpausing private workload rows:
+
+```sh
+python3 scripts/check_mesh_git_access.py \
+  --target cosbox \
+  --repo-url git@github.com:Tsotchke-Corporation/GeoRefineInternal.git \
+  --resource cosbox:cuda3090 \
+  --ref HEAD \
+  --json
+```
+
+Pass `--resource` when using this helper as a scheduler `preflight_cmd`; the
+preflight runner requires helper JSON to match the scheduler row's resource.
+
+Fixture coverage:
+
+```sh
+python3 scripts/check_mesh_git_access_selftest.py
+```
+
+### `check_mesh_resource_preflights.py`
+
+Runs `preflight_cmd` entries from `configs/mesh_resource_jobs.json`. By default
+it checks paused rows only, excluding rows with
+`metadata.preflight_default=false`. Use `--job-id` to run one of those opt-out
+preflights deliberately. The JSON output records those opt-out rows in
+`skipped_default_job_ids` so an empty default sweep is auditable. A passing
+preflight command must emit a JSON object with `schema`, `ok: true`, and the
+same `resource` as the scheduler row; a zero exit without that JSON is treated
+as invalid evidence.
+
+```sh
+python3 scripts/check_mesh_resource_preflights.py \
+  --job-id georefine-m2-cosbox \
+  --json
+```
+
+Use `scripts/check_mesh_resource_preflight_evidence.py
+--require-skipped-default-job <id>` or the operational-bundle flag
+`--mesh-preflight-skipped-default-job <id>` when the desired proof is "this
+default sweep intentionally did not run the opt-out row." For known external
+blockers that should stay visible in the default sweep, use
+`--allow-failure <job-id>:<reason>` or operational-bundle
+`--mesh-preflight-allowed-failure <job-id>:<reason>` to require the row and its
+exact current blocker without treating the full preflight bundle as passing.
+
+Fixture coverage:
+
+```sh
+python3 scripts/check_mesh_resource_preflights_selftest.py
+python3 scripts/check_mesh_resource_preflight_evidence_selftest.py
+```
+
+`check_mesh_resource_preflight_evidence.py` validates saved output from the
+preflight runner for operational evidence bundles. Use `--require-pass` before
+treating paused external rows as ready to unpause. Passing result rows must
+have `rc: 0`, include the helper's nested JSON payload with `ok: true`, and
+that payload's resource must match the scheduler row. `--require-pass` also
+requires at least one result row.
+
+### `start_georefine_qwen_cr025.py`
+
+Starts the GeoRefine Qwen CR025 supervised run from a remote git checkout. It
+clones or fast-forwards GeoRefine on the target host, refuses dirty checkouts by
+default, preserves the CR025 `m2_supervised_run` command, and emits scheduler
+JSON. Keep the scheduler row paused until the target host has the GeoRefine
+Python environment installed. Use `--preflight-only --json` to verify checkout,
+Python imports, calibration text, and evaluation text without launching work.
+The default repo URL is the SSH GitHub remote for the private GeoRefine repo.
+
+Fixture coverage:
+
+```sh
+python3 scripts/start_georefine_qwen_cr025_selftest.py
+```
+
+### `start_qllm_olddonkey_precompute_chain.py`
+
+Starts the old-donkey qLLM teacher-logit chain from a remote git checkout. It
+clones or fast-forwards `semiclassical_qllm` into the dedicated scheduler
+checkout `/data/qllm/checkouts/semiclassical_qllm-tensorcore`, generates a
+per-launch tmux chain script, and invokes `scripts/precompute_teacher_logits.py`
+directly for the known shard queue. Keep the scheduler row paused until the
+target host has the qLLM Python environment and phase-1 shard data installed.
+Use `--preflight-only --json` to verify checkout, Python imports, `tmux`,
+`nvidia-smi`, and shard files without launching the tmux chain.
+The default repo URL is the SSH GitHub remote for the private qLLM repo.
+
+Fixture coverage:
+
+```sh
+python3 scripts/start_qllm_olddonkey_precompute_chain_selftest.py
+```
 
 ### `mesh_system_audit.py`
 
@@ -430,13 +567,13 @@ scripts/mesh_system_audit.py \
   --inventory-json configs/mesh_resources.json \
   --jobs-json ~/.tsotchke/state/mesh-resource-jobs.json \
   --scheduler-state-json ~/.tsotchke/state/mesh-resource-scheduler-state.json \
-  --arbiter-cmd "scripts/mesh_arbiter_with_inventory.py --inventory-json configs/mesh_resources.json --arbiter-cmd ~/.tsotchke/bin/tsotchke-arbiter -- status --json" \
+  --arbiter-cmd "scripts/mesh_arbiter_with_inventory.py --inventory-json configs/mesh_resources.json --arbiter-cmd tsotchke-arbiter -- status --json" \
   --probe-cuda
 ```
 
 ### `check_cuda_resource_admission.py`
 
-Host-local admission gate for exclusive NVIDIA jobs. It refuses launch when
+Repo-owned admission gate for exclusive NVIDIA jobs. It refuses launch when
 `nvidia-smi` reports unmanaged compute applications, with an optional regex
 allowlist for tiny helper processes.
 
@@ -449,7 +586,37 @@ Fixture coverage:
 ```sh
 python3 scripts/check_cuda_resource_admission_selftest.py
 python3 scripts/check_windows_cuda_resource_admission_selftest.py
+python3 scripts/check_windows_persistent_launch_selftest.py
+python3 scripts/check_windows_cuda_smoke_artifact_selftest.py
+python3 scripts/start_windows_cuda_smoke_selftest.py
+python3 scripts/check_windows_cuda_scheduled_smoke_evidence_selftest.py
 ```
+
+`check_windows_persistent_launch.py` verifies that a Windows SSH account can
+create, run, mark, and delete a no-op scheduled task for durable scheduler
+launches. It does not start CUDA work.
+
+`start_windows_cuda_smoke.py` is repo-owned, but a Windows scheduler row should
+stay paused on hosts where SSH child processes are torn down at session exit and
+no credentialed scheduled-task or service launcher is installed.
+`check_windows_cuda_scheduled_smoke_evidence.py` validates the completed
+scheduler evidence; when smoke or identity flags are true, the evidence must
+carry the matching `smoke_artifact` and `worker_identity` JSON objects rather
+than just setting summary booleans.
+The smoke executable is internally bounded to `duration_sec + 15s`, and
+foreground timeout recovery is opt-in via `--recover-foreground-timeout` so a
+failed foreground launch does not automatically make an extra Windows SSH probe.
+Keep `--foreground` out of scheduler rows; it is a manual diagnostic fallback,
+not a durable launch mode.
+`check_mesh_resource_jobs.py` enforces that `windows_cuda_scheduled_smoke`
+rows use the persistent-launch preflight, omit foreground recovery flags, and
+keep the CUDA smoke duration at or below 5 seconds. Their post-start probe must
+accept either a fresh running artifact or a completed passing artifact, because
+the 3 second smoke may finish before the scheduler observes the post-start
+state. Their regular `probe_cmd` must still require a live artifact, while
+`completion_cmd` requires a completed passing artifact; that prevents a stale
+completed smoke from being adopted as live work. The starter itself accepts a
+running or completed passing artifact for scheduled-task launch success.
 
 ### `mesh_worker_identity.py`
 
@@ -472,6 +639,7 @@ Fixture coverage:
 
 ```sh
 python3 scripts/mesh_worker_identity_selftest.py
+python3 scripts/mesh_cuda_worker_identity_selftest.py
 python3 scripts/mesh_windows_worker_identity_selftest.py
 ```
 
@@ -490,10 +658,10 @@ was prepared from the archived checkout during that run.
 ### `check_operational_evidence.py`
 
 Validates a complete operational evidence bundle by delegating to the release,
-SDK26, CUDA, HIP, HIP toolchain, PyTorch, Windows, Windows CUDA probe, and
-live-mesh evidence checkers, then applying bundle-level policy. For production
-promotion, use the clean-head flags so stale or dirty-tree evidence cannot
-satisfy the current head's deployment gate.
+SDK26, CUDA, HIP, HIP toolchain, PyTorch, Windows, Windows CUDA probe, mesh
+preflight, and live-mesh evidence checkers, then applying bundle-level policy.
+For production promotion, use the clean-head flags so stale or dirty-tree
+evidence cannot satisfy the current head's deployment gate.
 
 ```sh
 python3 scripts/check_operational_evidence.py \
@@ -503,12 +671,16 @@ python3 scripts/check_operational_evidence.py \
   --pytorch /tmp/pytorch.json \
   --windows /tmp/windows-host.json \
   --windows-cuda /tmp/windows-cuda.json \
+  --windows-cuda-smoke /tmp/windows-cuda-smoke.json \
+  --mesh-preflights /tmp/mesh-preflights.json \
   --live-mesh /tmp/live-mesh-training.json \
   --require-release --require-sdk26 --require-cuda --require-pytorch \
   --require-pytorch-backend-allocation --require-windows \
   --require-windows-python --require-windows-cuda-driver \
   --require-windows-cuda-toolchain --require-windows-cuda-admission-clear \
   --require-windows-cuda-ready --require-windows-cuda-build-smoke \
+  --require-windows-cuda-scheduled-smoke \
+  --require-mesh-preflights --require-mesh-preflights-pass \
   --require-live-mesh \
   --require-release-clean-head --require-sdk26-clean-head \
   --require-cuda-clean-head --require-pytorch-clean-head \
@@ -541,6 +713,16 @@ to prove a Windows NVIDIA lane is visible and not currently occupied; add
 `--require-windows-cuda-toolchain`, `--require-windows-cuda-ready`, and
 `--require-windows-cuda-build-smoke` before treating that lane as CUDA-build
 ready.
+Add `--windows-cuda-smoke /tmp/windows-cuda-smoke.json
+--require-windows-cuda-scheduled-smoke` when a scheduler-owned Windows CUDA
+smoke has produced completed evidence with matching smoke artifact and worker
+identity payloads.
+Add `--mesh-preflights /tmp/mesh-preflights.json --require-mesh-preflights
+--require-mesh-preflights-pass` before unpausing external scheduler rows; use
+`--mesh-preflight-job <job-id>` to require specific paused launchable rows in
+that evidence. During paused rollout, use
+`--mesh-preflight-allowed-failure <job-id>:<reason>` for an explicit known
+external blocker such as Jack's `scheduled_task_did_not_run`.
 
 ### `ci_cuda_smoke.sh`
 

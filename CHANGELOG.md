@@ -129,6 +129,20 @@ every architectural primitive in code and tested:
   a paused CUDA-exclusive lane with WDDM-aware admission and Windows
   worker-identity helpers. It cannot launch work until a submitted job provides
   real start and post-start probes for the specific Windows CUDA process.
+- Mesh deployment is now git-checkout based: `scripts/mesh_deploy_git_checkout.py`
+  clones or fast-forwards repos on SSH nodes, checked-in scheduler configs
+  reject private wrapper paths, Jack's scheduled CUDA smoke uses repo-local
+  helpers but stays paused until Jack has a persistent Windows launch path, and
+  GeoRefine CR025 and old-donkey qLLM precompute now have repo-owned remote
+  starters with non-launching preflight modes. GitHub SSH access is configured
+  on the target hosts; the rows stay paused for operator-controlled adoption or
+  launch. Default preflight sweeps now include GeoRefine, old-donkey, and Jack
+  so paused launchable rows stay visible, while any future opt-out rows remain
+  explicit via `skipped_default_job_ids` and
+  `--mesh-preflight-skipped-default-job`. Windows SSH helpers now upload large
+  probe scripts with `scp` instead of stdin-fed PowerShell to avoid Jack's
+  OpenSSH stdin-close behavior. The stale qLLM phase-1 systemd row is
+  adoption-only until its launcher is installed from a qLLM git checkout.
 - Release-smoke evidence now records clean git-head provenance, and the
   operational bundle checker can require release, SDK26, PyTorch, and
   live-mesh evidence to match the current committed head.
@@ -204,8 +218,8 @@ every architectural primitive in code and tested:
   for private hostnames or tailnet addresses.
 - `Add operational evidence bundle validation`:
   `scripts/check_operational_evidence.py` validates release, SDK26, CUDA,
-  HIP, PyTorch, and live-mesh artifacts together, with clean-current-head
-  enforcement for physical mesh deployment evidence.
+  HIP, PyTorch, mesh preflight, and live-mesh artifacts together, with
+  clean-current-head enforcement for physical mesh deployment evidence.
 - Mesh training activation checkpoint mode: `mesh_training_demo
   --checkpoint` now discards `X_norm` after the forward projection,
   realizes it through the RMSNorm recompute callback before the `dW`

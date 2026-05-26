@@ -40,7 +40,10 @@ jobs:
         run: python3 scripts/check_hip_smoke_evidence_selftest.py
 
       - name: Operational evidence checker fixtures
-        run: python3 scripts/check_operational_evidence_selftest.py
+        run: |
+          python3 scripts/check_operational_evidence_selftest.py
+          python3 scripts/check_mesh_resource_preflight_evidence_selftest.py
+          python3 scripts/check_windows_cuda_scheduled_smoke_evidence_selftest.py
 
       - name: Mesh resource scheduler fixtures
         run: python3 scripts/mesh_resource_scheduler_selftest.py
@@ -48,21 +51,33 @@ jobs:
       - name: Mesh resource inventory fixtures
         run: |
           python3 scripts/mesh_arbiter_with_inventory_selftest.py
+          python3 scripts/mesh_deploy_git_checkout_selftest.py
+          python3 scripts/check_mesh_git_access_selftest.py
+          python3 scripts/check_mesh_resource_preflights_selftest.py
+          python3 scripts/check_mesh_resource_config_selftest.py
+          python3 scripts/check_georefine_qwen_live_selftest.py
+          python3 scripts/check_georefine_qwen_artifact_selftest.py
+          python3 scripts/start_georefine_qwen_cr025_selftest.py
+          python3 scripts/start_qllm_olddonkey_precompute_chain_selftest.py
           python3 scripts/check_mesh_resource_inventory.py
           python3 scripts/check_mesh_resource_jobs.py
           python3 scripts/mesh_system_audit_selftest.py
 
       - name: Live mesh launcher shell syntax
-        run: bash -n scripts/run_live_mesh_smoke.sh scripts/run_live_mesh_training_demo.sh scripts/run_windows_cuda_probe.sh
+        run: bash -n scripts/run_live_mesh_smoke.sh scripts/run_live_mesh_training_demo.sh scripts/run_windows_cuda_probe.sh scripts/run_windows_host_smoke.sh
 
       - name: CUDA resource admission fixtures
         run: |
           python3 scripts/check_cuda_resource_admission_selftest.py
           python3 scripts/check_windows_cuda_resource_admission_selftest.py
+          python3 scripts/check_windows_persistent_launch_selftest.py
+          python3 scripts/check_windows_cuda_smoke_artifact_selftest.py
+          python3 scripts/start_windows_cuda_smoke_selftest.py
 
       - name: Mesh worker identity fixtures
         run: |
           python3 scripts/mesh_worker_identity_selftest.py
+          python3 scripts/mesh_cuda_worker_identity_selftest.py
           python3 scripts/mesh_windows_worker_identity_selftest.py
 
   portable-cpu:

@@ -11,20 +11,19 @@
       "priority": 50,
       "desired_state": "paused",
       "ttl_sec": 900,
+      "adopt_unknown_lease_metadata_keys": [
+        "project",
+        "service"
+      ],
       "probe_cmd": [
         "ssh",
         "cosbox",
         "systemctl --user is-active --quiet qllm-phase1.service"
       ],
-      "start_cmd": [
-        "ssh",
-        "cosbox",
-        "systemctl --user start qllm-phase1.service"
-      ],
       "admission_cmd": [
         "ssh",
         "cosbox",
-        "/home/tyr/.local/bin/check-cuda-resource-admission --resource cosbox:cuda3090 --allow-process-regex steamwebhelper$ --allowed-process-max-memory-mib 16 --json"
+        "cd ~/src/tensorcore && python3 scripts/check_cuda_resource_admission.py --resource cosbox:cuda3090 --allow-process-regex steamwebhelper$ --allowed-process-max-memory-mib 16 --json"
       ],
       "post_start_probe_cmd": [
         "ssh",
@@ -34,12 +33,12 @@
       "worker_identity_cmd": [
         "ssh",
         "cosbox",
-        "/home/tyr/.local/bin/mesh-worker-identity --resource cosbox:cuda3090 --unit qllm-phase1.service --match-regex qllm.train_geometric_lm_torch --require-active-unit --require-matching-process --require-matched-cuda"
+        "cd ~/src/tensorcore && python3 scripts/mesh_worker_identity.py --resource cosbox:cuda3090 --unit qllm-phase1.service --match-regex qllm.train_geometric_lm_torch --require-active-unit --require-matching-process --require-matched-cuda"
       ],
       "metadata": {
         "project": "semiclassical_qllm",
         "scheduler_contract": "cuda_exclusive_admission_poststart_identity",
-        "scheduler_pause_reason": "Qwen cr010/cr020 90pct artifact required first",
+        "scheduler_pause_reason": "adoption-only until qllm-phase1.service or an equivalent phase-1 launcher is source-controlled and installed from the qLLM git checkout",
         "service": "qllm-phase1"
       }
     },
@@ -51,7 +50,7 @@
       "owner": "georefine:m2:cosbox",
       "tenant": "georefine",
       "priority": 100,
-      "desired_state": "running",
+      "desired_state": "paused",
       "ttl_sec": 900,
       "adopt_unknown_lease_metadata_keys": [
         "project",
@@ -61,32 +60,52 @@
       "probe_cmd": [
         "ssh",
         "cosbox",
-        "/home/tyr/.local/bin/check-georefine-qwen-cr025-live"
+        "cd ~/src/tensorcore && python3 scripts/check_georefine_qwen_live.py --run-dir /home/tyr/bytehole/georefine/runs/qwen3_5_0_8b_cr025_emb1024_fint4_cal4096_kd2048_t010_q005_20260525_043850 --match-regex 'experiments.georefine.m2_compress.*qwen3_5_0_8b_cr025_emb1024_fint4_cal4096_kd2048_t010_q005_20260525_043850' --json"
+      ],
+      "preflight_cmd": [
+        "python3",
+        "scripts/start_georefine_qwen_cr025.py",
+        "--target",
+        "cosbox",
+        "--repo-dir",
+        "~/src/georefine",
+        "--python-bin",
+        "/home/tyr/work/qllm-venv/bin/python",
+        "--require-clean",
+        "--preflight-only",
+        "--json"
       ],
       "completion_cmd": [
         "ssh",
         "cosbox",
-        "/home/tyr/.local/bin/check-georefine-qwen-artifact /home/tyr/bytehole/georefine/runs/qwen3_5_0_8b_cr025_emb1024_fint4_cal4096_kd2048_t010_q005_20260525_043850 --max-size-ratio 0.10"
+        "cd ~/src/tensorcore && python3 scripts/check_georefine_qwen_artifact.py /home/tyr/bytehole/georefine/runs/qwen3_5_0_8b_cr025_emb1024_fint4_cal4096_kd2048_t010_q005_20260525_043850 --max-size-ratio 0.10"
       ],
       "admission_cmd": [
         "ssh",
         "cosbox",
-        "/home/tyr/.local/bin/check-cuda-resource-admission --resource cosbox:cuda3090 --allow-process-regex '(steamwebhelper$|/opt/google/chrome/chrome)' --allowed-process-max-memory-mib 256 --json"
+        "cd ~/src/tensorcore && python3 scripts/check_cuda_resource_admission.py --resource cosbox:cuda3090 --allow-process-regex '(steamwebhelper$|/opt/google/chrome/chrome)' --allowed-process-max-memory-mib 256 --json"
       ],
       "start_cmd": [
-        "ssh",
+        "python3",
+        "scripts/start_georefine_qwen_cr025.py",
+        "--target",
         "cosbox",
-        "/home/tyr/.local/bin/start-georefine-qwen-cr025"
+        "--repo-dir",
+        "~/src/georefine",
+        "--python-bin",
+        "/home/tyr/work/qllm-venv/bin/python",
+        "--require-clean",
+        "--json"
       ],
       "post_start_probe_cmd": [
         "ssh",
         "cosbox",
-        "/home/tyr/.local/bin/check-georefine-qwen-cr025-live"
+        "cd ~/src/tensorcore && python3 scripts/check_georefine_qwen_live.py --run-dir /home/tyr/bytehole/georefine/runs/qwen3_5_0_8b_cr025_emb1024_fint4_cal4096_kd2048_t010_q005_20260525_043850 --match-regex 'experiments.georefine.m2_compress.*qwen3_5_0_8b_cr025_emb1024_fint4_cal4096_kd2048_t010_q005_20260525_043850' --json"
       ],
       "worker_identity_cmd": [
         "ssh",
         "cosbox",
-        "/home/tyr/.local/bin/mesh-worker-identity --resource cosbox:cuda3090 --match-regex experiments.georefine.m2_compress.*qwen3_5_0_8b_cr025_emb1024_fint4_cal4096_kd2048_t010_q005_20260525_043850 --artifact-dir /home/tyr/bytehole/georefine/runs/qwen3_5_0_8b_cr025_emb1024_fint4_cal4096_kd2048_t010_q005_20260525_043850 --require-matching-process --require-matched-cuda"
+        "cd ~/src/tensorcore && python3 scripts/mesh_worker_identity.py --resource cosbox:cuda3090 --match-regex experiments.georefine.m2_compress.*qwen3_5_0_8b_cr025_emb1024_fint4_cal4096_kd2048_t010_q005_20260525_043850 --artifact-dir /home/tyr/bytehole/georefine/runs/qwen3_5_0_8b_cr025_emb1024_fint4_cal4096_kd2048_t010_q005_20260525_043850 --require-matching-process --require-matched-cuda"
       ],
       "metadata": {
         "admission_policy": "allow low-memory steamwebhelper/chrome GPU helper only",
@@ -103,7 +122,7 @@
         "resumed_at_unix": 1779727191.9594738,
         "run_dir": "/home/tyr/bytehole/georefine/runs/qwen3_5_0_8b_cr025_emb1024_fint4_cal4096_kd2048_t010_q005_20260525_043850",
         "scheduler_contract": "cuda_exclusive_admission_poststart_identity",
-        "scheduler_pause_reason": "CR020 failed strict held-out quality and target-KL gates; paused to prevent relaunch churn.",
+        "scheduler_pause_reason": "source-controlled CR025 starter preflight passes on cosbox; keep paused until an operator intentionally resumes this long-running artifact workload",
         "service": "m2",
         "target": "qwen-cr025-supervised-cal4096-kd2048-size10-artifact"
       }
@@ -116,22 +135,38 @@
       "owner": "qllm:precompute:old-donkey",
       "tenant": "qllm",
       "priority": 20,
-      "desired_state": "running",
+      "desired_state": "paused",
       "ttl_sec": 900,
       "probe_cmd": [
         "ssh",
         "old-donkey",
         "pgrep -af 'precompute_teacher_logits.py.*--shard /data/qllm/corpus/phase1.shards/.*\\.bin' >/dev/null"
       ],
+      "preflight_cmd": [
+        "python3",
+        "scripts/start_qllm_olddonkey_precompute_chain.py",
+        "--target",
+        "old-donkey",
+        "--repo-dir",
+        "/data/qllm/checkouts/semiclassical_qllm-tensorcore",
+        "--require-clean",
+        "--preflight-only",
+        "--json"
+      ],
       "admission_cmd": [
         "ssh",
         "old-donkey",
-        "/home/tyr/.local/bin/check-cuda-resource-admission --resource old-donkey:cuda3050 --json"
+        "cd ~/src/tensorcore && python3 scripts/check_cuda_resource_admission.py --resource old-donkey:cuda3050 --json"
       ],
       "start_cmd": [
-        "ssh",
+        "python3",
+        "scripts/start_qllm_olddonkey_precompute_chain.py",
+        "--target",
         "old-donkey",
-        "/data/qllm/runs/start_olddonkey_precompute_chain.sh"
+        "--repo-dir",
+        "/data/qllm/checkouts/semiclassical_qllm-tensorcore",
+        "--require-clean",
+        "--json"
       ],
       "post_start_probe_cmd": [
         "ssh",
@@ -141,12 +176,13 @@
       "worker_identity_cmd": [
         "ssh",
         "old-donkey",
-        "/home/tyr/.local/bin/mesh-worker-identity --resource old-donkey:cuda3050 --match-regex 'precompute_teacher_logits.py.*--shard /data/qllm/corpus/phase1.shards/.*\\.bin' --require-matching-process --require-matched-cuda"
+        "cd ~/src/tensorcore && python3 scripts/mesh_worker_identity.py --resource old-donkey:cuda3050 --match-regex 'precompute_teacher_logits.py.*--shard /data/qllm/corpus/phase1.shards/.*\\.bin' --require-matching-process --require-matched-cuda"
       ],
       "metadata": {
-        "operator_note": "adopted active old-donkey precompute chain under scheduler lease",
+        "operator_note": "adopt live old-donkey precompute chain under scheduler lease only",
         "project": "semiclassical_qllm",
         "scheduler_contract": "cuda_exclusive_admission_poststart_identity",
+        "scheduler_pause_reason": "source-controlled old-donkey chain starter preflight passes and reports the chain already live; keep paused for adoption-only lease management",
         "service": "precompute_teacher_logits",
         "shard": "chain_resume"
       }
@@ -199,6 +235,105 @@
         "scheduler_contract": "windows_cuda_admission_registered_lane",
         "scheduler_pause_reason": "no submitted Jack CUDA workload yet",
         "service": "cuda3060"
+      }
+    },
+    {
+      "id": "jack-cuda3060-smoke",
+      "sync_id": "jack-cuda3060-smoke",
+      "resource": "jack-blupc:cuda3060",
+      "resource_class": "cuda_exclusive",
+      "owner": "tensorcore:jack-cuda-smoke",
+      "tenant": "tensorcore",
+      "priority": 20,
+      "desired_state": "paused",
+      "ttl_sec": 300,
+      "probe_cmd": [
+        "python3",
+        "scripts/check_windows_cuda_smoke_artifact.py",
+        "--target",
+        "jack-blupc",
+        "--resource",
+        "jack-blupc:cuda3060",
+        "--require-live",
+        "--max-age-sec",
+        "86400",
+        "--json"
+      ],
+      "completion_cmd": [
+        "python3",
+        "scripts/check_windows_cuda_smoke_artifact.py",
+        "--target",
+        "jack-blupc",
+        "--resource",
+        "jack-blupc:cuda3060",
+        "--require-complete",
+        "--max-age-sec",
+        "86400",
+        "--json"
+      ],
+      "admission_cmd": [
+        "python3",
+        "scripts/check_windows_cuda_resource_admission.py",
+        "--target",
+        "jack-blupc",
+        "--resource",
+        "jack-blupc:cuda3060",
+        "--require-toolchain",
+        "--json"
+      ],
+      "preflight_cmd": [
+        "python3",
+        "scripts/check_windows_persistent_launch.py",
+        "--target",
+        "jack-blupc",
+        "--resource",
+        "jack-blupc:cuda3060",
+        "--json"
+      ],
+      "start_cmd": [
+        "python3",
+        "scripts/start_windows_cuda_smoke.py",
+        "--target",
+        "jack-blupc",
+        "--resource",
+        "jack-blupc:cuda3060",
+        "--duration-sec",
+        "3",
+        "--start-wait-sec",
+        "20",
+        "--timeout-sec",
+        "35",
+        "--json"
+      ],
+      "post_start_probe_cmd": [
+        "python3",
+        "scripts/check_windows_cuda_smoke_artifact.py",
+        "--target",
+        "jack-blupc",
+        "--resource",
+        "jack-blupc:cuda3060",
+        "--require-live-or-complete",
+        "--max-age-sec",
+        "86400",
+        "--json"
+      ],
+      "worker_identity_cmd": [
+        "python3",
+        "scripts/mesh_windows_worker_identity.py",
+        "--target",
+        "jack-blupc",
+        "--resource",
+        "jack-blupc:cuda3060",
+        "--allow-completed-artifact",
+        "--json"
+      ],
+      "metadata": {
+        "project": "tensorcore",
+        "evidence_path": "artifacts/mesh/windows/jack-cuda3060-smoke.json",
+        "scheduler_contract": "windows_cuda_scheduled_smoke",
+        "scheduler_pause_reason": "Jack can create passwordless scheduled tasks but they do not execute from the noninteractive SSH session; keep paused until a durable service or credentialed scheduled-task launch path is installed",
+        "service": "cuda3060-smoke",
+        "target": "jack-cuda3060-scheduler-owned-cuda-smoke"
       }
     },
     {

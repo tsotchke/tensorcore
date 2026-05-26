@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from typing import Any
 
 
@@ -175,35 +176,32 @@ def ps_encode(command: str) -> str:
 
 def run_remote_powershell(target: str, script: str, *, timeout: float) -> subprocess.CompletedProcess[str]:
     script_name = f"tensorcore-windows-cuda-admission-{os.getpid()}.ps1"
-    upload_command = (
-        "$ProgressPreference = 'SilentlyContinue'; "
-        f"$Path = Join-Path $env:TEMP '{script_name}'; "
-        "Set-Content -LiteralPath $Path -Encoding UTF8 -Value ([Console]::In.ReadToEnd())"
-    )
-    run_command = (
-        "$ProgressPreference = 'SilentlyContinue'; "
-        f"$Path = Join-Path $env:TEMP '{script_name}'; & $Path"
-    )
     cleanup_command = (
         "$ProgressPreference = 'SilentlyContinue'; "
-        f"$Path = Join-Path $env:TEMP '{script_name}'; "
-        "Remove-Item -Force -LiteralPath $Path -ErrorAction SilentlyContinue"
+        f"Remove-Item -Force -LiteralPath '{script_name}' -ErrorAction SilentlyContinue"
     )
     common = ["ssh", target, "powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass"]
-    upload = subprocess.run(
-        common + ["-EncodedCommand", ps_encode(upload_command)],
-        input=script,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=timeout,
-        check=False,
-    )
-    if upload.returncode != 0:
-        return upload
+    local_path = ""
+    tmp_dir = "/private/tmp" if os.path.isdir("/private/tmp") and os.access("/private/tmp", os.W_OK) else None
     try:
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", prefix=script_name + ".", suffix=".tmp", dir=tmp_dir, delete=False
+        ) as handle:
+            handle.write(script)
+            local_path = handle.name
+        upload = subprocess.run(
+            ["scp", "-q", local_path, f"{target}:{script_name}"],
+            stdin=subprocess.DEVNULL,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            check=False,
+        )
+        if upload.returncode != 0:
+            return upload
         return subprocess.run(
-            common + ["-EncodedCommand", ps_encode(run_command)],
+            common + ["-File", script_name],
             stdin=subprocess.DEVNULL,
             text=True,
             stdout=subprocess.PIPE,
@@ -224,10 +222,24 @@ def run_remote_powershell(target: str, script: str, *, timeout: float) -> subpro
             )
         except subprocess.TimeoutExpired:
             pass
+        if local_path:
+            try:
+                os.unlink(local_path)
+            except FileNotFoundError:
+                pass
 
 
 def run_probe(args: argparse.Namespace) -> dict[str, Any]:
-    proc = run_remote_powershell(args.target, render_script(args), timeout=args.timeout_sec)
+    try:
+        proc = run_remote_powershell(args.target, render_script(args), timeout=args.timeout_sec)
+    except subprocess.TimeoutExpired:
+        return {
+            "schema": SCHEMA,
+            "ok": False,
+            "reason": "probe_timeout",
+            "resource": args.resource,
+            "blocked": [],
+        }
     if proc.returncode != 0:
         return {
             "schema": SCHEMA,

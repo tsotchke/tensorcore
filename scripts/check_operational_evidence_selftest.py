@@ -297,6 +297,120 @@ def windows_cuda_ready_evidence() -> dict[str, Any]:
     return data
 
 
+def windows_cuda_smoke_evidence() -> dict[str, Any]:
+    return {
+        "schema": "tensorcore.windows_cuda_scheduled_smoke.evidence.v1",
+        "schema_version": 1,
+        "checked_at_unix": 4102444800,
+        "phase": "completed",
+        "resource": "jack-blupc:cuda3060",
+        "job": "jack-cuda3060-smoke",
+        "driver_visible": True,
+        "toolchain_found": True,
+        "wddm_admission_ok": True,
+        "build_smoke_passed": True,
+        "runtime_smoke_passed": True,
+        "scheduler_lease_held": True,
+        "worker_identity_recorded": True,
+        "lease_id": "lease-jack",
+        "smoke_artifact": {
+            "schema": "tensorcore.windows_cuda_smoke.v1",
+            "ok": True,
+            "resource": "jack-blupc:cuda3060",
+            "state": "completed",
+            "build_ok": True,
+            "runtime_ok": True,
+        },
+        "worker_identity": {
+            "schema": "tensorcore.mesh_worker_identity.v1",
+            "ok": True,
+            "resource": "jack-blupc:cuda3060",
+            "worker_host": "DESKTOP-JACK-BLUPC",
+            "worker_pid": 1234,
+        },
+    }
+
+
+def mesh_preflights_evidence() -> dict[str, Any]:
+    return {
+        "schema": "tensorcore.mesh_resource_preflights.v1",
+        "ok": True,
+        "checked_at_unix": 4102444800,
+        "jobs_checked": 3,
+        "missing_job_ids": [],
+        "results": [
+            {
+                "job": "georefine-m2-cosbox",
+                "resource": "cosbox:cuda3090",
+                "ok": True,
+                "reason": "preflight_ok",
+                "rc": 0,
+                "json": {
+                    "schema": "tensorcore.georefine_qwen_cr025.start.v1",
+                    "ok": True,
+                    "resource": "cosbox:cuda3090",
+                    "reason": "preflight_ok",
+                },
+            },
+            {
+                "job": "old-donkey-precompute-chain",
+                "resource": "old-donkey:cuda3050",
+                "ok": True,
+                "reason": "preflight_ok",
+                "rc": 0,
+                "json": {
+                    "schema": "tensorcore.qllm_olddonkey_precompute_chain.start.v1",
+                    "ok": True,
+                    "resource": "old-donkey:cuda3050",
+                    "reason": "preflight_ok",
+                },
+            },
+            {
+                "job": "jack-cuda3060-smoke",
+                "resource": "jack-blupc:cuda3060",
+                "ok": True,
+                "reason": "preflight_ok",
+                "rc": 0,
+                "json": {
+                    "schema": "tensorcore.windows_persistent_launch.v1",
+                    "ok": True,
+                    "resource": "jack-blupc:cuda3060",
+                    "reason": "preflight_ok",
+                },
+            },
+        ],
+    }
+
+
+def mesh_default_preflights_evidence() -> dict[str, Any]:
+    return {
+        "schema": "tensorcore.mesh_resource_preflights.v1",
+        "ok": True,
+        "checked_at_unix": 4102444800,
+        "jobs_checked": 0,
+        "missing_job_ids": [],
+        "skipped_default_job_ids": ["jack-cuda3060-smoke"],
+        "results": [],
+    }
+
+
+def mesh_preflights_with_jack_blocker_evidence() -> dict[str, Any]:
+    data = mesh_preflights_evidence()
+    data["ok"] = False
+    for row in data["results"]:
+        if row["job"] == "jack-cuda3060-smoke":
+            row["ok"] = False
+            row["reason"] = "scheduled_task_did_not_run"
+            row["rc"] = 1
+            row["json"] = {
+                "schema": "tensorcore.windows_persistent_launch.v1",
+                "ok": False,
+                "resource": "jack-blupc:cuda3060",
+                "reason": "scheduled_task_did_not_run",
+            }
+    return data
+
+
 def write_json(directory: pathlib.Path, name: str, data: dict[str, Any]) -> pathlib.Path:
     path = directory / name
     path.write_text(json.dumps(data), encoding="utf-8")
@@ -344,6 +458,20 @@ def main() -> int:
         windows_cuda_path = write_json(
             directory, "windows-cuda.json", windows_cuda_ready_evidence()
         )
+        windows_cuda_smoke_path = write_json(
+            directory, "windows-cuda-smoke.json", windows_cuda_smoke_evidence()
+        )
+        mesh_preflights_path = write_json(
+            directory, "mesh-preflights.json", mesh_preflights_evidence()
+        )
+        mesh_default_preflights_path = write_json(
+            directory, "mesh-default-preflights.json", mesh_default_preflights_evidence()
+        )
+        mesh_jack_blocked_path = write_json(
+            directory,
+            "mesh-jack-blocked.json",
+            mesh_preflights_with_jack_blocker_evidence(),
+        )
 
         assert_passes(
             "--release", str(release_path),
@@ -354,6 +482,8 @@ def main() -> int:
             "--pytorch", str(pytorch_path),
             "--windows", str(windows_path),
             "--windows-cuda", str(windows_cuda_path),
+            "--windows-cuda-smoke", str(windows_cuda_smoke_path),
+            "--mesh-preflights", str(mesh_preflights_path),
             "--live-mesh", str(live_path),
             "--git-head", TEST_HEAD,
             "--require-release",
@@ -373,6 +503,14 @@ def main() -> int:
             "--require-windows-cuda-admission-clear",
             "--require-windows-cuda-ready",
             "--require-windows-cuda-build-smoke",
+            "--require-windows-cuda-scheduled-smoke",
+            "--windows-cuda-smoke-max-age-sec", "86400",
+            "--require-mesh-preflights",
+            "--require-mesh-preflights-pass",
+            "--mesh-preflights-max-age-sec", "86400",
+            "--mesh-preflight-job", "georefine-m2-cosbox",
+            "--mesh-preflight-job", "old-donkey-precompute-chain",
+            "--mesh-preflight-job", "jack-cuda3060-smoke",
             "--require-live-mesh",
             "--require-release-clean-head",
             "--require-sdk26-clean-head",
@@ -391,12 +529,52 @@ def main() -> int:
             "--require-no-backend-fallback",
         )
 
+        assert_passes(
+            "--mesh-preflights", str(mesh_default_preflights_path),
+            "--mesh-preflight-skipped-default-job", "jack-cuda3060-smoke",
+            "--mesh-preflights-max-age-sec", "86400",
+        )
+        assert_passes(
+            "--mesh-preflights", str(mesh_jack_blocked_path),
+            "--mesh-preflight-job", "jack-cuda3060-smoke",
+            "--mesh-preflight-allowed-failure",
+            "jack-cuda3060-smoke:scheduled_task_did_not_run",
+            "--mesh-preflights-max-age-sec", "86400",
+        )
+        assert_fails(
+            "allowed failure reason mismatch",
+            "--mesh-preflights", str(mesh_jack_blocked_path),
+            "--mesh-preflight-allowed-failure",
+            "jack-cuda3060-smoke:wrong_reason",
+        )
+        assert_fails(
+            "required skipped default jobs missing",
+            "--mesh-preflights", str(mesh_default_preflights_path),
+            "--mesh-preflight-skipped-default-job", "old-donkey-precompute-chain",
+        )
+
         assert_fails("no evidence paths were provided")
         assert_fails("--live-mesh evidence is required", "--require-live-mesh")
         assert_fails("--windows evidence is required", "--require-windows")
         assert_fails(
             "--windows-cuda evidence is required",
             "--require-windows-cuda-driver",
+        )
+        assert_fails(
+            "--windows-cuda-smoke evidence is required",
+            "--require-windows-cuda-scheduled-smoke",
+        )
+        assert_fails(
+            "--mesh-preflights evidence is required",
+            "--require-mesh-preflights",
+        )
+        assert_fails(
+            "--mesh-preflights evidence is required",
+            "--mesh-preflight-skipped-default-job", "jack-cuda3060-smoke",
+        )
+        assert_fails(
+            "--mesh-preflights evidence is required",
+            "--mesh-preflight-allowed-failure", "jack-cuda3060-smoke:scheduled_task_did_not_run",
         )
         assert_fails("--hip-toolchain evidence is required", "--require-hip-toolchain")
         assert_fails(

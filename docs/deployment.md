@@ -162,6 +162,117 @@ explain what is missing.
 
 ## 2. Network setup
 
+### Git checkouts
+
+Every mesh node should run jobs from git checkouts, not private wrapper
+scripts. For Unix-like nodes, bootstrap or refresh the Tensorcore checkout from
+the control machine:
+
+```sh
+python3 scripts/mesh_deploy_git_checkout.py \
+  --target <host> \
+  --repo-url https://github.com/tsotchke/tensorcore.git \
+  --repo-dir '~/src/tensorcore' \
+  --ref master \
+  --require-clean \
+  --json
+```
+
+Use the same clone/pull pattern for workload repositories before enabling a
+`running` scheduler job that launches those workloads. If the only available
+launcher is under `~/.tsotchke/bin`, `/home/tyr/.local/bin`, or a host-local
+run directory, keep the scheduler row paused and adoption-only until that
+launcher is committed to the owning repo. Host-local systemd units follow the
+same rule: a `systemctl start <unit>` row should stay paused until the unit file
+or equivalent launcher is installed from a git checkout.
+Private workload repos should use SSH Git remotes, for example
+`git@github.com:Tsotchke-Corporation/GeoRefineInternal.git`, so noninteractive
+preflights do not block on HTTPS credential prompts.
+Verify the target host can read each private repo before unpausing:
+
+```sh
+python3 scripts/check_mesh_git_access.py \
+  --target cosbox \
+  --repo-url git@github.com:Tsotchke-Corporation/GeoRefineInternal.git \
+  --resource cosbox:cuda3090 \
+  --ref HEAD \
+  --json
+python3 scripts/check_mesh_git_access.py \
+  --target old-donkey \
+  --repo-url git@github.com:Tsotchke-Corporation/semiclassical_qllm.git \
+  --resource old-donkey:cuda3050 \
+  --ref claude/session-2026-05-08 \
+  --json
+```
+
+GeoRefine CR025 uses `scripts/start_georefine_qwen_cr025.py`, which can clone
+or fast-forward the GeoRefine checkout on cosbox before invoking the supervised
+run module. The row still stays paused until that checkout's Python environment
+is installed and verified on the target host. Run the starter with
+`--preflight-only --json` to check the checkout, Python imports, calibration
+text, and evaluation text without starting the CR025 run.
+
+The old-donkey qLLM precompute chain uses
+`scripts/start_qllm_olddonkey_precompute_chain.py`, which can clone or
+fast-forward `semiclassical_qllm` into the dedicated scheduler checkout
+`/data/qllm/checkouts/semiclassical_qllm-tensorcore` and generate the tmux
+chain from checked-in Tensorcore state. Keep it paused until the qLLM Python
+environment and `/data/qllm/corpus/phase1.shards` are verified on old-donkey.
+Run it with `--preflight-only --json` to check those prerequisites without
+starting the tmux chain.
+
+You can also run the checked-in job preflights from the jobs file:
+
+```sh
+python3 scripts/check_mesh_resource_preflights.py --job-id georefine-m2-cosbox --json
+python3 scripts/check_mesh_resource_preflights.py --job-id old-donkey-precompute-chain --json
+python3 scripts/check_mesh_resource_preflights.py --job-id jack-cuda3060-smoke --json
+```
+
+The default preflight sweep includes the paused GeoRefine, old-donkey qLLM, and
+Jack CUDA smoke rows. Each preflight is non-launching and records the external
+prerequisite that must be fixed before unpausing the row. Default preflight JSON
+lists any explicit opt-out rows in `skipped_default_job_ids`.
+
+To prove the current paused Windows CUDA posture, keep the default sweep output
+and require the Jack row plus the known durable-launch blocker:
+
+```sh
+python3 scripts/check_operational_evidence.py \
+  --mesh-preflights /tmp/mesh-preflights-default.json \
+  --mesh-preflight-job jack-cuda3060-smoke \
+  --mesh-preflight-allowed-failure jack-cuda3060-smoke:scheduled_task_did_not_run
+```
+
+Do not combine that low-load evidence with `--require-mesh-preflights-pass`;
+that stricter flag is for deliberate sweeps that actually run at least one
+preflight row.
+
+The Tsotchke arbiter backend should come from the `computer_mesh` git checkout
+on the scheduler host. Put that checkout's `tsotchke/bin` directory on `PATH`
+or set `TC_MESH_ARBITER_CMD`; do not hard-code a private `~/.tsotchke/bin`
+path into Tensorcore scheduler configs.
+
+Windows hosts use the same rule through `scripts/run_windows_host_smoke.sh` and
+`scripts/run_windows_cuda_probe.sh`: the remote checkout is cloned if missing
+and fast-forwarded with `git pull --ff-only` before bootstrap or CUDA smoke
+evidence is collected.
+
+For Windows scheduler-launched CUDA work, also install a persistent launch path
+outside the SSH session, such as a service account or credentialed scheduled
+task. Keep Windows rows paused when child processes are torn down as soon as
+the SSH command exits.
+Use `scripts/check_windows_persistent_launch.py` to verify that launch path
+without starting CUDA work.
+The checked-in Jack CUDA smoke contract uses the scheduled-task path with a
+3 second runtime; the child process is killed after `duration_sec + 15s` if it
+does not exit. Its post-start probe accepts either a fresh running artifact or
+a completed passing artifact, so a fast smoke completion is not treated as a
+failed launch. Its regular liveness probe still requires a live artifact, and
+completion is handled by the strict completion probe. When using the foreground
+fallback for diagnosis, keep it as a manual one-shot and leave the scheduler
+row paused.
+
 ### Same-LAN: any IP-routable address
 
 For two hosts on the same LAN, just use their LAN IPs. The 4-rank
@@ -325,6 +436,17 @@ evidence records the fallback rank so promotion checks can reject it.
 When pairing the live run with release, SDK26, and accelerator smoke
 artifacts, validate the bundle as one deployment gate:
 
+Capture paused scheduler-row preflight evidence before the bundle check. The
+preflight runner exits non-zero when a row is still blocked, but it still emits
+the JSON artifact that `check_operational_evidence.py` can validate:
+
+```sh
+python3 scripts/check_mesh_resource_preflights.py \
+  --jobs-json configs/mesh_resource_jobs.json \
+  --timeout-sec 60 \
+  --json > /tmp/mesh-preflights.json || test -s /tmp/mesh-preflights.json
+```
+
 ```sh
 python3 scripts/check_operational_evidence.py \
   --release /tmp/release/release_smoke_runtime_evidence.json \
@@ -332,10 +454,16 @@ python3 scripts/check_operational_evidence.py \
   --cuda /tmp/cuda-smoke.json \
   --pytorch /tmp/pytorch.json \
   --windows /tmp/windows-host.json \
+  --mesh-preflights /tmp/mesh-preflights.json \
   --live-mesh /tmp/live-mesh-training.json \
   --require-release --require-sdk26 --require-cuda --require-pytorch \
   --require-pytorch-backend-allocation --require-windows \
-  --require-windows-python --require-live-mesh \
+  --require-windows-python \
+  --require-mesh-preflights --require-mesh-preflights-pass \
+  --mesh-preflight-job georefine-m2-cosbox \
+  --mesh-preflight-job old-donkey-precompute-chain \
+  --mesh-preflight-job jack-cuda3060-smoke \
+  --require-live-mesh \
   --require-release-clean-head --require-sdk26-clean-head \
   --require-cuda-clean-head --require-pytorch-clean-head \
   --require-windows-clean-head \

@@ -145,7 +145,7 @@ class FakeRuntime:
         admitted: dict[str, bool | None] | None = None,
         start_rc: dict[str, int] | None = None,
         post_start: dict[str, bool | None] | None = None,
-        identity: dict[str, bool | None] | None = None,
+        identity: dict[str, Any] | None = None,
     ) -> None:
         self.leases = list(leases or [])
         self.live = dict(live or {})
@@ -233,10 +233,20 @@ class FakeRuntime:
             return subprocess.CompletedProcess(argv, rc, stdout=stdout, stderr=stderr)
         if op == "identity":
             state = self.identity.get(ident, True)
+            if isinstance(state, subprocess.CompletedProcess):
+                return state
             if state is None:
                 raise subprocess.TimeoutExpired(argv, timeout)
+            if isinstance(state, str):
+                return subprocess.CompletedProcess(argv, 0, stdout=state, stderr="")
+            if isinstance(state, dict):
+                return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(state), stderr="")
             rc = 0 if state else 1
             payload = {
+                "schema": "tensorcore.mesh_worker_identity.v1",
+                "ok": True,
+                "reason": "ok",
+                "resource": "cosbox:cuda3090",
                 "worker_host": "cosbox",
                 "worker_pid": 1234,
                 "worker_systemd_unit": f"{ident}.service",
@@ -1196,6 +1206,18 @@ def test_resource_pool_command_templates_receive_placement_context() -> None:
     )
 
 
+def test_command_resolution_preserves_remote_tilde_arguments() -> None:
+    scheduler = load_scheduler()
+    argv = scheduler.command([
+        "python3",
+        "scripts/start_georefine_qwen_cr025.py",
+        "--repo-dir",
+        "~/src/georefine",
+    ])
+    assert argv[1] == str(ROOT / "scripts" / "start_georefine_qwen_cr025.py")
+    assert argv[3] == "~/src/georefine"
+
+
 def test_resource_pool_respects_global_tenant_parallel_limit() -> None:
     runtime = FakeRuntime()
     result = run_case(
@@ -1232,6 +1254,48 @@ def test_cuda_launch_runs_post_start_and_identity() -> None:
     assert row["action"] == "claimed_and_launched"
     assert row["post_start"]["verified"] is True
     assert row["worker_identity"]["ok"] is True
+    assert row["worker_identity_heartbeat"]["metadata_refreshed"] is True
+    assert runtime.leases[0]["metadata"]["worker_identity_pending"] is False
+    assert runtime.leases[0]["metadata"]["worker_identity"]["worker_host"] == "cosbox"
+    assert_event_order(
+        runtime,
+        [
+            ("probe", "qllm-phase1"),
+            ("admit", "qllm-phase1"),
+            ("status", "--json"),
+            ("claim", "cosbox:cuda3090"),
+            ("start", "qllm-phase1"),
+            ("post", "qllm-phase1"),
+            ("identity", "qllm-phase1"),
+            ("heartbeat", "lease-new-1"),
+        ],
+    )
+
+
+def test_cuda_launch_rejects_invalid_identity_json() -> None:
+    runtime = FakeRuntime(
+        live={"qllm-phase1": False},
+        identity={"qllm-phase1": "not-json"},
+    )
+    result = run_case(
+        [
+            job(
+                "qllm-phase1",
+                priority=100,
+                resource_class="cuda_exclusive",
+                admission_cmd=True,
+                post_start_probe_cmd=True,
+                worker_identity_cmd=True,
+            )
+        ],
+        runtime,
+    )
+    assert result["ok"] is False
+    row = result["results"][0]
+    assert row["worker_identity"]["ok"] is False
+    assert row["worker_identity"]["reason"] == "invalid_worker_identity_json"
+    assert "worker_identity_heartbeat" not in row
+    assert runtime.leases[0]["metadata"]["worker_identity_pending"] is True
     assert_event_order(
         runtime,
         [
@@ -1244,6 +1308,105 @@ def test_cuda_launch_runs_post_start_and_identity() -> None:
             ("identity", "qllm-phase1"),
         ],
     )
+
+
+def test_cuda_launch_rejects_identity_resource_mismatch() -> None:
+    runtime = FakeRuntime(
+        live={"qllm-phase1": False},
+        identity={
+            "qllm-phase1": {
+                "schema": "tensorcore.mesh_worker_identity.v1",
+                "ok": True,
+                "reason": "ok",
+                "resource": "other:cuda",
+                "worker_host": "cosbox",
+                "worker_pid": 1234,
+                "cuda_pids": [1234],
+            }
+        },
+    )
+    result = run_case(
+        [
+            job(
+                "qllm-phase1",
+                priority=100,
+                resource_class="cuda_exclusive",
+                admission_cmd=True,
+                post_start_probe_cmd=True,
+                worker_identity_cmd=True,
+            )
+        ],
+        runtime,
+    )
+    assert result["ok"] is False
+    row = result["results"][0]
+    assert row["worker_identity"]["ok"] is False
+    assert row["worker_identity"]["reason"] == "worker_identity_resource_mismatch"
+    assert "worker_identity_heartbeat" not in row
+
+
+def test_scheduler_writes_windows_cuda_smoke_evidence() -> None:
+    mod = load_scheduler()
+    with tempfile.TemporaryDirectory() as tmp:
+        evidence_path = pathlib.Path(tmp) / "jack-smoke.json"
+        job_row = job(
+            "jack-cuda3060-smoke",
+            priority=20,
+            resource="jack-blupc:cuda3060",
+            resource_class="cuda_exclusive",
+        )
+        job_row["metadata"] = {"evidence_path": str(evidence_path)}
+        result = {
+            "arbiter": {"ok": True, "lease_id": "lease-jack"},
+            "admission": {"json": {"ok": True, "admission_ok": True, "device_count": "1", "toolchain_ok": True}},
+            "start": {"json": {"payload": {
+                "schema": "tensorcore.windows_cuda_smoke.v1",
+                "ok": True,
+                "resource": "jack-blupc:cuda3060",
+                "state": "completed",
+                "build_ok": True,
+                "runtime_ok": True,
+                "nvcc_path": "nvcc.exe",
+            }}},
+            "completion": {"json": {"artifact": {
+                "schema": "tensorcore.windows_cuda_smoke.v1",
+                "ok": True,
+                "resource": "jack-blupc:cuda3060",
+                "state": "completed",
+                "build_ok": True,
+                "runtime_ok": True,
+                "nvcc_path": "nvcc.exe",
+            }}},
+            "worker_identity": {
+                "ok": True,
+                "identity": {
+                    "schema": "tensorcore.mesh_worker_identity.v1",
+                    "ok": True,
+                    "resource": "jack-blupc:cuda3060",
+                    "worker_host": "DESKTOP-JACK-BL",
+                    "worker_pid": 1234,
+                },
+            },
+            "worker_identity_heartbeat": {"ok": True, "metadata_refreshed": True},
+        }
+        evidence = mod.write_scheduler_evidence(job_row, result, phase="completed", leases=[])
+        assert evidence["ok"] is True
+        payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+    assert payload["schema"] == "tensorcore.windows_cuda_scheduled_smoke.evidence.v1"
+    assert payload["driver_visible"] is True
+    assert payload["toolchain_found"] is True
+    assert payload["wddm_admission_ok"] is True
+    assert payload["build_smoke_passed"] is True
+    assert payload["runtime_smoke_passed"] is True
+    assert payload["scheduler_lease_held"] is True
+    assert payload["worker_identity_recorded"] is True
+    assert payload["lease_id"] == "lease-jack"
+
+
+def test_parse_stdout_json_uses_last_json_line() -> None:
+    mod = load_scheduler()
+    payload = mod.parse_stdout_json("log before payload\n{\"ok\": true, \"reason\": \"ok\"}\n")
+    assert payload == {"ok": True, "reason": "ok"}
 
 
 def test_cuda_post_start_failure_releases_claimed_lease() -> None:
@@ -1413,8 +1576,13 @@ def main() -> int:
     test_resource_pool_fair_shares_between_tenants()
     test_resource_pool_filters_blocked_and_unowned_reserved_resources()
     test_resource_pool_command_templates_receive_placement_context()
+    test_command_resolution_preserves_remote_tilde_arguments()
     test_resource_pool_respects_global_tenant_parallel_limit()
     test_cuda_launch_runs_post_start_and_identity()
+    test_cuda_launch_rejects_invalid_identity_json()
+    test_cuda_launch_rejects_identity_resource_mismatch()
+    test_scheduler_writes_windows_cuda_smoke_evidence()
+    test_parse_stdout_json_uses_last_json_line()
     test_cuda_post_start_failure_releases_claimed_lease()
     test_cuda_live_adoption_records_worker_identity_in_claim()
     test_cuda_live_heartbeat_refreshes_worker_identity_metadata()

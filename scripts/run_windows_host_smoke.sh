@@ -182,17 +182,25 @@ ps_encode() {
 }
 
 remote_script_name="tensorcore-windows-host-smoke.ps1"
-upload_command="\$ProgressPreference = 'SilentlyContinue'; \$Path = Join-Path \$env:TEMP '$remote_script_name'; Set-Content -LiteralPath \$Path -Encoding UTF8 -Value ([Console]::In.ReadToEnd())"
-run_command="\$ProgressPreference = 'SilentlyContinue'; \$Path = Join-Path \$env:TEMP '$remote_script_name'; & \$Path"
-cleanup_command="\$ProgressPreference = 'SilentlyContinue'; \$Path = Join-Path \$env:TEMP '$remote_script_name'; Remove-Item -Force -LiteralPath \$Path -ErrorAction SilentlyContinue"
+cleanup_command="\$ProgressPreference = 'SilentlyContinue'; Remove-Item -Force -LiteralPath '$remote_script_name' -ErrorAction SilentlyContinue"
 
 run_remote() {
-    printf "%s\n" "$remote_command" |
-        ssh "${ssh_opts[@]}" "$windows_ssh" powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass \
-            -EncodedCommand "$(ps_encode "$upload_command")"
     local status=0
+    local local_script
+    local tmp_parent="${TMPDIR:-/tmp}"
+    if [[ -d /private/tmp && -w /private/tmp ]]; then
+        tmp_parent=/private/tmp
+    fi
+    local_script=$(mktemp "$tmp_parent/tensorcore-windows-host.XXXXXX.ps1")
+    printf "%s\n" "$remote_command" >"$local_script"
+    scp "${ssh_opts[@]}" -q "$local_script" "$windows_ssh:$remote_script_name" || {
+        status=$?
+        rm -f "$local_script"
+        return "$status"
+    }
+    rm -f "$local_script"
     ssh "${ssh_opts[@]}" "$windows_ssh" powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass \
-        -EncodedCommand "$(ps_encode "$run_command")" || status=$?
+        -File "$remote_script_name" || status=$?
     ssh "${ssh_opts[@]}" "$windows_ssh" powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass \
         -EncodedCommand "$(ps_encode "$cleanup_command")" >/dev/null 2>&1 || true
     return "$status"

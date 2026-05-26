@@ -21,12 +21,13 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_ARBITER_CMD = "~/.tsotchke/bin/tsotchke-arbiter"
+DEFAULT_ARBITER_CMD = os.environ.get("TC_MESH_ARBITER_CMD", "tsotchke-arbiter")
 SCHEMA = "tensorcore.mesh_resource_jobs.v1"
 INVENTORY_SCHEMA = "tensorcore.mesh_resources.v1"
 INVENTORY_STATUSES = {"active", "reserved", "blocked"}
 RESOURCE_CLASSES = {"generic", "cuda_exclusive"}
 DESIRED_STATES = {"running", "paused"}
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def render_command_part(value: str, job: dict | None = None) -> str:
@@ -39,6 +40,7 @@ def render_command_part(value: str, job: dict | None = None) -> str:
         "logical_id": job.get("logical_id"),
         "node": job.get("resource_node"),
         "owner": job.get("owner"),
+        "repo_root": ROOT,
         "resource": job.get("resource"),
         "resource_class": job.get("resource_class"),
         "sync_id": job.get("sync_id"),
@@ -51,6 +53,19 @@ def render_command_part(value: str, job: dict | None = None) -> str:
     return out
 
 
+def resolve_repo_relative_part(value: str, *, executable: bool = False) -> str:
+    if executable and value.startswith("~"):
+        return str(Path(value).expanduser())
+    path = Path(value)
+    if path.is_absolute():
+        return value
+    if value.startswith(("scripts/", "configs/")):
+        candidate = ROOT / path
+        if candidate.exists():
+            return str(candidate)
+    return value
+
+
 def command(value: Any, job: dict | None = None) -> list[str]:
     if isinstance(value, list):
         argv = [render_command_part(str(part), job) for part in value]
@@ -58,9 +73,7 @@ def command(value: Any, job: dict | None = None) -> list[str]:
         argv = shlex.split(render_command_part(value, job))
     else:
         return []
-    if argv and argv[0].startswith("~"):
-        argv[0] = str(Path(argv[0]).expanduser())
-    return argv
+    return [resolve_repo_relative_part(part, executable=index == 0) for index, part in enumerate(argv)]
 
 
 def run_capture(argv: list[str], *, timeout: float) -> subprocess.CompletedProcess[str]:
@@ -94,6 +107,17 @@ def write_json(path: str, payload: dict) -> None:
     tmp = out.with_name(f".{out.name}.tmp")
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     tmp.replace(out)
+
+
+def parse_stdout_json(stdout: str) -> dict | None:
+    for line in reversed(stdout.splitlines()):
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return None
 
 
 def load_jobs(path: str, inventory: dict[str, dict] | None = None) -> list[dict]:
@@ -507,13 +531,17 @@ def complete_job(job: dict, *, timeout: float) -> dict:
         proc = run_capture(completion_cmd, timeout=timeout)
     except subprocess.TimeoutExpired:
         return {"complete": None, "reason": "completion_timeout", "rc": None}
-    return {
+    result = {
         "complete": proc.returncode == 0,
         "reason": "ok" if proc.returncode == 0 else "completion_failed",
         "rc": proc.returncode,
         "stdout_tail": proc.stdout.strip()[-1000:],
         "stderr_tail": proc.stderr.strip()[-1000:],
     }
+    parsed = parse_stdout_json(proc.stdout)
+    if parsed is not None:
+        result["json"] = parsed
+    return result
 
 
 def admit_job(job: dict, *, timeout: float) -> dict:
@@ -524,13 +552,17 @@ def admit_job(job: dict, *, timeout: float) -> dict:
         proc = run_capture(admission_cmd, timeout=timeout)
     except subprocess.TimeoutExpired:
         return {"admitted": None, "reason": "admission_timeout", "rc": None}
-    return {
+    result = {
         "admitted": proc.returncode == 0,
         "reason": "ok" if proc.returncode == 0 else "admission_failed",
         "rc": proc.returncode,
         "stdout_tail": proc.stdout.strip()[-1000:],
         "stderr_tail": proc.stderr.strip()[-1000:],
     }
+    parsed = parse_stdout_json(proc.stdout)
+    if parsed is not None:
+        result["json"] = parsed
+    return result
 
 
 def lease_metadata(row: dict) -> dict:
@@ -695,6 +727,124 @@ def heartbeat_lease(
     return run_json(arbiter_cmd + base + ["--json"], timeout=timeout)
 
 
+def nested_get(value: Any, path: tuple[str, ...]) -> Any:
+    current = value
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def job_evidence_path(job: dict) -> Path | None:
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    raw = metadata.get("evidence_path")
+    if not raw:
+        return None
+    path = Path(str(raw)).expanduser()
+    if not path.is_absolute():
+        path = ROOT / path
+    return path
+
+
+def first_dict(*values: Any) -> dict:
+    for value in values:
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def evidence_worker_identity(result: dict, leases: list[dict]) -> dict:
+    identity = nested_get(result, ("worker_identity", "identity"))
+    if isinstance(identity, dict):
+        return identity
+    for lease in leases:
+        metadata = lease_metadata(lease)
+        worker_identity = metadata.get("worker_identity")
+        if isinstance(worker_identity, dict):
+            return worker_identity
+    return {}
+
+
+def evidence_lease_metadata(leases: list[dict]) -> list[dict]:
+    return [lease_metadata(lease) for lease in leases if lease_metadata(lease)]
+
+
+def positive_int(value: Any) -> bool:
+    try:
+        return int(value) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def write_scheduler_evidence(
+    job: dict,
+    result: dict,
+    *,
+    phase: str,
+    leases: list[dict] | None = None,
+) -> dict | None:
+    path = job_evidence_path(job)
+    if path is None:
+        return None
+    lease_rows = list(leases or [])
+    admission = first_dict(nested_get(result, ("admission", "json")))
+    start = first_dict(nested_get(result, ("start", "json")))
+    post_start = first_dict(nested_get(result, ("post_start", "json")))
+    completion = first_dict(nested_get(result, ("completion", "json")))
+    artifact = first_dict(
+        nested_get(completion, ("artifact",)),
+        nested_get(post_start, ("artifact",)),
+        nested_get(start, ("payload",)),
+    )
+    worker_identity = evidence_worker_identity(result, lease_rows)
+    lease_metadata_rows = evidence_lease_metadata(lease_rows)
+    claim = result.get("arbiter") if isinstance(result.get("arbiter"), dict) else {}
+    lease_id = (
+        result.get("lease_id")
+        or claim.get("lease_id")
+        or claim.get("id")
+        or next((lease.get("id") for lease in lease_rows if lease.get("id")), None)
+    )
+    scheduler_lease_held = bool(lease_id) and (
+        bool(claim.get("ok"))
+        or any(
+            metadata.get("surface") == "tensorcore_mesh_scheduler"
+            for metadata in lease_metadata_rows
+        )
+    )
+    worker_identity_recorded = bool(worker_identity) and (
+        nested_get(result, ("worker_identity", "ok")) is True
+        or any(metadata.get("worker_identity_pending") is False for metadata in lease_metadata_rows)
+    )
+    payload = {
+        "schema": "tensorcore.windows_cuda_scheduled_smoke.evidence.v1",
+        "schema_version": 1,
+        "checked_at_unix": time.time(),
+        "phase": phase,
+        "resource": job["resource"],
+        "job": job["id"],
+        "driver_visible": admission.get("driver_ok") is True or positive_int(admission.get("device_count")),
+        "toolchain_found": admission.get("toolchain_ok") is True or bool(artifact.get("nvcc_path")),
+        "wddm_admission_ok": admission.get("admission_ok") is True and admission.get("ok") is True,
+        "build_smoke_passed": artifact.get("build_ok") is True,
+        "runtime_smoke_passed": artifact.get("runtime_ok") is True,
+        "scheduler_lease_held": scheduler_lease_held,
+        "worker_identity_recorded": worker_identity_recorded,
+        "lease_id": lease_id,
+        "admission": admission,
+        "start": start,
+        "post_start": post_start,
+        "completion": completion,
+        "smoke_artifact": artifact,
+        "worker_identity": worker_identity,
+        "worker_identity_heartbeat": result.get("worker_identity_heartbeat"),
+        "lease_metadata": lease_metadata_rows,
+    }
+    write_json(str(path), payload)
+    return {"ok": True, "path": str(path), "schema": payload["schema"]}
+
+
 def release_lease(lease: dict, *, arbiter_cmd: list[str], timeout: float) -> dict:
     return run_json(
         arbiter_cmd + ["release", str(lease["id"]), "--json"],
@@ -722,12 +872,16 @@ def start_job(job: dict, *, timeout: float) -> dict:
     if not start_cmd:
         raise RuntimeError(f"job {job['id']} has no start_cmd")
     proc = run_capture(start_cmd, timeout=timeout)
-    return {
+    result = {
         "ok": proc.returncode == 0,
         "rc": proc.returncode,
         "stdout_tail": proc.stdout.strip()[-1000:],
         "stderr_tail": proc.stderr.strip()[-1000:],
     }
+    parsed = parse_stdout_json(proc.stdout)
+    if parsed is not None:
+        result["json"] = parsed
+    return result
 
 
 def post_start_probe_job(
@@ -769,6 +923,9 @@ def post_start_probe_job(
                 "stderr_tail": proc.stderr.strip()[-1000:],
                 "attempts": attempts,
             }
+            parsed = parse_stdout_json(proc.stdout)
+            if parsed is not None:
+                last["json"] = parsed
             if proc.returncode == 0:
                 return last
         if interval <= 0:
@@ -790,21 +947,34 @@ def collect_worker_identity(job: dict, *, timeout: float) -> dict:
     except subprocess.TimeoutExpired:
         return {"ok": False, "reason": "worker_identity_timeout", "rc": None}
     result: dict[str, Any] = {
-        "ok": proc.returncode == 0,
-        "reason": "ok" if proc.returncode == 0 else "worker_identity_failed",
+        "ok": False,
+        "reason": "worker_identity_failed",
         "rc": proc.returncode,
         "stdout_tail": proc.stdout.strip()[-1000:],
         "stderr_tail": proc.stderr.strip()[-1000:],
     }
-    if proc.returncode == 0:
-        try:
-            parsed = json.loads(proc.stdout)
-        except json.JSONDecodeError:
-            parsed = {"text": proc.stdout.strip()}
-        if isinstance(parsed, dict):
-            result["identity"] = parsed
-        else:
-            result["identity"] = {"value": parsed}
+    if proc.returncode != 0:
+        return result
+    try:
+        parsed = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        result["reason"] = "invalid_worker_identity_json"
+        return result
+    if not isinstance(parsed, dict):
+        result["reason"] = "invalid_worker_identity_payload"
+        return result
+    result["identity"] = parsed
+    if parsed.get("schema") != "tensorcore.mesh_worker_identity.v1":
+        result["reason"] = "invalid_worker_identity_schema"
+        return result
+    if parsed.get("resource") != job.get("resource"):
+        result["reason"] = "worker_identity_resource_mismatch"
+        return result
+    if parsed.get("ok") is not True:
+        result["reason"] = str(parsed.get("reason") or "worker_identity_payload_not_ok")
+        return result
+    result["ok"] = True
+    result["reason"] = "ok"
     return result
 
 
@@ -967,6 +1137,15 @@ def reconcile_stale_leases(
             except Exception as exc:
                 result["ok"] = False
                 errors.append({"resource": resource, "job": job["id"], "error": str(exc)})
+        if not dry_run and completion["complete"] is True and result.get("ok"):
+            evidence = write_scheduler_evidence(
+                job,
+                result,
+                phase="completed",
+                leases=leases,
+            )
+            if evidence is not None:
+                result["scheduler_evidence"] = evidence
         results.append(result)
     return results, errors
 
@@ -1374,13 +1553,45 @@ def schedule_resource(
         )
         result["post_start"] = post_start
         result["ok"] = post_start.get("verified") is True
-        if result["ok"]:
+        if result["ok"] and candidate.get("resource_class") == "cuda_exclusive":
             identity = collect_worker_identity(
                 candidate,
                 timeout=args.worker_identity_timeout_sec,
             )
             result["worker_identity"] = identity
             result["ok"] = bool(identity.get("ok"))
+            if result["ok"]:
+                lease_id = claim_payload.get("lease_id") or claim_payload.get("id")
+                if lease_id:
+                    try:
+                        identity_heartbeat = heartbeat_lease(
+                            {"id": lease_id},
+                            candidate,
+                            arbiter_cmd=arbiter_cmd,
+                            timeout=args.timeout_sec,
+                            worker_identity=identity,
+                        )
+                        result["worker_identity_heartbeat"] = identity_heartbeat
+                        result["ok"] = (
+                            bool(identity_heartbeat.get("ok"))
+                            and identity_heartbeat.get("metadata_refreshed", True) is not False
+                        )
+                    except Exception as exc:
+                        result["ok"] = False
+                        errors.append({
+                            "resource": resource,
+                            "job": candidate["id"],
+                            "error": f"failed to refresh worker identity metadata: {exc}",
+                        })
+    if result.get("ok"):
+        evidence = write_scheduler_evidence(
+            candidate,
+            result,
+            phase="launched",
+            leases=[],
+        )
+        if evidence is not None:
+            result["scheduler_evidence"] = evidence
 
     if not result["ok"]:
         lease_id = claim_payload.get("lease_id") or claim_payload.get("id")

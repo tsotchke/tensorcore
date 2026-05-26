@@ -58,6 +58,7 @@ def jobs() -> list[dict[str, Any]]:
             "id": "georefine",
             "resource": "cosbox:cuda3090",
             "tenant": "georefine",
+            "desired_state": "running",
         }
     ]
 
@@ -157,10 +158,59 @@ def test_unmanaged_cuda_pid_fails() -> None:
     assert payload["errors"][0]["error"] == "unmanaged_cuda_processes"
 
 
+def test_paused_launchable_job_without_preflight_warns() -> None:
+    mod = load_module()
+    payload = mod.audit(
+        inventory=inventory(),
+        jobs=[
+            {
+                "id": "paused-without-preflight",
+                "resource": "cosbox:cuda3090",
+                "tenant": "georefine",
+                "desired_state": "paused",
+                "start_cmd": ["start", "job"],
+            }
+        ],
+        scheduler_state=scheduler_state(),
+        arbiter_status=status(inventory(), []),
+        max_scheduler_age_sec=120,
+    )
+    assert payload["ok"] is True
+    assert payload["summary"]["paused_start_jobs"] == 1
+    assert payload["summary"]["paused_start_jobs_with_preflight"] == 0
+    assert payload["warnings"][0]["warning"] == "paused_launchable_job_missing_preflight_cmd"
+
+
+def test_paused_launchable_job_with_preflight_is_counted() -> None:
+    mod = load_module()
+    payload = mod.audit(
+        inventory=inventory(),
+        jobs=[
+            {
+                "id": "paused-with-preflight",
+                "resource": "cosbox:cuda3090",
+                "tenant": "georefine",
+                "desired_state": "paused",
+                "start_cmd": ["start", "job"],
+                "preflight_cmd": ["preflight", "job"],
+            }
+        ],
+        scheduler_state=scheduler_state(),
+        arbiter_status=status(inventory(), []),
+        max_scheduler_age_sec=120,
+    )
+    assert payload["ok"] is True
+    assert payload["summary"]["paused_start_jobs"] == 1
+    assert payload["summary"]["paused_start_jobs_with_preflight"] == 1
+    assert payload["warnings"] == []
+
+
 def main() -> int:
     test_ok_with_scheduled_cuda_pid()
     test_blocked_resource_with_lease_fails()
     test_unmanaged_cuda_pid_fails()
+    test_paused_launchable_job_without_preflight_warns()
+    test_paused_launchable_job_with_preflight_is_counted()
     print("mesh system audit selftest OK")
     return 0
 

@@ -36,13 +36,26 @@ conservative:
 Mesh capacity is declared in `configs/mesh_resources.json`. That inventory is
 the source of truth for accelerator ownership and scheduling eligibility:
 
-- `cosbox:cuda3090` is the primary exclusive CUDA artifact lane.
-- `old-donkey:cuda3050` is the low-VRAM CUDA precompute lane.
+- `cosbox:cuda3090` is the primary exclusive CUDA artifact lane. The current
+  GeoRefine CR025 row has a source-controlled starter
+  (`scripts/start_georefine_qwen_cr025.py`) but stays paused until the
+  GeoRefine checkout and Python environment are deployed on cosbox. The
+  qLLM phase-1 row is also adoption-only until `qllm-phase1.service` or an
+  equivalent launcher is installed from the qLLM git checkout rather than a
+  host-local systemd unit.
+- `old-donkey:cuda3050` is the low-VRAM CUDA precompute lane. The current
+  precompute-chain row has a source-controlled starter
+  (`scripts/start_qllm_olddonkey_precompute_chain.py`) but stays paused until
+  the dedicated qLLM checkout, data shards, and Python environment are verified
+  on old-donkey.
 - `jack-blupc:cuda3060` is active as a scheduler-registered paused lane.
   Windows SSH/bootstrap, portable CPU smoke, CUDA Toolkit 12.6 redistributable
   discovery, exclusive admission, and CUDA build/CTest smoke are healthy.
   Submitted Jack CUDA jobs must still provide workload-specific start,
-  post-start, and Windows worker-identity probes before they can launch.
+  post-start, and Windows worker-identity probes before they can launch. The
+  repo-owned scheduled-smoke helpers are also paused on Jack until a persistent
+  Windows service or credentialed scheduled-task path can keep CUDA work alive
+  after an SSH session exits.
 - `atlas:metal_m2ultra` is active Metal capacity for validation, evaluation,
   generation support, and Tensorcore Metal workloads.
 - `enki:metal_m4_tsotchke_chan` is `reserved`; only `tsotchke-chan` owners may
@@ -79,7 +92,7 @@ scripts/mesh_system_audit.py \
   --inventory-json configs/mesh_resources.json \
   --jobs-json ~/.tsotchke/state/mesh-resource-jobs.json \
   --scheduler-state-json ~/.tsotchke/state/mesh-resource-scheduler-state.json \
-  --arbiter-cmd "scripts/mesh_arbiter_with_inventory.py --inventory-json configs/mesh_resources.json --arbiter-cmd ~/.tsotchke/bin/tsotchke-arbiter -- status --json" \
+  --arbiter-cmd "scripts/mesh_arbiter_with_inventory.py --inventory-json configs/mesh_resources.json --arbiter-cmd tsotchke-arbiter -- status --json" \
   --probe-cuda
 ```
 
@@ -88,7 +101,7 @@ wrapper when the arbiter status path should also show the inventory resources:
 
 ```sh
 scripts/mesh_resource_scheduler.py \
-  --arbiter-cmd "scripts/mesh_arbiter_with_inventory.py --inventory-json configs/mesh_resources.json --arbiter-cmd ~/.tsotchke/bin/tsotchke-arbiter --" \
+  --arbiter-cmd "scripts/mesh_arbiter_with_inventory.py --inventory-json configs/mesh_resources.json --arbiter-cmd tsotchke-arbiter --" \
   --inventory-json configs/mesh_resources.json \
   --jobs-json ~/.tsotchke/state/mesh-resource-jobs.json
 ```
@@ -107,36 +120,38 @@ The jobs file is JSON:
       "resource": "cosbox:cuda3090",
       "resource_class": "cuda_exclusive",
       "owner": "qllm:phase1",
+      "tenant": "qllm",
       "priority": 50,
-      "desired_state": "running",
+      "desired_state": "paused",
       "ttl_sec": 900,
+      "adopt_unknown_lease_metadata_keys": [
+        "project",
+        "service"
+      ],
       "probe_cmd": [
         "ssh",
         "cosbox",
         "systemctl --user is-active --quiet qllm-phase1.service"
       ],
-      "start_cmd": [
-        "ssh",
-        "cosbox",
-        "systemctl --user start qllm-phase1.service"
-      ],
       "admission_cmd": [
         "ssh",
         "cosbox",
-        "cd /home/tyr/work/tensorcore && python3 scripts/check_operational_evidence.py --cuda /tmp/tensorcore-cuda-smoke.json --require-cuda --require-cuda-clean-head && python3 scripts/check_cuda_resource_admission.py --resource cosbox:cuda3090 --allow-process-regex steamwebhelper$ --allowed-process-max-memory-mib 16 --json"
+        "cd ~/src/tensorcore && python3 scripts/check_cuda_resource_admission.py --resource cosbox:cuda3090 --allow-process-regex steamwebhelper$ --allowed-process-max-memory-mib 16 --json"
       ],
       "post_start_probe_cmd": [
         "ssh",
         "cosbox",
-        "systemctl --user is-active --quiet qllm-phase1.service && nvidia-smi --query-compute-apps=pid,process_name --format=csv,noheader | grep -q qllm"
+        "systemctl --user is-active --quiet qllm-phase1.service"
       ],
       "worker_identity_cmd": [
         "ssh",
         "cosbox",
-        "python3 /home/tyr/work/tensorcore/scripts/mesh_worker_identity.py --resource cosbox:cuda3090 --unit qllm-phase1.service --match-regex qllm.train_geometric_lm_torch --require-active-unit --require-matching-process --require-matched-cuda"
+        "cd ~/src/tensorcore && python3 scripts/mesh_worker_identity.py --resource cosbox:cuda3090 --unit qllm-phase1.service --match-regex qllm.train_geometric_lm_torch --require-active-unit --require-matching-process --require-matched-cuda"
       ],
       "metadata": {
-        "project": "semiclassical_qllm"
+        "project": "semiclassical_qllm",
+        "scheduler_pause_reason": "adoption-only until qllm-phase1.service or an equivalent phase-1 launcher is source-controlled and installed from the qLLM git checkout",
+        "service": "qllm-phase1"
       }
     },
     {
@@ -145,8 +160,9 @@ The jobs file is JSON:
       "resource": "cosbox:cuda3090",
       "resource_class": "cuda_exclusive",
       "owner": "georefine:m2",
+      "tenant": "georefine",
       "priority": 100,
-      "desired_state": "running",
+      "desired_state": "paused",
       "ttl_sec": 900,
       "probe_cmd": [
         "ssh",
@@ -156,12 +172,12 @@ The jobs file is JSON:
       "completion_cmd": [
         "ssh",
         "cosbox",
-        "/home/tyr/.local/bin/check-georefine-qwen-artifact /path/to/run --max-size-ratio 0.10"
+        "cd ~/src/tensorcore && python3 scripts/check_georefine_qwen_artifact.py /path/to/run --max-size-ratio 0.10"
       ],
       "admission_cmd": [
         "ssh",
         "cosbox",
-        "cd /home/tyr/work/tensorcore && python3 scripts/check_operational_evidence.py --cuda /tmp/tensorcore-cuda-smoke.json --require-cuda --require-cuda-clean-head && python3 scripts/check_cuda_resource_admission.py --resource cosbox:cuda3090 --allow-process-regex steamwebhelper$ --allowed-process-max-memory-mib 16 --json"
+        "cd ~/src/tensorcore && python3 scripts/check_operational_evidence.py --cuda /tmp/tensorcore-cuda-smoke.json --require-cuda --require-cuda-clean-head && python3 scripts/check_cuda_resource_admission.py --resource cosbox:cuda3090 --allow-process-regex steamwebhelper$ --allowed-process-max-memory-mib 16 --json"
       ],
       "post_start_probe_cmd": [
         "ssh",
@@ -171,10 +187,11 @@ The jobs file is JSON:
       "worker_identity_cmd": [
         "ssh",
         "cosbox",
-        "python3 /home/tyr/work/tensorcore/scripts/mesh_worker_identity.py --resource cosbox:cuda3090 --match-regex experiments.georefine.m2_compress --artifact-dir /path/to/run --require-matching-process --require-matched-cuda"
+        "cd ~/src/tensorcore && python3 scripts/mesh_worker_identity.py --resource cosbox:cuda3090 --match-regex experiments.georefine.m2_compress --artifact-dir /path/to/run --require-matching-process --require-matched-cuda"
       ],
       "metadata": {
-        "project": "georefine"
+        "project": "georefine",
+        "scheduler_pause_reason": "adoption-only until the GeoRefine launcher is source-controlled and preflighted"
       }
     }
   ]
@@ -213,6 +230,9 @@ Fields:
   narrow, for example `["project", "service", "run_dir"]`.
 - `desired_state`: `running` makes the job launchable; `paused` prevents new
   launches but still lets a live job be adopted and protected.
+  `scripts/check_mesh_resource_jobs.py` requires paused rows to include
+  `metadata.scheduler_pause_reason`; paused rows with `start_cmd` must also
+  include `preflight_cmd`.
 - `probe_cmd`: optional command that exits 0 when the job is live. If omitted
   or inconclusive, liveness is unknown and known leases block scheduling.
 - `completion_cmd`: optional command that exits 0 only when the job's output is
@@ -227,18 +247,74 @@ Fields:
 - `post_start_probe_cmd`: command that proves a just-started worker is actually
   live on the target host. Required for `cuda_exclusive` jobs. If this fails,
   the scheduler releases the lease it just claimed.
+- `preflight_cmd`: optional non-launching command for paused rows. It should
+  verify prerequisites needed before changing `desired_state` to `running` and
+  must emit JSON via `--json`.
+- `metadata.preflight_default`: set to `false` when a paused row's preflight is
+  safe but should not run in the default preflight sweep. Operators can still
+  run it explicitly with `check_mesh_resource_preflights.py --job-id <id>`.
+  The preflight runner reports these opt-out rows in `skipped_default_job_ids`.
 - `worker_identity_cmd`: command that prints JSON identifying the worker host,
   PID, service/cgroup, and accelerator process metadata. Required for
-  `cuda_exclusive` jobs and stored in adopted lease metadata.
+  `cuda_exclusive` jobs and stored in lease metadata after launch, adoption,
+  and heartbeat refresh.
 - `start_cmd`: command used only when the job is selected for launch.
 - `metadata`: copied into the arbiter lease with `sync_job_id`, `job_id`,
   `logical_job_id`, `tenant`, `resource_class`, scheduler host, and worker
   identity status.
 
 Command arrays and command strings may use these placement placeholders:
-`{resource}`, `{node}`, `{backend}`, `{tenant}`, `{owner}`, `{id}`,
+`{repo_root}`, `{resource}`, `{node}`, `{backend}`, `{tenant}`, `{owner}`, `{id}`,
 `{logical_id}`, `{sync_id}`, and `{resource_class}`. This lets one pool job use
 the same command template across Atlas, old-donkey, Jack, or future nodes.
+Checked-in configs should call repo-local helpers such as
+`python3 scripts/check_windows_cuda_resource_admission.py`; deploy new scheduler
+machines by cloning/pulling this repo rather than relying on private wrapper
+paths in `~/.tsotchke/bin`.
+
+Deploy or refresh a git checkout on a mesh node before enabling scheduler work:
+
+```sh
+python3 scripts/mesh_deploy_git_checkout.py \
+  --target cosbox \
+  --repo-url https://github.com/tsotchke/tensorcore.git \
+  --repo-dir '~/src/tensorcore' \
+  --ref master \
+  --require-clean \
+  --json
+```
+
+Use the same pattern for workload-owned repos such as GeoRefine or qLLM before
+adding a `running` job for them. If a workload can only be started through
+`~/.tsotchke/bin`, `/home/tyr/.local/bin`, or `/data/qllm/runs/*.sh`, keep the
+job `paused` and adoption-only until that launcher is committed to the owning
+repo. `scripts/check_mesh_resource_jobs.py` rejects those private paths in the
+checked-in jobs file.
+
+Before unpausing the current external workload rows, run their non-launching
+preflights:
+
+```sh
+python3 scripts/start_georefine_qwen_cr025.py --target cosbox --preflight-only --json
+python3 scripts/start_qllm_olddonkey_precompute_chain.py --target old-donkey --preflight-only --json
+```
+
+Those preflights require the target host to have noninteractive Git access to
+the private workload repos. If they fail with `Permission denied (publickey)`,
+install a deploy key or point `--repo-url` at a reachable internal git mirror
+before changing `desired_state` to `running`.
+
+To run checked-in `preflight_cmd` rows from the jobs file:
+
+```sh
+python3 scripts/check_mesh_resource_preflights.py --job-id georefine-m2-cosbox --json
+python3 scripts/check_mesh_resource_preflights.py --job-id old-donkey-precompute-chain --json
+```
+
+The scheduler's default arbiter command is `tsotchke-arbiter` on `PATH` or the
+value of `TC_MESH_ARBITER_CMD`. Install that backend from the `computer_mesh`
+git checkout and add its `tsotchke/bin` directory to the service environment
+instead of hard-coding `~/.tsotchke/bin` in Tensorcore configs.
 
 Example multi-user pool job:
 
@@ -255,8 +331,8 @@ Example multi-user pool job:
   "priority": 40,
   "desired_state": "running",
   "ttl_sec": 600,
-  "probe_cmd": ["ssh", "{node}", "/opt/tensorcore/bin/heldout-eval-live {logical_id}"],
-  "start_cmd": ["ssh", "{node}", "/opt/tensorcore/bin/start-heldout-eval {logical_id} {resource}"],
+  "probe_cmd": ["ssh", "{node}", "cd ~/src/heldout_eval && python3 scripts/heldout_eval_live.py --job {logical_id} --json"],
+  "start_cmd": ["ssh", "{node}", "cd ~/src/heldout_eval && python3 scripts/start_heldout_eval.py --job {logical_id} --resource {resource} --json"],
   "metadata": {
     "project": "semiclassical_qllm"
   }
@@ -267,7 +343,14 @@ For the current GeoRefine Qwen target, completion means the run's
 `m2_certificate.json` has `completed=true`, a positive final held-out PPL
 (`ppl_compressed_eval`), a positive final stored size (`size_compressed_bytes`),
 and `size_ratio <= 0.10`. `scripts/check_georefine_qwen_artifact.py` enforces
-that gate.
+that gate. `scripts/check_georefine_qwen_live.py` is the repo-owned liveness
+probe for the same run family; it checks the supervisor status file and falls
+back to process matching without relying on a host-local wrapper.
+`scripts/start_georefine_qwen_cr025.py` is the matching source-controlled
+starter for the CR025 candidate; it clones or fast-forwards the GeoRefine
+checkout on cosbox and invokes `experiments.georefine.m2_supervised_run` with
+the production CR025 command. Use `--preflight-only --json` to check checkout,
+Python imports, calibration text, and evaluation text without launching.
 
 ## Running
 
@@ -275,7 +358,7 @@ Dry-run one pass:
 
 ```sh
 scripts/mesh_resource_scheduler.py \
-  --arbiter-cmd ~/.tsotchke/bin/tsotchke-arbiter \
+  --arbiter-cmd tsotchke-arbiter \
   --jobs-json ~/.tsotchke/state/mesh-resource-jobs.json \
   --dry-run \
   --pretty-json
@@ -285,7 +368,7 @@ Run the control loop and write last-state evidence:
 
 ```sh
 scripts/mesh_resource_scheduler.py \
-  --arbiter-cmd ~/.tsotchke/bin/tsotchke-arbiter \
+  --arbiter-cmd tsotchke-arbiter \
   --jobs-json ~/.tsotchke/state/mesh-resource-jobs.json \
   --state-json ~/.tsotchke/state/mesh-resource-scheduler-state.json \
   --loop \
@@ -309,7 +392,7 @@ produced by the host's smoke jobs. Examples:
   "admission_cmd": [
     "ssh",
     "cosbox",
-    "cd /home/tyr/work/tensorcore && python3 scripts/check_operational_evidence.py --cuda /tmp/tensorcore-cuda-smoke.json --require-cuda --require-cuda-clean-head && python3 scripts/check_cuda_resource_admission.py --resource cosbox:cuda3090 --allow-process-regex steamwebhelper$ --allowed-process-max-memory-mib 16 --json"
+    "cd ~/src/tensorcore && python3 scripts/check_operational_evidence.py --cuda /tmp/tensorcore-cuda-smoke.json --require-cuda --require-cuda-clean-head && python3 scripts/check_cuda_resource_admission.py --resource cosbox:cuda3090 --allow-process-regex steamwebhelper$ --allowed-process-max-memory-mib 16 --json"
   ]
 }
 ```
@@ -319,7 +402,7 @@ produced by the host's smoke jobs. Examples:
   "admission_cmd": [
     "ssh",
     "xavier",
-    "cd /home/tyr/work/tensorcore && python3 scripts/check_operational_evidence.py --hip-toolchain /tmp/hip-toolchain.json --require-hip-spirv-runtime --require-hip-toolchain-clean-head"
+    "cd ~/src/tensorcore && python3 scripts/check_operational_evidence.py --hip-toolchain /tmp/hip-toolchain.json --require-hip-spirv-runtime --require-hip-toolchain-clean-head"
   ]
 }
 ```

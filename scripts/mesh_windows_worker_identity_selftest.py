@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import importlib.machinery
 import importlib.util
 import json
@@ -31,6 +32,8 @@ def args(**kwargs: object) -> argparse.Namespace:
         "target": "jack-blupc",
         "resource": "jack-blupc:cuda3060",
         "match_regex": "tensorcore_cuda_worker",
+        "artifact_path": "",
+        "allow_completed_artifact": False,
         "require_matching_process": True,
         "require_matched_cuda": True,
         "timeout_sec": 5.0,
@@ -78,6 +81,14 @@ def test_matching_cuda_process_passes() -> None:
     assert payload["ok"] is True
     assert payload["worker_host"] == "DESKTOP-JACK-BL"
     assert payload["matched_cuda_pids"] == [1234]
+
+
+def test_remote_upload_uses_scp_not_ssh_stdin() -> None:
+    mod = load_module()
+    source = inspect.getsource(mod.run_remote_powershell)
+    assert '"scp"' in source
+    assert "In.ReadToEnd" not in source
+    assert "input=script" not in source
 
 
 def test_matching_process_without_cuda_fails_when_required() -> None:
@@ -138,12 +149,83 @@ def test_invalid_json_fails_closed() -> None:
     assert payload["reason"] == "invalid_probe_json"
 
 
+def test_timeout_fails_closed() -> None:
+    mod = load_module()
+
+    def fake_run(target: str, script: str, *, timeout: float) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(["scp"], timeout)
+
+    mod.run_remote_powershell = fake_run
+    payload = mod.run_probe(args(require_matched_cuda=False))
+    assert payload["ok"] is False
+    assert payload["reason"] == "probe_timeout"
+
+
+def test_artifact_timeout_fails_closed() -> None:
+    mod = load_module()
+
+    def fake_run(target: str, script: str, *, timeout: float) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(["scp"], timeout)
+
+    mod.run_remote_powershell = fake_run
+    payload = mod.run_probe(args(allow_completed_artifact=True, require_matching_process=False))
+    assert payload["ok"] is False
+    assert payload["reason"] == "probe_timeout"
+
+
+def test_artifact_probe_non_object_json_fails_closed() -> None:
+    mod = load_module()
+
+    def fake_run(target: str, script: str, *, timeout: float) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess([], 0, "[]", "")
+
+    mod.run_remote_powershell = fake_run
+    payload = mod.run_probe(args(allow_completed_artifact=True, require_matching_process=False))
+    assert payload["ok"] is False
+    assert payload["reason"] == "invalid_probe_payload"
+
+
+def test_completed_artifact_identity_passes_when_allowed() -> None:
+    mod = load_module()
+
+    def fake_run(target: str, script: str, *, timeout: float) -> subprocess.CompletedProcess[str]:
+        assert "jack-blupc-cuda3060-smoke.json" in script
+        raw = {
+            "computer_name": "DESKTOP-JACK-BL",
+            "user": "tsotchke",
+            "reason": "ok",
+            "artifact": {
+                "schema": "tensorcore.windows_cuda_smoke.v1",
+                "resource": "jack-blupc:cuda3060",
+                "state": "completed",
+                "ok": True,
+                "runtime_ok": True,
+                "smoke_pid": 100,
+                "cuda_pid": 200,
+                "executable": "C:/tmp/smoke.exe",
+                "token": "unit",
+            },
+        }
+        return subprocess.CompletedProcess([], 0, json.dumps(raw), "")
+
+    mod.run_remote_powershell = fake_run
+    payload = mod.run_probe(args(allow_completed_artifact=True, require_matching_process=False))
+    assert payload["ok"] is True
+    assert payload["worker_pid"] == 100
+    assert payload["matched_cuda_pids"] == [200]
+
+
 def main() -> int:
     test_matching_cuda_process_passes()
+    test_remote_upload_uses_scp_not_ssh_stdin()
     test_matching_process_without_cuda_fails_when_required()
     test_no_matching_process_fails_when_required()
     test_opaque_wddm_rows_are_not_cuda_identity()
     test_invalid_json_fails_closed()
+    test_timeout_fails_closed()
+    test_artifact_timeout_fails_closed()
+    test_artifact_probe_non_object_json_fails_closed()
+    test_completed_artifact_identity_passes_when_allowed()
     print("Windows worker identity selftest OK")
     return 0
 

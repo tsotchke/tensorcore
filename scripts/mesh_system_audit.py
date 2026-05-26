@@ -269,6 +269,16 @@ def audit(
     for resource in unknown:
         warnings.append({"resource": resource, "warning": "arbiter_resource_not_in_inventory"})
 
+    paused_jobs = [job for job in jobs if job.get("desired_state") == "paused"]
+    paused_start_jobs = [job for job in paused_jobs if job.get("start_cmd")]
+    for job in paused_start_jobs:
+        if not job.get("preflight_cmd"):
+            warnings.append({
+                "job": job.get("id"),
+                "resource": job.get("resource"),
+                "warning": "paused_launchable_job_missing_preflight_cmd",
+            })
+
     for resource_id, row in inventory.items():
         active = leases.get(resource_id, [])
         if row.get("status", "active") == "blocked" and active:
@@ -363,6 +373,9 @@ def audit(
         "summary": {
             "inventory_resources": len(inventory),
             "expanded_jobs": len(jobs),
+            "paused_jobs": len(paused_jobs),
+            "paused_start_jobs": len(paused_start_jobs),
+            "paused_start_jobs_with_preflight": sum(1 for job in paused_start_jobs if job.get("preflight_cmd")),
             "active_leases": len(arbiter_status.get("leases") or []),
             "errors": len(errors),
             "warnings": len(warnings),

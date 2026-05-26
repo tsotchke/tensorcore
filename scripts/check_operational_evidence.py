@@ -88,7 +88,8 @@ def get_path(value: Any, path: str) -> Any:
 def normalize_optional_paths(args: argparse.Namespace) -> None:
     for name in (
         "release", "sdk26", "cuda", "hip", "hip_toolchain", "pytorch",
-        "windows", "windows_cuda", "live_mesh",
+        "windows", "windows_cuda", "windows_cuda_smoke", "mesh_preflights",
+        "live_mesh",
     ):
         path = getattr(args, name)
         if path is not None:
@@ -105,6 +106,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pytorch", type=pathlib.Path)
     parser.add_argument("--windows", type=pathlib.Path)
     parser.add_argument("--windows-cuda", type=pathlib.Path)
+    parser.add_argument("--windows-cuda-smoke", type=pathlib.Path)
+    parser.add_argument("--mesh-preflights", type=pathlib.Path)
     parser.add_argument("--live-mesh", type=pathlib.Path)
     parser.add_argument("--git-head", default=git_head())
     parser.add_argument("--require-release", action="store_true")
@@ -124,6 +127,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--require-windows-cuda-admission-clear", action="store_true")
     parser.add_argument("--require-windows-cuda-ready", action="store_true")
     parser.add_argument("--require-windows-cuda-build-smoke", action="store_true")
+    parser.add_argument("--require-windows-cuda-scheduled-smoke", action="store_true")
+    parser.add_argument("--windows-cuda-smoke-max-age-sec", type=float, default=0.0)
+    parser.add_argument("--require-mesh-preflights", action="store_true")
+    parser.add_argument("--require-mesh-preflights-pass", action="store_true")
+    parser.add_argument("--mesh-preflights-max-age-sec", type=float, default=0.0)
+    parser.add_argument("--mesh-preflight-job", action="append", default=[])
+    parser.add_argument("--mesh-preflight-skipped-default-job", action="append", default=[])
+    parser.add_argument("--mesh-preflight-allowed-failure", action="append", default=[])
     parser.add_argument("--require-live-mesh", action="store_true")
     parser.add_argument("--require-release-clean-head", action="store_true")
     parser.add_argument("--require-sdk26-clean-head", action="store_true")
@@ -175,6 +186,15 @@ def main() -> int:
         or args.require_windows_cuda_build_smoke
     ):
         args.windows_cuda = require_path("--windows-cuda", args.windows_cuda)
+    if args.require_windows_cuda_scheduled_smoke:
+        args.windows_cuda_smoke = require_path("--windows-cuda-smoke", args.windows_cuda_smoke)
+    if (
+        args.require_mesh_preflights
+        or args.require_mesh_preflights_pass
+        or args.mesh_preflight_skipped_default_job
+        or args.mesh_preflight_allowed_failure
+    ):
+        args.mesh_preflights = require_path("--mesh-preflights", args.mesh_preflights)
     if args.require_live_mesh:
         args.live_mesh = require_path("--live-mesh", args.live_mesh)
     normalize_optional_paths(args)
@@ -274,6 +294,36 @@ def main() -> int:
             cmd.extend(["--git-head", args.git_head or "", "--require-clean-head"])
         run_checker(cmd)
         checked.append("windows_cuda")
+
+    if args.windows_cuda_smoke is not None:
+        cmd = [
+            "scripts/check_windows_cuda_scheduled_smoke_evidence.py",
+            str(args.windows_cuda_smoke),
+        ]
+        if args.require_windows_cuda_scheduled_smoke:
+            cmd.append("--require-complete")
+        if args.windows_cuda_smoke_max_age_sec > 0:
+            cmd.extend(["--max-age-sec", str(args.windows_cuda_smoke_max_age_sec)])
+        run_checker(cmd)
+        checked.append("windows_cuda_smoke")
+
+    if args.mesh_preflights is not None:
+        cmd = [
+            "scripts/check_mesh_resource_preflight_evidence.py",
+            str(args.mesh_preflights),
+        ]
+        if args.require_mesh_preflights_pass:
+            cmd.append("--require-pass")
+        if args.mesh_preflights_max_age_sec > 0:
+            cmd.extend(["--max-age-sec", str(args.mesh_preflights_max_age_sec)])
+        for job_id in args.mesh_preflight_job:
+            cmd.extend(["--require-job", job_id])
+        for job_id in args.mesh_preflight_skipped_default_job:
+            cmd.extend(["--require-skipped-default-job", job_id])
+        for spec in args.mesh_preflight_allowed_failure:
+            cmd.extend(["--allow-failure", spec])
+        run_checker(cmd)
+        checked.append("mesh_preflights")
 
     if args.live_mesh is not None:
         cmd = [
