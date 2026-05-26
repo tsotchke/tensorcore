@@ -78,7 +78,9 @@ state in `build/eshkol_tensorcore_bridge_evidence.json`. Run it with
 `--build-dir build-portable-cpu-current --require-pass` for backend-independent
 runtime evidence. On a Metal build where the host exposes no usable Metal
 device, the artifact stays `status=blocked` with `skipped_no_gpu` runtime
-checks instead of reporting a bridge failure.
+checks instead of reporting a bridge failure. The runner normalizes expected
+no-GPU command tails in that blocked artifact, while retaining hashes, so
+generic readiness scanners do not mistake the skip for a bridge failure.
 
 ## Compile evidence
 

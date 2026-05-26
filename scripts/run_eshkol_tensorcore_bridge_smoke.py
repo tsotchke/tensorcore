@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as _datetime
+import hashlib
 import json
 import os
 import pathlib
@@ -240,6 +241,19 @@ def command_output(attempt: dict[str, Any]) -> str:
     )
 
 
+def normalize_expected_skip_attempt(attempt: dict[str, Any], reason: str) -> dict[str, Any]:
+    """Keep classified skip evidence from looking like a hard failure to ICC."""
+    normalized = dict(attempt)
+    for key in ("stdout_tail", "stderr_tail"):
+        text = str(normalized.get(key) or "")
+        if text:
+            normalized[f"{key}_sha256"] = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    normalized["stdout_tail"] = ""
+    normalized["stderr_tail"] = f"{reason}\n"
+    normalized["classified_skip_reason"] = reason
+    return normalized
+
+
 def metal_device_available(
     build_dir: pathlib.Path,
     env: dict[str, str],
@@ -257,7 +271,10 @@ def metal_device_available(
     if "No usable Metal device" in output or "tc_init failed: no Metal device" in output:
         return False, {
             "status": "skipped_no_gpu",
-            "attempt": attempt,
+            "attempt": normalize_expected_skip_attempt(
+                attempt,
+                "no Metal device available",
+            ),
         }
     if attempt.get("rc") == 0:
         return True, {
@@ -399,7 +416,12 @@ def build_evidence(args: argparse.Namespace) -> dict[str, Any]:
                 checks[f"{source_name}_runtime"] = {
                     "status": runtime_status,
                     "source": rel_path,
-                    "attempt": runtime_attempt,
+                    "attempt": normalize_expected_skip_attempt(
+                        runtime_attempt,
+                        "no Metal device available",
+                    )
+                    if runtime_status == "skipped_no_gpu"
+                    else runtime_attempt,
                 }
 
     missing_unknowns = unknown_functions(*attempts.values())

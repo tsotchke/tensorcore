@@ -386,6 +386,9 @@ coverage once the bridge actually runs. The Scheme module resolves `__tc-*`
 through the `tc_eshkol_*` C shims exported by `libtensorcore`; if the selected
 native backend cannot initialize, the smoke records `status=blocked` with
 `skipped_no_gpu` runtime checks while still recording bridge function coverage.
+Expected no-GPU command tails are normalized and hashed in the evidence so
+generic ICC text scanning does not misclassify the explicit skip as a hard
+runtime failure.
 Validate the artifact with:
 
 ```sh

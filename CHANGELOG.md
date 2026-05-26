@@ -183,6 +183,10 @@ every architectural primitive in code and tested:
   the GGUF quantized-matrix descriptor helper while reporting explicit
   `metal_device_unavailable` blocked states when the host sandbox hides the
   Metal device.
+- Eshkol bridge evidence now normalizes expected no-GPU command tails in
+  `skipped_no_gpu` artifacts, preserving hashes while preventing generic ICC
+  failure scanning from treating a deliberate hardware skip as a runtime
+  failure.
 - HIP smoke evidence now proves both fp32 `hip_gemm_sgemm` and fp16
   `hip_gemm_hgemm`, records per-kernel `gemm_kernels`, and emits
   ICC-readable source coverage for remote chipStar/HIP runs.
