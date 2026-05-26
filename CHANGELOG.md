@@ -156,6 +156,10 @@ every architectural primitive in code and tested:
   `tc_compile_metallib`, hashes the generated `.metallib`, emits
   ICC-readable coverage for the CMake helper, and reports explicit blocked
   statuses on hosts without Apple Metal tools.
+- Python packaging evidence now directly proves the native artifact copy path
+  and macOS validation-tool path in `setup.py`, including copied artifact
+  hashes, wheel hash, explicit platform tag, and ICC-readable coverage for
+  `_run_tool` and `build_py_with_native_artifacts.run`.
 - Eshkol bridge runtime evidence now has a repo-owned smoke/checker pair:
   `scripts/run_eshkol_tensorcore_bridge_smoke.py` records the real local
   `eshkol-run` compile/runtime state for `hello_tensorcore.esk` and the new

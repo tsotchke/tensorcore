@@ -206,6 +206,34 @@ On non-Apple hosts, or Apple hosts without `xcrun metal`/`metallib`, the
 artifact reports `status=blocked` with a specific reason instead of treating
 the missing external Metal backend as a source failure.
 
+### `run_python_packaging_evidence.py`
+
+Focused evidence for `setup.py` packaging paths. The runner uses local native
+artifacts, defaults to `build/`, runs the native artifact copy path through
+`build_py`, runs the macOS validation-tool path through `_run_tool`, builds a
+wheel with an explicit platform tag, and records copied artifact hashes plus
+the wheel hash.
+
+The default artifact is
+`build/python-packaging-evidence/python_packaging_evidence.json`. Validate it
+with:
+
+```sh
+python3 scripts/check_python_packaging_evidence.py \
+  build/python-packaging-evidence/python_packaging_evidence.json \
+  --require-pass
+```
+
+Run locally after building native artifacts:
+
+```sh
+python3 scripts/run_python_packaging_evidence.py --require-pass
+```
+
+On hosts without the required native artifacts, or non-macOS hosts where the
+`lipo` validation path is not applicable, the artifact reports
+`status=blocked` with a specific reason.
+
 ### `run_eshkol_tensorcore_bridge_smoke.py`
 
 Focused evidence for the Eshkol bridge surface. The script uses a local
@@ -1024,6 +1052,7 @@ workflow will pass too.
 | Run the CI Python smoke locally | `cmake --install build --prefix /tmp/tensorcore-install && scripts/ci_python_smoke.sh` |
 | Emit ICC-readable fallback runtime evidence | `python3 scripts/run_fallback_runtime_smoke.py --require-pass` |
 | Prove the Metal library build rule | `python3 scripts/run_metallib_build_rule_evidence.py --require-pass` |
+| Prove Python native packaging paths | `python3 scripts/run_python_packaging_evidence.py --require-pass` |
 | Probe Eshkol bridge runtime evidence | `python3 scripts/run_eshkol_tensorcore_bridge_smoke.py --build-dir build-portable-cpu-current --require-pass` |
 | Pre-release wide smoke | `scripts/release_smoke.sh` (add `REQUIRE_GPU=1` if you have one) |
 | Cross-check version triple | `scripts/check_version_consistency.sh` |
