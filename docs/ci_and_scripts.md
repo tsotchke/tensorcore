@@ -131,7 +131,9 @@ If PyTorch is not importable, the script skips by default. Set
 `REQUIRE_PYTORCH=1` to make that a hard failure.
 Set `TENSORCORE_PYTORCH_SMOKE_EVIDENCE_PATH=/tmp/pytorch.json` to emit a
 machine-readable node-health artifact with the skip/pass status, torch
-version, backend state, matmul checks, and direct device-allocation status.
+version, backend state, matmul checks, direct device-allocation status, and
+ICC-readable function coverage for the Python shim plus native extension
+dispatch paths.
 Validate it with:
 
 ```sh
@@ -146,6 +148,36 @@ Run locally:
 cmake --build build-portable-cpu-current --parallel
 REQUIRE_PYTORCH=1 REQUIRE_PYTORCH_BACKEND=1 scripts/ci_pytorch_smoke.sh
 ```
+
+### `run_fallback_runtime_smoke.py`
+
+Focused runtime evidence for the intentional GEMM fallback surface. The script
+reuses the existing `test_gemm_f32`, `test_gemm_bf16`, and `test_gemm_i8`
+binaries from `${BUILD_DIR:-build}` and records an ICC-readable trace for:
+
+- Accelerate fp32 GEMM fallback (`tc_accelerate_gemm_f32`)
+- MPS fp32 fallback dispatch (`tc_mps_gemm`)
+- bf16 software fallback through fp32 conversion
+- i8 software fallback through fp32 conversion
+- the fallback layout and dtype helpers used by those paths
+
+The default artifact is `build/fallback_runtime_evidence.json`. Validate it
+with:
+
+```sh
+python3 scripts/check_fallback_runtime_evidence.py \
+  build/fallback_runtime_evidence.json --require-pass
+```
+
+Run locally after building the Metal test binaries:
+
+```sh
+python3 scripts/run_fallback_runtime_smoke.py --require-pass
+```
+
+The artifact's `files` section is intentionally shaped like the release-smoke
+coverage payload so ICC can consume it as `--trace-file` evidence when ranking
+fallback-path readiness.
 
 ### `ci_portable_cpu.sh`
 
@@ -929,5 +961,6 @@ workflow will pass too.
 | Validate the Python binding hasn't drifted | `scripts/check_python_{ffi_surface,abi_layout,constants}.py` |
 | Build and verify a native SDK tarball | `scripts/create_native_sdk_archive.sh && scripts/check_native_sdk_archive.sh` |
 | Run the CI Python smoke locally | `cmake --install build --prefix /tmp/tensorcore-install && scripts/ci_python_smoke.sh` |
+| Emit ICC-readable fallback runtime evidence | `python3 scripts/run_fallback_runtime_smoke.py --require-pass` |
 | Pre-release wide smoke | `scripts/release_smoke.sh` (add `REQUIRE_GPU=1` if you have one) |
 | Cross-check version triple | `scripts/check_version_consistency.sh` |

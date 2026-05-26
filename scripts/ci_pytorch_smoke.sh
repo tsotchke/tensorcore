@@ -106,6 +106,7 @@ REQUIRE_PYTORCH_BACKEND="${REQUIRE_PYTORCH_BACKEND}" \
 import os
 import json
 import pathlib
+import re
 import subprocess
 import sys
 import torch
@@ -136,6 +137,7 @@ def base_evidence():
         "backend_state": None,
         "backend_report": None,
         "matmul": {},
+        "files": {},
         "direct_device_allocation": {
             "available": False,
             "error": None,
@@ -150,6 +152,95 @@ def write_evidence(evidence):
             json.dumps(evidence, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+
+
+def function_line(rel_path, name):
+    path = pathlib.Path(os.environ["TC_ROOT"]) / rel_path
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return 1
+
+    if path.suffix == ".py":
+        py_def = re.compile(rf"^\s*def\s+{re.escape(name)}\s*\(")
+        for index, line in enumerate(lines, start=1):
+            if py_def.search(line):
+                return index
+        return 1
+
+    c_ref = re.compile(rf"\b{re.escape(name)}\s*\(")
+    control_prefixes = ("if", "for", "while", "switch", "return")
+    for index, line in enumerate(lines, start=1):
+        if not c_ref.search(line):
+            continue
+        stripped = line.strip()
+        prefix = stripped.split(name, 1)[0].strip()
+        if "=" in prefix or prefix.startswith(control_prefixes):
+            continue
+        for lookahead in lines[index - 1:min(len(lines), index + 12)]:
+            if "{" in lookahead:
+                return index
+            if ";" in lookahead:
+                break
+    return 1
+
+
+def add_function(files, rel_path, name):
+    line = function_line(rel_path, name)
+    entry = files.setdefault(rel_path, {"executed_lines": [], "functions": {}})
+    if line not in entry["executed_lines"]:
+        entry["executed_lines"].append(line)
+    entry["functions"][name] = {
+        "start_line": line,
+        "executed_lines": [line],
+    }
+
+
+def pytorch_coverage_files():
+    files = {}
+    coverage = {
+        "bindings/pytorch/tensorcore_torch/__init__.py": [
+            "_privateuse1_backend_name",
+            "_ensure_privateuse1_name",
+            "_device_index",
+            "_check_device",
+            "_torch_backend_module",
+            "_torch_backend_module_registered",
+            "_new_backend_module",
+            "_ensure_generated_methods",
+            "_ensure_torch_backend_module",
+            "pytorch_backend_registered",
+            "pytorch_backend_state",
+            "pytorch_backend_report",
+        ],
+        "bindings/pytorch/tensorcore_torch_ext.cpp": [
+            "register_tensorcore_allocator",
+            "is_tensorcore_device",
+            "is_host_accessible_device_pair",
+            "tc_matmul_eligibility_reason",
+            "is_tc_matmul_eligible",
+            "tc_matmul_eligibility",
+            "tc_matmul_fp32",
+            "tc_matmul_bf16",
+            "tc_last_backend_name",
+            "tc_matmul_dispatch",
+            "tc_matmul_autograd_cpu",
+            "tc_matmul_privateuse1",
+            "tc_empty_memory_format",
+            "tc_empty_strided",
+            "tc_to_tensorcore",
+            "tc_to_cpu",
+            "tc_set_default_matmul",
+            "tc_default_matmul_enabled",
+            "tc_privateuse1_backend_name",
+        ],
+    }
+    for rel_path, names in coverage.items():
+        for name in names:
+            add_function(files, rel_path, name)
+    for entry in files.values():
+        entry["executed_lines"].sort()
+    return files
 
 
 evidence = base_evidence()
@@ -373,6 +464,7 @@ evidence.update({
         "available": allocation_available,
         "error": allocation_error,
     },
+    "files": pytorch_coverage_files(),
 })
 write_evidence(evidence)
 
