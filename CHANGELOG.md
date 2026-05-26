@@ -172,6 +172,11 @@ every architectural primitive in code and tested:
 - Portable CPU ops evidence now wraps `test_portable_cpu` and `test_conv2d`,
   emitting ICC-readable coverage for `gemm_compute` and the Conv2D
   `direct_sgemm_f32` backward helper.
+- Metal ops evidence now wraps attention correctness and Metal Conv2D smokes
+  with `TC_TRACE=1`, emitting coverage for attention `encode_forward` and
+  Conv2D `conv_bytes` while leaving shader-internal async-copy coverage
+  explicitly blocked until selected-kernel or shader-line instrumentation
+  exists.
 - Eshkol bridge runtime evidence now has a repo-owned smoke/checker pair:
   `scripts/run_eshkol_tensorcore_bridge_smoke.py` records the real local
   `eshkol-run` compile/runtime state for `hello_tensorcore.esk` and the new

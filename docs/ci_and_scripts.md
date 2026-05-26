@@ -314,6 +314,34 @@ Run locally after building the portable CPU suite:
 python3 scripts/run_cpu_ops_runtime_evidence.py --require-pass
 ```
 
+### `run_metal_ops_runtime_evidence.py`
+
+Focused evidence for local Metal attention and Conv2D host dispatch. The
+runner executes `test_attention_correctness` and the Metal-build `test_conv2d`
+with `TC_TRACE=1`, then emits ICC-readable coverage for:
+
+- `lib/ops/attention.mm:encode_forward`
+- `lib/ops/conv.mm:conv_bytes`
+
+The default artifact is `build/metal_ops_runtime_evidence.json`. Validate it
+with:
+
+```sh
+python3 scripts/check_metal_ops_runtime_evidence.py \
+  build/metal_ops_runtime_evidence.json --require-pass
+```
+
+Run locally after building the Metal test suite:
+
+```sh
+python3 scripts/run_metal_ops_runtime_evidence.py --require-pass
+```
+
+The runner also records async-copy shader availability as an optional blocked
+check. Existing host traces show public ops/backends, not Metal shader
+function-line execution, so `async_copy` remains unclaimed until a Metal
+capture, shader instrumentation, or selected-kernel trace exists.
+
 ### `run_eshkol_tensorcore_bridge_smoke.py`
 
 Focused evidence for the Eshkol bridge surface. The script uses a local
@@ -1136,6 +1164,7 @@ workflow will pass too.
 | Prove local distributed runtime paths | `python3 scripts/run_distributed_runtime_evidence.py --require-pass` |
 | Prove local AMX and GEMM benchmark paths | `python3 scripts/run_amx_bench_evidence.py --require-pass` |
 | Prove portable CPU GEMM and Conv2D helpers | `python3 scripts/run_cpu_ops_runtime_evidence.py --require-pass` |
+| Prove Metal attention and Conv2D dispatch helpers | `python3 scripts/run_metal_ops_runtime_evidence.py --require-pass` |
 | Probe Eshkol bridge runtime evidence | `python3 scripts/run_eshkol_tensorcore_bridge_smoke.py --build-dir build-portable-cpu-current --require-pass` |
 | Pre-release wide smoke | `scripts/release_smoke.sh` (add `REQUIRE_GPU=1` if you have one) |
 | Cross-check version triple | `scripts/check_version_consistency.sh` |
