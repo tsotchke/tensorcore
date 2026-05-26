@@ -152,6 +152,10 @@ every architectural primitive in code and tested:
 - Release-smoke evidence now records clean git-head provenance, and the
   operational bundle checker can require release, SDK26, PyTorch, and
   live-mesh evidence to match the current committed head.
+- Metallib build-rule evidence now probes a generated CMake project that calls
+  `tc_compile_metallib`, hashes the generated `.metallib`, emits
+  ICC-readable coverage for the CMake helper, and reports explicit blocked
+  statuses on hosts without Apple Metal tools.
 - Eshkol bridge runtime evidence now has a repo-owned smoke/checker pair:
   `scripts/run_eshkol_tensorcore_bridge_smoke.py` records the real local
   `eshkol-run` compile/runtime state for `hello_tensorcore.esk` and the new

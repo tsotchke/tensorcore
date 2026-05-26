@@ -30,6 +30,9 @@ jobs:
       - name: Eshkol bridge evidence checker fixtures
         run: python3 scripts/check_eshkol_tensorcore_bridge_evidence_selftest.py
 
+      - name: Metallib build-rule evidence checker fixtures
+        run: python3 scripts/check_metallib_build_rule_evidence_selftest.py
+
       - name: Windows host smoke evidence checker fixtures
         run: python3 scripts/check_windows_host_smoke_evidence_selftest.py
 

@@ -179,6 +179,33 @@ The artifact's `files` section is intentionally shaped like the release-smoke
 coverage payload so ICC can consume it as `--trace-file` evidence when ranking
 fallback-path readiness.
 
+### `run_metallib_build_rule_evidence.py`
+
+Focused evidence for `cmake/compile_metallib.cmake`. The runner generates a
+small out-of-tree CMake project that includes the real `compile_metallib`
+module, calls `tc_compile_metallib`, builds a one-kernel `probe.metallib`, and
+records the artifact SHA-256 plus ICC-readable function coverage.
+
+The default artifact is
+`build/metallib-build-rule-evidence/metallib_build_rule_evidence.json`.
+Validate it with:
+
+```sh
+python3 scripts/check_metallib_build_rule_evidence.py \
+  build/metallib-build-rule-evidence/metallib_build_rule_evidence.json \
+  --require-pass
+```
+
+Run locally:
+
+```sh
+python3 scripts/run_metallib_build_rule_evidence.py --require-pass
+```
+
+On non-Apple hosts, or Apple hosts without `xcrun metal`/`metallib`, the
+artifact reports `status=blocked` with a specific reason instead of treating
+the missing external Metal backend as a source failure.
+
 ### `run_eshkol_tensorcore_bridge_smoke.py`
 
 Focused evidence for the Eshkol bridge surface. The script uses a local
@@ -996,6 +1023,7 @@ workflow will pass too.
 | Build and verify a native SDK tarball | `scripts/create_native_sdk_archive.sh && scripts/check_native_sdk_archive.sh` |
 | Run the CI Python smoke locally | `cmake --install build --prefix /tmp/tensorcore-install && scripts/ci_python_smoke.sh` |
 | Emit ICC-readable fallback runtime evidence | `python3 scripts/run_fallback_runtime_smoke.py --require-pass` |
+| Prove the Metal library build rule | `python3 scripts/run_metallib_build_rule_evidence.py --require-pass` |
 | Probe Eshkol bridge runtime evidence | `python3 scripts/run_eshkol_tensorcore_bridge_smoke.py --build-dir build-portable-cpu-current --require-pass` |
 | Pre-release wide smoke | `scripts/release_smoke.sh` (add `REQUIRE_GPU=1` if you have one) |
 | Cross-check version triple | `scripts/check_version_consistency.sh` |
