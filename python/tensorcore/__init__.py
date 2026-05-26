@@ -473,6 +473,46 @@ if _lib is not None:
     _lib.tc_checkpoint_count_resident.restype = c_uint64
     _lib.tc_checkpoint_count_discarded.argtypes = []
     _lib.tc_checkpoint_count_discarded.restype = c_uint64
+    _lib.tc_eshkol_init.argtypes = []
+    _lib.tc_eshkol_init.restype = c_void_p
+    _lib.tc_eshkol_shutdown.argtypes = [c_void_p]
+    _lib.tc_eshkol_shutdown.restype = c_int
+    _lib.tc_eshkol_device_name.argtypes = [c_void_p]
+    _lib.tc_eshkol_device_name.restype = c_char_p
+    _lib.tc_eshkol_device_family.argtypes = [c_void_p]
+    _lib.tc_eshkol_device_family.restype = c_int
+    _lib.tc_eshkol_device_unified_memory.argtypes = [c_void_p]
+    _lib.tc_eshkol_device_unified_memory.restype = c_int
+    _lib.tc_eshkol_device_supports_bf16.argtypes = [c_void_p]
+    _lib.tc_eshkol_device_supports_bf16.restype = c_int
+    _lib.tc_eshkol_device_supports_i8.argtypes = [c_void_p]
+    _lib.tc_eshkol_device_supports_i8.restype = c_int
+    _lib.tc_eshkol_device_supports_tensorops_m5.argtypes = [c_void_p]
+    _lib.tc_eshkol_device_supports_tensorops_m5.restype = c_int
+    _lib.tc_eshkol_buffer_alloc.argtypes = [c_void_p, c_int64]
+    _lib.tc_eshkol_buffer_alloc.restype = c_void_p
+    _lib.tc_eshkol_buffer_free.argtypes = [c_void_p, c_void_p]
+    _lib.tc_eshkol_buffer_free.restype = c_int
+    _lib.tc_eshkol_buffer_map.argtypes = [c_void_p]
+    _lib.tc_eshkol_buffer_map.restype = c_void_p
+    _lib.tc_eshkol_gemm.argtypes = [
+        c_void_p, c_int, c_void_p, c_void_p, c_void_p,
+        c_int, c_int, c_int, c_double, c_double, c_int, c_int
+    ]
+    _lib.tc_eshkol_gemm.restype = c_int
+    _lib.tc_eshkol_attention_forward.argtypes = [
+        c_void_p, c_void_p, c_void_p, c_void_p, c_void_p,
+        c_int, c_int, c_int, c_int, c_int, c_double, c_int
+    ]
+    _lib.tc_eshkol_attention_forward.restype = c_int
+    _lib.tc_eshkol_last_backend.argtypes = []
+    _lib.tc_eshkol_last_backend.restype = c_char_p
+    _lib.tc_eshkol_last_backend_code.argtypes = []
+    _lib.tc_eshkol_last_backend_code.restype = c_int
+    _lib.tc_eshkol_version.argtypes = []
+    _lib.tc_eshkol_version.restype = c_char_p
+    _lib.tc_eshkol_status_string.argtypes = [c_int]
+    _lib.tc_eshkol_status_string.restype = c_char_p
     _lib.tc_stream_create.argtypes = [c_void_p, POINTER(c_void_p)]; _lib.tc_stream_create.restype = c_int
     _lib.tc_stream_destroy.argtypes = [c_void_p, c_void_p]; _lib.tc_stream_destroy.restype = c_int
     _lib.tc_stream_sync.argtypes = [c_void_p]; _lib.tc_stream_sync.restype = c_int
