@@ -77,6 +77,9 @@ every architectural primitive in code and tested:
   split-rank CTest launcher, so Jack's x86 Windows host proves
   `TC_DIST_GLOO` allreduce over loopback instead of only portable CPU
   single-process kernels.
+- Eshkol bridge diagnostics now expose C-string device/backend/version/status
+  pointers through real `tc_eshkol_*` C shims, exported with the existing
+  bridge ABI and exercised by the Scheme bridge smoke.
 - Mesh resource scheduling now supports completion gates: GeoRefine Qwen
   jobs can declare an artifact checker, completed jobs are not relaunched,
   completed stale leases are released, and unknown completion checks block

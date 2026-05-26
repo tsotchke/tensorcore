@@ -10,10 +10,12 @@
 ;;
 
 (provide tc-init tc-shutdown tc-device-info
+         tc-device-name
          tc-buffer-alloc tc-buffer-free tc-buffer-map
          tc-gemm tc-gemm-fp16 tc-gemm-fp32 tc-gemm-bf16
          tc-attention-forward
-         tc-last-backend)
+         tc-last-backend tc-last-backend-name
+         tc-version tc-status-string)
 
 (extern ptr __tc-init :real tc_eshkol_init)
 (extern i32 __tc-shutdown ptr :real tc_eshkol_shutdown)
@@ -32,6 +34,9 @@
 (extern i32 __tc-gemm ptr i32 ptr ptr ptr i32 i32 i32 double double i32 i32 :real tc_eshkol_gemm)
 (extern i32 __tc-attention-forward ptr ptr ptr ptr ptr i32 i32 i32 i32 i32 double i32 :real tc_eshkol_attention_forward)
 (extern i32 __tc-last-backend :real tc_eshkol_last_backend_code)
+(extern ptr __tc-last-backend-name :real tc_eshkol_last_backend)
+(extern ptr __tc-version :real tc_eshkol_version)
+(extern ptr __tc-status-string i32 :real tc_eshkol_status_string)
 
 ;;; ----------------------------------------------------------------
 ;;;  Lifecycle
@@ -45,14 +50,19 @@
   "Release the tensorcore context and any pooled buffers."
   (__tc-shutdown ctx))
 
+(define (tc-device-name ctx)
+  "Return the native device name C string pointer from the bridge."
+  (__tc-device-name ctx))
+
 (define (tc-device-info ctx)
   "Return an alist of (family name unified-memory? bf16? i8? tensorops-m5?)."
-  (list (cons 'family (__tc-device-family ctx))
-        (cons 'name "tensorcore")
-        (cons 'unified-memory? (= (__tc-device-unified-memory ctx) 1))
-        (cons 'bf16? (= (__tc-device-supports-bf16 ctx) 1))
-        (cons 'i8? (= (__tc-device-supports-i8 ctx) 1))
-        (cons 'tensorops-m5? (= (__tc-device-supports-tensorops-m5 ctx) 1))))
+  (let ((native-name (tc-device-name ctx)))
+    (list (cons 'family (__tc-device-family ctx))
+          (cons 'name (if native-name "tensorcore" "unknown"))
+          (cons 'unified-memory? (= (__tc-device-unified-memory ctx) 1))
+          (cons 'bf16? (= (__tc-device-supports-bf16 ctx) 1))
+          (cons 'i8? (= (__tc-device-supports-i8 ctx) 1))
+          (cons 'tensorops-m5? (= (__tc-device-supports-tensorops-m5 ctx) 1)))))
 
 ;;; ----------------------------------------------------------------
 ;;;  Buffers — unified-memory MTLBuffer handles
@@ -135,3 +145,15 @@
   "Symbol describing which backend served the most recent call from this
    thread: 'simdgroup-matrix 'tensorops-m5 'mps 'accelerate-cpu 'none."
   (tc-backend-symbol (__tc-last-backend)))
+
+(define (tc-last-backend-name)
+  "Return the last backend C string pointer from the C ABI."
+  (__tc-last-backend-name))
+
+(define (tc-version)
+  "Return the tensorcore version C string pointer from the C ABI."
+  (__tc-version))
+
+(define (tc-status-string status)
+  "Return the tensorcore status C string pointer for an integer status code."
+  (__tc-status-string status))

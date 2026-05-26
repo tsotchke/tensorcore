@@ -54,6 +54,8 @@ _tc_eshkol_init
 _tc_eshkol_last_backend
 _tc_eshkol_last_backend_code
 _tc_eshkol_shutdown
+_tc_eshkol_status_string
+_tc_eshkol_version
 _tc_diloco_add_parameter
 _tc_diloco_apply_outer
 _tc_diloco_finalize

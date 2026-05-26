@@ -59,6 +59,8 @@ int32_t     tc_eshkol_attention_forward(void* ctx,
 
 const char* tc_eshkol_last_backend(void);
 int32_t     tc_eshkol_last_backend_code(void);
+const char* tc_eshkol_version(void);
+const char* tc_eshkol_status_string(int32_t status);
 
 #ifdef __cplusplus
 }

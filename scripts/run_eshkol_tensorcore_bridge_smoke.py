@@ -36,29 +36,68 @@ REQUIRED_FUNCTIONS = {
     "eshkol/tensorcore.esk": {
         "tc-init",
         "tc-shutdown",
+        "tc-device-name",
         "tc-device-info",
         "tc-buffer-alloc",
         "tc-buffer-free",
         "tc-buffer-map",
+        "tc-dtype-code",
         "tc-gemm",
         "tc-gemm-fp32",
         "tc-gemm-fp16",
         "tc-gemm-bf16",
         "tc-attention-forward",
         "tc-last-backend",
+        "tc-last-backend-name",
+        "tc-version",
+        "tc-status-string",
+    },
+    "lib/c_api/eshkol_bridge.c": {
+        "bool_to_i32",
+        "normalize_status",
+        "dtype_from_eshkol",
+        "get_device_info",
+        "tc_eshkol_init",
+        "tc_eshkol_shutdown",
+        "tc_eshkol_device_name",
+        "tc_eshkol_device_family",
+        "tc_eshkol_device_unified_memory",
+        "tc_eshkol_device_supports_bf16",
+        "tc_eshkol_device_supports_i8",
+        "tc_eshkol_device_supports_tensorops_m5",
+        "tc_eshkol_buffer_alloc",
+        "tc_eshkol_buffer_free",
+        "tc_eshkol_buffer_map",
+        "tc_eshkol_gemm",
+        "tc_eshkol_attention_forward",
+        "tc_eshkol_last_backend",
+        "tc_eshkol_last_backend_code",
+        "tc_eshkol_version",
+        "tc_eshkol_status_string",
+    },
+    "lib/core/status.c": {
+        "tc_status_string",
     },
 }
 
 EXPECTED_BUILTINS = {
     "__tc-init",
     "__tc-shutdown",
-    "__tc-device-info",
+    "__tc-device-name",
+    "__tc-device-family",
+    "__tc-device-unified-memory",
+    "__tc-device-supports-bf16",
+    "__tc-device-supports-i8",
+    "__tc-device-supports-tensorops-m5",
     "__tc-buffer-alloc",
     "__tc-buffer-free",
     "__tc-buffer-map",
     "__tc-gemm",
     "__tc-attention-forward",
     "__tc-last-backend",
+    "__tc-last-backend-name",
+    "__tc-version",
+    "__tc-status-string",
 }
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -208,6 +247,7 @@ def function_line(rel_path: str, name: str) -> int:
     patterns = [
         re.compile(rf"\(define\s+\(\s*{re.escape(name)}(?:\s|\))"),
         re.compile(rf"\(define\s+{re.escape(name)}(?:\s|\))"),
+        re.compile(rf"^\s*(?:static\s+)?[A-Za-z_][A-Za-z0-9_\s\*]*\s+{re.escape(name)}\s*\("),
     ]
     for index, line in enumerate(lines, start=1):
         if any(pattern.search(line) for pattern in patterns):

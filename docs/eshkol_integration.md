@@ -24,6 +24,9 @@ The bridge declares Eshkol-visible builtins that thunk into flat C helpers:
 | `__tc-gemm`                | `tc_eshkol_gemm`               |
 | `__tc-attention-forward`   | `tc_eshkol_attention_forward`  |
 | `__tc-last-backend`        | `tc_eshkol_last_backend_code`  |
+| `__tc-last-backend-name`   | `tc_eshkol_last_backend`       |
+| `__tc-version`             | `tc_eshkol_version`            |
+| `__tc-status-string`       | `tc_eshkol_status_string`      |
 
 Opaque handles (`tc_context*`, `tc_buffer*`, `tc_stream*`) cross the FFI as
 boxed pointers. `tc_buffer_map` exposes the unified-memory pointer so Eshkol
@@ -59,6 +62,9 @@ flattening the pieces that are awkward for Eshkol's scalar/pointer FFI:
 - Opaque handles cross as boxed pointers (Eshkol type `(Pointer Void)`).
 - Status codes return as fixnums; the smoke only prints success markers when
   required calls return `TC_OK`.
+- Diagnostics expose the canonical C ABI device name, backend name, version,
+  and status renderer through pointer-returning wrappers because this bridge
+  intentionally stays within Eshkol's flat pointer/scalar FFI.
 - Buffer maps return host-addressable `(Pointer UInt8)` so Eshkol
   vectors are constructed in-place without copy.
 - GEMM and attention descriptors are built inside the `tc_eshkol_*` C helpers,

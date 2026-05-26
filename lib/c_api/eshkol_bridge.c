@@ -192,3 +192,11 @@ const char* tc_eshkol_last_backend(void) {
 int32_t tc_eshkol_last_backend_code(void) {
     return (int32_t)tc_last_backend();
 }
+
+const char* tc_eshkol_version(void) {
+    return tc_version();
+}
+
+const char* tc_eshkol_status_string(int32_t status) {
+    return tc_status_string((tc_status_t)status);
+}
