@@ -73,3 +73,38 @@ oracles:
         severity: high
         label: Metal 4 TensorOps runtime path is covered on M5
         action: run_m5_tensorops_runtime_smoke
+
+  - name: eshkol-bridge-runtime-evidence
+    target: eshkol-bridge-runtime-evidence
+    aliases:
+      - exercise Eshkol bridge runtime evidence
+    criteria:
+      - id: eshkol_bridge_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: Eshkol bridge runtime evidence is present
+        action: run_eshkol_bridge_smoke
+
+      - id: eshkol_bridge_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: Eshkol bridge runtime evidence is failure-free
+        action: fix_eshkol_bridge_runtime_failure
+
+      - id: hello_tensorcore_runtime_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.hello_tensorcore_runtime.status]
+          event_values: [passed]
+        severity: high
+        label: hello_tensorcore.esk runs through tensorcore
+        action: fix_hello_tensorcore_runtime
+
+      - id: tensorcore_bridge_smoke_runtime_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.tensorcore_bridge_smoke_runtime.status]
+          event_values: [passed]
+        severity: high
+        label: tensorcore_bridge_smoke.esk runs the broader bridge surface
+        action: fix_tensorcore_bridge_runtime
