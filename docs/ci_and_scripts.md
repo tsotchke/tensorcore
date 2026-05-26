@@ -211,8 +211,8 @@ the missing external Metal backend as a source failure.
 Focused evidence for `setup.py` packaging paths. The runner uses local native
 artifacts, defaults to `build/`, runs the native artifact copy path through
 `build_py`, runs the macOS validation-tool path through `_run_tool`, builds a
-wheel with an explicit platform tag, and records copied artifact hashes plus
-the wheel hash.
+wheel through `bdist_wheel`, and records copied artifact hashes plus the wheel
+hash.
 
 The default artifact is
 `build/python-packaging-evidence/python_packaging_evidence.json`. Validate it

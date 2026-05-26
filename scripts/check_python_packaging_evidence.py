@@ -29,7 +29,11 @@ REQUIRED_CHECKS = {
     "bdist_wheel_native_artifacts",
 }
 REQUIRED_FUNCTIONS = {
-    "setup.py": {"_run_tool", "build_py_with_native_artifacts.run"},
+    "setup.py": {
+        "_run_tool",
+        "bdist_wheel_with_native_artifacts.run",
+        "build_py_with_native_artifacts.run",
+    },
 }
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 

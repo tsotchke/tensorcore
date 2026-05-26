@@ -159,7 +159,8 @@ every architectural primitive in code and tested:
 - Python packaging evidence now directly proves the native artifact copy path
   and macOS validation-tool path in `setup.py`, including copied artifact
   hashes, wheel hash, explicit platform tag, and ICC-readable coverage for
-  `_run_tool` and `build_py_with_native_artifacts.run`.
+  `_run_tool`, `build_py_with_native_artifacts.run`, and
+  `bdist_wheel_with_native_artifacts.run`.
 - Distributed runtime evidence now wraps the forked GLOO ring, dense DiLoCo,
   and sparse DiLoCo smokes, recording explicit loopback-blocked states when
   local TCP sockets are unavailable and ICC-readable coverage for the GLOO

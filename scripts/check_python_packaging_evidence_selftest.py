@@ -19,9 +19,13 @@ CHECKER = ROOT / "scripts" / "check_python_packaging_evidence.py"
 def coverage() -> dict[str, Any]:
     return {
         "setup.py": {
-            "executed_lines": [82, 156, 162],
+            "executed_lines": [82, 156, 162, 182],
             "functions": {
                 "_run_tool": {"start_line": 82, "executed_lines": [82]},
+                "bdist_wheel_with_native_artifacts.run": {
+                    "start_line": 182,
+                    "executed_lines": [182],
+                },
                 "build_py_with_native_artifacts.run": {
                     "start_line": 156,
                     "executed_lines": [156],
@@ -100,10 +104,12 @@ def passed_evidence() -> dict[str, Any]:
             "failure_reason": None,
             "required_functions": [
                 "setup.py:_run_tool",
+                "setup.py:bdist_wheel_with_native_artifacts.run",
                 "setup.py:build_py_with_native_artifacts.run",
             ],
             "covered_functions": [
                 "setup.py:_run_tool",
+                "setup.py:bdist_wheel_with_native_artifacts.run",
                 "setup.py:build_py_with_native_artifacts.run",
             ],
             "missing_functions": [],
@@ -130,6 +136,7 @@ def blocked_evidence(reason: str = "native_artifacts_missing") -> dict[str, Any]
     evidence["summary"]["covered_functions"] = []
     evidence["summary"]["missing_functions"] = [
         "setup.py:_run_tool",
+        "setup.py:bdist_wheel_with_native_artifacts.run",
         "setup.py:build_py_with_native_artifacts.run",
     ]
     return evidence

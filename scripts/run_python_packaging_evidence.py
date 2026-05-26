@@ -22,7 +22,11 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCHEMA = "tensorcore.python_packaging_evidence.v1"
 FORMAT_VERSION = 1
 REQUIRED_FUNCTIONS = {
-    "setup.py": {"_run_tool", "build_py_with_native_artifacts.run"},
+    "setup.py": {
+        "_run_tool",
+        "bdist_wheel_with_native_artifacts.run",
+        "build_py_with_native_artifacts.run",
+    },
 }
 NATIVE_LIBRARY_NAMES = {
     "darwin": ("libtensorcore.dylib",),
@@ -281,7 +285,7 @@ def add_function(files: dict[str, Any], rel_path: str, name: str, start_line: in
     entry["functions"][name] = {"start_line": start_line, "executed_lines": [start_line]}
 
 
-def coverage_for(run_tool_passed: bool, build_py_passed: bool) -> dict[str, Any]:
+def coverage_for(run_tool_passed: bool, build_py_passed: bool, wheel_passed: bool) -> dict[str, Any]:
     files: dict[str, Any] = {}
     if run_tool_passed:
         add_function(files, "setup.py", "_run_tool", function_line("setup.py", "_run_tool"))
@@ -294,6 +298,13 @@ def coverage_for(run_tool_passed: bool, build_py_passed: bool) -> dict[str, Any]
         )
         copy_line = line_matching("setup.py", r"shutil\.copy2")
         files["setup.py"]["executed_lines"].append(copy_line)
+    if wheel_passed:
+        add_function(
+            files,
+            "setup.py",
+            "bdist_wheel_with_native_artifacts.run",
+            class_method_line("setup.py", "bdist_wheel_with_native_artifacts", "run"),
+        )
     for entry in files.values():
         entry["executed_lines"] = sorted(set(entry["executed_lines"]))
     return files
@@ -378,6 +389,7 @@ def build_evidence(args: argparse.Namespace) -> dict[str, Any]:
     failure_reason: str | None = None
     run_tool_passed = False
     build_py_passed = False
+    wheel_passed = False
 
     if blocked_reason is None:
         native_dir = native_dir_for(found, work_dir)
@@ -470,6 +482,7 @@ def build_evidence(args: argparse.Namespace) -> dict[str, Any]:
         trace.append(wheel_attempt)
         wheel = inspect_wheel(dist_dir, artifact_names)
         if wheel_attempt.get("rc") == 0 and wheel["status"] == "passed":
+            wheel_passed = True
             checks["bdist_wheel_native_artifacts"] = {
                 "status": "passed",
                 "trace": "bdist_wheel_native_artifacts",
@@ -493,7 +506,7 @@ def build_evidence(args: argparse.Namespace) -> dict[str, Any]:
     else:
         status = "passed"
 
-    files = coverage_for(run_tool_passed, build_py_passed)
+    files = coverage_for(run_tool_passed, build_py_passed, wheel_passed)
     required_functions = sorted(f"{path}:{name}" for path, names in REQUIRED_FUNCTIONS.items() for name in names)
     covered = covered_functions(files)
     missing_functions = sorted(set(required_functions) - set(covered))
