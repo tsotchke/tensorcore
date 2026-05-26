@@ -160,6 +160,10 @@ every architectural primitive in code and tested:
   and macOS validation-tool path in `setup.py`, including copied artifact
   hashes, wheel hash, explicit platform tag, and ICC-readable coverage for
   `_run_tool` and `build_py_with_native_artifacts.run`.
+- Distributed runtime evidence now wraps the forked GLOO ring, dense DiLoCo,
+  and sparse DiLoCo smokes, recording explicit loopback-blocked states when
+  local TCP sockets are unavailable and ICC-readable coverage for the GLOO
+  ring connection helpers plus DiLoCo outer-step core.
 - Eshkol bridge runtime evidence now has a repo-owned smoke/checker pair:
   `scripts/run_eshkol_tensorcore_bridge_smoke.py` records the real local
   `eshkol-run` compile/runtime state for `hello_tensorcore.esk` and the new

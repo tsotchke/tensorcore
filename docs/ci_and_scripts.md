@@ -234,6 +234,33 @@ On hosts without the required native artifacts, or non-macOS hosts where the
 `lipo` validation path is not applicable, the artifact reports
 `status=blocked` with a specific reason.
 
+### `run_distributed_runtime_evidence.py`
+
+Focused evidence for local distributed runtime paths. The runner executes the
+forked GLOO ring, dense DiLoCo, and sparse DiLoCo smokes from an existing build
+directory, captures command traces, and emits ICC-readable coverage for:
+
+- `lib/distributed/gloo_tcp.cpp`
+- `lib/distributed/diloco.cpp`
+
+The default artifact is `build/distributed_runtime_evidence.json`. Validate it
+with:
+
+```sh
+python3 scripts/check_distributed_runtime_evidence.py \
+  build/distributed_runtime_evidence.json --require-pass
+```
+
+Run locally after building tests:
+
+```sh
+python3 scripts/run_distributed_runtime_evidence.py --require-pass
+```
+
+If the host cannot bind loopback sockets, the artifact reports
+`status=blocked` with `loopback_unavailable` instead of treating the test skip
+as a code failure.
+
 ### `run_eshkol_tensorcore_bridge_smoke.py`
 
 Focused evidence for the Eshkol bridge surface. The script uses a local
@@ -1053,6 +1080,7 @@ workflow will pass too.
 | Emit ICC-readable fallback runtime evidence | `python3 scripts/run_fallback_runtime_smoke.py --require-pass` |
 | Prove the Metal library build rule | `python3 scripts/run_metallib_build_rule_evidence.py --require-pass` |
 | Prove Python native packaging paths | `python3 scripts/run_python_packaging_evidence.py --require-pass` |
+| Prove local distributed runtime paths | `python3 scripts/run_distributed_runtime_evidence.py --require-pass` |
 | Probe Eshkol bridge runtime evidence | `python3 scripts/run_eshkol_tensorcore_bridge_smoke.py --build-dir build-portable-cpu-current --require-pass` |
 | Pre-release wide smoke | `scripts/release_smoke.sh` (add `REQUIRE_GPU=1` if you have one) |
 | Cross-check version triple | `scripts/check_version_consistency.sh` |
