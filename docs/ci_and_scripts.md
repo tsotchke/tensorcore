@@ -1023,11 +1023,15 @@ targets are missing, the script records `runtime_status=skipped_not_built`;
 if HIP builds but no runtime device is available, it records
 `skipped_runtime_unavailable`; if chipStar initializes but hipBLAS is not
 installed, it records `runtime_only_no_hipblas`. On a working chipStar +
-hipBLAS host, it asserts fp32 GEMM dispatch through `backend=hip`,
-`kernel=hipblas_sgemm_staged`, and verifies `TC_DISABLE_HIP_GEMM=1` falls
-back to a non-HIP backend. Set `TC_HIP_PREFIX=/path/to/chipstar-install`
-when chipStar is outside the default CMake prefix paths. HIP evidence records
-`git_head` and `git_dirty`; archive-based deployments can supply that
+hipBLAS host, it asserts fp32 and fp16 GEMM dispatch through `backend=hip`,
+`hipblas_sgemm_staged`, and `hipblas_hgemm_staged`, then verifies
+`TC_DISABLE_HIP_GEMM=1` falls back to a non-HIP backend. The runtime evidence
+now records per-kernel
+`gemm_kernels` entries and ICC-readable source coverage for both
+`hip_gemm_sgemm` and `hip_gemm_hgemm`. Set
+`TC_HIP_PREFIX=/path/to/chipstar-install` when chipStar is outside the default
+CMake prefix paths. HIP evidence records `git_head` and `git_dirty`;
+archive-based deployments can supply that
 provenance via `TENSORCORE_SOURCE_GIT_HEAD` / `TENSORCORE_SOURCE_GIT_DIRTY`
 or the `.tensorcore_source_head` / `.tensorcore_source_dirty` files written
 by the live-mesh prepare step. The JSON also embeds the HIP toolchain probe
@@ -1038,6 +1042,8 @@ OpenCL/SPIR-V diagnostics.
 TENSORCORE_HIP_SMOKE_EVIDENCE_PATH=/tmp/hip.json scripts/ci_hip_smoke.sh
 python3 scripts/check_hip_smoke_evidence.py /tmp/hip.json
 python3 scripts/check_hip_smoke_evidence.py /tmp/hip.json --require-hip-build
+python3 scripts/check_hip_smoke_evidence.py /tmp/hip.json \
+  --require-hip --require-hip-gemm-sgemm --require-hip-gemm-hgemm
 python3 scripts/check_hip_smoke_evidence.py /tmp/hip.json --require-clean-head
 python3 scripts/check_hip_smoke_evidence.py /tmp/hip.json --require-toolchain
 

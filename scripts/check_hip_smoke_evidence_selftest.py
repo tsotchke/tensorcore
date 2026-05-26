@@ -63,7 +63,39 @@ def hip_evidence() -> dict[str, Any]:
         "device_count": 1,
         "backend": "hip",
         "kernel": "hipblas_sgemm_staged",
+        "gemm_kernels": {
+            "hip_gemm_sgemm": {
+                "status": "passed",
+                "backend": "hip",
+                "kernel": "hipblas_sgemm_staged",
+            },
+            "hip_gemm_hgemm": {
+                "status": "passed",
+                "backend": "hip",
+                "kernel": "hipblas_hgemm_staged",
+            },
+        },
         "fallback_backend": "portable_cpu",
+        "files": {
+            "lib/hip/gemm.cpp": {
+                "executed_lines": [124, 168],
+                "functions": {
+                    "hip_gemm_sgemm": {"start_line": 124, "executed_lines": [124]},
+                    "hip_gemm_hgemm": {"start_line": 168, "executed_lines": [168]},
+                },
+            },
+        },
+        "summary": {
+            "required_functions": [
+                "lib/hip/gemm.cpp:hip_gemm_hgemm",
+                "lib/hip/gemm.cpp:hip_gemm_sgemm",
+            ],
+            "covered_functions": [
+                "lib/hip/gemm.cpp:hip_gemm_hgemm",
+                "lib/hip/gemm.cpp:hip_gemm_sgemm",
+            ],
+            "missing_functions": [],
+        },
         "toolchain": toolchain_evidence(),
     }
 
@@ -112,6 +144,8 @@ def main() -> int:
             "--require-clean-head",
             "--require-toolchain",
             "--require-ready-toolchain",
+            "--require-hip-gemm-sgemm",
+            "--require-hip-gemm-hgemm",
         )
 
         no_toolchain = copy.deepcopy(hip_evidence())
@@ -134,6 +168,23 @@ def main() -> int:
             missing_path,
             "--require-ready-toolchain needs ready_for_hip_gemm",
             "--require-ready-toolchain",
+        )
+
+        no_hgemm = copy.deepcopy(hip_evidence())
+        no_hgemm["gemm_kernels"]["hip_gemm_hgemm"]["status"] = "skipped_unsupported"
+        no_hgemm_path = write_json(directory, "no-hgemm.json", no_hgemm)
+        assert_fails(
+            no_hgemm_path,
+            "hip_gemm_hgemm.status must be passed",
+            "--require-hip-gemm-hgemm",
+        )
+
+        missing_coverage = copy.deepcopy(hip_evidence())
+        del missing_coverage["files"]["lib/hip/gemm.cpp"]["functions"]["hip_gemm_hgemm"]
+        missing_coverage_path = write_json(directory, "missing-coverage.json", missing_coverage)
+        assert_fails(
+            missing_coverage_path,
+            "summary.covered_functions",
         )
 
     print("HIP smoke evidence checker selftest OK")

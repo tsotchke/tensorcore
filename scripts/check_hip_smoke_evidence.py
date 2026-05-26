@@ -22,6 +22,16 @@ VALID_TOOLCHAIN_STATUSES = {
     "runtime_only_no_hipblas",
     "missing_requirements",
 }
+EXPECTED_GEMM_KERNELS = {
+    "hip_gemm_sgemm": "hipblas_sgemm_staged",
+    "hip_gemm_hgemm": "hipblas_hgemm_staged",
+}
+REQUIRED_FUNCTIONS = {
+    "lib/hip/gemm.cpp": {
+        "hip_gemm_sgemm",
+        "hip_gemm_hgemm",
+    },
+}
 
 
 def fail(message: str) -> int:
@@ -39,6 +49,70 @@ def git_head() -> str | None:
         ).strip()
     except Exception:
         return None
+
+
+def covered_functions(data: dict) -> dict[str, set[str]]:
+    files = data.get("files")
+    if not isinstance(files, dict):
+        return {}
+    covered: dict[str, set[str]] = {}
+    for rel_path, entry in files.items():
+        if not isinstance(entry, dict):
+            continue
+        functions = entry.get("functions")
+        if isinstance(functions, dict):
+            covered[str(rel_path)] = {str(name) for name in functions}
+    return covered
+
+
+def expected_required_functions() -> list[str]:
+    return sorted(f"{path}:{name}" for path, names in REQUIRED_FUNCTIONS.items() for name in names)
+
+
+def derived_covered_functions(data: dict) -> list[str]:
+    covered = covered_functions(data)
+    return sorted(f"{path}:{name}" for path, names in covered.items() for name in names)
+
+
+def missing_required_functions(data: dict) -> list[str]:
+    required = expected_required_functions()
+    covered = derived_covered_functions(data)
+    return sorted(set(required) - set(covered))
+
+
+def require_gemm_kernel(evidence: dict, name: str) -> str | None:
+    gemm = evidence.get("gemm_kernels")
+    if not isinstance(gemm, dict):
+        return "passed evidence must include gemm_kernels"
+    item = gemm.get(name)
+    if not isinstance(item, dict):
+        return f"missing HIP GEMM kernel evidence for {name}"
+    expected = EXPECTED_GEMM_KERNELS[name]
+    if item.get("status") != "passed":
+        return f"{name}.status must be passed, got {item.get('status')!r}"
+    if item.get("backend") != "hip":
+        return f"{name}.backend must be hip"
+    if item.get("kernel") != expected:
+        return f"{name}.kernel must be {expected}, got {item.get('kernel')!r}"
+    return None
+
+
+def check_summary(evidence: dict) -> str | None:
+    summary = evidence.get("summary")
+    if not isinstance(summary, dict):
+        return "passed evidence must include summary"
+    required = expected_required_functions()
+    covered = derived_covered_functions(evidence)
+    missing = sorted(set(required) - set(covered))
+    if summary.get("required_functions") != required:
+        return "summary.required_functions must match checker required functions"
+    if summary.get("covered_functions") != covered:
+        return "summary.covered_functions must match files coverage"
+    if summary.get("missing_functions") != missing:
+        return "summary.missing_functions must match derived missing functions"
+    if missing:
+        return f"HIP evidence is missing function coverage: {missing!r}"
+    return None
 
 
 def main() -> int:
@@ -62,6 +136,8 @@ def main() -> int:
         action="store_true",
         help="Require embedded toolchain evidence ready for hipBLAS GEMM.",
     )
+    parser.add_argument("--require-hip-gemm-sgemm", action="store_true")
+    parser.add_argument("--require-hip-gemm-hgemm", action="store_true")
     args = parser.parse_args()
 
     try:
@@ -126,6 +202,23 @@ def main() -> int:
             return fail("passed evidence must report hipblas_sgemm_staged")
         if evidence.get("fallback_backend") in (None, "hip"):
             return fail("passed evidence must prove non-HIP fallback when disabled")
+        for name in EXPECTED_GEMM_KERNELS:
+            error = require_gemm_kernel(evidence, name)
+            if error:
+                return fail(error)
+        error = check_summary(evidence)
+        if error:
+            return fail(error)
+
+    if args.require_hip_gemm_sgemm:
+        error = require_gemm_kernel(evidence, "hip_gemm_sgemm")
+        if error:
+            return fail(error)
+
+    if args.require_hip_gemm_hgemm:
+        error = require_gemm_kernel(evidence, "hip_gemm_hgemm")
+        if error:
+            return fail(error)
 
     if status == "skipped_not_built" and evidence.get("hip_build_enabled"):
         return fail("skipped_not_built cannot have hip_build_enabled=true")
@@ -142,7 +235,8 @@ def main() -> int:
         "HIP smoke evidence OK: "
         f"status={status} build={bool(evidence.get('hip_build_enabled'))} "
         f"gemm={bool(evidence.get('hip_gemm_enabled'))} "
-        f"devices={int(evidence.get('device_count') or 0)}"
+        f"devices={int(evidence.get('device_count') or 0)} "
+        f"covered={len(derived_covered_functions(evidence))}"
     )
     return 0
 

@@ -74,7 +74,39 @@ def hip_evidence() -> dict[str, Any]:
         "device_count": 1,
         "backend": "hip",
         "kernel": "hipblas_sgemm_staged",
+        "gemm_kernels": {
+            "hip_gemm_sgemm": {
+                "status": "passed",
+                "backend": "hip",
+                "kernel": "hipblas_sgemm_staged",
+            },
+            "hip_gemm_hgemm": {
+                "status": "passed",
+                "backend": "hip",
+                "kernel": "hipblas_hgemm_staged",
+            },
+        },
         "fallback_backend": "portable_cpu",
+        "files": {
+            "lib/hip/gemm.cpp": {
+                "executed_lines": [124, 168],
+                "functions": {
+                    "hip_gemm_sgemm": {"start_line": 124, "executed_lines": [124]},
+                    "hip_gemm_hgemm": {"start_line": 168, "executed_lines": [168]},
+                },
+            },
+        },
+        "summary": {
+            "required_functions": [
+                "lib/hip/gemm.cpp:hip_gemm_hgemm",
+                "lib/hip/gemm.cpp:hip_gemm_sgemm",
+            ],
+            "covered_functions": [
+                "lib/hip/gemm.cpp:hip_gemm_hgemm",
+                "lib/hip/gemm.cpp:hip_gemm_sgemm",
+            ],
+            "missing_functions": [],
+        },
     }
 
 

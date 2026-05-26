@@ -183,6 +183,9 @@ every architectural primitive in code and tested:
   the GGUF quantized-matrix descriptor helper while reporting explicit
   `metal_device_unavailable` blocked states when the host sandbox hides the
   Metal device.
+- HIP smoke evidence now proves both fp32 `hip_gemm_sgemm` and fp16
+  `hip_gemm_hgemm`, records per-kernel `gemm_kernels`, and emits
+  ICC-readable source coverage for remote chipStar/HIP runs.
 - Eshkol bridge runtime evidence now has a repo-owned smoke/checker pair:
   `scripts/run_eshkol_tensorcore_bridge_smoke.py` records the real local
   `eshkol-run` compile/runtime state for `hello_tensorcore.esk` and the new

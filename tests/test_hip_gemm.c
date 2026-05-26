@@ -9,9 +9,50 @@
 #include "tensorcore/hip.h"
 
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+static uint16_t f32_to_f16(float x) {
+    union { float f; uint32_t u; } v = {x};
+    uint32_t f = v.u;
+    uint32_t sign = (f >> 16) & 0x8000u;
+    int32_t exp = (int32_t)((f >> 23) & 0xff) - 127 + 15;
+    uint32_t mant = f & 0x7fffffu;
+    if (exp <= 0) {
+        if (exp < -10) return (uint16_t)sign;
+        mant |= 0x800000u;
+        uint32_t sh = (uint32_t)(14 - exp);
+        return (uint16_t)(sign | ((mant >> sh) + ((mant >> (sh - 1)) & 1u)));
+    }
+    if (exp >= 31) return (uint16_t)(sign | 0x7c00u);
+    return (uint16_t)(sign | ((uint32_t)exp << 10) |
+                      ((mant >> 13) + ((mant >> 12) & 1u)));
+}
+
+static float f16_to_f32(uint16_t h) {
+    uint32_t sign = (uint32_t)(h & 0x8000u) << 16;
+    int32_t exp = (h >> 10) & 0x1f;
+    uint32_t mant = h & 0x3ffu;
+    if (exp == 0 && mant == 0) {
+        union { uint32_t u; float f; } v = {sign};
+        return v.f;
+    }
+    if (exp == 31) {
+        union { uint32_t u; float f; } v = {sign | 0x7f800000u};
+        return v.f;
+    }
+    if (exp == 0) {
+        while ((mant & 0x400u) == 0) { mant <<= 1; --exp; }
+        ++exp;
+        mant &= 0x3ffu;
+    }
+    union { uint32_t u; float f; } v = {
+        sign | ((uint32_t)(exp + 127 - 15) << 23) | (mant << 13)
+    };
+    return v.f;
+}
 
 static int expect_backend(const char* label, const char* expected_kernel) {
     if (tc_last_backend() != TC_BACKEND_HIP) {
@@ -98,6 +139,58 @@ int main(void) {
             return 1;
         }
     }
+    printf("HIP f32 GEMM OK: kernel=hipblas_sgemm_staged\n");
+
+    tc_buffer *Ah = NULL, *Bh = NULL, *Ch = NULL;
+    const uint16_t Ah_vals[4] = {
+        f32_to_f16(1.0f), f32_to_f16(2.0f),
+        f32_to_f16(3.0f), f32_to_f16(4.0f),
+    };
+    const uint16_t Bh_vals[4] = {
+        f32_to_f16(5.0f), f32_to_f16(6.0f),
+        f32_to_f16(7.0f), f32_to_f16(8.0f),
+    };
+    if (tc_buffer_alloc(ctx, sizeof(Ah_vals), &Ah) != TC_OK ||
+        tc_buffer_alloc(ctx, sizeof(Bh_vals), &Bh) != TC_OK ||
+        tc_buffer_alloc(ctx, sizeof(Ah_vals), &Ch) != TC_OK) {
+        fprintf(stderr, "fp16 alloc failed\n");
+        return 1;
+    }
+    void *Ahp = NULL, *Bhp = NULL, *Chp = NULL;
+    if (tc_buffer_map(Ah, &Ahp) != TC_OK ||
+        tc_buffer_map(Bh, &Bhp) != TC_OK ||
+        tc_buffer_map(Ch, &Chp) != TC_OK) {
+        fprintf(stderr, "fp16 map failed\n");
+        return 1;
+    }
+    memcpy(Ahp, Ah_vals, sizeof(Ah_vals));
+    memcpy(Bhp, Bh_vals, sizeof(Bh_vals));
+    memset(Chp, 0, sizeof(Ah_vals));
+
+    memset(&d, 0, sizeof(d));
+    d.M = 2; d.N = 2; d.K = 2;
+    d.alpha = 1.0f; d.beta = 0.0f;
+    d.a_dtype = d.b_dtype = d.c_dtype = TC_DTYPE_F16;
+    d.accum_dtype = TC_DTYPE_F32;
+    s = tc_gemm(ctx, &d, Ah, Bh, Ch);
+    if (s != TC_OK) {
+        fprintf(stderr, "tc_gemm HIP fp16 failed: %s\n", tc_status_string(s));
+        return 1;
+    }
+    if (expect_backend("fp16 identity", "hipblas_hgemm_staged")) return 1;
+    uint16_t* hout = (uint16_t*)Chp;
+    for (int i = 0; i < 4; ++i) {
+        const float got = f16_to_f32(hout[i]);
+        if (fabsf(got - expected[i]) > 1e-3f) {
+            fprintf(stderr, "bad HIP hGEMM output[%d]=%.6f expected %.6f\n",
+                    i, got, expected[i]);
+            return 1;
+        }
+    }
+    printf("HIP fp16 GEMM OK: kernel=hipblas_hgemm_staged\n");
+    tc_buffer_free(ctx, Ah);
+    tc_buffer_free(ctx, Bh);
+    tc_buffer_free(ctx, Ch);
 
     setenv("TC_DISABLE_HIP_GEMM", "1", 1);
     memset(Cp, 0, sizeof(expected));
