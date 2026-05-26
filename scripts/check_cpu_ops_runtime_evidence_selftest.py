@@ -19,9 +19,11 @@ CHECKER = ROOT / "scripts" / "check_cpu_ops_runtime_evidence.py"
 def coverage() -> dict[str, Any]:
     return {
         "lib/ops/gemm_cpu.cpp": {
-            "executed_lines": [419],
+            "executed_lines": [315, 354, 419],
             "functions": {
                 "gemm_compute": {"start_line": 419, "executed_lines": [419]},
+                "gemm_compute_cblas_bf16": {"start_line": 315, "executed_lines": [315]},
+                "gemm_compute_cblas_f16": {"start_line": 354, "executed_lines": [354]},
             },
         },
         "lib/ops/conv2d_cpu.cpp": {
@@ -47,6 +49,9 @@ def passed_evidence() -> dict[str, Any]:
             "build_dir": "/repo/build-portable-cpu-current",
             "evidence": "/repo/build/cpu_ops_runtime_evidence.json",
         },
+        "build_features": {
+            "cblas": True,
+        },
         "checks": {
             "portable_cpu": {"status": "passed", "binary": "/repo/build/tests/test_portable_cpu", "trace": "portable_cpu"},
             "conv2d": {"status": "passed", "binary": "/repo/build/tests/test_conv2d", "trace": "conv2d"},
@@ -63,10 +68,14 @@ def passed_evidence() -> dict[str, Any]:
             "required_functions": [
                 "lib/ops/conv2d_cpu.cpp:direct_sgemm_f32",
                 "lib/ops/gemm_cpu.cpp:gemm_compute",
+                "lib/ops/gemm_cpu.cpp:gemm_compute_cblas_bf16",
+                "lib/ops/gemm_cpu.cpp:gemm_compute_cblas_f16",
             ],
             "covered_functions": [
                 "lib/ops/conv2d_cpu.cpp:direct_sgemm_f32",
                 "lib/ops/gemm_cpu.cpp:gemm_compute",
+                "lib/ops/gemm_cpu.cpp:gemm_compute_cblas_bf16",
+                "lib/ops/gemm_cpu.cpp:gemm_compute_cblas_f16",
             ],
             "missing_functions": [],
         },
@@ -91,6 +100,8 @@ def blocked_evidence() -> dict[str, Any]:
     ]
     evidence["summary"]["missing_functions"] = [
         "lib/ops/gemm_cpu.cpp:gemm_compute",
+        "lib/ops/gemm_cpu.cpp:gemm_compute_cblas_bf16",
+        "lib/ops/gemm_cpu.cpp:gemm_compute_cblas_f16",
     ]
     return evidence
 

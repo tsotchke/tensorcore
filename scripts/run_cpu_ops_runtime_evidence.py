@@ -19,6 +19,8 @@ FORMAT_VERSION = 1
 REQUIRED_FUNCTIONS = {
     "lib/ops/gemm_cpu.cpp": {
         "gemm_compute",
+        "gemm_compute_cblas_bf16",
+        "gemm_compute_cblas_f16",
     },
     "lib/ops/conv2d_cpu.cpp": {
         "direct_sgemm_f32",
@@ -199,6 +201,17 @@ def build_env(build_dir: pathlib.Path) -> dict[str, str]:
     return env
 
 
+def build_has_cblas(build_dir: pathlib.Path) -> bool:
+    for rel in ("compile_commands.json", "CMakeCache.txt"):
+        try:
+            text = (build_dir / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if "TC_HAS_CBLAS=1" in text or "TC_HAS_CBLAS:INTERNAL=1" in text:
+            return True
+    return False
+
+
 def classify_attempt(attempt: dict[str, Any], markers: tuple[str, ...]) -> tuple[str, str | None]:
     text = "\n".join([str(attempt.get("stdout_tail", "")), str(attempt.get("stderr_tail", ""))])
     if attempt.get("rc") == 0 and all(marker in text for marker in markers):
@@ -213,6 +226,7 @@ def classify_attempt(attempt: dict[str, Any], markers: tuple[str, ...]) -> tuple
 def build_evidence(args: argparse.Namespace) -> dict[str, Any]:
     build_dir = args.build_dir.resolve()
     env = build_env(build_dir)
+    cblas_available = build_has_cblas(build_dir)
     trace: list[dict[str, Any]] = []
     checks: dict[str, Any] = {}
     files: dict[str, Any] = {}
@@ -243,6 +257,12 @@ def build_evidence(args: argparse.Namespace) -> dict[str, Any]:
             for rel_path, names in spec["covers"].items():
                 for function in names:
                     add_function(files, rel_path, function)
+            if name == "portable_cpu":
+                if cblas_available:
+                    add_function(files, "lib/ops/gemm_cpu.cpp", "gemm_compute_cblas_f16")
+                    add_function(files, "lib/ops/gemm_cpu.cpp", "gemm_compute_cblas_bf16")
+                else:
+                    blocked_reasons.append("portable_cpu:cblas_not_compiled")
         elif status == "blocked":
             blocked_reasons.append(f"{name}:{reason}")
         else:
@@ -276,6 +296,9 @@ def build_evidence(args: argparse.Namespace) -> dict[str, Any]:
         "paths": {
             "build_dir": str(build_dir),
             "evidence": str(args.evidence_path),
+        },
+        "build_features": {
+            "cblas": cblas_available,
         },
         "checks": checks,
         "trace": trace,

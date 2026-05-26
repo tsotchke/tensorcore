@@ -23,6 +23,8 @@ REQUIRED_CHECKS = {
 REQUIRED_FUNCTIONS = {
     "lib/ops/gemm_cpu.cpp": {
         "gemm_compute",
+        "gemm_compute_cblas_bf16",
+        "gemm_compute_cblas_f16",
     },
     "lib/ops/conv2d_cpu.cpp": {
         "direct_sgemm_f32",

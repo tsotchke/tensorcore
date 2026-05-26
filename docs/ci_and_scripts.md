@@ -298,6 +298,8 @@ the portable CPU build, executes `test_portable_cpu` and `test_conv2d`, and
 emits ICC-readable coverage for:
 
 - `lib/ops/gemm_cpu.cpp:gemm_compute`
+- `lib/ops/gemm_cpu.cpp:gemm_compute_cblas_f16` and
+  `gemm_compute_cblas_bf16` when the build has CBLAS
 - `lib/ops/conv2d_cpu.cpp:direct_sgemm_f32`
 
 The default artifact is `build/cpu_ops_runtime_evidence.json`. Validate it

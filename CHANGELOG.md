@@ -171,8 +171,8 @@ every architectural primitive in code and tested:
   M5 layout helpers as optional `skipped_no_metal4_sdk`/`skipped_no_m5`
   blockers when the host cannot genuinely execute them.
 - Portable CPU ops evidence now wraps `test_portable_cpu` and `test_conv2d`,
-  emitting ICC-readable coverage for `gemm_compute` and the Conv2D
-  `direct_sgemm_f32` backward helper.
+  emitting ICC-readable coverage for `gemm_compute`, CBLAS f16/bf16 helpers
+  when compiled, and the Conv2D `direct_sgemm_f32` backward helper.
 - Metal ops evidence now wraps attention correctness and Metal Conv2D smokes
   with `TC_TRACE=1`, emitting coverage for attention `encode_forward` and
   Conv2D `conv_bytes` while leaving shader-internal async-copy coverage
