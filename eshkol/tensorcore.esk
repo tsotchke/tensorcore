@@ -8,7 +8,7 @@
 ;;   2. In eshkol-platform, link against -ltensorcore and add the bridge file
 ;;      `lib/ffi/tensorcore_ffi.cpp` (see docs/eshkol_integration.md).  That
 ;;      file registers __tc-* builtins.
-;;   3. (use tensorcore) from any Eshkol source.
+;;   3. (require tensorcore) from any Eshkol source.
 ;;
 ;; Until the bridge lands, this file documents the planned API.
 ;;

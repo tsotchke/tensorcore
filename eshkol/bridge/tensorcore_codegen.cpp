@@ -3,10 +3,10 @@
  *
  * Drop-in to eshkol-platform/lib/backend/.  Models the same pattern used by
  * builtin_declarations.cpp and tensor_codegen.cpp: declares the tensorcore
- * C ABI as ExternalLinkage functions in the Eshkol LLVM module, then exposes
- * Eshkol-callable wrappers (`__tc-init`, `__tc-gemm`, `__tc-attention-forward`,
- * `__tc-attention-backward`, `__tc-buffer-alloc`, `__tc-buffer-map`,
- * `__tc-buffer-free`, `__tc-last-backend`).
+ * C ABI as ExternalLinkage functions in the Eshkol LLVM module. The
+ * Scheme-side `tensorcore.esk` wrappers call `__tc-*` builtins; runtime
+ * evidence must prove that the Eshkol integration resolves those wrappers
+ * to the native `tc_*` declarations.
  *
  * Integration steps in eshkol-platform:
  *   1. Drop this file into lib/backend/.
@@ -16,7 +16,7 @@
  *   3. Call TensorcoreDeclarations(ctx) from CodegenContext init alongside
  *      BuiltinDeclarations.
  *   4. Register the Scheme bindings:
- *        (use tensorcore)
+ *        (require tensorcore)
  *      which loads eshkol/tensorcore.esk (the .esk file in this repo).
  */
 

@@ -1,0 +1,58 @@
+;;
+;; tensorcore_bridge_smoke.esk - broader Eshkol bridge smoke.
+;;
+;; This is intentionally separate from hello_tensorcore.esk, which stays a
+;; compact user-facing example. This file exercises the bridge wrappers ICC
+;; needs to see in runtime evidence.
+;;
+;; Run via:
+;;   ESHKOL_ENABLE_TENSORCORE=1 ESHKOL_PATH=eshkol eshkol-run -I eshkol \
+;;     tensorcore_bridge_smoke.esk
+;;
+
+(require stdlib)
+(require tensorcore)
+
+(define (main)
+  (let* ((ctx (tc-init))
+         (info (tc-device-info ctx))
+         (M 8)
+         (N 8)
+         (K 8)
+         (matrix-bytes (* M N 4))
+         (attention-bytes (* 1 1 4 64 2))
+         (A (tc-buffer-alloc ctx matrix-bytes))
+         (B (tc-buffer-alloc ctx matrix-bytes))
+         (C (tc-buffer-alloc ctx matrix-bytes))
+         (Q (tc-buffer-alloc ctx attention-bytes))
+         (KV (tc-buffer-alloc ctx attention-bytes))
+         (V (tc-buffer-alloc ctx attention-bytes))
+         (O (tc-buffer-alloc ctx attention-bytes))
+         (mapped (tc-buffer-map A)))
+    (display "tensorcore bridge device=")
+    (display (cdr (assoc 'name info)))
+    (newline)
+    (if mapped
+        (display "buffer map OK")
+        (display "buffer map NULL"))
+    (newline)
+
+    (tc-gemm ctx 'f32 A B C M N K 1.0 0.0 #f #f)
+    (tc-gemm-fp16 ctx A B C M N K)
+    (tc-gemm-bf16 ctx A B C M N K)
+    (tc-attention-forward ctx Q KV V O 1 1 4 4 64 0.125 #f)
+
+    (display "TENSORCORE_BRIDGE_OK backend=")
+    (display (tc-last-backend))
+    (newline)
+
+    (tc-buffer-free ctx A)
+    (tc-buffer-free ctx B)
+    (tc-buffer-free ctx C)
+    (tc-buffer-free ctx Q)
+    (tc-buffer-free ctx KV)
+    (tc-buffer-free ctx V)
+    (tc-buffer-free ctx O)
+    (tc-shutdown ctx)))
+
+(main)

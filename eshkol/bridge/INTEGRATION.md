@@ -67,7 +67,7 @@ cp ~/Desktop/tensorcore/eshkol/tensorcore.esk \
 Then in Eshkol code:
 
 ```scheme
-(use tensorcore)
+(require tensorcore)
 
 (define ctx (tc-init))
 (define A (tc-buffer-alloc ctx (* M K 2)))
@@ -94,7 +94,7 @@ zero overhead — direct LLVM IR call into the linked C ABI.
 
 After integration:
 
-1. **Smoke test**: Run `eshkol-run ~/Desktop/tensorcore/eshkol/hello_tensorcore.esk`. Should print device info + `gemm OK backend=simdgroup-matrix`.
+1. **Smoke test**: Run `ESHKOL_ENABLE_TENSORCORE=1 ESHKOL_PATH=~/Desktop/tensorcore/eshkol eshkol-run -I ~/Desktop/tensorcore/eshkol ~/Desktop/tensorcore/eshkol/hello_tensorcore.esk`. Should print device info + `gemm OK backend=simdgroup-matrix`.
 2. **Cross-check vs eshkol-platform's existing GEMM**: Run both paths on identical inputs, compare element-wise. Should match within fp16 tolerance.
 3. **Bench**: Compare tensorcore-via-Eshkol vs eshkol-platform's `gpu_memory.mm` matmul. tensorcore should be ≥1.2× on shapes ≥1024³ (because it uses `simdgroup_matrix` with fp32 accum while gpu_memory.mm uses f32-only simdgroup).
 

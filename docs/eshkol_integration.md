@@ -75,6 +75,12 @@ The Eshkol-side calling convention mirrors the C ABI exactly:
 The `.esk` files in this directory (`tensorcore.esk`, `hello_tensorcore.esk`)
 describe the intended Eshkol-side interface and a sample program.
 
+`scripts/run_eshkol_tensorcore_bridge_smoke.py` records the current runtime
+state in `build/eshkol_tensorcore_bridge_evidence.json`. Until the Eshkol-side
+`__tc-*` wrappers resolve to the native `tc_*` declarations, that evidence is
+expected to be `status=blocked`; use `--require-pass` only when promoting the
+bridge to a real runtime-proven path.
+
 ## Compile evidence
 
 `eshkol/bridge/COMPILE-EVIDENCE.txt` and

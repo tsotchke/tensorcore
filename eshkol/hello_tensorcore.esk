@@ -2,14 +2,15 @@
 ;; hello_tensorcore.esk — minimal "is tensorcore wired up" example.
 ;;
 ;; Run via:
-;;   eshkol-run --library=eshkol/tensorcore.esk hello_tensorcore.esk
+;;   ESHKOL_PATH=eshkol eshkol-run -I eshkol hello_tensorcore.esk
 ;;
 ;; Expected output:
 ;;   tensorcore device=<Apple GPU name> family=Apple<N>
 ;;   gemm OK   backend=simdgroup-matrix
 ;;
 
-(use tensorcore)
+(require stdlib)
+(require tensorcore)
 
 (define (main)
   (let* ((ctx  (tc-init))

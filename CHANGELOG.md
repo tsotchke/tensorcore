@@ -146,6 +146,11 @@ every architectural primitive in code and tested:
 - Release-smoke evidence now records clean git-head provenance, and the
   operational bundle checker can require release, SDK26, PyTorch, and
   live-mesh evidence to match the current committed head.
+- Eshkol bridge runtime evidence now has a repo-owned smoke/checker pair:
+  `scripts/run_eshkol_tensorcore_bridge_smoke.py` records the real local
+  `eshkol-run` compile/runtime state for `hello_tensorcore.esk` and the new
+  broader `tensorcore_bridge_smoke.esk`, while the checker accepts explicit
+  blocked evidence until Eshkol resolves the `__tc-*` wrapper builtins.
 - CUDA smoke evidence now participates in the same clean-head gate, including
   archive-based remote builds prepared by the live mesh runner.
 - HIP smoke evidence now uses the same source-head override/marker mechanism

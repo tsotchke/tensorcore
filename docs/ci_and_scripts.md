@@ -179,6 +179,39 @@ The artifact's `files` section is intentionally shaped like the release-smoke
 coverage payload so ICC can consume it as `--trace-file` evidence when ranking
 fallback-path readiness.
 
+### `run_eshkol_tensorcore_bridge_smoke.py`
+
+Focused evidence for the Eshkol bridge surface. The script uses a local
+`eshkol-run` binary, defaults to `~/Desktop/eshkol/build/eshkol-run` when
+available, and tries to compile and run:
+
+- `eshkol/hello_tensorcore.esk`
+- `eshkol/tensorcore_bridge_smoke.esk`
+
+It emits `build/eshkol_tensorcore_bridge_evidence.json` with structured
+compile/runtime attempts, source module-load checks, and ICC-readable function
+coverage once the bridge actually runs. Until the Eshkol-side `__tc-*` wrappers
+resolve, the evidence is expected to be `status=blocked` with
+`summary.missing_builtins` listing the unresolved bridge functions. Validate
+the artifact with:
+
+```sh
+python3 scripts/check_eshkol_tensorcore_bridge_evidence.py \
+  build/eshkol_tensorcore_bridge_evidence.json
+```
+
+Run locally:
+
+```sh
+python3 scripts/run_eshkol_tensorcore_bridge_smoke.py
+python3 scripts/check_eshkol_tensorcore_bridge_evidence.py \
+  build/eshkol_tensorcore_bridge_evidence.json --require-pass
+```
+
+The first command is useful even before the bridge is complete because it
+records the exact Eshkol compiler/runtime blocker. The second command is the
+promotion gate for real runtime evidence.
+
 ### `ci_portable_cpu.sh`
 
 Builds with `TC_ENABLE_METAL=OFF`, runs the portable CTest suite,
@@ -962,5 +995,6 @@ workflow will pass too.
 | Build and verify a native SDK tarball | `scripts/create_native_sdk_archive.sh && scripts/check_native_sdk_archive.sh` |
 | Run the CI Python smoke locally | `cmake --install build --prefix /tmp/tensorcore-install && scripts/ci_python_smoke.sh` |
 | Emit ICC-readable fallback runtime evidence | `python3 scripts/run_fallback_runtime_smoke.py --require-pass` |
+| Probe Eshkol bridge runtime evidence | `python3 scripts/run_eshkol_tensorcore_bridge_smoke.py` |
 | Pre-release wide smoke | `scripts/release_smoke.sh` (add `REQUIRE_GPU=1` if you have one) |
 | Cross-check version triple | `scripts/check_version_consistency.sh` |
