@@ -42,6 +42,9 @@ jobs:
       - name: AMX and bench runtime evidence checker fixtures
         run: python3 scripts/check_amx_bench_evidence_selftest.py
 
+      - name: CPU ops runtime evidence checker fixtures
+        run: python3 scripts/check_cpu_ops_runtime_evidence_selftest.py
+
       - name: Windows host smoke evidence checker fixtures
         run: python3 scripts/check_windows_host_smoke_evidence_selftest.py
 

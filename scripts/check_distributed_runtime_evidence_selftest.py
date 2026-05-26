@@ -28,9 +28,10 @@ def coverage() -> dict[str, Any]:
             },
         },
         "lib/distributed/diloco.cpp": {
-            "executed_lines": [280, 387],
+            "executed_lines": [241, 280, 387],
             "functions": {
                 "apply_outer_optimizer": {"start_line": 280, "executed_lines": [280]},
+                "compute_delta_topk": {"start_line": 241, "executed_lines": [241]},
                 "do_outer_step": {"start_line": 387, "executed_lines": [387]},
             },
         },
@@ -68,6 +69,7 @@ def passed_evidence() -> dict[str, Any]:
             "failure_reasons": [],
             "required_functions": [
                 "lib/distributed/diloco.cpp:apply_outer_optimizer",
+                "lib/distributed/diloco.cpp:compute_delta_topk",
                 "lib/distributed/diloco.cpp:do_outer_step",
                 "lib/distributed/gloo_tcp.cpp:accept_with_timeout",
                 "lib/distributed/gloo_tcp.cpp:advertised_peer_info",
@@ -76,6 +78,7 @@ def passed_evidence() -> dict[str, Any]:
             ],
             "covered_functions": [
                 "lib/distributed/diloco.cpp:apply_outer_optimizer",
+                "lib/distributed/diloco.cpp:compute_delta_topk",
                 "lib/distributed/diloco.cpp:do_outer_step",
                 "lib/distributed/gloo_tcp.cpp:accept_with_timeout",
                 "lib/distributed/gloo_tcp.cpp:advertised_peer_info",
@@ -104,6 +107,7 @@ def blocked_evidence() -> dict[str, Any]:
     evidence["summary"]["blocked_reasons"] = ["gloo_ring_fork:loopback_unavailable"]
     evidence["summary"]["covered_functions"] = [
         "lib/distributed/diloco.cpp:apply_outer_optimizer",
+        "lib/distributed/diloco.cpp:compute_delta_topk",
         "lib/distributed/diloco.cpp:do_outer_step",
     ]
     evidence["summary"]["missing_functions"] = [

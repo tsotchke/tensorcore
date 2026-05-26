@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run distributed local fork smokes and emit ICC-readable runtime evidence."""
+"""Run portable CPU ops smokes and emit ICC-readable runtime evidence."""
 
 from __future__ import annotations
 
@@ -14,52 +14,37 @@ from typing import Any
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-SCHEMA = "tensorcore.distributed_runtime_evidence.v1"
+SCHEMA = "tensorcore.cpu_ops_runtime_evidence.v1"
 FORMAT_VERSION = 1
 REQUIRED_FUNCTIONS = {
-    "lib/distributed/gloo_tcp.cpp": {
-        "tcp_connect_timeout",
-        "advertised_peer_info",
-        "ring_connect_timeout_ms",
-        "accept_with_timeout",
+    "lib/ops/gemm_cpu.cpp": {
+        "gemm_compute",
     },
-    "lib/distributed/diloco.cpp": {
-        "apply_outer_optimizer",
-        "compute_delta_topk",
-        "do_outer_step",
+    "lib/ops/conv2d_cpu.cpp": {
+        "direct_sgemm_f32",
     },
 }
 TESTS = {
-    "gloo_ring_fork": {
-        "path": "tests/test_gloo_ring_fork",
-        "required_markers": ("ring 4-rank fork test ipv4:", "OK"),
+    "portable_cpu": {
+        "path": "tests/test_portable_cpu",
+        "required_markers": ("portable CPU backend: OK",),
         "covers": {
-            "lib/distributed/gloo_tcp.cpp": {
-                "tcp_connect_timeout",
-                "advertised_peer_info",
-                "ring_connect_timeout_ms",
-                "accept_with_timeout",
+            "lib/ops/gemm_cpu.cpp": {
+                "gemm_compute",
             },
         },
     },
-    "diloco_gloo_fork": {
-        "path": "tests/test_diloco_gloo_fork",
-        "required_markers": ("diloco_gloo: OK",),
+    "conv2d": {
+        "path": "tests/test_conv2d",
+        "required_markers": (
+            "conv2d_backward_input  dispatched=yes",
+            "conv2d_backward_weight dispatched=yes",
+            "conv2d_validation",
+            "OK",
+        ),
         "covers": {
-            "lib/distributed/diloco.cpp": {
-                "apply_outer_optimizer",
-                "compute_delta_topk",
-                "do_outer_step",
-            },
-        },
-    },
-    "diloco_sparse_fork": {
-        "path": "tests/test_diloco_sparse_fork",
-        "required_markers": ("diloco_sparse: OK", "bandwidth:"),
-        "covers": {
-            "lib/distributed/diloco.cpp": {
-                "apply_outer_optimizer",
-                "do_outer_step",
+            "lib/ops/conv2d_cpu.cpp": {
+                "direct_sgemm_f32",
             },
         },
     },
@@ -68,11 +53,15 @@ TESTS = {
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--build-dir", type=pathlib.Path, default=ROOT / "build")
+    parser.add_argument(
+        "--build-dir",
+        type=pathlib.Path,
+        default=ROOT / "build-portable-cpu-current",
+    )
     parser.add_argument(
         "--evidence-path",
         type=pathlib.Path,
-        default=ROOT / "build" / "distributed_runtime_evidence.json",
+        default=ROOT / "build" / "cpu_ops_runtime_evidence.json",
     )
     parser.add_argument("--timeout-sec", type=float, default=90.0)
     parser.add_argument("--require-pass", action="store_true")
@@ -162,24 +151,26 @@ def run_cmd(
         }
 
 
-def line_matching(rel_path: str, pattern: str) -> int:
+def function_line(rel_path: str, name: str) -> int:
     path = ROOT / rel_path
-    regex = re.compile(pattern)
+    regex = re.compile(
+        rf"^\s*(?:extern\s+\"C\"\s+)?(?:[A-Za-z_][\w:<>,\s\*&]*\s+)+{re.escape(name)}\s*\("
+    )
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return 1
     for index, line in enumerate(lines, start=1):
-        if regex.search(line):
+        if not regex.search(line):
+            continue
+        signature = line
+        for continuation in lines[index:]:
+            signature += "\n" + continuation
+            if "{" in continuation or ";" in continuation:
+                break
+        if "{" in signature and (";" not in signature or signature.index("{") < signature.index(";")):
             return index
     return 1
-
-
-def function_line(rel_path: str, name: str) -> int:
-    return line_matching(
-        rel_path,
-        rf"^\s*(?:[A-Za-z_][\w:<>,\s\*&]*\s+)+{re.escape(name)}\s*\(",
-    )
 
 
 def add_function(files: dict[str, Any], rel_path: str, name: str) -> None:
@@ -201,10 +192,6 @@ def covered_functions(files: dict[str, Any]) -> list[str]:
 
 def build_env(build_dir: pathlib.Path) -> dict[str, str]:
     env = os.environ.copy()
-    env.setdefault("TC_GLOO_TRACE", "1")
-    metallib = build_dir / "tensorcore.metallib"
-    if metallib.exists():
-        env.setdefault("TC_METALLIB", str(metallib))
     dylib_entries = [str(build_dir), str(build_dir / "lib" / "tensorcore")]
     if env.get("DYLD_LIBRARY_PATH"):
         dylib_entries.append(env["DYLD_LIBRARY_PATH"])
@@ -217,8 +204,6 @@ def classify_attempt(attempt: dict[str, Any], markers: tuple[str, ...]) -> tuple
     if attempt.get("rc") == 0 and all(marker in text for marker in markers):
         return "passed", None
     if attempt.get("rc") == 77 or "SKIP" in text:
-        if "loopback" in text or "port" in text:
-            return "blocked", "loopback_unavailable"
         return "blocked", "test_skipped"
     if attempt.get("rc") is None and attempt.get("timeout_seconds"):
         return "failed", "timeout"
@@ -280,7 +265,7 @@ def build_evidence(args: argparse.Namespace) -> dict[str, Any]:
         "schema": SCHEMA,
         "meta": {
             "format": FORMAT_VERSION,
-            "source": "tensorcore_distributed_runtime_probe",
+            "source": "tensorcore_cpu_ops_probe",
             "git_head": git_value("rev-parse", "HEAD"),
             "git_dirty": git_dirty(),
         },
@@ -317,7 +302,7 @@ def main() -> int:
     else:
         reason = ",".join(evidence["summary"]["blocked_reasons"] or evidence["summary"]["failure_reasons"]) or "ok"
         print(
-            "distributed runtime evidence "
+            "CPU ops evidence "
             f"{evidence['status']}: reason={reason} evidence={args.evidence_path} "
             f"covered={len(evidence['summary']['covered_functions'])}/"
             f"{len(evidence['summary']['required_functions'])}"

@@ -241,7 +241,8 @@ forked GLOO ring, dense DiLoCo, and sparse DiLoCo smokes from an existing build
 directory, captures command traces, and emits ICC-readable coverage for:
 
 - `lib/distributed/gloo_tcp.cpp`
-- `lib/distributed/diloco.cpp`
+- `lib/distributed/diloco.cpp`, including the TOPK sparse-delta path when
+  `test_diloco_sparse_fork` passes
 
 The default artifact is `build/distributed_runtime_evidence.json`. Validate it
 with:
@@ -289,6 +290,29 @@ TensorOps M5 layout helpers are probed as an optional layout check. On current
 non-SDK26 or non-M5 hosts the artifact stays `status=passed` for AMX/bench
 coverage while recording `summary.optional_blocked_reasons` such as
 `tensorops_layout:skipped_no_metal4_sdk` or `tensorops_layout:skipped_no_m5`.
+
+### `run_cpu_ops_runtime_evidence.py`
+
+Focused evidence for portable CPU GEMM and Conv2D helper paths. The runner uses
+the portable CPU build, executes `test_portable_cpu` and `test_conv2d`, and
+emits ICC-readable coverage for:
+
+- `lib/ops/gemm_cpu.cpp:gemm_compute`
+- `lib/ops/conv2d_cpu.cpp:direct_sgemm_f32`
+
+The default artifact is `build/cpu_ops_runtime_evidence.json`. Validate it
+with:
+
+```sh
+python3 scripts/check_cpu_ops_runtime_evidence.py \
+  build/cpu_ops_runtime_evidence.json --require-pass
+```
+
+Run locally after building the portable CPU suite:
+
+```sh
+python3 scripts/run_cpu_ops_runtime_evidence.py --require-pass
+```
 
 ### `run_eshkol_tensorcore_bridge_smoke.py`
 
@@ -1111,6 +1135,7 @@ workflow will pass too.
 | Prove Python native packaging paths | `python3 scripts/run_python_packaging_evidence.py --require-pass` |
 | Prove local distributed runtime paths | `python3 scripts/run_distributed_runtime_evidence.py --require-pass` |
 | Prove local AMX and GEMM benchmark paths | `python3 scripts/run_amx_bench_evidence.py --require-pass` |
+| Prove portable CPU GEMM and Conv2D helpers | `python3 scripts/run_cpu_ops_runtime_evidence.py --require-pass` |
 | Probe Eshkol bridge runtime evidence | `python3 scripts/run_eshkol_tensorcore_bridge_smoke.py --build-dir build-portable-cpu-current --require-pass` |
 | Pre-release wide smoke | `scripts/release_smoke.sh` (add `REQUIRE_GPU=1` if you have one) |
 | Cross-check version triple | `scripts/check_version_consistency.sh` |

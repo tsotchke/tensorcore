@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate JSON evidence from scripts/run_distributed_runtime_evidence.py."""
+"""Validate JSON evidence from scripts/run_cpu_ops_runtime_evidence.py."""
 
 from __future__ import annotations
 
@@ -12,26 +12,20 @@ from typing import Any
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-SCHEMA = "tensorcore.distributed_runtime_evidence.v1"
+SCHEMA = "tensorcore.cpu_ops_runtime_evidence.v1"
 FORMAT_VERSION = 1
 VALID_STATUSES = {"passed", "failed", "blocked"}
 VALID_CHECK_STATUSES = {"passed", "failed", "blocked"}
 REQUIRED_CHECKS = {
-    "gloo_ring_fork",
-    "diloco_gloo_fork",
-    "diloco_sparse_fork",
+    "portable_cpu",
+    "conv2d",
 }
 REQUIRED_FUNCTIONS = {
-    "lib/distributed/gloo_tcp.cpp": {
-        "tcp_connect_timeout",
-        "advertised_peer_info",
-        "ring_connect_timeout_ms",
-        "accept_with_timeout",
+    "lib/ops/gemm_cpu.cpp": {
+        "gemm_compute",
     },
-    "lib/distributed/diloco.cpp": {
-        "apply_outer_optimizer",
-        "compute_delta_topk",
-        "do_outer_step",
+    "lib/ops/conv2d_cpu.cpp": {
+        "direct_sgemm_f32",
     },
 }
 
@@ -61,13 +55,13 @@ def load_json(path: pathlib.Path) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except OSError as exc:
-        raise SystemExit(f"could not read distributed runtime evidence {path}: {exc}") from exc
+        raise SystemExit(f"could not read CPU ops evidence {path}: {exc}") from exc
     except json.JSONDecodeError as exc:
-        raise SystemExit(f"distributed runtime evidence is not valid JSON: {exc}") from exc
+        raise SystemExit(f"CPU ops evidence is not valid JSON: {exc}") from exc
 
 
 def fail(errors: list[str]) -> int:
-    print("distributed runtime evidence invalid:", file=sys.stderr)
+    print("CPU ops evidence invalid:", file=sys.stderr)
     for error in errors:
         print(f"  - {error}", file=sys.stderr)
     return 1
@@ -87,6 +81,15 @@ def covered_functions(data: dict[str, Any]) -> dict[str, set[str]]:
     return covered
 
 
+def expected_required_functions() -> list[str]:
+    return sorted(f"{path}:{name}" for path, names in REQUIRED_FUNCTIONS.items() for name in names)
+
+
+def derived_covered_functions(data: dict[str, Any]) -> list[str]:
+    covered = covered_functions(data)
+    return sorted(f"{path}:{name}" for path, names in covered.items() for name in names)
+
+
 def check_required_functions(errors: list[str], data: dict[str, Any]) -> None:
     covered = covered_functions(data)
     missing: list[str] = []
@@ -96,7 +99,31 @@ def check_required_functions(errors: list[str], data: dict[str, Any]) -> None:
             if name not in present:
                 missing.append(f"{rel_path}:{name}")
     if missing:
-        errors.append(f"distributed runtime evidence is missing function coverage: {sorted(missing)!r}")
+        errors.append(f"CPU ops evidence is missing function coverage: {sorted(missing)!r}")
+
+
+def check_summary_contract(errors: list[str], data: dict[str, Any]) -> None:
+    summary = data.get("summary")
+    if not isinstance(summary, dict):
+        return
+    required = expected_required_functions()
+    covered = derived_covered_functions(data)
+    missing = sorted(set(required) - set(covered))
+    if summary.get("required_functions") != required:
+        errors.append(
+            "summary.required_functions must match checker required functions: "
+            f"{summary.get('required_functions')!r} != {required!r}"
+        )
+    if summary.get("covered_functions") != covered:
+        errors.append(
+            "summary.covered_functions must match files coverage: "
+            f"{summary.get('covered_functions')!r} != {covered!r}"
+        )
+    if summary.get("missing_functions") != missing:
+        errors.append(
+            "summary.missing_functions must match derived missing functions: "
+            f"{summary.get('missing_functions')!r} != {missing!r}"
+        )
 
 
 def check_clean_head(errors: list[str], data: dict[str, Any], expected_head: str | None) -> None:
@@ -108,10 +135,10 @@ def check_clean_head(errors: list[str], data: dict[str, Any], expected_head: str
         errors.append("meta must be an object")
         return
     if meta.get("git_dirty") is not False:
-        errors.append("distributed runtime evidence must be from a clean git tree")
+        errors.append("CPU ops evidence must be from a clean git tree")
     if meta.get("git_head") != expected_head:
         errors.append(
-            "distributed runtime evidence git_head mismatch: "
+            "CPU ops evidence git_head mismatch: "
             f"{meta.get('git_head')!r} != {expected_head!r}"
         )
 
@@ -169,19 +196,20 @@ def main() -> int:
     errors: list[str] = []
 
     if not isinstance(data, dict):
-        return fail(["distributed runtime evidence root must be a JSON object"])
+        return fail(["CPU ops evidence root must be a JSON object"])
     meta = data.get("meta")
     if data.get("schema") != SCHEMA:
         errors.append(f"schema must be {SCHEMA!r}")
     if not isinstance(meta, dict) or meta.get("format") != FORMAT_VERSION:
         errors.append(f"meta.format must be {FORMAT_VERSION}")
-    if not isinstance(meta, dict) or meta.get("source") != "tensorcore_distributed_runtime_probe":
-        errors.append("meta.source must be tensorcore_distributed_runtime_probe")
+    if not isinstance(meta, dict) or meta.get("source") != "tensorcore_cpu_ops_probe":
+        errors.append("meta.source must be tensorcore_cpu_ops_probe")
     if data.get("status") not in VALID_STATUSES:
         errors.append(f"status must be one of {sorted(VALID_STATUSES)!r}, got {data.get('status')!r}")
 
     check_checks(errors, data.get("checks"), args.require_pass)
     check_status_consistency(errors, data)
+    check_summary_contract(errors, data)
     trace = data.get("trace")
     if not isinstance(trace, list):
         errors.append("trace must be a list")
@@ -189,9 +217,6 @@ def main() -> int:
         errors.append("passed/failed evidence must include command traces")
     if data.get("status") == "passed":
         check_required_functions(errors, data)
-        summary = data.get("summary")
-        if isinstance(summary, dict) and summary.get("missing_functions") not in ([], None):
-            errors.append(f"summary.missing_functions must be empty, got {summary.get('missing_functions')!r}")
     if args.require_pass and data.get("status") != "passed":
         errors.append(f"--require-pass needs passed evidence, got {data.get('status')!r}")
     if args.require_clean_head:
@@ -199,14 +224,7 @@ def main() -> int:
     if errors:
         return fail(errors)
     covered_count = sum(len(names) for names in covered_functions(data).values())
-    reason = ""
-    summary = data.get("summary")
-    if isinstance(summary, dict):
-        reason = ",".join(summary.get("blocked_reasons") or summary.get("failure_reasons") or ["ok"])
-    print(
-        "distributed runtime evidence OK: "
-        f"status={data.get('status')} reason={reason} covered_functions={covered_count}"
-    )
+    print(f"CPU ops evidence OK: status={data.get('status')} covered_functions={covered_count}")
     return 0
 
 
