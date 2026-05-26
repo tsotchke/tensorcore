@@ -155,12 +155,17 @@ every architectural primitive in code and tested:
 - Metallib build-rule evidence now probes a generated CMake project that calls
   `tc_compile_metallib`, hashes the generated `.metallib`, emits
   ICC-readable coverage for the CMake helper, and reports explicit blocked
-  statuses on hosts without Apple Metal tools.
+  statuses on hosts without Apple Metal tools. The CMake helper now also
+  emits an explicit runtime backend probe line for `xcrun metal`/`metallib`
+  discovery, so ICC can distinguish observable Metal-tool gating from an
+  unresolved external backend.
 - Python packaging evidence now directly proves the native artifact copy path
   and macOS validation-tool path in `setup.py`, including copied artifact
   hashes, wheel hash, explicit platform tag, and ICC-readable coverage for
   `_run_tool`, `build_py_with_native_artifacts.run`, and
-  `bdist_wheel_with_native_artifacts.run`.
+  `bdist_wheel_with_native_artifacts.run`. `_run_tool` now has opt-in
+  structured probe logging, and the evidence runner records that log without
+  polluting parsed `lipo` architecture results.
 - Distributed runtime evidence now wraps the forked GLOO ring, dense DiLoCo,
   and sparse DiLoCo smokes, recording explicit loopback-blocked states when
   local TCP sockets are unavailable and ICC-readable coverage for the GLOO
@@ -189,7 +194,9 @@ every architectural primitive in code and tested:
   failure.
 - Hardware evidence dispatches now include a GitHub-hosted runner preflight
   artifact and CI-tested preflight script so missing `[self-hosted, macOS,
-  ARM64]` runners are visible before the hardware job queues.
+  ARM64]` runners are visible before the hardware job queues. A live
+  dispatch validated that the preflight artifact uploads even when the
+  self-hosted Apple GPU job remains queued.
 - HIP smoke evidence now proves both fp32 `hip_gemm_sgemm` and fp16
   `hip_gemm_hgemm`, records per-kernel `gemm_kernels`, and emits
   ICC-readable source coverage for remote chipStar/HIP runs.

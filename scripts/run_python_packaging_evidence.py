@@ -217,6 +217,18 @@ def run_cmd(
         }
 
 
+def parse_lipo_arches(output: str) -> list[str]:
+    known_arches = {
+        "arm64",
+        "arm64e",
+        "i386",
+        "ppc",
+        "ppc64",
+        "x86_64",
+    }
+    return sorted({token for token in output.split() if token in known_arches})
+
+
 def write_run_tool_probe(path: pathlib.Path) -> None:
     path.write_text(
         "\n".join(
@@ -246,6 +258,7 @@ def setup_env(native_dir: pathlib.Path) -> dict[str, str]:
     env = os.environ.copy()
     env["TENSORCORE_NATIVE_DIR"] = str(native_dir)
     env["TENSORCORE_REQUIRE_METALLIB"] = "1" if host_key() == "darwin" else "0"
+    env["TENSORCORE_SETUP_PROBE_LOG"] = "1"
     return env
 
 
@@ -416,7 +429,7 @@ def build_evidence(args: argparse.Namespace) -> dict[str, Any]:
                     checks["run_tool_lipo"] = {
                         "status": "passed",
                         "trace": "run_tool_lipo",
-                        "arches": lipo_attempt.get("stdout_tail", "").split(),
+                        "arches": parse_lipo_arches(lipo_attempt.get("stdout_tail", "")),
                     }
                 else:
                     failure_reason = "run_tool_lipo_failed"

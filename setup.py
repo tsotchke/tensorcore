@@ -79,18 +79,35 @@ def _find_native_artifacts():
     return found
 
 
+def _log_native_tool_probe(tool, backend_native_available, reason=""):
+    if os.environ.get("TENSORCORE_SETUP_PROBE_LOG") != "1":
+        return
+    suffix = f" reason={reason}" if reason else ""
+    print(
+        "runtime backend probe target=_run_tool "
+        f"backend_native_available=\"{backend_native_available}\" tool={tool}{suffix}"
+    )
+
+
 def _run_tool(args):
     try:
-        return subprocess.run(
+        result = subprocess.run(
             args,
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-        ).stdout
+        )
+        backend_native_available = "created"
+        _log_native_tool_probe(args[0], backend_native_available)
+        return result.stdout
     except FileNotFoundError as exc:
+        backend_native_available = "unavailable"
+        _log_native_tool_probe(args[0], backend_native_available, "tool_missing")
         raise SetupError(f"required native validation tool not found: {args[0]}") from exc
     except subprocess.CalledProcessError as exc:
+        backend_native_available = "init_failed"
+        _log_native_tool_probe(args[0], backend_native_available, "tool_failed")
         output = (exc.stderr or exc.stdout or str(exc)).strip()
         raise SetupError(f"{args[0]} failed while validating native artifact: {output}") from exc
 

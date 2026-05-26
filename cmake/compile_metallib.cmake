@@ -28,6 +28,9 @@ function(tc_compile_metallib)
     )
 
     if(NOT APPLE)
+        message(STATUS
+            "runtime backend probe target=tc_compile_metallib "
+            "backend_native_available=\"unavailable\" backend=metal reason=non_apple_platform")
         message(FATAL_ERROR "tc_compile_metallib requires Apple platform")
     endif()
     if(NOT TC_MLIB_TARGET)
@@ -40,6 +43,9 @@ function(tc_compile_metallib)
         message(FATAL_ERROR "tc_compile_metallib: SOURCES is required")
     endif()
     if(NOT TC_XCRUN_EXECUTABLE)
+        message(STATUS
+            "runtime backend probe target=tc_compile_metallib "
+            "backend_native_available=\"unavailable\" backend=metal reason=xcrun_missing")
         message(FATAL_ERROR "tc_compile_metallib: xcrun was not found; install Xcode command line tools")
     endif()
     if(NOT TC_MLIB_STD)
@@ -55,6 +61,9 @@ function(tc_compile_metallib)
         OUTPUT_STRIP_TRAILING_WHITESPACE
     )
     if(NOT _tc_metal_tool_result EQUAL 0 OR NOT _tc_metal_tool)
+        message(STATUS
+            "runtime backend probe target=tc_compile_metallib "
+            "backend_native_available=\"unavailable\" backend=metal reason=metal_compiler_missing")
         message(FATAL_ERROR
             "tc_compile_metallib: xcrun could not locate the Metal compiler "
             "(xcrun -sdk macosx -find metal failed: ${_tc_metal_tool_error})")
@@ -68,10 +77,17 @@ function(tc_compile_metallib)
         OUTPUT_STRIP_TRAILING_WHITESPACE
     )
     if(NOT _tc_metallib_tool_result EQUAL 0 OR NOT _tc_metallib_tool)
+        message(STATUS
+            "runtime backend probe target=tc_compile_metallib "
+            "backend_native_available=\"unavailable\" backend=metal reason=metallib_linker_missing")
         message(FATAL_ERROR
             "tc_compile_metallib: xcrun could not locate the metallib linker "
             "(xcrun -sdk macosx -find metallib failed: ${_tc_metallib_tool_error})")
     endif()
+    message(STATUS
+        "runtime backend probe target=tc_compile_metallib "
+        "backend_native_available=\"created\" backend=metal "
+        "metal_tool=${_tc_metal_tool} metallib_tool=${_tc_metallib_tool}")
 
     string(MAKE_C_IDENTIFIER "${TC_MLIB_TARGET}" _target_stem)
     set(_air_dir "${CMAKE_CURRENT_BINARY_DIR}/metal_air/${_target_stem}")

@@ -24,7 +24,7 @@ jobs:
 
       - name: Probe hardware runner registration
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.TC_RUNNER_READ_TOKEN || github.token }}
           REQUIRE_METAL4_TENSOROPS: ${{ inputs.require_metal4_tensorops }}
         run: |
           set +e

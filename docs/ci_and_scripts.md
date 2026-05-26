@@ -198,7 +198,10 @@ fallback-path readiness.
 Focused evidence for `cmake/compile_metallib.cmake`. The runner generates a
 small out-of-tree CMake project that includes the real `compile_metallib`
 module, calls `tc_compile_metallib`, builds a one-kernel `probe.metallib`, and
-records the artifact SHA-256 plus ICC-readable function coverage.
+records the artifact SHA-256 plus ICC-readable function coverage. The CMake
+helper emits a `runtime backend probe target=tc_compile_metallib` line during
+Metal tool discovery so external Metal-tool availability is explicit in
+configure logs.
 
 The default artifact is
 `build/metallib-build-rule-evidence/metallib_build_rule_evidence.json`.
@@ -226,7 +229,9 @@ Focused evidence for `setup.py` packaging paths. The runner uses local native
 artifacts, defaults to `build/`, runs the native artifact copy path through
 `build_py`, runs the macOS validation-tool path through `_run_tool`, builds a
 wheel through `bdist_wheel`, and records copied artifact hashes plus the wheel
-hash.
+hash. It sets `TENSORCORE_SETUP_PROBE_LOG=1` for the evidence run so `_run_tool`
+records a structured native-tool probe while the runner still parses only real
+`lipo` architecture tokens into `checks.run_tool_lipo.arches`.
 
 The default artifact is
 `build/python-packaging-evidence/python_packaging_evidence.json`. Validate it

@@ -191,6 +191,7 @@ v0.1 series has not removed or renamed any public symbol.
 | Wheel reinstall fails | `release.yml` "Verify wheel" step | The dylib + metallib weren't vendored — re-check `pyproject.toml` `[tool.setuptools.package-data]` |
 | GitHub release upload fails | `release.yml` final step | Usually the tag already has a release — `gh release delete v$NEW && retry` |
 | Self-hosted runner offline | `hardware-evidence.yml` preflight artifact reports no online `[self-hosted, macOS, ARM64]` runner, then the hardware job queues | Bring the runner online; cancel/re-run the queued hardware job |
+| Runner API unavailable | `hardware-evidence.yml` preflight artifact reports `runner_api_unavailable` | Add a repo secret named `TC_RUNNER_READ_TOKEN` with runner-list permission, or use the artifact as a visibility-only diagnostic |
 
 ## CI workflows that gate
 
