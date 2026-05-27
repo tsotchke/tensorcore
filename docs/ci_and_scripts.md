@@ -786,7 +786,9 @@ rows until the unit or equivalent launcher is installed from a git checkout.
 Real `submit` and `cancel` queue mutations require `--event-log-jsonl` and
 take an advisory lock beside the queue file before updating jobs or appending
 the queue event. Scheduler-VM clients should use those commands instead of
-editing `mesh_resource_jobs.json` directly.
+editing `mesh_resource_jobs.json` directly. Set
+`TC_SCHEDULER_EVENT_LOG_JSONL` in the scheduler environment so clients inherit
+the canonical event-log path.
 
 Run one dry pass:
 

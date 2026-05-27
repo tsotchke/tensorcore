@@ -46,7 +46,8 @@ append-only audit trail. Mutating commands take an advisory lock beside the
 queue file, named like `.mesh_resource_jobs.json.lock`, before the
 load-modify-write cycle and before appending the queue event. Scheduler-VM
 clients should call the submit/cancel CLI instead of editing the queue file
-directly.
+directly. On the scheduler VM, set `TC_SCHEDULER_EVENT_LOG_JSONL` so submit and
+cancel clients inherit the canonical queue event log path.
 
 Example scheduler loop:
 

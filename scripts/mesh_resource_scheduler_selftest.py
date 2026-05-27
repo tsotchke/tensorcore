@@ -8,10 +8,11 @@ import importlib.machinery
 import importlib.util
 import io
 import json
+import os
 import pathlib
 import subprocess
 import tempfile
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from types import ModuleType
 from typing import Any
 
@@ -1792,6 +1793,40 @@ def test_submit_and_cancel_require_event_log_for_queue_mutation() -> None:
             raise AssertionError("cancel without event log was accepted")
 
 
+def test_submit_and_cancel_parse_event_log_default_from_env() -> None:
+    scheduler = load_scheduler()
+    previous = os.environ.get("TC_SCHEDULER_EVENT_LOG_JSONL")
+    os.environ["TC_SCHEDULER_EVENT_LOG_JSONL"] = "/var/lib/tensorcore/events.jsonl"
+    try:
+        submit_args = scheduler.parse_args(
+            [
+                "submit",
+                "--job-json",
+                "job.json",
+                "--jobs-json",
+                "queue.json",
+                "--inventory-json",
+                "inventory.json",
+            ]
+        )
+        cancel_args = scheduler.parse_args(
+            [
+                "cancel",
+                "--jobs-json",
+                "queue.json",
+                "--job-id",
+                "job-1",
+            ]
+        )
+    finally:
+        if previous is None:
+            os.environ.pop("TC_SCHEDULER_EVENT_LOG_JSONL", None)
+        else:
+            os.environ["TC_SCHEDULER_EVENT_LOG_JSONL"] = previous
+    assert submit_args.event_log_jsonl == "/var/lib/tensorcore/events.jsonl"
+    assert cancel_args.event_log_jsonl == "/var/lib/tensorcore/events.jsonl"
+
+
 def test_cancel_accepts_expanded_pool_job_id() -> None:
     scheduler = load_scheduler()
     with tempfile.TemporaryDirectory() as tmp:
@@ -1939,6 +1974,29 @@ def test_status_reports_gpu_reconciliation_audit_gate() -> None:
     assert gate["ok"] is False
     assert gate["reason"] == "audit_artifact_unreadable"
     assert gate["cuda_job_count"] == 1
+
+
+def test_status_rejects_nonpositive_gpu_reconciliation_max_age() -> None:
+    scheduler = load_scheduler()
+    stderr = io.StringIO()
+    with redirect_stderr(stderr):
+        try:
+            scheduler.parse_args(
+                [
+                    "status",
+                    "--inventory-json",
+                    "inventory.json",
+                    "--gpu-reconciliation-audit-json",
+                    "audit.json",
+                    "--gpu-reconciliation-max-age-sec",
+                    "0",
+                ]
+            )
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:
+            raise AssertionError("nonpositive status GPU reconciliation max age was accepted")
+    assert "--gpu-reconciliation-max-age-sec must be > 0" in stderr.getvalue()
 
 
 def test_scheduler_dry_run_includes_launch_plan() -> None:
@@ -2287,10 +2345,12 @@ def main() -> int:
     test_submit_dry_run_expands_tensorcore_job_v1()
     test_submit_writes_queue_and_cancel_pauses_job()
     test_submit_and_cancel_require_event_log_for_queue_mutation()
+    test_submit_and_cancel_parse_event_log_default_from_env()
     test_cancel_accepts_expanded_pool_job_id()
     test_submit_rejects_malformed_tensorcore_job_v1_fields()
     test_status_offline_reports_inventory_jobs_and_drain_updates_copy()
     test_status_reports_gpu_reconciliation_audit_gate()
+    test_status_rejects_nonpositive_gpu_reconciliation_max_age()
     test_scheduler_dry_run_includes_launch_plan()
     test_scheduler_blocks_cuda_when_gpu_reconciliation_audit_missing()
     test_scheduler_keeps_non_cuda_placement_when_gpu_reconciliation_audit_missing()

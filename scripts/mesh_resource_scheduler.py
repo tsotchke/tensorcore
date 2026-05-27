@@ -2422,7 +2422,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         submit.add_argument("--job-json", required=True)
         submit.add_argument("--jobs-json", required=True)
         submit.add_argument("--inventory-json", required=True)
-        submit.add_argument("--event-log-jsonl")
+        submit.add_argument("--event-log-jsonl", default=os.environ.get("TC_SCHEDULER_EVENT_LOG_JSONL"))
         submit.add_argument("--replace", action="store_true")
         submit.add_argument("--dry-run", action="store_true")
         add_output_flags(submit)
@@ -2439,7 +2439,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
         cancel = sub.add_parser("cancel", help="Disable a queued job without releasing leases")
         cancel.add_argument("--jobs-json", required=True)
-        cancel.add_argument("--event-log-jsonl")
+        cancel.add_argument("--event-log-jsonl", default=os.environ.get("TC_SCHEDULER_EVENT_LOG_JSONL"))
         cancel.add_argument("--job-id", required=True)
         cancel.add_argument("--reason", default="operator_cancelled")
         cancel.add_argument("--dry-run", action="store_true")
@@ -2468,7 +2468,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         audit.add_argument("--worker-reconciliation-dir", action="append", default=[])
         add_output_flags(audit)
 
-        return parser.parse_args(argv)
+        args = parser.parse_args(argv)
+        if (
+            args.control_command == "status"
+            and args.gpu_reconciliation_max_age_sec <= 0
+        ):
+            parser.error("--gpu-reconciliation-max-age-sec must be > 0")
+        return args
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--arbiter-cmd", default=DEFAULT_ARBITER_CMD)
