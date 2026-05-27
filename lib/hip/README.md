@@ -71,7 +71,10 @@ backend to come up.
 Run `scripts/probe_hip_toolchain.py --json /tmp/hip-toolchain.json` before
 the build on a new machine. The evidence checker can require build-toolchain
 readiness (`hipcc` + HIP CMake config), SPIR-V runtime readiness
-(`llvm-spirv` + OpenCL/Level Zero), or full hipBLAS GEMM readiness.
+(`llvm-spirv` + OpenCL/Level Zero), or full hipBLAS GEMM readiness. The probe
+also records `readiness.diagnostic_class` so no HIP/chipStar/ROCm installation
+(`no_hip_rocm`) is distinct from an indicated but blocked setup
+(`diagnostic_blocked`) in clean-head evidence.
 
 ## Kernel porting strategy
 

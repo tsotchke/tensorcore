@@ -86,6 +86,33 @@ def main() -> int:
         )
         == "blocked"
     )
+    assert (
+        preflight.overall_status(
+            {
+                "host_platform": check("passed"),
+                "xcode": check("passed"),
+                "sdk26": check("passed"),
+                "display_gpu": check("unknown"),
+                "tensorops_runtime_probe": check("skipped"),
+            }
+        )
+        == "blocked"
+    )
+
+    original_run_cmd = preflight.run_cmd
+    preflight.run_cmd = lambda cmd, timeout_sec: {
+        "cmd": cmd,
+        "rc": 1,
+        "stdout_tail": "",
+        "stderr_tail": "system_profiler failed",
+    }
+    try:
+        display = preflight.display_check(1.0)
+        assert display["status"] == "blocked"
+        assert display["diagnostic_class"] == preflight.ENVIRONMENT_UNAVAILABLE
+        assert "cannot prove M5 display GPU" in display["diagnostic_message"]
+    finally:
+        preflight.run_cmd = original_run_cmd
 
     diagnostics = preflight.diagnostics_for_checks(
         {

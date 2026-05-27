@@ -16,14 +16,7 @@ from typing import Any
 
 
 SCHEMA = "tensorcore.georefine_qwen_rank_probe.start.v1"
-RESOURCE = "cosbox:cuda3090"
-DEFAULT_REPO_URL = "git@github.com:Tsotchke-Corporation/GeoRefineInternal.git"
-DEFAULT_REPO_DIR = "~/src/georefine"
-DEFAULT_QLLM_REPO_DIR = "/home/tyr/projects/semiclassical_qllm"
-DEFAULT_LEASE_HELPER = "/home/tyr/.tsotchke/bin/_tsotchke_resource_lease.py"
-DEFAULT_REF = "master"
-DEFAULT_OUTPUT_ROOT = "/home/tyr/bytehole/georefine/good_qwen_results_20260526"
-DEFAULT_EVIDENCE_ROOT = "/home/tyr/.local/share/georefine_trusted/evidence"
+DEFAULT_REF = os.environ.get("TC_GEOREFINE_REF", "")
 
 
 def shq(value: str) -> str:
@@ -35,6 +28,8 @@ def render_remote_script(args: argparse.Namespace) -> str:
     trust_remote_code = "1" if args.trust_remote_code else "0"
     live_agent = "1" if args.live_agent else "0"
     preflight_only = "1" if args.preflight_only else "0"
+    sync_repo = "1" if args.sync_repo else "0"
+    chat_verify_fail_on_drift = "1" if args.chat_verify_fail_on_drift else "0"
     return f"""#!/bin/sh
 set -eu
 
@@ -57,8 +52,13 @@ require_clean={require_clean}
 trust_remote_code={trust_remote_code}
 live_agent={live_agent}
 preflight_only={preflight_only}
+sync_repo={sync_repo}
+chat_verify_fail_on_drift={chat_verify_fail_on_drift}
 cal_text={shq(args.cal_text)}
 eval_text={shq(args.eval_text)}
+cal_images_dir={shq(args.cal_images_dir)}
+cal_preset={shq(args.cal_preset)}
+exclude_layers={shq(args.exclude_layers)}
 embedding_rank={int(args.embedding_rank)}
 compression_ratio={float(args.compression_ratio)}
 target_kl={float(args.target_kl)}
@@ -67,6 +67,27 @@ max_size_ratio={float(args.max_size_ratio)}
 quality_floor={float(args.quality_floor)}
 target_kl_max_iterations={int(args.target_kl_max_iterations)}
 target_kl_layers_per_iter={int(args.target_kl_layers_per_iter)}
+target_kl_rank_growth={float(args.target_kl_rank_growth)}
+target_kl_kd_lr={float(args.target_kl_kd_lr)}
+target_kl_kd_temperature={float(args.target_kl_kd_temperature)}
+target_kl_kd_hidden_state_weight={float(args.target_kl_kd_hidden_state_weight)}
+target_kl_kd_chunk_size={int(args.target_kl_kd_chunk_size)}
+model={shq(args.model)}
+device={shq(args.device)}
+dtype={shq(args.dtype)}
+cal_tokens={int(args.cal_tokens)}
+eval_tokens={int(args.eval_tokens)}
+min_rank={int(args.min_rank)}
+heartbeat_seconds={int(args.heartbeat_seconds)}
+max_state_age_seconds={int(args.max_state_age_seconds)}
+quality_floor_retries={int(args.quality_floor_retries)}
+lease_ttl_sec={int(args.lease_ttl_sec)}
+run_target={shq(args.run_target)}
+quantize_factors={shq(args.quantize_factors)}
+chat_verify_phases={shq(args.chat_verify_phases)}
+chat_verify_max_kl={float(args.chat_verify_max_kl)}
+chat_verify_max_l1={float(args.chat_verify_max_l1)}
+chat_verify_max_base_rank={int(args.chat_verify_max_base_rank)}
 
 case "$repo_dir" in
   "~") repo_dir="$HOME" ;;
@@ -91,13 +112,13 @@ emit() {{
     "$(json_escape "$repo_dir")" "$(json_escape "$resource")" "$(json_escape "$run_dir")" "$(json_escape "$schema")"
 }}
 
-if [ ! -d "$repo_dir/.git" ]; then
+if [ "$sync_repo" = "1" ] && [ ! -d "$repo_dir/.git" ]; then
   mkdir -p "$(dirname "$repo_dir")"
   if ! git clone --filter=blob:none --branch "$ref" "$repo_url" "$repo_dir"; then
     emit false clone_failed
     exit 1
   fi
-else
+elif [ "$sync_repo" = "1" ]; then
   current_url=$(git -C "$repo_dir" remote get-url origin 2>/dev/null || true)
   if [ "$current_url" != "$repo_url" ]; then
     git -C "$repo_dir" remote set-url origin "$repo_url"
@@ -107,6 +128,9 @@ else
   if git -C "$repo_dir" symbolic-ref -q HEAD >/dev/null 2>&1; then
     git -C "$repo_dir" pull --ff-only origin "$ref"
   fi
+elif [ ! -d "$repo_dir/.git" ]; then
+  emit false repo_dir_missing_with_no_sync
+  exit 1
 fi
 
 head=$(git -C "$repo_dir" rev-parse HEAD)
@@ -152,12 +176,8 @@ if [ -z "$run_dir" ]; then
   run_dir="${{output_root}}/qwen35_0_8b_cr${{ratio_label}}_emb${{rank_label}}_tkl${{tkl_label}}_size${{size_label}}_${{stamp}}"
 fi
 if [ -z "$worker_resource" ]; then
-  case "$resource" in
-    cosbox:cuda3090) worker_resource=gpu:cosbox:0 ;;
-    jack-blupc:cuda3060) worker_resource=gpu:jack-blupc:0 ;;
-    old-donkey:cuda3050) worker_resource=gpu:old-donkey:0 ;;
-    *) worker_resource="$resource" ;;
-  esac
+  emit false worker_resource_missing 0 "$head"
+  exit 1
 fi
 if [ -z "$authority_owner" ]; then
   authority_owner=georefine:qwen-rank-probe
@@ -168,6 +188,10 @@ if [ ! -r "$cal_text" ]; then
 fi
 if [ ! -r "$eval_text" ]; then
   emit false eval_text_missing 0 "$head"
+  exit 1
+fi
+if [ -n "$cal_images_dir" ] && [ ! -d "$cal_images_dir" ]; then
+  emit false calibration_images_missing 0 "$head"
   exit 1
 fi
 
@@ -301,10 +325,6 @@ if [ ! -r "$lease_wrapper" ]; then
   emit false qllm_resource_lease_missing 0 "$head"
   exit 1
 fi
-if [ ! -r "$lease_helper" ]; then
-  emit false qllm_lease_helper_missing 0 "$head"
-  exit 1
-fi
 if [ ! -r "$reconciler_script" ]; then
   emit false qllm_reconciler_missing 0 "$head"
   exit 1
@@ -329,24 +349,25 @@ fi
 
 set -- "$python_bin" -m experiments.georefine.m2_supervised_run \\
   --artifact-dir "$run_dir" \\
-  --heartbeat-seconds 15 \\
+  --heartbeat-seconds "$heartbeat_seconds" \\
   --target-size-ratio "$max_size_ratio" \\
   --quality-floor "$quality_floor" \\
-  --max-state-age-seconds 240
+  --max-state-age-seconds "$max_state_age_seconds"
 if [ "$live_agent" != "1" ]; then
   set -- "$@" --no-live-agent
 fi
 set -- "$@" -- "$python_bin" -m experiments.georefine.m2_compress \\
-  --model Qwen/Qwen3.5-0.8B \\
+  --model "$model" \\
   --output-dir "$run_dir" \\
-  --device cuda \\
-  --dtype auto \\
+  --device "$device" \\
+  --dtype "$dtype" \\
   --cal-text-file "$cal_text" \\
-  --cal-tokens 4096 \\
+  --cal-tokens "$cal_tokens" \\
   --eval-text-file "$eval_text" \\
-  --eval-tokens 1024 \\
+  --eval-tokens "$eval_tokens" \\
+  --cal-preset "$cal_preset" \\
   --compression-ratio "$compression_ratio" \\
-  --min-rank 4 \\
+  --min-rank "$min_rank" \\
   --streaming-asvd \\
   --resume \\
   --skip-if-exists \\
@@ -354,40 +375,57 @@ set -- "$@" -- "$python_bin" -m experiments.georefine.m2_compress \\
   --no-null-head-filter \\
   --factor-embeddings \\
   --embedding-rank "$embedding_rank" \\
-  --factor-inactive-linears \\
-  --inactive-linear-prefix model.visual \\
-  --inactive-linear-compression-ratio 0.20 \\
-  --inactive-linear-min-params 262144 \\
   --target-kl "$target_kl" \\
   --target-kl-max-iterations "$target_kl_max_iterations" \\
   --target-kl-layers-per-iter "$target_kl_layers_per_iter" \\
-  --target-kl-rank-growth 1.15 \\
+  --target-kl-rank-growth "$target_kl_rank_growth" \\
   --target-kl-kd-steps "$target_kl_kd_steps" \\
-  --target-kl-kd-lr 3e-5 \\
-  --target-kl-kd-temperature 2.0 \\
-  --target-kl-kd-hidden-state-weight 0.03 \\
-  --target-kl-kd-chunk-size 64 \\
-  --quantize-factors int4 \\
+  --target-kl-kd-lr "$target_kl_kd_lr" \\
+  --target-kl-kd-temperature "$target_kl_kd_temperature" \\
+  --target-kl-kd-hidden-state-weight "$target_kl_kd_hidden_state_weight" \\
+  --target-kl-kd-chunk-size "$target_kl_kd_chunk_size" \\
+  --quantize-factors "$quantize_factors" \\
   --quantize-residual-tensors none \\
   --storage-quantization-recovery auto \\
   --residual-quantization-preflight off \\
   --max-size-ratio "$max_size_ratio" \\
   --fail-on-size-gate \\
   --quality-floor "$quality_floor" \\
-  --quality-floor-retries 0 \\
+  --quality-floor-retries "$quality_floor_retries" \\
   --fail-on-quality-gate \\
   --require-held-out-quality \\
   --fail-on-verdict LOSSY \\
   --verbose
+if [ -n "$cal_images_dir" ]; then
+  set -- "$@" --cal-images-dir "$cal_images_dir"
+fi
+if [ -n "$exclude_layers" ]; then
+  set -- "$@" --exclude-layers "$exclude_layers"
+fi
+if [ "$chat_verify_fail_on_drift" = "1" ]; then
+  set -- "$@" \\
+    --chat-verify-fail-on-drift \\
+    --chat-verify-phases "$chat_verify_phases" \\
+    --chat-verify-max-kl "$chat_verify_max_kl" \\
+    --chat-verify-max-l1 "$chat_verify_max_l1" \\
+    --chat-verify-max-base-rank "$chat_verify_max_base_rank"
+fi
 if [ "$trust_remote_code" = "1" ]; then
   set -- "$@" --trust-remote-code
 fi
 metadata_json=$(printf '{{"surface":"tensorcore_scheduler","service":"georefine-qwen-rank-probe","run_dir":"%s"}}' "$(json_escape "$run_dir")")
-set -- "$python_bin" "$lease_wrapper" \\
-  --helper "$lease_helper" \\
+set -- "$python_bin" "$lease_wrapper"
+if [ -n "$lease_helper" ]; then
+  if [ ! -r "$lease_helper" ]; then
+    emit false qllm_lease_helper_missing 0 "$head"
+    exit 1
+  fi
+  set -- "$@" --helper "$lease_helper"
+fi
+set -- "$@" \\
   --resource "$worker_resource" \\
   --owner "$authority_owner" \\
-  --ttl-sec 21600 \\
+  --ttl-sec "$lease_ttl_sec" \\
   --heartbeat-failure-policy terminate \\
   --worker-lease-mode mirror \\
   --verify-gpu-identity \\
@@ -397,7 +435,7 @@ set -- "$python_bin" "$lease_wrapper" \\
   --artifact-dir "$run_dir" \\
   --controller-mode observe \\
   --allowed-mutator tensorcore-georefine-reconciler \\
-  --run-target qwen-cr070-rank-search \\
+  --run-target "$run_target" \\
   --authority-resource "$resource" \\
   --authority-lease-id "$authority_lease_id" \\
   --authority-owner "$authority_owner" \\
@@ -407,6 +445,9 @@ set -- "$python_bin" "$lease_wrapper" \\
   --finalizer-python "$python_bin" \\
   --final-manifest-evidence-root "$evidence_root" \\
   --final-manifest-output "$final_manifest_output" \\
+  --finalizer-max-size-ratio "$max_size_ratio" \\
+  --finalizer-max-ppl-delta "$quality_floor" \\
+  --finalizer-max-target-kl "$target_kl" \\
   --finalizer-failure-policy fail \\
   --reconciler-script "$reconciler_script" \\
   --reconciler-python "$python_bin" \\
@@ -432,37 +473,77 @@ exit 1
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", required=True)
-    parser.add_argument("--resource", default=RESOURCE)
-    parser.add_argument("--worker-resource", default="")
+    parser.add_argument("--resource", default=os.environ.get("TC_GEOREFINE_RESOURCE", ""))
+    parser.add_argument("--worker-resource", default=os.environ.get("TC_GEOREFINE_WORKER_RESOURCE", ""))
     parser.add_argument("--authority-lease-id", default="")
-    parser.add_argument("--authority-owner", default="georefine:qwen-rank-probe")
-    parser.add_argument("--repo-url", default=DEFAULT_REPO_URL)
-    parser.add_argument("--repo-dir", default=DEFAULT_REPO_DIR)
-    parser.add_argument("--qllm-repo-dir", default=DEFAULT_QLLM_REPO_DIR)
-    parser.add_argument("--lease-helper", default=DEFAULT_LEASE_HELPER)
+    parser.add_argument("--authority-owner", default=os.environ.get("TC_GEOREFINE_AUTHORITY_OWNER", ""))
+    parser.add_argument("--repo-url", default=os.environ.get("TC_GEOREFINE_REPO_URL", ""))
+    parser.add_argument("--repo-dir", default=os.environ.get("TC_GEOREFINE_REPO_DIR", ""))
+    parser.add_argument("--qllm-repo-dir", default=os.environ.get("TC_GEOREFINE_QLLM_REPO_DIR", ""))
+    parser.add_argument("--lease-helper", default=os.environ.get("TC_GEOREFINE_LEASE_HELPER", ""))
     parser.add_argument("--ref", default=DEFAULT_REF)
     parser.add_argument("--run-dir", default="")
-    parser.add_argument("--output-root", default=DEFAULT_OUTPUT_ROOT)
-    parser.add_argument("--evidence-root", default=DEFAULT_EVIDENCE_ROOT)
+    parser.add_argument("--output-root", default=os.environ.get("TC_GEOREFINE_OUTPUT_ROOT", ""))
+    parser.add_argument("--evidence-root", default=os.environ.get("TC_GEOREFINE_EVIDENCE_ROOT", ""))
     parser.add_argument("--python-bin", default="")
     parser.add_argument("--start-log", default="")
-    parser.add_argument(
-        "--cal-text",
-        default="/home/tyr/bytehole/georefine/qwen35_calibration/wikitext_merged_calibration_20260525.txt",
-    )
-    parser.add_argument(
-        "--eval-text",
-        default="/home/tyr/projects/GeoRefineInternal/results/m2/qwen35_0_8b_investor_eval_wikitext_validation_20260522.txt",
-    )
+    parser.add_argument("--cal-text", default=os.environ.get("TC_GEOREFINE_CAL_TEXT", ""))
+    parser.add_argument("--eval-text", default=os.environ.get("TC_GEOREFINE_EVAL_TEXT", ""))
     parser.add_argument("--embedding-rank", type=int, default=1024)
     parser.add_argument("--compression-ratio", type=float, default=0.70)
     parser.add_argument("--target-kl", type=float, default=0.80)
     parser.add_argument("--target-kl-kd-steps", type=int, default=2048)
+    parser.add_argument("--target-kl-kd-lr", type=float, default=3e-5)
+    parser.add_argument("--target-kl-kd-temperature", type=float, default=2.0)
+    parser.add_argument("--target-kl-kd-hidden-state-weight", type=float, default=0.03)
+    parser.add_argument("--target-kl-kd-chunk-size", type=int, default=64)
     parser.add_argument("--target-kl-max-iterations", type=int, default=4)
     parser.add_argument("--target-kl-layers-per-iter", type=int, default=64)
+    parser.add_argument("--target-kl-rank-growth", type=float, default=1.15)
     parser.add_argument("--max-size-ratio", type=float, default=0.30)
     parser.add_argument("--quality-floor", type=float, default=0.05)
+    parser.add_argument("--model", default=os.environ.get("TC_GEOREFINE_MODEL", ""))
+    parser.add_argument("--device", default=os.environ.get("TC_GEOREFINE_DEVICE", ""))
+    parser.add_argument("--dtype", default=os.environ.get("TC_GEOREFINE_DTYPE", ""))
+    parser.add_argument("--cal-tokens", type=int, default=int(os.environ.get("TC_GEOREFINE_CAL_TOKENS", "4096")))
+    parser.add_argument("--eval-tokens", type=int, default=int(os.environ.get("TC_GEOREFINE_EVAL_TOKENS", "1024")))
+    parser.add_argument("--min-rank", type=int, default=int(os.environ.get("TC_GEOREFINE_MIN_RANK", "4")))
+    parser.add_argument(
+        "--heartbeat-seconds",
+        type=int,
+        default=int(os.environ.get("TC_GEOREFINE_HEARTBEAT_SECONDS", "15")),
+    )
+    parser.add_argument(
+        "--max-state-age-seconds",
+        type=int,
+        default=int(os.environ.get("TC_GEOREFINE_MAX_STATE_AGE_SECONDS", "240")),
+    )
+    parser.add_argument(
+        "--quality-floor-retries",
+        type=int,
+        default=int(os.environ.get("TC_GEOREFINE_QUALITY_FLOOR_RETRIES", "0")),
+    )
+    parser.add_argument("--lease-ttl-sec", type=int, default=int(os.environ.get("TC_GEOREFINE_LEASE_TTL_SEC", "21600")))
+    parser.add_argument("--run-target", default=os.environ.get("TC_GEOREFINE_RUN_TARGET", ""))
+    parser.add_argument("--cal-images-dir", default="")
+    parser.add_argument("--cal-preset", default="default")
+    parser.add_argument("--exclude-layers", default="")
+    parser.add_argument(
+        "--quantize-factors",
+        choices=("none", "int8", "int4", "int2"),
+        default="int4",
+    )
+    parser.add_argument(
+        "--chat-verify-fail-on-drift",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    parser.add_argument("--chat-verify-phases", default="all")
+    parser.add_argument("--chat-verify-max-kl", type=float, default=1.0)
+    parser.add_argument("--chat-verify-max-l1", type=float, default=1.0)
+    parser.add_argument("--chat-verify-max-base-rank", type=int, default=5)
     parser.add_argument("--require-clean", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--sync-repo", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--trust-remote-code", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--live-agent", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--preflight-only", action="store_true")
@@ -470,6 +551,28 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--print-script", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
+    required_strings = {
+        "--resource": args.resource,
+        "--worker-resource": args.worker_resource,
+        "--authority-owner": args.authority_owner,
+        "--repo-dir": args.repo_dir,
+        "--qllm-repo-dir": args.qllm_repo_dir,
+        "--ref": args.ref,
+        "--evidence-root": args.evidence_root,
+        "--cal-text": args.cal_text,
+        "--eval-text": args.eval_text,
+        "--model": args.model,
+        "--device": args.device,
+        "--dtype": args.dtype,
+        "--run-target": args.run_target,
+    }
+    if args.sync_repo:
+        required_strings["--repo-url"] = args.repo_url
+    if not args.run_dir:
+        required_strings["--output-root"] = args.output_root
+    for flag, value in required_strings.items():
+        if not str(value or "").strip():
+            parser.error(f"{flag} is required; pass it explicitly or set the matching TC_GEOREFINE_* environment variable")
     if args.embedding_rank < 1:
         parser.error("--embedding-rank must be positive")
     if args.compression_ratio <= 0 or args.compression_ratio > 1:
@@ -480,10 +583,40 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error("--target-kl must be positive")
     if args.target_kl_kd_steps < 0:
         parser.error("--target-kl-kd-steps must be >= 0")
+    if args.target_kl_kd_lr <= 0:
+        parser.error("--target-kl-kd-lr must be positive")
+    if args.target_kl_kd_temperature <= 0:
+        parser.error("--target-kl-kd-temperature must be positive")
+    if args.target_kl_kd_hidden_state_weight < 0:
+        parser.error("--target-kl-kd-hidden-state-weight must be >= 0")
+    if args.target_kl_kd_chunk_size < 1:
+        parser.error("--target-kl-kd-chunk-size must be positive")
     if args.target_kl_max_iterations < 0:
         parser.error("--target-kl-max-iterations must be >= 0")
     if args.target_kl_layers_per_iter < 1:
         parser.error("--target-kl-layers-per-iter must be positive")
+    if args.target_kl_rank_growth <= 1.0:
+        parser.error("--target-kl-rank-growth must be > 1")
+    if args.chat_verify_max_kl <= 0:
+        parser.error("--chat-verify-max-kl must be positive")
+    if args.chat_verify_max_l1 <= 0:
+        parser.error("--chat-verify-max-l1 must be positive")
+    if args.chat_verify_max_base_rank < 1:
+        parser.error("--chat-verify-max-base-rank must be >= 1")
+    if args.cal_tokens < 1:
+        parser.error("--cal-tokens must be positive")
+    if args.eval_tokens < 1:
+        parser.error("--eval-tokens must be positive")
+    if args.min_rank < 1:
+        parser.error("--min-rank must be positive")
+    if args.heartbeat_seconds < 1:
+        parser.error("--heartbeat-seconds must be positive")
+    if args.max_state_age_seconds < 1:
+        parser.error("--max-state-age-seconds must be positive")
+    if args.quality_floor_retries < 0:
+        parser.error("--quality-floor-retries must be >= 0")
+    if args.lease_ttl_sec < 1:
+        parser.error("--lease-ttl-sec must be positive")
     return args
 
 

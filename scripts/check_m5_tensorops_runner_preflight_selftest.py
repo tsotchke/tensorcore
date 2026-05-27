@@ -129,6 +129,14 @@ def main() -> int:
     assert_passes(candidate, "--require-candidate")
     assert_fails(candidate, "--require-ready needs ready evidence", "--require-ready")
 
+    unverifiable_candidate = copy.deepcopy(candidate)
+    unverifiable_candidate["checks"]["display_gpu"] = check(
+        "unknown",
+        m5_name_candidate=False,
+        device_names=[],
+    )
+    assert_fails(unverifiable_candidate, "checks.display_gpu.status must be passed")
+
     blocked = evidence("blocked")
     assert_passes(blocked)
     assert_passes(blocked, "--require-blocked-check", "sdk26")

@@ -22,6 +22,12 @@ VALID_TOOLCHAIN_STATUSES = {
     "runtime_only_no_hipblas",
     "missing_requirements",
 }
+VALID_TOOLCHAIN_DIAGNOSTIC_CLASSES = {
+    "ready",
+    "runtime_only_no_hipblas",
+    "no_hip_rocm",
+    "diagnostic_blocked",
+}
 EXPECTED_GEMM_KERNELS = {
     "hip_gemm_sgemm": "hipblas_sgemm_staged",
     "hip_gemm_hgemm": "hipblas_hgemm_staged",
@@ -97,6 +103,59 @@ def require_gemm_kernel(evidence: dict, name: str) -> str | None:
     return None
 
 
+def check_toolchain_diagnostic_class(readiness: dict, status: str) -> str | None:
+    diagnostic_class = readiness.get("diagnostic_class")
+    if diagnostic_class is None:
+        return None
+    if diagnostic_class not in VALID_TOOLCHAIN_DIAGNOSTIC_CLASSES:
+        return (
+            "toolchain.readiness.diagnostic_class must be one of "
+            f"{sorted(VALID_TOOLCHAIN_DIAGNOSTIC_CLASSES)!r}, got {diagnostic_class!r}"
+        )
+    install_markers = readiness.get("install_markers")
+    if not isinstance(install_markers, list):
+        return (
+            "toolchain.readiness.install_markers must be a list when "
+            "diagnostic_class is present"
+        )
+    if any(not isinstance(item, str) for item in install_markers):
+        return "toolchain.readiness.install_markers entries must be strings"
+
+    if diagnostic_class == "ready" and status != "ready_for_hip_gemm":
+        return "toolchain.readiness.diagnostic_class=ready requires status=ready_for_hip_gemm"
+    if (
+        diagnostic_class == "runtime_only_no_hipblas"
+        and status != "runtime_only_no_hipblas"
+    ):
+        return (
+            "toolchain.readiness.diagnostic_class=runtime_only_no_hipblas requires "
+            "status=runtime_only_no_hipblas"
+        )
+    if diagnostic_class == "no_hip_rocm":
+        if status != "missing_requirements":
+            return "toolchain.readiness.diagnostic_class=no_hip_rocm requires missing_requirements"
+        if install_markers:
+            return "toolchain.readiness.diagnostic_class=no_hip_rocm requires no install_markers"
+        for name in ("hip_runtime_config", "hipcc", "hipblas_config"):
+            if readiness.get(name) is not False:
+                return (
+                    "toolchain.readiness.diagnostic_class=no_hip_rocm requires "
+                    f"{name}=false"
+                )
+    if diagnostic_class == "diagnostic_blocked":
+        if status != "missing_requirements":
+            return (
+                "toolchain.readiness.diagnostic_class=diagnostic_blocked "
+                "requires missing_requirements"
+            )
+        if not install_markers:
+            return (
+                "toolchain.readiness.diagnostic_class=diagnostic_blocked "
+                "requires install_markers"
+            )
+    return None
+
+
 def check_summary(evidence: dict) -> str | None:
     summary = evidence.get("summary")
     if not isinstance(summary, dict):
@@ -136,6 +195,11 @@ def main() -> int:
         action="store_true",
         help="Require embedded toolchain evidence ready for hipBLAS GEMM.",
     )
+    parser.add_argument(
+        "--require-toolchain-diagnostic-class",
+        choices=sorted(VALID_TOOLCHAIN_DIAGNOSTIC_CLASSES),
+        help="Require the embedded HIP/ROCm absence/blocker classification.",
+    )
     parser.add_argument("--require-hip-gemm-sgemm", action="store_true")
     parser.add_argument("--require-hip-gemm-hgemm", action="store_true")
     args = parser.parse_args()
@@ -172,7 +236,13 @@ def main() -> int:
             )
 
     toolchain = evidence.get("toolchain")
-    if args.require_toolchain or args.require_ready_toolchain or toolchain is not None:
+    toolchain_diagnostic_class = None
+    if (
+        args.require_toolchain
+        or args.require_ready_toolchain
+        or args.require_toolchain_diagnostic_class
+        or toolchain is not None
+    ):
         if not isinstance(toolchain, dict):
             return fail("toolchain evidence must be an object")
         if toolchain.get("schema_version") != 1:
@@ -183,6 +253,19 @@ def main() -> int:
         toolchain_status = readiness.get("status")
         if toolchain_status not in VALID_TOOLCHAIN_STATUSES:
             return fail(f"unexpected toolchain readiness.status={toolchain_status!r}")
+        error = check_toolchain_diagnostic_class(readiness, toolchain_status)
+        if error:
+            return fail(error)
+        toolchain_diagnostic_class = readiness.get("diagnostic_class")
+        if (
+            args.require_toolchain_diagnostic_class
+            and toolchain_diagnostic_class != args.require_toolchain_diagnostic_class
+        ):
+            return fail(
+                "--require-toolchain-diagnostic-class needs "
+                f"{args.require_toolchain_diagnostic_class}, "
+                f"got {toolchain_diagnostic_class!r}"
+            )
         if args.require_ready_toolchain and toolchain_status != "ready_for_hip_gemm":
             return fail(
                 "--require-ready-toolchain needs ready_for_hip_gemm, "
@@ -236,7 +319,8 @@ def main() -> int:
         f"status={status} build={bool(evidence.get('hip_build_enabled'))} "
         f"gemm={bool(evidence.get('hip_gemm_enabled'))} "
         f"devices={int(evidence.get('device_count') or 0)} "
-        f"covered={len(derived_covered_functions(evidence))}"
+        f"covered={len(derived_covered_functions(evidence))} "
+        f"toolchain_diagnostic={toolchain_diagnostic_class or 'unspecified'}"
     )
     return 0
 

@@ -27,6 +27,10 @@ TOOL_ALIASES = {
     "llvm-spirv": ["llvm-spirv", "llvm-spirv-19", "llvm-spirv-20"],
     "spirv-val": ["spirv-val", "spirv-val-19", "spirv-val-20"],
 }
+DIAGNOSTIC_READY = "ready"
+DIAGNOSTIC_RUNTIME_ONLY_NO_HIPBLAS = "runtime_only_no_hipblas"
+DIAGNOSTIC_NO_HIP_ROCM = "no_hip_rocm"
+DIAGNOSTIC_BLOCKED = "diagnostic_blocked"
 
 
 def git_value(root: pathlib.Path, *args: str) -> str | None:
@@ -354,6 +358,77 @@ def collect_cmake_packages(prefixes: list[str]) -> dict[str, list[str]]:
     }
 
 
+def hip_rocm_install_markers(
+    prefixes: list[str],
+    tools: dict[str, Any],
+    packages: dict[str, list[str]],
+) -> list[str]:
+    markers: list[str] = []
+    seen: set[str] = set()
+
+    def add(marker: str) -> None:
+        if marker not in seen:
+            seen.add(marker)
+            markers.append(marker)
+
+    for name in ("TC_HIP_PREFIX", "CHIPSTAR_HOME", "HIP_PATH", "ROCM_PATH"):
+        if os.environ.get(name):
+            add(f"env:{name}")
+
+    for path in split_env_paths(os.environ.get("CMAKE_PREFIX_PATH")):
+        parts = [part.lower() for part in pathlib.PurePath(path).parts]
+        if any(
+            "chipstar" in part
+            or "rocm" in part
+            or part in {"hip", "hipblas"}
+            or part.startswith(("hip-", "hip_", "hipblas-", "hipblas_"))
+            for part in parts
+        ):
+            add("env:CMAKE_PREFIX_PATH")
+            break
+
+    if tools.get("hipcc", {}).get("path"):
+        add("tool:hipcc")
+
+    for name in ("hip", "hipblas"):
+        if packages.get(name):
+            add(f"cmake_package:{name}")
+
+    for prefix in prefixes:
+        root = pathlib.Path(prefix)
+        if not root.exists():
+            continue
+        lowered = str(root).lower()
+        if "chipstar" in lowered or "rocm" in lowered:
+            add(f"prefix:{root}")
+            continue
+        if (root / "bin" / "hipcc").exists():
+            add(f"prefix:{root}")
+            continue
+        if any(
+            path.exists()
+            for path in (
+                root / "lib" / "cmake" / "hip",
+                root / "lib64" / "cmake" / "hip",
+                root / "share" / "cmake" / "hip",
+                root / "share" / "hip",
+            )
+        ):
+            add(f"prefix:{root}")
+
+    return markers
+
+
+def readiness_diagnostic_class(status: str, install_markers: list[str]) -> str:
+    if status == "ready_for_hip_gemm":
+        return DIAGNOSTIC_READY
+    if status == "runtime_only_no_hipblas":
+        return DIAGNOSTIC_RUNTIME_ONLY_NO_HIPBLAS
+    if install_markers:
+        return DIAGNOSTIC_BLOCKED
+    return DIAGNOSTIC_NO_HIP_ROCM
+
+
 def collect_runtime(tools: dict[str, Any]) -> dict[str, Any]:
     icd_candidates = [
         pathlib.Path("/etc/OpenCL/vendors"),
@@ -452,6 +527,7 @@ def collect_evidence(root: str | pathlib.Path = ROOT) -> dict[str, Any]:
         status = "runtime_only_no_hipblas"
     else:
         status = "missing_requirements"
+    install_markers = hip_rocm_install_markers(prefixes, tools, packages)
 
     return {
         "schema_version": 1,
@@ -476,6 +552,8 @@ def collect_evidence(root: str | pathlib.Path = ROOT) -> dict[str, Any]:
         "readiness": {
             **readiness,
             "status": status,
+            "diagnostic_class": readiness_diagnostic_class(status, install_markers),
+            "install_markers": install_markers,
             "missing": missing,
         },
         "path_hints": path_hints(prefixes),

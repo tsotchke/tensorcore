@@ -23,6 +23,7 @@ REQUIRED_CHECKS = {
     "display_gpu",
     "tensorops_runtime_probe",
 }
+CANDIDATE_REQUIRED_CHECKS = ("host_platform", "xcode", "sdk26", "display_gpu")
 
 
 def git_head() -> str | None:
@@ -143,6 +144,22 @@ def check_ready_contract(errors: list[str], data: dict[str, Any]) -> None:
         errors.append(f"checks.tensorops_runtime_probe.runtime_status must be passed, got {runtime_status!r}")
 
 
+def check_candidate_contract(errors: list[str], data: dict[str, Any]) -> None:
+    checks = data.get("checks")
+    if not isinstance(checks, dict):
+        return
+    for name in CANDIDATE_REQUIRED_CHECKS:
+        item = checks.get(name)
+        if not isinstance(item, dict) or item.get("status") != "passed":
+            errors.append(f"checks.{name}.status must be passed for candidate evidence")
+    runtime_status = get_path(data, "checks.tensorops_runtime_probe.status")
+    if runtime_status not in {"skipped", "unknown"}:
+        errors.append(
+            "checks.tensorops_runtime_probe.status must be skipped or unknown for candidate "
+            f"evidence, got {runtime_status!r}"
+        )
+
+
 def main() -> int:
     args = parse_args()
     data = load_json(args.evidence)
@@ -180,6 +197,8 @@ def main() -> int:
     if not isinstance(data.get("summary"), dict):
         errors.append("summary must be an object")
     check_summary_consistency(errors, data)
+    if data.get("status") == "candidate":
+        check_candidate_contract(errors, data)
 
     if args.require_ready:
         if data.get("status") != "ready":

@@ -41,6 +41,15 @@
       "status": "active",
       "control_plane": "tensorcore_scheduler",
       "general_queue_eligible": true,
+      "gpu_reconciliation": {
+        "enabled": true,
+        "poll_host": "cosbox",
+        "allow_process_regex": [
+          "steamwebhelper$",
+          "/opt/google/chrome/chrome"
+        ],
+        "allowed_process_max_memory_mib": 256
+      },
       "description": "Primary RTX 3090 artifact lane for GeoRefine/qLLM exclusive CUDA jobs."
     },
     {
@@ -52,6 +61,12 @@
       "status": "active",
       "control_plane": "tensorcore_scheduler",
       "general_queue_eligible": true,
+      "gpu_reconciliation": {
+        "enabled": true,
+        "poll_host": "old-donkey",
+        "allow_process_regex": [],
+        "allowed_process_max_memory_mib": 64
+      },
       "description": "Low-VRAM CUDA lane for qLLM teacher-logit precompute and small shard jobs."
     },
     {
@@ -64,6 +79,10 @@
       "status": "active",
       "control_plane": "tensorcore_scheduler",
       "general_queue_eligible": true,
+      "gpu_reconciliation": {
+        "enabled": false,
+        "reason": "windows worker snapshot agent pending; WDDM admission remains the launch-time guard"
+      },
       "cuda_probe_cmd": [
         "python3",
         "scripts/check_windows_cuda_resource_admission.py",

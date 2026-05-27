@@ -119,6 +119,7 @@ jobs:
           python3 scripts/mesh_cuda_worker_identity_selftest.py
           python3 scripts/mesh_windows_worker_identity_selftest.py
           python3 scripts/mesh_worker_gpu_snapshot_selftest.py
+          python3 scripts/mesh_worker_gpu_reconcile_sweep_selftest.py
 
   portable-cpu:
     name: portable-cpu (${{ matrix.os }})

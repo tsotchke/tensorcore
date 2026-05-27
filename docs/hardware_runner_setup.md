@@ -371,7 +371,10 @@ readiness and, when the binary exists, the runtime probe.
 
 Required checks are `host_platform`, `xcode`, `sdk26`, `display_gpu`, and
 `tensorops_runtime_probe`. Use `summary.blocked_checks` to find the failing
-check. Diagnostic classes separate environment gaps from code/runtime failures:
+check. A host is not a `candidate` unless the platform, Xcode, SDK 26, and M5
+display checks are all proven; an unavailable `system_profiler` display probe
+stays `blocked` because it cannot prove M5 hardware. Diagnostic classes
+separate environment gaps from code/runtime failures:
 
 - `environment_unavailable`: wrong platform, SDK below 26.0, no M5 display GPU,
   or an environment skip such as `skipped_no_m5`.

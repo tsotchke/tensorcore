@@ -232,6 +232,61 @@ def test_tensorcore_job_v1_qllm_contract_passes_policy() -> None:
     assert errors == []
 
 
+def test_cuda_inventory_requires_gpu_reconciliation_policy() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_gpu_reconciliation_policy(
+        errors,
+        "cosbox:cuda3090",
+        {
+            "id": "cosbox:cuda3090",
+            "backend": "cuda",
+            "status": "active",
+            "control_plane": "tensorcore_scheduler",
+        },
+    )
+    assert any("requires gpu_reconciliation policy" in error for error in errors)
+
+
+def test_cuda_inventory_accepts_enabled_gpu_reconciliation_policy() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_gpu_reconciliation_policy(
+        errors,
+        "cosbox:cuda3090",
+        {
+            "id": "cosbox:cuda3090",
+            "backend": "cuda",
+            "status": "active",
+            "control_plane": "tensorcore_scheduler",
+            "gpu_reconciliation": {
+                "enabled": True,
+                "poll_host": "cosbox",
+                "allow_process_regex": ["steamwebhelper$"],
+                "allowed_process_max_memory_mib": 64,
+            },
+        },
+    )
+    assert errors == []
+
+
+def test_cuda_inventory_disabled_gpu_reconciliation_requires_reason() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_gpu_reconciliation_policy(
+        errors,
+        "jack-blupc:cuda3060",
+        {
+            "id": "jack-blupc:cuda3060",
+            "backend": "cuda",
+            "status": "active",
+            "control_plane": "tensorcore_scheduler",
+            "gpu_reconciliation": {"enabled": False},
+        },
+    )
+    assert any("requires reason" in error for error in errors)
+
+
 def test_preflight_commands_must_emit_json() -> None:
     jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
     errors: list[str] = []
@@ -452,6 +507,9 @@ def main() -> int:
     test_tensorcore_job_v1_qllm_contract_requires_completion_checker()
     test_tensorcore_job_v1_qllm_contract_rejects_bytehole_evidence_root()
     test_tensorcore_job_v1_qllm_contract_passes_policy()
+    test_cuda_inventory_requires_gpu_reconciliation_policy()
+    test_cuda_inventory_accepts_enabled_gpu_reconciliation_policy()
+    test_cuda_inventory_disabled_gpu_reconciliation_requires_reason()
     test_preflight_commands_must_emit_json()
     test_git_access_preflight_requires_resource()
     test_paused_launchable_job_with_preflight_passes_policy()

@@ -148,6 +148,13 @@ every architectural primitive in code and tested:
   GeoRefine Qwen CR070 rank-probe template. The template pins run identity
   through liveness, worker-identity, and completion gates, and cancel accepts
   the expanded placement ids reported by status.
+- Mesh scheduler queue mutations now require an explicit append-only
+  `--event-log-jsonl`, CUDA inventory rows declare per-resource GPU
+  reconciliation policy, and `scripts/mesh_worker_gpu_reconcile_sweep.py`
+  sweeps worker GPU occupancy without hardcoded arbiter or resource aliases.
+- The GeoRefine Qwen rank-probe launcher now takes host, path, model, worker
+  resource, and quality gate values from scheduler config or environment
+  instead of embedding cosbox/private-path defaults in code.
 - Mesh scheduler heartbeats for live CUDA-exclusive jobs now refresh worker
   identity metadata on the existing lease instead of leaving identity pending.
 - Mesh scheduler jobs now have a checked-in source of truth
@@ -258,6 +265,12 @@ every architectural primitive in code and tested:
 - HIP smoke evidence now proves both fp32 `hip_gemm_sgemm` and fp16
   `hip_gemm_hgemm`, records per-kernel `gemm_kernels`, and emits
   ICC-readable source coverage for remote chipStar/HIP runs.
+- HIP diagnostic evidence now records `readiness.diagnostic_class`, separating
+  clean no-HIP/ROCm absence from an indicated but blocked HIP setup, and both
+  HIP evidence checkers can require that class with clean-head provenance.
+- M5 TensorOps preflight candidate evidence now requires proven host, Xcode,
+  SDK 26, and display-GPU checks; unverifiable display probes remain blocked
+  instead of becoming candidates.
 - CUDA smoke evidence now records per-kernel fp32/fp16/bf16/int8 GEMM status,
   AdamW dispatch coverage, and ICC-readable source coverage for remote NVIDIA
   runs that support those paths.

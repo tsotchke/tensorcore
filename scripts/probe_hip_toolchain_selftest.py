@@ -55,6 +55,26 @@ def main() -> int:
         devices = probe_hip_toolchain.parse_clinfo_devices(clinfo)
         if not probe_hip_toolchain.has_gpu_spirv_device(devices):
             raise AssertionError(f"SPIR-V GPU device was not detected: {devices!r}")
+
+        if (
+            probe_hip_toolchain.readiness_diagnostic_class("missing_requirements", [])
+            != "no_hip_rocm"
+        ):
+            raise AssertionError("missing requirements without HIP markers must be no_hip_rocm")
+        if (
+            probe_hip_toolchain.readiness_diagnostic_class(
+                "missing_requirements", ["env:TC_HIP_PREFIX"]
+            )
+            != "diagnostic_blocked"
+        ):
+            raise AssertionError("missing requirements with HIP markers must be diagnostic_blocked")
+        if (
+            probe_hip_toolchain.readiness_diagnostic_class(
+                "runtime_only_no_hipblas", ["tool:hipcc"]
+            )
+            != "runtime_only_no_hipblas"
+        ):
+            raise AssertionError("runtime-only readiness must keep its diagnostic class")
     print("HIP toolchain probe selftest OK")
     return 0
 

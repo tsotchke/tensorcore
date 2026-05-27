@@ -163,6 +163,24 @@ def write_json(path: str, payload: dict) -> None:
     tmp.replace(out)
 
 
+def append_jsonl(path: str | Path | None, payload: dict) -> None:
+    if not path:
+        return
+    out = Path(path).expanduser()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
+
+
+def require_queue_event_log(args: argparse.Namespace, *, command: str) -> str:
+    path = getattr(args, "event_log_jsonl", None)
+    if not path:
+        raise ValueError(
+            f"{command} requires --event-log-jsonl unless --dry-run is set"
+        )
+    return str(path)
+
+
 def parse_stdout_json(stdout: str) -> dict | None:
     for line in reversed(stdout.splitlines()):
         try:
@@ -2040,9 +2058,22 @@ def cmd_submit(args: argparse.Namespace) -> dict:
     }
     if args.dry_run:
         return payload
+    event_log_jsonl = require_queue_event_log(args, command="submit")
     doc = load_jobs_doc(args.jobs_json, missing_ok=True)
     doc["jobs"] = upsert_job(doc["jobs"], mesh_job, replace=args.replace)
     write_jobs_doc(args.jobs_json, doc)
+    append_jsonl(
+        event_log_jsonl,
+        {
+            "schema": "tensorcore.scheduler_queue_event.v1",
+            "event": "submit",
+            "created_at_unix": payload["checked_at_unix"],
+            "jobs_json": str(Path(args.jobs_json).expanduser()),
+            "job_id": mesh_job["id"],
+            "replace": bool(args.replace),
+            "expanded_jobs": payload["expanded_jobs"],
+        },
+    )
     payload["jobs_json"] = str(Path(args.jobs_json).expanduser())
     payload["queued"] = True
     return payload
@@ -2093,12 +2124,26 @@ def cmd_cancel(args: argparse.Namespace) -> dict:
         matched.append(job.get("id"))
     if not matched:
         raise ValueError(f"job {args.job_id!r} not found")
+    checked_at = time.time()
     if not args.dry_run:
+        event_log_jsonl = require_queue_event_log(args, command="cancel")
         write_jobs_doc(args.jobs_json, doc)
+        append_jsonl(
+            event_log_jsonl,
+            {
+                "schema": "tensorcore.scheduler_queue_event.v1",
+                "event": "cancel",
+                "created_at_unix": checked_at,
+                "jobs_json": str(Path(args.jobs_json).expanduser()),
+                "requested_job_id": args.job_id,
+                "cancelled_jobs": matched,
+                "reason": args.reason,
+            },
+        )
     return {
         "schema": "tensorcore.cluster_cancel.result.v1",
         "ok": True,
-        "checked_at_unix": time.time(),
+        "checked_at_unix": checked_at,
         "dry_run": args.dry_run,
         "cancelled_jobs": matched,
     }
@@ -2150,9 +2195,15 @@ def cmd_audit(args: argparse.Namespace) -> dict:
                 errors.append(f"CUDA job {job['id']!r} disables run_intent requirement")
             if not job.get("admission_cmd") or not job.get("post_start_probe_cmd") or not job.get("worker_identity_cmd"):
                 errors.append(f"CUDA job {job['id']!r} lacks admission/post-start/identity contract")
+    reconciliation_paths = [Path(raw_path).expanduser() for raw_path in getattr(args, "worker_reconciliation_json", []) or []]
+    for raw_dir in getattr(args, "worker_reconciliation_dir", []) or []:
+        directory = Path(raw_dir).expanduser()
+        if not directory.is_dir():
+            errors.append(f"worker reconciliation dir {directory} is not a directory")
+            continue
+        reconciliation_paths.extend(sorted(directory.glob("*.reconciliation.json")))
     reconciliation_reports = []
-    for raw_path in getattr(args, "worker_reconciliation_json", []) or []:
-        path = Path(raw_path).expanduser()
+    for path in reconciliation_paths:
         try:
             report = read_json_object(path)
         except Exception as exc:
@@ -2223,6 +2274,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         submit.add_argument("--job-json", required=True)
         submit.add_argument("--jobs-json", required=True)
         submit.add_argument("--inventory-json", required=True)
+        submit.add_argument("--event-log-jsonl")
         submit.add_argument("--replace", action="store_true")
         submit.add_argument("--dry-run", action="store_true")
         add_output_flags(submit)
@@ -2237,6 +2289,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
         cancel = sub.add_parser("cancel", help="Disable a queued job without releasing leases")
         cancel.add_argument("--jobs-json", required=True)
+        cancel.add_argument("--event-log-jsonl")
         cancel.add_argument("--job-id", required=True)
         cancel.add_argument("--reason", default="operator_cancelled")
         cancel.add_argument("--dry-run", action="store_true")
@@ -2262,6 +2315,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         audit.add_argument("--jobs-json", required=True)
         audit.add_argument("--inventory-json", required=True)
         audit.add_argument("--worker-reconciliation-json", action="append", default=[])
+        audit.add_argument("--worker-reconciliation-dir", action="append", default=[])
         add_output_flags(audit)
 
         return parser.parse_args(argv)

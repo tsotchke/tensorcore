@@ -68,6 +68,13 @@ def evidence() -> dict[str, Any]:
             "gpu_spirv_runtime": True,
             "hipblas_config": True,
             "status": "ready_for_hip_gemm",
+            "diagnostic_class": "ready",
+            "install_markers": [
+                "env:TC_HIP_PREFIX",
+                "tool:hipcc",
+                "cmake_package:hip",
+                "cmake_package:hipblas",
+            ],
             "missing": [],
         },
         "path_hints": [
@@ -121,6 +128,7 @@ def main() -> int:
             "--require-spirv-runtime",
             "--require-hipblas",
             "--require-ready",
+            "--require-diagnostic-class", "ready",
         )
 
         missing_runtime = copy.deepcopy(evidence())
@@ -128,6 +136,7 @@ def main() -> int:
             "opencl_or_level_zero": False,
             "gpu_spirv_runtime": False,
             "status": "missing_requirements",
+            "diagnostic_class": "diagnostic_blocked",
             "missing": ["OpenCL or Level Zero runtime"],
         })
         missing_runtime_path = write_json(directory, "missing-runtime.json", missing_runtime)
@@ -142,6 +151,7 @@ def main() -> int:
         gpu_missing["readiness"].update({
             "gpu_spirv_runtime": False,
             "status": "missing_requirements",
+            "diagnostic_class": "diagnostic_blocked",
             "missing": ["SPIR-V-capable GPU OpenCL or Level Zero runtime"],
         })
         gpu_missing_path = write_json(directory, "missing-gpu-spirv.json", gpu_missing)
@@ -156,6 +166,7 @@ def main() -> int:
         runtime_only["readiness"].update({
             "hipblas_config": False,
             "status": "runtime_only_no_hipblas",
+            "diagnostic_class": "runtime_only_no_hipblas",
             "missing": ["hipBLAS CMake config"],
         })
         runtime_only_path = write_json(directory, "runtime-only.json", runtime_only)
@@ -168,6 +179,40 @@ def main() -> int:
             runtime_only_path,
             "--require-hipblas needs readiness.hipblas_config=true",
             "--require-hipblas",
+        )
+
+        no_hip_rocm = copy.deepcopy(evidence())
+        no_hip_rocm["environment"]["TC_HIP_PREFIX"] = None
+        no_hip_rocm["environment"]["CMAKE_PREFIX_PATH"] = None
+        no_hip_rocm["prefixes"] = ["/usr/local", "/usr"]
+        no_hip_rocm["tools"]["hipcc"] = {"path": None, "available": False}
+        no_hip_rocm["cmake_packages"]["hip"] = []
+        no_hip_rocm["cmake_packages"]["hipblas"] = []
+        no_hip_rocm["readiness"].update({
+            "hip_runtime_config": False,
+            "hipcc": False,
+            "hipblas_config": False,
+            "status": "missing_requirements",
+            "diagnostic_class": "no_hip_rocm",
+            "install_markers": [],
+            "missing": ["hip CMake config", "hipcc", "hipBLAS CMake config"],
+        })
+        no_hip_rocm_path = write_json(directory, "no-hip-rocm.json", no_hip_rocm)
+        assert_passes(
+            no_hip_rocm_path,
+            "--git-head", TEST_HEAD,
+            "--require-clean-head",
+            "--require-diagnostic-class", "no_hip_rocm",
+        )
+
+        bad_no_hip_rocm = copy.deepcopy(no_hip_rocm)
+        bad_no_hip_rocm["readiness"]["install_markers"] = ["env:TC_HIP_PREFIX"]
+        bad_no_hip_rocm_path = write_json(
+            directory, "bad-no-hip-rocm.json", bad_no_hip_rocm
+        )
+        assert_fails(
+            bad_no_hip_rocm_path,
+            "readiness.diagnostic_class=no_hip_rocm requires no install_markers",
         )
 
         dirty = copy.deepcopy(evidence())

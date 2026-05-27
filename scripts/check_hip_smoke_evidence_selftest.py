@@ -47,6 +47,12 @@ def toolchain_evidence() -> dict[str, Any]:
             "gpu_spirv_runtime": True,
             "hipblas_config": True,
             "status": "ready_for_hip_gemm",
+            "diagnostic_class": "ready",
+            "install_markers": [
+                "tool:hipcc",
+                "cmake_package:hip",
+                "cmake_package:hipblas",
+            ],
             "missing": [],
         },
     }
@@ -144,6 +150,7 @@ def main() -> int:
             "--require-clean-head",
             "--require-toolchain",
             "--require-ready-toolchain",
+            "--require-toolchain-diagnostic-class", "ready",
             "--require-hip-gemm-sgemm",
             "--require-hip-gemm-hgemm",
         )
@@ -161,6 +168,7 @@ def main() -> int:
         missing = copy.deepcopy(hip_evidence())
         missing["toolchain"]["readiness"].update({
             "status": "missing_requirements",
+            "diagnostic_class": "diagnostic_blocked",
             "missing": ["hipcc"],
         })
         missing_path = write_json(directory, "missing-toolchain.json", missing)
@@ -168,6 +176,50 @@ def main() -> int:
             missing_path,
             "--require-ready-toolchain needs ready_for_hip_gemm",
             "--require-ready-toolchain",
+        )
+
+        skipped_no_hip = copy.deepcopy(hip_evidence())
+        skipped_no_hip.update({
+            "runtime_status": "skipped_not_built",
+            "hip_build_enabled": False,
+            "hip_gemm_enabled": False,
+            "device_count": 0,
+            "device": None,
+            "backend": None,
+            "kernel": "none",
+            "fallback_backend": None,
+            "gemm_kernels": {},
+            "files": {},
+            "summary": {
+                "required_functions": [
+                    "lib/hip/gemm.cpp:hip_gemm_hgemm",
+                    "lib/hip/gemm.cpp:hip_gemm_sgemm",
+                ],
+                "covered_functions": [],
+                "missing_functions": [
+                    "lib/hip/gemm.cpp:hip_gemm_hgemm",
+                    "lib/hip/gemm.cpp:hip_gemm_sgemm",
+                ],
+            },
+        })
+        skipped_no_hip["toolchain"]["tools"]["hipcc"] = {"path": None}
+        skipped_no_hip["toolchain"]["cmake_packages"]["hip"] = []
+        skipped_no_hip["toolchain"]["cmake_packages"]["hipblas"] = []
+        skipped_no_hip["toolchain"]["readiness"].update({
+            "hip_runtime_config": False,
+            "hipcc": False,
+            "hipblas_config": False,
+            "status": "missing_requirements",
+            "diagnostic_class": "no_hip_rocm",
+            "install_markers": [],
+            "missing": ["hip CMake config", "hipcc", "hipBLAS CMake config"],
+        })
+        skipped_no_hip_path = write_json(directory, "skipped-no-hip.json", skipped_no_hip)
+        assert_passes(
+            skipped_no_hip_path,
+            "--git-head", TEST_HEAD,
+            "--require-clean-head",
+            "--require-toolchain-diagnostic-class", "no_hip_rocm",
         )
 
         no_hgemm = copy.deepcopy(hip_evidence())

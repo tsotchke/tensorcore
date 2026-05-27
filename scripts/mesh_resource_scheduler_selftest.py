@@ -1675,6 +1675,7 @@ def test_submit_writes_queue_and_cancel_pauses_job() -> None:
         root = pathlib.Path(tmp)
         spec_path = root / "job.json"
         queue_path = root / "queue.json"
+        event_log = root / "queue-events.jsonl"
         inventory_path = write_inventory(root, cuda_inventory())
         spec_path.write_text(json.dumps(tensorcore_job_v1_spec()), encoding="utf-8")
         submit_payload = scheduler.cmd_submit(
@@ -1682,6 +1683,7 @@ def test_submit_writes_queue_and_cancel_pauses_job() -> None:
                 job_json=str(spec_path),
                 jobs_json=str(queue_path),
                 inventory_json=str(inventory_path),
+                event_log_jsonl=str(event_log),
                 replace=False,
                 dry_run=False,
             )
@@ -1689,17 +1691,75 @@ def test_submit_writes_queue_and_cancel_pauses_job() -> None:
         cancel_payload = scheduler.cmd_cancel(
             argparse.Namespace(
                 jobs_json=str(queue_path),
+                event_log_jsonl=str(event_log),
                 job_id="georefine-qwen-rank-probe",
                 reason="test_cancel",
                 dry_run=False,
             )
         )
         queue = json.loads(queue_path.read_text(encoding="utf-8"))
+        events = [
+            json.loads(line)
+            for line in event_log.read_text(encoding="utf-8").splitlines()
+        ]
     assert submit_payload["queued"] is True
     assert cancel_payload["cancelled_jobs"] == ["georefine-qwen-rank-probe"]
     assert queue["jobs"][0]["enabled"] is False
     assert queue["jobs"][0]["desired_state"] == "paused"
     assert queue["jobs"][0]["metadata"]["cancel_reason"] == "test_cancel"
+    assert [event["event"] for event in events] == ["submit", "cancel"]
+    assert events[0]["job_id"] == "georefine-qwen-rank-probe"
+    assert events[1]["cancelled_jobs"] == ["georefine-qwen-rank-probe"]
+    assert events[1]["reason"] == "test_cancel"
+
+
+def test_submit_and_cancel_require_event_log_for_queue_mutation() -> None:
+    scheduler = load_scheduler()
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        spec_path = root / "job.json"
+        queue_path = root / "queue.json"
+        inventory_path = write_inventory(root, cuda_inventory())
+        spec_path.write_text(json.dumps(tensorcore_job_v1_spec()), encoding="utf-8")
+        try:
+            scheduler.cmd_submit(
+                argparse.Namespace(
+                    job_json=str(spec_path),
+                    jobs_json=str(queue_path),
+                    inventory_json=str(inventory_path),
+                    replace=False,
+                    dry_run=False,
+                )
+            )
+        except ValueError as exc:
+            assert "requires --event-log-jsonl" in str(exc)
+        else:
+            raise AssertionError("submit without event log was accepted")
+
+        event_log = root / "queue-events.jsonl"
+        scheduler.cmd_submit(
+            argparse.Namespace(
+                job_json=str(spec_path),
+                jobs_json=str(queue_path),
+                inventory_json=str(inventory_path),
+                event_log_jsonl=str(event_log),
+                replace=False,
+                dry_run=False,
+            )
+        )
+        try:
+            scheduler.cmd_cancel(
+                argparse.Namespace(
+                    jobs_json=str(queue_path),
+                    job_id="georefine-qwen-rank-probe",
+                    reason="missing_event_log",
+                    dry_run=False,
+                )
+            )
+        except ValueError as exc:
+            assert "requires --event-log-jsonl" in str(exc)
+        else:
+            raise AssertionError("cancel without event log was accepted")
 
 
 def test_cancel_accepts_expanded_pool_job_id() -> None:
@@ -1708,6 +1768,7 @@ def test_cancel_accepts_expanded_pool_job_id() -> None:
         root = pathlib.Path(tmp)
         spec_path = root / "job.json"
         queue_path = root / "queue.json"
+        event_log = root / "queue-events.jsonl"
         inventory_path = write_inventory(root, cuda_inventory())
         spec_path.write_text(json.dumps(tensorcore_job_v1_spec()), encoding="utf-8")
         scheduler.cmd_submit(
@@ -1715,6 +1776,7 @@ def test_cancel_accepts_expanded_pool_job_id() -> None:
                 job_json=str(spec_path),
                 jobs_json=str(queue_path),
                 inventory_json=str(inventory_path),
+                event_log_jsonl=str(event_log),
                 replace=False,
                 dry_run=False,
             )
@@ -1722,6 +1784,7 @@ def test_cancel_accepts_expanded_pool_job_id() -> None:
         payload = scheduler.cmd_cancel(
             argparse.Namespace(
                 jobs_json=str(queue_path),
+                event_log_jsonl=str(event_log),
                 job_id="georefine-qwen-rank-probe@cosbox:cuda3090",
                 reason="cancel_from_status_id",
                 dry_run=False,
@@ -1844,21 +1907,24 @@ def test_audit_consumes_worker_reconciliation_reports() -> None:
         inventory_path = write_inventory(root, cuda_inventory())
         good_report = root / "worker-reconciliation-good.json"
         bad_report = root / "worker-reconciliation-bad.json"
+        good_dir = root / "reconciliation-dir"
+        good_dir.mkdir()
+        good_dir_report = good_dir / "cosbox_cuda3090.reconciliation.json"
+        good_payload_json = {
+            "schema": "tensorcore.mesh_worker_gpu_reconciliation.v1",
+            "ok": True,
+            "reason": "ok",
+            "action": "none",
+            "resource": "cosbox:cuda3090",
+            "cuda_app_count": 0,
+            "active_lease_count": 0,
+            "errors": [],
+        }
         good_report.write_text(
-            json.dumps(
-                {
-                    "schema": "tensorcore.mesh_worker_gpu_reconciliation.v1",
-                    "ok": True,
-                    "reason": "ok",
-                    "action": "none",
-                    "resource": "cosbox:cuda3090",
-                    "cuda_app_count": 0,
-                    "active_lease_count": 0,
-                    "errors": [],
-                }
-            ),
+            json.dumps(good_payload_json),
             encoding="utf-8",
         )
+        good_dir_report.write_text(json.dumps(good_payload_json), encoding="utf-8")
         bad_report.write_text(
             json.dumps(
                 {
@@ -1885,6 +1951,13 @@ def test_audit_consumes_worker_reconciliation_reports() -> None:
                 worker_reconciliation_json=[str(good_report)],
             )
         )
+        good_dir_payload = scheduler.cmd_audit(
+            argparse.Namespace(
+                **base_args,
+                worker_reconciliation_json=[],
+                worker_reconciliation_dir=[str(good_dir)],
+            )
+        )
         bad_payload = scheduler.cmd_audit(
             argparse.Namespace(
                 **base_args,
@@ -1893,6 +1966,8 @@ def test_audit_consumes_worker_reconciliation_reports() -> None:
         )
     assert good_payload["ok"] is True
     assert good_payload["worker_reconciliation_reports"][0]["ok"] is True
+    assert good_dir_payload["ok"] is True
+    assert good_dir_payload["worker_reconciliation_reports"][0]["resource"] == "cosbox:cuda3090"
     assert bad_payload["ok"] is False
     assert bad_payload["worker_reconciliation_reports"][0]["action"] == "drain"
     assert any("worker reconciliation failed" in error for error in bad_payload["errors"])
@@ -1947,6 +2022,7 @@ def main() -> int:
     test_loop_pretty_json_emits_json()
     test_submit_dry_run_expands_tensorcore_job_v1()
     test_submit_writes_queue_and_cancel_pauses_job()
+    test_submit_and_cancel_require_event_log_for_queue_mutation()
     test_cancel_accepts_expanded_pool_job_id()
     test_submit_rejects_malformed_tensorcore_job_v1_fields()
     test_status_offline_reports_inventory_jobs_and_drain_updates_copy()

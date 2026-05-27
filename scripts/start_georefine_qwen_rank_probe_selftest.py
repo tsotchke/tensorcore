@@ -29,10 +29,36 @@ def test_print_script_renders_scheduler_contract() -> None:
         "cosbox",
         "--resource",
         "cosbox:cuda3090",
+        "--worker-resource",
+        "gpu:cosbox:0",
         "--authority-lease-id",
         "lease-test",
+        "--authority-owner",
+        "georefine:test",
+        "--repo-url",
+        "git@example.invalid/georefine.git",
+        "--ref",
+        "main",
+        "--repo-dir",
+        "/repos/georefine",
+        "--qllm-repo-dir",
+        "/repos/qllm-tools",
         "--run-dir",
         "/runs/qwen-rank-probe",
+        "--evidence-root",
+        "/runs/evidence",
+        "--cal-text",
+        "/data/cal.txt",
+        "--eval-text",
+        "/data/eval.txt",
+        "--model",
+        "test/model",
+        "--device",
+        "cuda",
+        "--dtype",
+        "auto",
+        "--run-target",
+        "test-run",
         "--preflight-only",
         "--print-script",
         "--json",
@@ -47,15 +73,48 @@ def test_print_script_renders_scheduler_contract() -> None:
     assert "run_dir=/runs/qwen-rank-probe" in script
     assert "--authority-source tensorcore-scheduler" in script
     assert "--worker-lease-mode mirror" in script
-    assert "--run-target qwen-cr070-rank-search" in script
+    assert '--run-target "$run_target"' in script
+    assert "run_target=test-run" in script
     assert script.index("qllm_resource_lease_missing") < script.index("preflight_ok")
     assert script.index("authority_lease_id_missing") < script.index("preflight_ok")
+    assert "worker_resource_missing" in script
+    assert "gpu:cosbox:0" in script
 
 
 def test_invalid_numeric_arguments_fail() -> None:
     result = run_starter(
         "--target",
         "cosbox",
+        "--resource",
+        "cosbox:cuda3090",
+        "--worker-resource",
+        "gpu:cosbox:0",
+        "--authority-owner",
+        "georefine:test",
+        "--repo-url",
+        "git@example.invalid/georefine.git",
+        "--ref",
+        "main",
+        "--repo-dir",
+        "/repos/georefine",
+        "--qllm-repo-dir",
+        "/repos/qllm-tools",
+        "--run-dir",
+        "/runs/qwen-rank-probe",
+        "--evidence-root",
+        "/runs/evidence",
+        "--cal-text",
+        "/data/cal.txt",
+        "--eval-text",
+        "/data/eval.txt",
+        "--model",
+        "test/model",
+        "--device",
+        "cuda",
+        "--dtype",
+        "auto",
+        "--run-target",
+        "test-run",
         "--compression-ratio",
         "1.5",
         "--print-script",
@@ -67,9 +126,51 @@ def test_invalid_numeric_arguments_fail() -> None:
         raise AssertionError(result.stderr + result.stdout)
 
 
+def test_worker_resource_is_required() -> None:
+    result = run_starter(
+        "--target",
+        "cosbox",
+        "--resource",
+        "cosbox:cuda3090",
+        "--authority-owner",
+        "georefine:test",
+        "--repo-url",
+        "git@example.invalid/georefine.git",
+        "--ref",
+        "main",
+        "--repo-dir",
+        "/repos/georefine",
+        "--qllm-repo-dir",
+        "/repos/qllm-tools",
+        "--run-dir",
+        "/runs/qwen-rank-probe",
+        "--evidence-root",
+        "/runs/evidence",
+        "--cal-text",
+        "/data/cal.txt",
+        "--eval-text",
+        "/data/eval.txt",
+        "--model",
+        "test/model",
+        "--device",
+        "cuda",
+        "--dtype",
+        "auto",
+        "--run-target",
+        "test-run",
+        "--print-script",
+        "--json",
+    )
+    if result.returncode == 0:
+        raise AssertionError("missing worker resource unexpectedly passed")
+    if "--worker-resource is required" not in result.stderr:
+        raise AssertionError(result.stderr + result.stdout)
+
+
 def main() -> int:
     test_print_script_renders_scheduler_contract()
     test_invalid_numeric_arguments_fail()
+    test_worker_resource_is_required()
     print("GeoRefine Qwen rank probe starter selftest OK")
     return 0
 

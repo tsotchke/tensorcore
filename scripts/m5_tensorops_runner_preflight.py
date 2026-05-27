@@ -215,7 +215,7 @@ def display_check(timeout_sec: float) -> dict[str, Any]:
     names = display_device_names(str(attempt.get("stdout_tail") or ""))
     is_m5 = m5_candidate_from_names(names)
     if attempt.get("rc") != 0:
-        status = "unknown"
+        status = "blocked"
     elif is_m5:
         status = "passed"
     else:
@@ -227,9 +227,13 @@ def display_check(timeout_sec: float) -> dict[str, Any]:
         "attempt": attempt,
     }
     if status == "blocked":
-        display_names = ", ".join(names) if names else "none reported"
+        if attempt.get("rc") != 0:
+            message = "system_profiler SPDisplaysDataType -json did not complete; cannot prove M5 display GPU"
+        else:
+            display_names = ", ".join(names) if names else "none reported"
+            message = f"display GPU is not M5 or newer ({display_names})"
         result["diagnostic_class"] = ENVIRONMENT_UNAVAILABLE
-        result["diagnostic_message"] = f"display GPU is not M5 or newer ({display_names})"
+        result["diagnostic_message"] = message
     return result
 
 
@@ -290,7 +294,7 @@ def diagnostics_for_checks(checks: dict[str, dict[str, Any]]) -> list[dict[str, 
 
 def overall_status(checks: dict[str, dict[str, Any]]) -> str:
     required = ["host_platform", "xcode", "sdk26", "display_gpu"]
-    if any(checks[name]["status"] == "blocked" for name in required):
+    if any(checks.get(name, {}).get("status") != "passed" for name in required):
         return "blocked"
     runtime = checks.get("tensorops_runtime_probe", {})
     if runtime.get("status") == "passed":

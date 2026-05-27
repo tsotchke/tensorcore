@@ -316,6 +316,45 @@ def validate_job_policy(errors: list[str], job: dict[str, Any]) -> None:
             )
 
 
+def validate_gpu_reconciliation_policy(
+    errors: list[str],
+    resource_id: str,
+    row: dict[str, Any],
+) -> None:
+    if str(row.get("backend") or "").lower() != "cuda":
+        return
+    if row.get("control_plane") != "tensorcore_scheduler":
+        return
+    if row.get("status", "active") == "blocked":
+        return
+    cfg = row.get("gpu_reconciliation")
+    if not isinstance(cfg, dict):
+        errors.append(f"CUDA resource {resource_id!r} requires gpu_reconciliation policy")
+        return
+    enabled = cfg.get("enabled", True)
+    if not isinstance(enabled, bool):
+        errors.append(f"CUDA resource {resource_id!r} gpu_reconciliation.enabled must be a JSON boolean")
+        return
+    if not enabled:
+        if not str(cfg.get("reason") or "").strip():
+            errors.append(f"CUDA resource {resource_id!r} disabled gpu_reconciliation requires reason")
+        return
+    if not str(cfg.get("poll_host") or "").strip():
+        errors.append(f"CUDA resource {resource_id!r} gpu_reconciliation requires poll_host")
+    nvidia_smi = cfg.get("nvidia_smi", "nvidia-smi")
+    if not isinstance(nvidia_smi, str) or not nvidia_smi.strip():
+        errors.append(f"CUDA resource {resource_id!r} gpu_reconciliation.nvidia_smi must be non-empty")
+    allow = cfg.get("allow_process_regex", [])
+    if not isinstance(allow, list) or not all(isinstance(item, str) for item in allow):
+        errors.append(f"CUDA resource {resource_id!r} gpu_reconciliation.allow_process_regex must be a string list")
+    memory_cap = cfg.get("allowed_process_max_memory_mib", 64)
+    if not isinstance(memory_cap, int) or memory_cap < 0:
+        errors.append(
+            f"CUDA resource {resource_id!r} "
+            "gpu_reconciliation.allowed_process_max_memory_mib must be >= 0"
+        )
+
+
 def validate_jobs(inventory_path: pathlib.Path, jobs_path: pathlib.Path) -> list[str]:
     scheduler_path = next((item for item in SCHEDULER_CANDIDATES if item.exists()), SCHEDULER_CANDIDATES[0])
     scheduler = load_module("mesh_resource_scheduler_for_jobs_check", scheduler_path)
@@ -341,6 +380,9 @@ def validate_jobs(inventory_path: pathlib.Path, jobs_path: pathlib.Path) -> list
     missing = sorted(scheduler_resources - job_resources)
     if missing:
         errors.append(f"tensorcore_scheduler resources without jobs: {', '.join(missing)}")
+
+    for resource_id, row in inventory.items():
+        validate_gpu_reconciliation_policy(errors, resource_id, row)
 
     for job in jobs:
         for field in COMMAND_FIELDS:

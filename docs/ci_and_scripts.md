@@ -1085,6 +1085,7 @@ python3 scripts/mesh_worker_identity_selftest.py
 python3 scripts/mesh_cuda_worker_identity_selftest.py
 python3 scripts/mesh_windows_worker_identity_selftest.py
 python3 scripts/mesh_worker_gpu_snapshot_selftest.py
+python3 scripts/mesh_worker_gpu_reconcile_sweep_selftest.py
 ```
 
 ### `mesh_worker_gpu_snapshot.py` and `mesh_worker_gpu_reconcile.py`
@@ -1099,6 +1100,10 @@ supports explicit low-memory desktop-client exceptions with
 that allow-list still drains the resource. Feed reconciliation JSON into the
 scheduler audit with `--worker-reconciliation-json` to make unleased worker GPU
 activity fail the control-plane audit.
+`mesh_worker_gpu_reconcile_sweep.py` applies that policy across scheduler-owned
+CUDA inventory resources, using each resource's `gpu_reconciliation` settings
+and `TC_MESH_ARBITER_CMD` unless `--arbiter-status-json` or `--arbiter-cmd` is
+provided explicitly.
 
 ```sh
 python3 scripts/mesh_worker_gpu_snapshot.py --resource cosbox:cuda3090 --json
@@ -1118,6 +1123,16 @@ python3 scripts/mesh_resource_scheduler.py audit \
   --jobs-json configs/mesh_resource_jobs.json \
   --inventory-json configs/mesh_resources.json \
   --worker-reconciliation-json worker_gpu_reconciliation.json \
+  --json
+python3 scripts/mesh_worker_gpu_reconcile_sweep.py \
+  --inventory-json configs/mesh_resources.json \
+  --arbiter-status-json arbiter_status.json \
+  --reports-dir worker_gpu_reconciliations \
+  --json
+python3 scripts/mesh_resource_scheduler.py audit \
+  --jobs-json configs/mesh_resource_jobs.json \
+  --inventory-json configs/mesh_resources.json \
+  --worker-reconciliation-dir worker_gpu_reconciliations \
   --json
 ```
 
@@ -1262,7 +1277,10 @@ provenance via `TENSORCORE_SOURCE_GIT_HEAD` / `TENSORCORE_SOURCE_GIT_DIRTY`
 or the `.tensorcore_source_head` / `.tensorcore_source_dirty` files written
 by the live-mesh prepare step. The JSON also embeds the HIP toolchain probe
 described below, so skipped HIP smoke artifacts still preserve path and
-OpenCL/SPIR-V diagnostics.
+OpenCL/SPIR-V diagnostics. New probe artifacts include
+`toolchain.readiness.diagnostic_class`: `no_hip_rocm` means the host exposes
+no HIP/chipStar/ROCm install markers, while `diagnostic_blocked` means a HIP
+setup was indicated but the probe could not prove all required pieces.
 
 ```sh
 TENSORCORE_HIP_SMOKE_EVIDENCE_PATH=/tmp/hip.json scripts/ci_hip_smoke.sh
@@ -1272,6 +1290,8 @@ python3 scripts/check_hip_smoke_evidence.py /tmp/hip.json \
   --require-hip --require-hip-gemm-sgemm --require-hip-gemm-hgemm
 python3 scripts/check_hip_smoke_evidence.py /tmp/hip.json --require-clean-head
 python3 scripts/check_hip_smoke_evidence.py /tmp/hip.json --require-toolchain
+python3 scripts/check_hip_smoke_evidence.py /tmp/hip.json \
+  --require-clean-head --require-toolchain-diagnostic-class no_hip_rocm
 
 REQUIRE_HIP=1 scripts/ci_hip_smoke.sh  # fails unless HIP dispatch passes
 ```
@@ -1283,6 +1303,10 @@ The evidence records `hipcc`, `clang`, `llvm-spirv`, `clinfo`, HIP and
 hipBLAS CMake package files, OpenCL ICDs, Level Zero loader discovery,
 `clinfo` GPU/SPIR-V capability summaries, and path hints for
 `TC_HIP_PREFIX`, `PATH`, `CMAKE_PREFIX_PATH`, and `LD_LIBRARY_PATH`.
+`readiness.diagnostic_class` separates clean no-HIP/ROCm absence
+(`no_hip_rocm`) from a blocked attempted setup (`diagnostic_blocked`), while
+preserving `ready` and `runtime_only_no_hipblas` for hosts that can build and
+initialize enough of the stack.
 
 ```sh
 python3 scripts/probe_hip_toolchain.py --json /tmp/hip-toolchain.json
@@ -1291,6 +1315,8 @@ python3 scripts/check_hip_toolchain_evidence.py /tmp/hip-toolchain.json \
   --require-build-toolchain --require-spirv-runtime
 python3 scripts/check_hip_toolchain_evidence.py /tmp/hip-toolchain.json \
   --require-ready --require-clean-head
+python3 scripts/check_hip_toolchain_evidence.py /tmp/hip-toolchain.json \
+  --require-clean-head --require-diagnostic-class no_hip_rocm
 ```
 
 ### `check_public_headers.sh`

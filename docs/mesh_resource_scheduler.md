@@ -39,6 +39,10 @@ python3 scripts/mesh_resource_scheduler.py submit \
   --dry-run --pretty-json
 ```
 
+Real `submit` and `cancel` mutations require `--event-log-jsonl`; dry runs do
+not. Keep that path in the scheduler state directory so queue mutations have an
+append-only audit trail.
+
 Example scheduler loop:
 
 ```sh
@@ -511,6 +515,16 @@ to the admission command so unmanaged CUDA compute applications block a launch:
 ```sh
 python3 scripts/check_cuda_resource_admission.py --resource cosbox:cuda3090
 ```
+
+Scheduler-owned CUDA inventory rows must also define `gpu_reconciliation`.
+`scripts/mesh_worker_gpu_reconcile_sweep.py` uses that per-resource policy to
+poll worker GPU state, compare it with arbiter leases, and emit one
+reconciliation report per resource. Provide arbiter state through
+`--arbiter-status-json`, `--arbiter-cmd`, or `TC_MESH_ARBITER_CMD`; disable
+reconciliation only with an explicit reason, for example while a Windows worker
+snapshot agent is not available.
+`mesh_resource_scheduler.py audit` accepts the sweep output directory via
+`--worker-reconciliation-dir`.
 
 ## Worker Identity
 
