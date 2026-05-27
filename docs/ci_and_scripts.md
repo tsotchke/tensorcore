@@ -812,6 +812,19 @@ scripts/mesh_resource_scheduler.py \
   --worker-identity-timeout-sec 10
 ```
 
+Check operator-visible status, including the same GPU reconciliation audit gate
+used by the loop:
+
+```sh
+scripts/mesh_resource_scheduler.py status \
+  --arbiter-cmd tsotchke-arbiter \
+  --inventory-json configs/mesh_resources.json \
+  --jobs-json ~/.tsotchke/state/mesh-resource-jobs.json \
+  --gpu-reconciliation-audit-json ~/.tsotchke/state/gpu-reconciliation-audit.json \
+  --gpu-reconciliation-max-age-sec 120 \
+  --json
+```
+
 Fixture coverage:
 
 ```sh

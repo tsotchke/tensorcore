@@ -1904,6 +1904,43 @@ def test_status_offline_reports_inventory_jobs_and_drain_updates_copy() -> None:
     assert drained["resources"][0]["blocked_reason"] == "maintenance"
 
 
+def test_status_reports_gpu_reconciliation_audit_gate() -> None:
+    scheduler = load_scheduler()
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        queue_path = write_jobs(
+            root,
+            [
+                job(
+                    "georefine-qwen-rank-probe",
+                    priority=100,
+                    resource="cosbox:cuda3090",
+                    resource_class="cuda_exclusive",
+                    admission_cmd=True,
+                    post_start_probe_cmd=True,
+                    worker_identity_cmd=True,
+                )
+            ],
+        )
+        inventory_path = write_inventory(root, cuda_inventory())
+        status_payload = scheduler.cmd_status(
+            argparse.Namespace(
+                arbiter_cmd="arbiter",
+                jobs_json=str(queue_path),
+                inventory_json=str(inventory_path),
+                gpu_reconciliation_audit_json=str(root / "missing-audit.json"),
+                gpu_reconciliation_max_age_sec=120.0,
+                timeout_sec=1.0,
+                offline=True,
+            )
+        )
+    assert status_payload["ok"] is True
+    gate = status_payload["gpu_reconciliation_audit"]
+    assert gate["ok"] is False
+    assert gate["reason"] == "audit_artifact_unreadable"
+    assert gate["cuda_job_count"] == 1
+
+
 def test_scheduler_dry_run_includes_launch_plan() -> None:
     candidate = job("qllm-phase1", priority=50)
     candidate["cwd"] = "scripts"
@@ -2253,6 +2290,7 @@ def main() -> int:
     test_cancel_accepts_expanded_pool_job_id()
     test_submit_rejects_malformed_tensorcore_job_v1_fields()
     test_status_offline_reports_inventory_jobs_and_drain_updates_copy()
+    test_status_reports_gpu_reconciliation_audit_gate()
     test_scheduler_dry_run_includes_launch_plan()
     test_scheduler_blocks_cuda_when_gpu_reconciliation_audit_missing()
     test_scheduler_keeps_non_cuda_placement_when_gpu_reconciliation_audit_missing()

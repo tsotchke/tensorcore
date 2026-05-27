@@ -18,7 +18,8 @@ The v1 boundary is intentionally backend-neutral:
 - `tensorcore.job.v1` describes owner, tenant, priority, resource selector,
   command, environment, artifact root, quality gates, and preemption policy.
 - `submit` validates and queues the job or emits a dry-run launch plan.
-- `status` reports inventory, queued jobs, and arbiter leases.
+- `status` reports inventory, queued jobs, arbiter leases, and optional GPU
+  reconciliation audit gate state.
 - `cancel` disables a queued job without claiming to have killed live work.
 - `drain` and `undrain` update inventory state for operator maintenance.
 - `audit` verifies that CUDA jobs have admission, post-start probe, worker
@@ -57,6 +58,17 @@ python3 scripts/mesh_resource_scheduler.py \
   --gpu-reconciliation-audit-json /var/lib/tensorcore/gpu-reconciliation-audit.json \
   --gpu-reconciliation-max-age-sec 120 \
   --loop --json
+```
+
+Example operator status with the same CUDA placement gate the loop enforces:
+
+```sh
+python3 scripts/mesh_resource_scheduler.py status \
+  --jobs-json /var/lib/tensorcore/mesh_resource_jobs.json \
+  --inventory-json configs/mesh_resources.json \
+  --gpu-reconciliation-audit-json /var/lib/tensorcore/gpu-reconciliation-audit.json \
+  --gpu-reconciliation-max-age-sec 120 \
+  --json
 ```
 
 For a dedicated Linux scheduler VM, use

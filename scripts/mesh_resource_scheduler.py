@@ -2216,6 +2216,9 @@ def cmd_submit(args: argparse.Namespace) -> dict:
 def cmd_status(args: argparse.Namespace) -> dict:
     inventory = load_inventory(args.inventory_json)
     jobs = load_jobs(args.jobs_json, inventory=inventory) if args.jobs_json else []
+    reconciliation_gate = None
+    if getattr(args, "gpu_reconciliation_audit_json", None):
+        reconciliation_gate = gpu_reconciliation_gate(args, jobs)
     status = {"leases": []}
     if not args.offline:
         status = run_json(command(args.arbiter_cmd) + ["status", "--json"], timeout=args.timeout_sec)
@@ -2233,7 +2236,7 @@ def cmd_status(args: argparse.Namespace) -> dict:
             "leases": [lease.get("id") for lease in resource_leases],
             "busy": bool(resource_leases),
         })
-    return {
+    payload = {
         "schema": "tensorcore.cluster_status.v1",
         "ok": True,
         "checked_at_unix": time.time(),
@@ -2241,6 +2244,9 @@ def cmd_status(args: argparse.Namespace) -> dict:
         "jobs": [{"id": job["id"], "resource": job["resource"], "desired_state": job["desired_state"]} for job in jobs],
         "leases": status.get("leases") or [],
     }
+    if reconciliation_gate is not None:
+        payload["gpu_reconciliation_audit"] = reconciliation_gate
+    return payload
 
 
 def cmd_cancel(args: argparse.Namespace) -> dict:
@@ -2425,6 +2431,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         status.add_argument("--arbiter-cmd", default=DEFAULT_ARBITER_CMD)
         status.add_argument("--jobs-json")
         status.add_argument("--inventory-json", required=True)
+        status.add_argument("--gpu-reconciliation-audit-json")
+        status.add_argument("--gpu-reconciliation-max-age-sec", type=float, default=120.0)
         status.add_argument("--timeout-sec", type=float, default=10.0)
         status.add_argument("--offline", action="store_true")
         add_output_flags(status)
