@@ -19,11 +19,13 @@ VALID_CHECK_STATUSES = {"passed", "failed", "blocked", "skipped"}
 REQUIRED_CHECKS = {
     "attention_correctness",
     "conv2d",
+    "gemm_batched",
     "async_copy_shader",
 }
 REQUIRE_PASS_CHECKS = {
     "attention_correctness",
     "conv2d",
+    "gemm_batched",
 }
 REQUIRED_FUNCTIONS = {
     "lib/ops/attention.mm": {
@@ -31,6 +33,9 @@ REQUIRED_FUNCTIONS = {
     },
     "lib/ops/conv.mm": {
         "conv_bytes",
+    },
+    "lib/ops/gemm.mm": {
+        "batched_matrix_bytes",
     },
 }
 

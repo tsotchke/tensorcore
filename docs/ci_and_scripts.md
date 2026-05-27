@@ -330,7 +330,10 @@ artifacts, defaults to `build/`, runs the native artifact copy path through
 wheel through `bdist_wheel`, and records copied artifact hashes plus the wheel
 hash. It sets `TENSORCORE_SETUP_PROBE_LOG=1` for the evidence run so `_run_tool`
 records a structured native-tool probe while the runner still parses only real
-`lipo` architecture tokens into `checks.run_tool_lipo.arches`.
+`lipo` architecture tokens into `checks.run_tool_lipo.arches`. On macOS, the
+artifact also covers the setup helper paths for artifact discovery, platform
+library selection, metallib requirements, dylib architecture/minimum-version
+inspection, platform-tag parsing, and dylib/tag validation.
 
 The default artifact is
 `build/python-packaging-evidence/python_packaging_evidence.json`. Validate it
@@ -358,7 +361,7 @@ Focused evidence for local distributed runtime paths. The runner executes the
 forked GLOO ring, dense DiLoCo, and sparse DiLoCo smokes from an existing build
 directory, captures command traces, and emits ICC-readable coverage for:
 
-- `lib/distributed/gloo_tcp.cpp`
+- `lib/distributed/gloo_tcp.cpp`, including connection setup and teardown
 - `lib/distributed/diloco.cpp`, including the TOPK sparse-delta path when
   `test_diloco_sparse_fork` passes
 
@@ -385,11 +388,16 @@ as a code failure.
 Focused evidence for local AMX and GEMM benchmark paths. The runner executes
 the AMX metadata probe, the opt-in direct AMX GEMM regression, and a tiny
 `bench_gemm` run with `TC_BENCH_SIZES=16`, `TC_BENCH_DTYPES=f32`,
-`TC_BENCH_WARMUP=0`, and `TC_BENCH_ITERS=1`. It records ICC-readable coverage
-for:
+`TC_BENCH_WARMUP=0`, and `TC_BENCH_ITERS=1`. It also runs a bounded
+FlashAttention benchmark with `TC_ATTENTION_BENCH_SINGLE=1`,
+`TC_ATTENTION_BENCH_S=16`, `TC_ATTENTION_BENCH_WARMUP=0`, and
+`TC_ATTENTION_BENCH_ITERS=1`, falling back to the portable CPU build when
+Metal is unavailable to the evidence subprocess. It records ICC-readable
+coverage for:
 
 - `lib/ops/gemm_cpu_amx.cpp`
 - `bench/bench_gemm.c`
+- `bench/bench_attention.c`
 
 The default artifact is `build/amx_bench_evidence.json`. Validate it with:
 
@@ -419,6 +427,7 @@ emits ICC-readable coverage for:
 - `lib/ops/gemm_cpu.cpp:gemm_compute_cblas_f16` and
   `gemm_compute_cblas_bf16` when the build has CBLAS
 - `lib/ops/conv2d_cpu.cpp:direct_sgemm_f32`
+- `lib/ops/conv2d_cpu.cpp:im2col_fp16`
 
 The default artifact is `build/cpu_ops_runtime_evidence.json`. Validate it
 with:
@@ -436,12 +445,14 @@ python3 scripts/run_cpu_ops_runtime_evidence.py --require-pass
 
 ### `run_metal_ops_runtime_evidence.py`
 
-Focused evidence for local Metal attention and Conv2D host dispatch. The
-runner executes `test_attention_correctness` and the Metal-build `test_conv2d`
-with `TC_TRACE=1`, then emits ICC-readable coverage for:
+Focused evidence for local Metal attention, Conv2D, and batched-GEMM host
+dispatch. The runner executes `test_attention_correctness`, the Metal-build
+`test_conv2d`, and `test_gemm_f16` with `TC_TRACE=1`, then emits
+ICC-readable coverage for:
 
 - `lib/ops/attention.mm:encode_forward`
 - `lib/ops/conv.mm:conv_bytes`
+- `lib/ops/gemm.mm:batched_matrix_bytes`
 
 The default artifact is `build/metal_ops_runtime_evidence.json`. Validate it
 with:

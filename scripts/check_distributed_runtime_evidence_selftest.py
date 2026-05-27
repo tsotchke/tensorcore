@@ -19,12 +19,13 @@ CHECKER = ROOT / "scripts" / "check_distributed_runtime_evidence.py"
 def coverage() -> dict[str, Any]:
     return {
         "lib/distributed/gloo_tcp.cpp": {
-            "executed_lines": [404, 530, 583, 592],
+            "executed_lines": [404, 530, 583, 592, 667],
             "functions": {
                 "tcp_connect_timeout": {"start_line": 404, "executed_lines": [404]},
                 "advertised_peer_info": {"start_line": 530, "executed_lines": [530]},
                 "ring_connect_timeout_ms": {"start_line": 583, "executed_lines": [583]},
                 "accept_with_timeout": {"start_line": 592, "executed_lines": [592]},
+                "close_gloo_state": {"start_line": 667, "executed_lines": [667]},
             },
         },
         "lib/distributed/diloco.cpp": {
@@ -73,6 +74,7 @@ def passed_evidence() -> dict[str, Any]:
                 "lib/distributed/diloco.cpp:do_outer_step",
                 "lib/distributed/gloo_tcp.cpp:accept_with_timeout",
                 "lib/distributed/gloo_tcp.cpp:advertised_peer_info",
+                "lib/distributed/gloo_tcp.cpp:close_gloo_state",
                 "lib/distributed/gloo_tcp.cpp:ring_connect_timeout_ms",
                 "lib/distributed/gloo_tcp.cpp:tcp_connect_timeout",
             ],
@@ -82,6 +84,7 @@ def passed_evidence() -> dict[str, Any]:
                 "lib/distributed/diloco.cpp:do_outer_step",
                 "lib/distributed/gloo_tcp.cpp:accept_with_timeout",
                 "lib/distributed/gloo_tcp.cpp:advertised_peer_info",
+                "lib/distributed/gloo_tcp.cpp:close_gloo_state",
                 "lib/distributed/gloo_tcp.cpp:ring_connect_timeout_ms",
                 "lib/distributed/gloo_tcp.cpp:tcp_connect_timeout",
             ],
@@ -113,6 +116,7 @@ def blocked_evidence() -> dict[str, Any]:
     evidence["summary"]["missing_functions"] = [
         "lib/distributed/gloo_tcp.cpp:accept_with_timeout",
         "lib/distributed/gloo_tcp.cpp:advertised_peer_info",
+        "lib/distributed/gloo_tcp.cpp:close_gloo_state",
         "lib/distributed/gloo_tcp.cpp:ring_connect_timeout_ms",
         "lib/distributed/gloo_tcp.cpp:tcp_connect_timeout",
     ]

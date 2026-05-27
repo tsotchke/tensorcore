@@ -28,6 +28,7 @@ REQUIRED_FUNCTIONS = {
     },
     "lib/ops/conv2d_cpu.cpp": {
         "direct_sgemm_f32",
+        "im2col_fp16",
     },
 }
 

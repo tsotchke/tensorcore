@@ -30,6 +30,12 @@ def coverage() -> dict[str, Any]:
                 "conv_bytes": {"start_line": 46, "executed_lines": [46]},
             },
         },
+        "lib/ops/gemm.mm": {
+            "executed_lines": [214],
+            "functions": {
+                "batched_matrix_bytes": {"start_line": 214, "executed_lines": [214]},
+            },
+        },
     }
 
 
@@ -50,6 +56,7 @@ def passed_evidence() -> dict[str, Any]:
         "checks": {
             "attention_correctness": {"status": "passed", "binary": "/repo/build/tests/test_attention_correctness", "trace": "attention_correctness"},
             "conv2d": {"status": "passed", "binary": "/repo/build/tests/test_conv2d", "trace": "conv2d"},
+            "gemm_batched": {"status": "passed", "binary": "/repo/build/tests/test_gemm_f16", "trace": "gemm_batched"},
             "async_copy_shader": {
                 "status": "blocked",
                 "blocked_reason": "shader_line_execution_trace_unavailable",
@@ -59,6 +66,7 @@ def passed_evidence() -> dict[str, Any]:
         "trace": [
             {"name": "attention_correctness", "cmd": ["test_attention_correctness"], "cwd": "/repo", "rc": 0},
             {"name": "conv2d", "cmd": ["test_conv2d"], "cwd": "/repo", "rc": 0},
+            {"name": "gemm_batched", "cmd": ["test_gemm_f16"], "cwd": "/repo", "rc": 0},
         ],
         "files": coverage(),
         "summary": {
@@ -69,10 +77,12 @@ def passed_evidence() -> dict[str, Any]:
             "required_functions": [
                 "lib/ops/attention.mm:encode_forward",
                 "lib/ops/conv.mm:conv_bytes",
+                "lib/ops/gemm.mm:batched_matrix_bytes",
             ],
             "covered_functions": [
                 "lib/ops/attention.mm:encode_forward",
                 "lib/ops/conv.mm:conv_bytes",
+                "lib/ops/gemm.mm:batched_matrix_bytes",
             ],
             "missing_functions": [],
             "optional_missing_functions": [
@@ -92,10 +102,14 @@ def blocked_evidence() -> dict[str, Any]:
     }
     evidence["files"] = {
         "lib/ops/conv.mm": coverage()["lib/ops/conv.mm"],
+        "lib/ops/gemm.mm": coverage()["lib/ops/gemm.mm"],
     }
     evidence["summary"]["checks_passed"] = False
     evidence["summary"]["blocked_reasons"] = ["attention_correctness:test_binary_missing"]
-    evidence["summary"]["covered_functions"] = ["lib/ops/conv.mm:conv_bytes"]
+    evidence["summary"]["covered_functions"] = [
+        "lib/ops/conv.mm:conv_bytes",
+        "lib/ops/gemm.mm:batched_matrix_bytes",
+    ]
     evidence["summary"]["missing_functions"] = ["lib/ops/attention.mm:encode_forward"]
     return evidence
 
@@ -141,7 +155,10 @@ def main() -> int:
 
     missing_function = copy.deepcopy(passed)
     del missing_function["files"]["lib/ops/attention.mm"]["functions"]["encode_forward"]
-    missing_function["summary"]["covered_functions"] = ["lib/ops/conv.mm:conv_bytes"]
+    missing_function["summary"]["covered_functions"] = [
+        "lib/ops/conv.mm:conv_bytes",
+        "lib/ops/gemm.mm:batched_matrix_bytes",
+    ]
     missing_function["summary"]["missing_functions"] = ["lib/ops/attention.mm:encode_forward"]
     assert_fails(missing_function, "missing function coverage", "--require-pass")
 

@@ -20,12 +20,14 @@ REQUIRED_CHECKS = {
     "amx_probe",
     "amx_gemm",
     "bench_gemm",
+    "bench_attention",
     "tensorops_layout",
 }
 REQUIRE_PASS_CHECKS = {
     "amx_probe",
     "amx_gemm",
     "bench_gemm",
+    "bench_attention",
 }
 REQUIRED_FUNCTIONS = {
     "lib/ops/gemm_cpu_amx.cpp": {
@@ -41,6 +43,21 @@ REQUIRED_FUNCTIONS = {
     },
     "bench/bench_gemm.c": {
         "bench_one",
+        "cmp_double",
+        "env_int",
+        "now_seconds",
+        "only_spaces",
+        "parse_dtype_token",
+        "parse_dtypes",
+        "parse_sizes",
+        "print_throughput",
+        "trim_token",
+    },
+    "bench/bench_attention.c": {
+        "bench_one",
+        "cmp_double",
+        "env_int",
+        "now_seconds",
     },
 }
 

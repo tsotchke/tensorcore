@@ -37,6 +37,21 @@ every architectural primitive in code and tested:
 - GLOO ring observability: `TC_GLOO_TRACE=1` logs direct-ring enablement,
   coordinated fallback, and fp32 SUM route selection so WAN runs prove
   whether they used the ring or broker.
+- Distributed runtime evidence now claims GLOO teardown explicitly:
+  `run_distributed_runtime_evidence.py` covers `close_gloo_state` when the
+  forked ring smoke passes, so setup and cleanup are both visible to ICC.
+- Metal ops evidence now includes the batched-GEMM host validation path:
+  `run_metal_ops_runtime_evidence.py` runs `test_gemm_f16` and covers
+  `lib/ops/gemm.mm:batched_matrix_bytes`.
+- CPU ops evidence now claims the Conv2D im2col staging helper when
+  `test_conv2d` passes, covering `lib/ops/conv2d_cpu.cpp:im2col_fp16`.
+- Python packaging evidence now covers the full `setup.py` native-artifact
+  helper chain, including artifact discovery, platform selection, metallib
+  requirement checks, macOS dylib/tag validation, and `_run_tool`.
+- AMX/bench evidence now covers benchmark parser/timing helpers in
+  `bench_gemm.c` plus the FlashAttention benchmark helpers in
+  `bench_attention.c`; `bench_attention` has a bounded environment-controlled
+  single-case mode for evidence subprocesses and slow portable hosts.
 - `test_dist_remote` now accepts `--elements` and `--iters`, making short
   WAN ring proofs possible without changing the default 4 MB throughput
   probe.

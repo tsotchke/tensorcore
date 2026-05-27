@@ -22,6 +22,7 @@ REQUIRED_FUNCTIONS = {
         "advertised_peer_info",
         "ring_connect_timeout_ms",
         "accept_with_timeout",
+        "close_gloo_state",
     },
     "lib/distributed/diloco.cpp": {
         "apply_outer_optimizer",
@@ -39,6 +40,7 @@ TESTS = {
                 "advertised_peer_info",
                 "ring_connect_timeout_ms",
                 "accept_with_timeout",
+                "close_gloo_state",
             },
         },
     },

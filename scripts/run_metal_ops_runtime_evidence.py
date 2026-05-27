@@ -23,6 +23,9 @@ REQUIRED_FUNCTIONS = {
     "lib/ops/conv.mm": {
         "conv_bytes",
     },
+    "lib/ops/gemm.mm": {
+        "batched_matrix_bytes",
+    },
 }
 OPTIONAL_FUNCTIONS = {
     "kernels/metal/metal_simdgroup_event.h": {
@@ -55,6 +58,20 @@ TESTS = {
         "covers": {
             "lib/ops/conv.mm": {
                 "conv_bytes",
+            },
+        },
+    },
+    "gemm_batched": {
+        "path": "tests/test_gemm_f16",
+        "required_markers": (
+            "trace op=tc_gemm_batched status=ok backend=simdgroup_matrix",
+            "batched batch=3",
+            "batched transpose/padded",
+            "OK",
+        ),
+        "covers": {
+            "lib/ops/gemm.mm": {
+                "batched_matrix_bytes",
             },
         },
     },

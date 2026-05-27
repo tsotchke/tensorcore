@@ -30,7 +30,18 @@ REQUIRED_CHECKS = {
 }
 REQUIRED_FUNCTIONS = {
     "setup.py": {
+        "_artifact_dirs",
+        "_dylib_arches",
+        "_dylib_macos_version",
+        "_find_native_artifacts",
+        "_macos_platform_tags",
+        "_metallib_required",
+        "_platform_library_names",
         "_run_tool",
+        "_validate_dylib_matches_platform_tag",
+        "_wheel_macos_version",
+        "bdist_wheel_with_native_artifacts.finalize_options",
+        "bdist_wheel_with_native_artifacts.get_tag",
         "bdist_wheel_with_native_artifacts.run",
         "build_py_with_native_artifacts.run",
     },

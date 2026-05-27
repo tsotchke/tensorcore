@@ -23,7 +23,18 @@ SCHEMA = "tensorcore.python_packaging_evidence.v1"
 FORMAT_VERSION = 1
 REQUIRED_FUNCTIONS = {
     "setup.py": {
+        "_artifact_dirs",
+        "_dylib_arches",
+        "_dylib_macos_version",
+        "_find_native_artifacts",
+        "_macos_platform_tags",
+        "_metallib_required",
+        "_platform_library_names",
         "_run_tool",
+        "_validate_dylib_matches_platform_tag",
+        "_wheel_macos_version",
+        "bdist_wheel_with_native_artifacts.finalize_options",
+        "bdist_wheel_with_native_artifacts.get_tag",
         "bdist_wheel_with_native_artifacts.run",
         "build_py_with_native_artifacts.run",
     },
@@ -300,9 +311,14 @@ def add_function(files: dict[str, Any], rel_path: str, name: str, start_line: in
 
 def coverage_for(run_tool_passed: bool, build_py_passed: bool, wheel_passed: bool) -> dict[str, Any]:
     files: dict[str, Any] = {}
+    def add_setup_function(name: str) -> None:
+        add_function(files, "setup.py", name, function_line("setup.py", name))
+
     if run_tool_passed:
-        add_function(files, "setup.py", "_run_tool", function_line("setup.py", "_run_tool"))
+        add_setup_function("_run_tool")
     if build_py_passed:
+        add_setup_function("_artifact_dirs")
+        add_setup_function("_find_native_artifacts")
         add_function(
             files,
             "setup.py",
@@ -312,6 +328,28 @@ def coverage_for(run_tool_passed: bool, build_py_passed: bool, wheel_passed: boo
         copy_line = line_matching("setup.py", r"shutil\.copy2")
         files["setup.py"]["executed_lines"].append(copy_line)
     if wheel_passed:
+        add_setup_function("_artifact_dirs")
+        add_setup_function("_find_native_artifacts")
+        add_setup_function("_metallib_required")
+        add_setup_function("_platform_library_names")
+        if host_key() == "darwin" and run_tool_passed:
+            add_setup_function("_dylib_arches")
+            add_setup_function("_dylib_macos_version")
+            add_setup_function("_macos_platform_tags")
+            add_setup_function("_validate_dylib_matches_platform_tag")
+            add_setup_function("_wheel_macos_version")
+        add_function(
+            files,
+            "setup.py",
+            "bdist_wheel_with_native_artifacts.finalize_options",
+            class_method_line("setup.py", "bdist_wheel_with_native_artifacts", "finalize_options"),
+        )
+        add_function(
+            files,
+            "setup.py",
+            "bdist_wheel_with_native_artifacts.get_tag",
+            class_method_line("setup.py", "bdist_wheel_with_native_artifacts", "get_tag"),
+        )
         add_function(
             files,
             "setup.py",

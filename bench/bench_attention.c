@@ -12,6 +12,8 @@
 #include <stdint.h>
 #include "tensorcore/tensorcore.h"
 
+#define MAX_BENCH_ITERS 64
+
 static double now_seconds(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -23,7 +25,24 @@ static int cmp_double(const void* a, const void* b) {
     return (x > y) - (x < y);
 }
 
-static void bench_one(tc_context* ctx, int B, int H, int S, int D, int causal) {
+static int env_int(const char* name, int fallback, int min_value, int max_value) {
+    const char* value = getenv(name);
+    if (!value || !*value) return fallback;
+
+    char* end = NULL;
+    long parsed = strtol(value, &end, 10);
+    if (end == value) return fallback;
+    while (*end) {
+        if (*end != ' ' && *end != '\t' && *end != '\n' && *end != '\r') return fallback;
+        ++end;
+    }
+    if (parsed < min_value) parsed = min_value;
+    if (parsed > max_value) parsed = max_value;
+    return (int)parsed;
+}
+
+static void bench_one(tc_context* ctx, int B, int H, int S, int D, int causal,
+                      int warmup, int iters) {
     const size_t qkv = (size_t)B * H * S * D;
     tc_buffer *Q = NULL, *K = NULL, *V = NULL, *O = NULL;
     tc_buffer_alloc(ctx, qkv * sizeof(uint16_t), &Q);
@@ -43,11 +62,10 @@ static void bench_one(tc_context* ctx, int B, int H, int S, int D, int causal) {
     d.causal = !!causal; d.return_lse = 0;
 
     /* warmup */
-    for (int i = 0; i < 3; ++i) (void)tc_attention_forward(ctx, &d, Q, K, V, O, NULL);
+    for (int i = 0; i < warmup; ++i) (void)tc_attention_forward(ctx, &d, Q, K, V, O, NULL);
 
-    const int ITERS = 10;
-    double times[16] = {0};
-    for (int i = 0; i < ITERS; ++i) {
+    double times[MAX_BENCH_ITERS] = {0};
+    for (int i = 0; i < iters; ++i) {
         const double t0 = now_seconds();
         tc_status_t s = tc_attention_forward(ctx, &d, Q, K, V, O, NULL);
         const double t1 = now_seconds();
@@ -57,8 +75,8 @@ static void bench_one(tc_context* ctx, int B, int H, int S, int D, int causal) {
         }
         times[i] = t1 - t0;
     }
-    qsort(times, ITERS, sizeof(double), cmp_double);
-    const double med = times[ITERS / 2];
+    qsort(times, (size_t)iters, sizeof(double), cmp_double);
+    const double med = times[iters / 2];
     /* FlashAttention work: 4 * B * H * S * S * D FLOPs (QK^T + softmax + PV ≈ 4SD per row) */
     const double flops = 4.0 * (double)B * H * (double)S * (double)S * D;
     const double tflops = flops / med / 1e12;
@@ -78,13 +96,27 @@ int main(void) {
         return 1;
     }
     printf("=== tensorcore FlashAttention bench (fp16, D=64) ===\n\n");
+    const int warmup = env_int("TC_ATTENTION_BENCH_WARMUP", 3, 0, 100);
+    const int iters = env_int("TC_ATTENTION_BENCH_ITERS", 10, 1, MAX_BENCH_ITERS);
+    if (env_int("TC_ATTENTION_BENCH_SINGLE", 0, 0, 1)) {
+        bench_one(ctx,
+                  env_int("TC_ATTENTION_BENCH_B", 1, 1, 64),
+                  env_int("TC_ATTENTION_BENCH_H", 1, 1, 128),
+                  env_int("TC_ATTENTION_BENCH_S", 16, 1, 32768),
+                  env_int("TC_ATTENTION_BENCH_D", 64, 1, 256),
+                  env_int("TC_ATTENTION_BENCH_CAUSAL", 1, 0, 1),
+                  warmup,
+                  iters);
+        tc_shutdown(ctx);
+        return 0;
+    }
     /* Llama-style: H=32, D=128 — we'd use D=128 kernel; for v0.1 D=64 only. */
-    bench_one(ctx, 1,  8,   512, 64, 1);
-    bench_one(ctx, 1,  8,  1024, 64, 1);
-    bench_one(ctx, 1,  8,  2048, 64, 1);
-    bench_one(ctx, 1, 16,  2048, 64, 1);
-    bench_one(ctx, 1, 16,  4096, 64, 1);
-    bench_one(ctx, 1, 32,  4096, 64, 1);
+    bench_one(ctx, 1,  8,   512, 64, 1, warmup, iters);
+    bench_one(ctx, 1,  8,  1024, 64, 1, warmup, iters);
+    bench_one(ctx, 1,  8,  2048, 64, 1, warmup, iters);
+    bench_one(ctx, 1, 16,  2048, 64, 1, warmup, iters);
+    bench_one(ctx, 1, 16,  4096, 64, 1, warmup, iters);
+    bench_one(ctx, 1, 32,  4096, 64, 1, warmup, iters);
     tc_shutdown(ctx);
     return 0;
 }

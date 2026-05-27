@@ -27,9 +27,10 @@ def coverage() -> dict[str, Any]:
             },
         },
         "lib/ops/conv2d_cpu.cpp": {
-            "executed_lines": [44],
+            "executed_lines": [44, 186],
             "functions": {
                 "direct_sgemm_f32": {"start_line": 44, "executed_lines": [44]},
+                "im2col_fp16": {"start_line": 186, "executed_lines": [186]},
             },
         },
     }
@@ -67,12 +68,14 @@ def passed_evidence() -> dict[str, Any]:
             "failure_reasons": [],
             "required_functions": [
                 "lib/ops/conv2d_cpu.cpp:direct_sgemm_f32",
+                "lib/ops/conv2d_cpu.cpp:im2col_fp16",
                 "lib/ops/gemm_cpu.cpp:gemm_compute",
                 "lib/ops/gemm_cpu.cpp:gemm_compute_cblas_bf16",
                 "lib/ops/gemm_cpu.cpp:gemm_compute_cblas_f16",
             ],
             "covered_functions": [
                 "lib/ops/conv2d_cpu.cpp:direct_sgemm_f32",
+                "lib/ops/conv2d_cpu.cpp:im2col_fp16",
                 "lib/ops/gemm_cpu.cpp:gemm_compute",
                 "lib/ops/gemm_cpu.cpp:gemm_compute_cblas_bf16",
                 "lib/ops/gemm_cpu.cpp:gemm_compute_cblas_f16",
@@ -97,6 +100,7 @@ def blocked_evidence() -> dict[str, Any]:
     evidence["summary"]["blocked_reasons"] = ["portable_cpu:test_binary_missing"]
     evidence["summary"]["covered_functions"] = [
         "lib/ops/conv2d_cpu.cpp:direct_sgemm_f32",
+        "lib/ops/conv2d_cpu.cpp:im2col_fp16",
     ]
     evidence["summary"]["missing_functions"] = [
         "lib/ops/gemm_cpu.cpp:gemm_compute",
@@ -148,7 +152,8 @@ def main() -> int:
     missing_function = copy.deepcopy(passed)
     del missing_function["files"]["lib/ops/gemm_cpu.cpp"]["functions"]["gemm_compute"]
     missing_function["summary"]["covered_functions"] = [
-        "lib/ops/conv2d_cpu.cpp:direct_sgemm_f32"
+        "lib/ops/conv2d_cpu.cpp:direct_sgemm_f32",
+        "lib/ops/conv2d_cpu.cpp:im2col_fp16",
     ]
     missing_function["summary"]["missing_functions"] = [
         "lib/ops/gemm_cpu.cpp:gemm_compute"

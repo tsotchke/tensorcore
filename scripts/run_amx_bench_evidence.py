@@ -30,6 +30,21 @@ REQUIRED_FUNCTIONS = {
     },
     "bench/bench_gemm.c": {
         "bench_one",
+        "cmp_double",
+        "env_int",
+        "now_seconds",
+        "only_spaces",
+        "parse_dtype_token",
+        "parse_dtypes",
+        "parse_sizes",
+        "print_throughput",
+        "trim_token",
+    },
+    "bench/bench_attention.c": {
+        "bench_one",
+        "cmp_double",
+        "env_int",
+        "now_seconds",
     },
 }
 OPTIONAL_LAYOUT_FUNCTIONS = {
@@ -220,6 +235,8 @@ def classify_output(
     text = "\n".join([str(attempt.get("stdout_tail", "")), str(attempt.get("stderr_tail", ""))])
     if attempt.get("rc") == 0 and all(marker in text for marker in markers):
         return "passed", None
+    if "no Metal device available" in text:
+        return "blocked", "metal_device_unavailable"
     if attempt.get("rc") == -4 or "SIGILL" in text or "Illegal instruction" in text:
         return "blocked", "sigill"
     if any(marker in text for marker in blocked_markers):
@@ -428,11 +445,51 @@ def build_evidence(args: argparse.Namespace) -> dict[str, Any]:
     checks["bench_gemm"] = bench_check
     trace.extend(bench_trace)
     if bench_check["status"] == "passed":
-        add_function(files, "bench/bench_gemm.c", "bench_one")
+        for function in (
+            "bench_one",
+            "cmp_double",
+            "env_int",
+            "now_seconds",
+            "only_spaces",
+            "parse_dtype_token",
+            "parse_dtypes",
+            "parse_sizes",
+            "print_throughput",
+            "trim_token",
+        ):
+            add_function(files, "bench/bench_gemm.c", function)
     elif bench_check["status"] == "blocked":
         blocked_reasons.append(f"bench_gemm:{bench_check.get('blocked_reason')}")
     else:
         failure_reasons.append(f"bench_gemm:{bench_check.get('reason')}")
+
+    attention_env = env.copy()
+    attention_env["TC_ATTENTION_BENCH_SINGLE"] = "1"
+    attention_env["TC_ATTENTION_BENCH_B"] = "1"
+    attention_env["TC_ATTENTION_BENCH_H"] = "1"
+    attention_env["TC_ATTENTION_BENCH_S"] = "16"
+    attention_env["TC_ATTENTION_BENCH_D"] = "64"
+    attention_env["TC_ATTENTION_BENCH_WARMUP"] = "0"
+    attention_env["TC_ATTENTION_BENCH_ITERS"] = "1"
+    attention_check, attention_trace = run_probe(
+        "bench_attention",
+        [
+            build_dir / "bench" / "bench_attention",
+            portable_build_dir / "bench" / "bench_attention",
+        ],
+        attention_env,
+        args.timeout_sec,
+        ("=== tensorcore FlashAttention bench", "median="),
+    )
+    checks["bench_attention"] = attention_check
+    trace.extend(attention_trace)
+    if attention_check["status"] == "passed":
+        for function in ("bench_one", "cmp_double", "env_int", "now_seconds"):
+            add_function(files, "bench/bench_attention.c", function)
+    elif attention_check["status"] == "blocked":
+        blocked_reasons.append(f"bench_attention:{attention_check.get('blocked_reason')}")
+    else:
+        failure_reasons.append(f"bench_attention:{attention_check.get('reason')}")
 
     layout_check, layout_trace, layout_covered = tensorops_layout_check(build_dir, env, args.timeout_sec)
     checks["tensorops_layout"] = layout_check
