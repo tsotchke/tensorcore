@@ -114,6 +114,38 @@ def test_running_jobs_reject_host_local_systemd_starts() -> None:
     assert any("host-local systemd unit" in error for error in errors)
 
 
+def test_running_jobs_reject_legacy_georefine_direct_starter() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_job_policy(
+        errors,
+        {
+            "id": "legacy-georefine",
+            "desired_state": "running",
+            "start_cmd": ["python3", "scripts/start_georefine_qwen_cr025.py", "--json"],
+            "metadata": {},
+        },
+    )
+    assert any("legacy direct GeoRefine starter" in error for error in errors)
+
+
+def test_tensorcore_job_v1_georefine_contract_requires_rank_probe_starter() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_job_policy(
+        errors,
+        {
+            "id": "bad-georefine-v1",
+            "desired_state": "running",
+            "start_cmd": ["python3", "scripts/start_georefine_qwen_cr025.py", "--json"],
+            "metadata": {
+                "scheduler_contract": "tensorcore_job_v1_cuda_exclusive_trusted_artifact",
+            },
+        },
+    )
+    assert any("start_georefine_qwen_rank_probe.py" in error for error in errors)
+
+
 def test_preflight_commands_must_emit_json() -> None:
     jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
     errors: list[str] = []
@@ -328,6 +360,8 @@ def main() -> int:
     test_paused_launchable_jobs_require_preflight()
     test_paused_jobs_require_pause_reason()
     test_running_jobs_reject_host_local_systemd_starts()
+    test_running_jobs_reject_legacy_georefine_direct_starter()
+    test_tensorcore_job_v1_georefine_contract_requires_rank_probe_starter()
     test_preflight_commands_must_emit_json()
     test_git_access_preflight_requires_resource()
     test_paused_launchable_job_with_preflight_passes_policy()

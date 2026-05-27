@@ -40,6 +40,9 @@ WINDOWS_CUDA_SCHEDULED_SMOKE_CONTRACT = "windows_cuda_scheduled_smoke"
 WINDOWS_CUDA_SMOKE_SCRIPT = "scripts/start_windows_cuda_smoke.py"
 WINDOWS_PERSISTENT_LAUNCH_SCRIPT = "scripts/check_windows_persistent_launch.py"
 WINDOWS_CUDA_SMOKE_MAX_DURATION_SEC = 5
+LEGACY_GEOREFINE_CR025_STARTER = "scripts/start_georefine_qwen_cr025.py"
+GEOREFINE_QWEN_RANK_PROBE_STARTER = "scripts/start_georefine_qwen_rank_probe.py"
+TENSORCORE_JOB_V1_GEOREFINE_CONTRACT = "tensorcore_job_v1_cuda_exclusive_trusted_artifact"
 HOST_LOCAL_SERVICE_STARTS = (
     "systemctl --user start",
     "systemctl start",
@@ -148,6 +151,20 @@ def validate_job_policy(errors: list[str], job: dict[str, Any]) -> None:
         errors.append(
             f"running job {job_id!r} must use a repo-owned starter, not a host-local systemd unit"
         )
+    if job.get("desired_state") == "running" and command_has_part(
+        job.get("start_cmd"),
+        LEGACY_GEOREFINE_CR025_STARTER,
+    ):
+        errors.append(
+            f"running job {job_id!r} must not use legacy direct GeoRefine starter "
+            f"{LEGACY_GEOREFINE_CR025_STARTER}; submit tensorcore.job.v1 instead"
+        )
+    if metadata.get("scheduler_contract") == TENSORCORE_JOB_V1_GEOREFINE_CONTRACT:
+        if not command_has_part(job.get("start_cmd"), GEOREFINE_QWEN_RANK_PROBE_STARTER):
+            errors.append(
+                f"job {job_id!r} {TENSORCORE_JOB_V1_GEOREFINE_CONTRACT} "
+                f"requires {GEOREFINE_QWEN_RANK_PROBE_STARTER} start_cmd"
+            )
     if metadata.get("scheduler_contract") == WINDOWS_CUDA_SCHEDULED_SMOKE_CONTRACT:
         if not command_has_part(job.get("start_cmd"), WINDOWS_CUDA_SMOKE_SCRIPT):
             errors.append(

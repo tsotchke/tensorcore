@@ -1,0 +1,101 @@
+{
+  "schema": "tensorcore.job.v1",
+  "id": "georefine-qwen-cr070-rank-probe",
+  "owner": "georefine:qwen-rank-probe",
+  "tenant": "georefine",
+  "priority": 100,
+  "ttl_sec": 21600,
+  "resources": {
+    "selector": {
+      "backend": "cuda",
+      "class": "cuda-training",
+      "min_memory_gib": 20
+    },
+    "resource_class": "cuda_exclusive",
+    "exclusive": true
+  },
+  "command": {
+    "argv": [
+      "python3",
+      "scripts/start_georefine_qwen_rank_probe.py",
+      "--target",
+      "{node}",
+      "--resource",
+      "{resource}",
+      "--authority-lease-id",
+      "{lease_id}",
+      "--authority-owner",
+      "georefine:qwen-rank-probe",
+      "--embedding-rank",
+      "1024",
+      "--compression-ratio",
+      "0.70",
+      "--target-kl",
+      "0.80",
+      "--max-size-ratio",
+      "0.30",
+      "--run-dir",
+      "/home/tyr/bytehole/georefine/good_qwen_results_20260526/qwen35_0_8b_cr070_emb1024_tkl080_size030_scheduler",
+      "--json"
+    ]
+  },
+  "probe": [
+    "ssh",
+    "{node}",
+    "cd ~/src/tensorcore && python3 scripts/check_georefine_qwen_live.py --run-dir /home/tyr/bytehole/georefine/good_qwen_results_20260526/qwen35_0_8b_cr070_emb1024_tkl080_size030_scheduler --match-regex 'experiments.georefine.m2_compress.*qwen35_0_8b_cr070_emb1024_tkl080_size030_scheduler' --json"
+  ],
+  "completion": [
+    "ssh",
+    "{node}",
+    "cd ~/src/tensorcore && python3 scripts/check_georefine_qwen_artifact.py /home/tyr/bytehole/georefine/good_qwen_results_20260526/qwen35_0_8b_cr070_emb1024_tkl080_size030_scheduler --max-size-ratio 0.30 --max-ppl-delta 0.05 --max-target-kl 0.80"
+  ],
+  "admission": [
+    "ssh",
+    "{node}",
+    "cd ~/src/tensorcore && python3 scripts/check_cuda_resource_admission.py --resource {resource} --allow-process-regex '(steamwebhelper$|/opt/google/chrome/chrome)' --allowed-process-max-memory-mib 256 --json"
+  ],
+  "post_start_probe": [
+    "ssh",
+    "{node}",
+    "cd ~/src/tensorcore && python3 scripts/check_georefine_qwen_live.py --run-dir /home/tyr/bytehole/georefine/good_qwen_results_20260526/qwen35_0_8b_cr070_emb1024_tkl080_size030_scheduler --match-regex 'experiments.georefine.m2_compress.*qwen35_0_8b_cr070_emb1024_tkl080_size030_scheduler' --json"
+  ],
+  "worker_identity": [
+    "ssh",
+    "{node}",
+    "cd ~/src/tensorcore && python3 scripts/mesh_worker_identity.py --resource {resource} --artifact-dir /home/tyr/bytehole/georefine/good_qwen_results_20260526/qwen35_0_8b_cr070_emb1024_tkl080_size030_scheduler --match-regex 'experiments.georefine.m2_compress.*qwen35_0_8b_cr070_emb1024_tkl080_size030_scheduler' --require-matching-process --require-matched-cuda"
+  ],
+  "artifact": {
+    "root": "/home/tyr/.local/share/georefine_trusted/evidence",
+    "evidence_path": "/home/tyr/.local/share/georefine_trusted/evidence/georefine-qwen-cr070-rank-probe.scheduler.json"
+  },
+  "preemption_policy": {
+    "mode": "non_preemptible",
+    "emergency_override_requires_reason": true
+  },
+  "quality_gates": [
+    {
+      "name": "size_ratio",
+      "max": 0.30
+    },
+    {
+      "name": "quality_gate",
+      "passed": true
+    },
+    {
+      "name": "lossless_audit",
+      "passed": true
+    },
+    {
+      "name": "reload_smoke",
+      "passed": true
+    }
+  ],
+  "metadata": {
+    "project": "georefine",
+    "service": "m2",
+    "target": "qwen-cr070-rank-search",
+    "run_dir": "/home/tyr/bytehole/georefine/good_qwen_results_20260526/qwen35_0_8b_cr070_emb1024_tkl080_size030_scheduler",
+    "scheduler_contract": "tensorcore_job_v1_cuda_exclusive_trusted_artifact",
+    "require_run_intent": true
+  }
+}

@@ -80,7 +80,7 @@ def test_remote_runner_closes_stdin_and_masks_cleanup_timeout() -> None:
 
 def test_success_payload_passes_through() -> None:
     mod = load_module()
-    args = mod.parse_args(["--target", "cosbox", "--json"])
+    args = mod.parse_args(["--target", "cosbox", "--json", "--allow-legacy-direct-gpu-launch"])
 
     def fake_run(*cmd: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
         payload = {
@@ -129,7 +129,7 @@ def test_scp_failure_falls_back_to_chunked_ssh() -> None:
 
 def test_remote_failure_fails_closed() -> None:
     mod = load_module()
-    args = mod.parse_args(["--target", "cosbox", "--json"])
+    args = mod.parse_args(["--target", "cosbox", "--json", "--allow-legacy-direct-gpu-launch"])
 
     def fake_run(*cmd: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(
@@ -148,7 +148,7 @@ def test_remote_failure_fails_closed() -> None:
 
 def test_clone_publickey_failure_is_specific() -> None:
     mod = load_module()
-    args = mod.parse_args(["--target", "cosbox", "--json"])
+    args = mod.parse_args(["--target", "cosbox", "--json", "--allow-legacy-direct-gpu-launch"])
 
     def fake_run(*cmd: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(
@@ -166,7 +166,7 @@ def test_clone_publickey_failure_is_specific() -> None:
 
 def test_schema_mismatch_fails_closed() -> None:
     mod = load_module()
-    args = mod.parse_args(["--target", "cosbox", "--json"])
+    args = mod.parse_args(["--target", "cosbox", "--json", "--allow-legacy-direct-gpu-launch"])
 
     def fake_run(*cmd: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
         payload = {"schema": "wrong", "ok": True, "resource": "cosbox:cuda3090"}
@@ -180,7 +180,7 @@ def test_schema_mismatch_fails_closed() -> None:
 
 def test_resource_mismatch_fails_closed() -> None:
     mod = load_module()
-    args = mod.parse_args(["--target", "cosbox", "--json"])
+    args = mod.parse_args(["--target", "cosbox", "--json", "--allow-legacy-direct-gpu-launch"])
 
     def fake_run(*cmd: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
         payload = {"schema": mod.SCHEMA, "ok": True, "resource": "old-donkey:cuda3050"}
@@ -194,7 +194,7 @@ def test_resource_mismatch_fails_closed() -> None:
 
 def test_timeout_fails_closed() -> None:
     mod = load_module()
-    args = mod.parse_args(["--target", "cosbox", "--json"])
+    args = mod.parse_args(["--target", "cosbox", "--json", "--allow-legacy-direct-gpu-launch"])
 
     def fake_run(*cmd: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
         raise subprocess.TimeoutExpired(["ssh"], 1.0)
@@ -208,7 +208,7 @@ def test_timeout_fails_closed() -> None:
 
 def test_remote_transport_failure_carries_resource() -> None:
     mod = load_module()
-    args = mod.parse_args(["--target", "cosbox", "--json"])
+    args = mod.parse_args(["--target", "cosbox", "--json", "--allow-legacy-direct-gpu-launch"])
 
     def fake_run(*cmd: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess([], 255, "", "Connection closed")
@@ -218,6 +218,23 @@ def test_remote_transport_failure_carries_resource() -> None:
     assert payload["ok"] is False
     assert payload["reason"] == "remote_start_failed"
     assert payload["resource"] == "cosbox:cuda3090"
+
+
+def test_legacy_direct_launch_fails_closed_without_override() -> None:
+    mod = load_module()
+    args = mod.parse_args(["--target", "cosbox", "--json"])
+    calls: list[object] = []
+
+    def fake_run(*cmd: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(cmd)
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    mod.subprocess.run = fake_run
+    payload = mod.run_start(args)
+    assert payload["ok"] is False
+    assert payload["reason"] == "legacy_direct_gpu_launcher_disabled"
+    assert payload["required_path"] == "tensorcore.job.v1"
+    assert calls == []
 
 
 def main() -> int:
@@ -232,6 +249,7 @@ def main() -> int:
     test_resource_mismatch_fails_closed()
     test_timeout_fails_closed()
     test_remote_transport_failure_carries_resource()
+    test_legacy_direct_launch_fails_closed_without_override()
     print("GeoRefine Qwen CR025 starter selftest OK")
     return 0
 

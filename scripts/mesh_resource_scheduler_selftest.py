@@ -195,6 +195,8 @@ class FakeRuntime:
         argv: list[str],
         *,
         timeout: float,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         op = argv[0]
         ident = argv[1] if len(argv) > 1 else ""
@@ -1542,6 +1544,235 @@ def test_loop_pretty_json_emits_json() -> None:
     assert out.getvalue().startswith("{\n")
 
 
+def tensorcore_job_v1_spec() -> dict[str, Any]:
+    return {
+        "schema": "tensorcore.job.v1",
+        "id": "georefine-qwen-rank-probe",
+        "owner": "georefine:qwen",
+        "tenant": "georefine",
+        "priority": 100,
+        "ttl_sec": 900,
+        "resources": {
+            "selector": {"backend": "cuda", "min_memory_gib": 20},
+            "resource_class": "cuda_exclusive",
+            "exclusive": True,
+        },
+        "command": {
+            "argv": ["start", "{resource}"],
+            "cwd": "scripts",
+            "env": {"CUDA_VISIBLE_DEVICES": "0"},
+        },
+        "probe": ["probe", "{logical_id}"],
+        "completion": ["complete", "{logical_id}"],
+        "admission": ["admit", "{id}"],
+        "post_start_probe": ["post", "{id}"],
+        "worker_identity": ["identity", "{id}"],
+        "artifact": {
+            "root": "/evidence/georefine",
+            "evidence_path": "/evidence/georefine/scheduler.json",
+        },
+        "preemption_policy": {"mode": "non_preemptible"},
+        "quality_gates": [{"name": "size_ratio", "max": 0.30}],
+    }
+
+
+def cuda_inventory() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": "cosbox:cuda3090",
+            "node": "cosbox",
+            "backend": "cuda",
+            "class": "cuda-training",
+            "status": "active",
+            "capacity": 1,
+            "memory_gib": 24,
+            "control_plane": "tensorcore_scheduler",
+        }
+    ]
+
+
+def test_submit_dry_run_expands_tensorcore_job_v1() -> None:
+    scheduler = load_scheduler()
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        spec_path = root / "job.json"
+        queue_path = root / "queue.json"
+        inventory_path = write_inventory(root, cuda_inventory())
+        spec_path.write_text(json.dumps(tensorcore_job_v1_spec()), encoding="utf-8")
+        payload = scheduler.cmd_submit(
+            argparse.Namespace(
+                job_json=str(spec_path),
+                jobs_json=str(queue_path),
+                inventory_json=str(inventory_path),
+                replace=False,
+                dry_run=True,
+            )
+        )
+    assert payload["ok"] is True
+    assert payload["dry_run"] is True
+    assert payload["expanded_jobs"] == ["georefine-qwen-rank-probe@cosbox:cuda3090"]
+    plan = payload["launch_plans"][0]
+    assert plan["schema"] == "tensorcore.cluster_launch_plan.v1"
+    assert plan["resource"] == "cosbox:cuda3090"
+    assert plan["completion_cmd"] == ["complete", "georefine-qwen-rank-probe"]
+    assert plan["artifact_root"] == "/evidence/georefine"
+    assert plan["quality_gates"] == [{"name": "size_ratio", "max": 0.30}]
+
+
+def test_submit_writes_queue_and_cancel_pauses_job() -> None:
+    scheduler = load_scheduler()
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        spec_path = root / "job.json"
+        queue_path = root / "queue.json"
+        inventory_path = write_inventory(root, cuda_inventory())
+        spec_path.write_text(json.dumps(tensorcore_job_v1_spec()), encoding="utf-8")
+        submit_payload = scheduler.cmd_submit(
+            argparse.Namespace(
+                job_json=str(spec_path),
+                jobs_json=str(queue_path),
+                inventory_json=str(inventory_path),
+                replace=False,
+                dry_run=False,
+            )
+        )
+        cancel_payload = scheduler.cmd_cancel(
+            argparse.Namespace(
+                jobs_json=str(queue_path),
+                job_id="georefine-qwen-rank-probe",
+                reason="test_cancel",
+                dry_run=False,
+            )
+        )
+        queue = json.loads(queue_path.read_text(encoding="utf-8"))
+    assert submit_payload["queued"] is True
+    assert cancel_payload["cancelled_jobs"] == ["georefine-qwen-rank-probe"]
+    assert queue["jobs"][0]["enabled"] is False
+    assert queue["jobs"][0]["desired_state"] == "paused"
+    assert queue["jobs"][0]["metadata"]["cancel_reason"] == "test_cancel"
+
+
+def test_cancel_accepts_expanded_pool_job_id() -> None:
+    scheduler = load_scheduler()
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        spec_path = root / "job.json"
+        queue_path = root / "queue.json"
+        inventory_path = write_inventory(root, cuda_inventory())
+        spec_path.write_text(json.dumps(tensorcore_job_v1_spec()), encoding="utf-8")
+        scheduler.cmd_submit(
+            argparse.Namespace(
+                job_json=str(spec_path),
+                jobs_json=str(queue_path),
+                inventory_json=str(inventory_path),
+                replace=False,
+                dry_run=False,
+            )
+        )
+        payload = scheduler.cmd_cancel(
+            argparse.Namespace(
+                jobs_json=str(queue_path),
+                job_id="georefine-qwen-rank-probe@cosbox:cuda3090",
+                reason="cancel_from_status_id",
+                dry_run=False,
+            )
+        )
+        queue = json.loads(queue_path.read_text(encoding="utf-8"))
+    assert payload["cancelled_jobs"] == ["georefine-qwen-rank-probe"]
+    assert queue["jobs"][0]["enabled"] is False
+    assert queue["jobs"][0]["metadata"]["cancel_reason"] == "cancel_from_status_id"
+
+
+def test_submit_rejects_malformed_tensorcore_job_v1_fields() -> None:
+    scheduler = load_scheduler()
+    cases = [
+        ("enabled", "false", "JSON boolean"),
+        ("quality_gates", {"name": "size_ratio"}, "quality_gates"),
+        ("preemption_policy", ["non_preemptible"], "preemption_policy"),
+        ("resources", ["cosbox:cuda3090"], "resources"),
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        inventory_path = write_inventory(root, cuda_inventory())
+        for field, bad_value, needle in cases:
+            spec = tensorcore_job_v1_spec()
+            spec[field] = bad_value
+            spec_path = root / f"bad-{field}.json"
+            spec_path.write_text(json.dumps(spec), encoding="utf-8")
+            try:
+                scheduler.cmd_submit(
+                    argparse.Namespace(
+                        job_json=str(spec_path),
+                        jobs_json=str(root / "queue.json"),
+                        inventory_json=str(inventory_path),
+                        replace=False,
+                        dry_run=True,
+                    )
+                )
+            except ValueError as exc:
+                assert needle in str(exc)
+            else:
+                raise AssertionError(f"bad tensorcore.job.v1 field {field!r} was accepted")
+
+
+def test_status_offline_reports_inventory_jobs_and_drain_updates_copy() -> None:
+    scheduler = load_scheduler()
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        queue_path = write_jobs(
+            root,
+            [
+                job(
+                    "georefine-qwen-rank-probe",
+                    priority=100,
+                    resource="cosbox:cuda3090",
+                    resource_class="cuda_exclusive",
+                    admission_cmd=True,
+                    post_start_probe_cmd=True,
+                    worker_identity_cmd=True,
+                )
+            ],
+        )
+        inventory_path = write_inventory(root, cuda_inventory())
+        drained_path = root / "inventory.drained.json"
+        status_payload = scheduler.cmd_status(
+            argparse.Namespace(
+                arbiter_cmd="arbiter",
+                jobs_json=str(queue_path),
+                inventory_json=str(inventory_path),
+                timeout_sec=1.0,
+                offline=True,
+            )
+        )
+        drain_payload = scheduler.update_inventory_status(
+            argparse.Namespace(
+                inventory_json=str(inventory_path),
+                out_inventory_json=str(drained_path),
+                resource="cosbox:cuda3090",
+                reason="maintenance",
+                dry_run=False,
+            ),
+            drained=True,
+        )
+        drained = json.loads(drained_path.read_text(encoding="utf-8"))
+    assert status_payload["resources"][0]["jobs"] == ["georefine-qwen-rank-probe"]
+    assert drain_payload["status"] == "blocked"
+    assert drained["resources"][0]["status"] == "blocked"
+    assert drained["resources"][0]["blocked_reason"] == "maintenance"
+
+
+def test_scheduler_dry_run_includes_launch_plan() -> None:
+    candidate = job("qllm-phase1", priority=50)
+    candidate["cwd"] = "scripts"
+    candidate["env"] = {"CUDA_VISIBLE_DEVICES": "0"}
+    runtime = FakeRuntime(live={"qllm-phase1": False})
+    result = run_case([candidate], runtime, dry_run=True)
+    row = result["results"][0]
+    assert row["action"] == "would_claim_and_launch"
+    assert row["launch_plan"]["start_cmd"] == ["start", "qllm-phase1"]
+    assert row["launch_plan"]["env_keys"] == ["CUDA_VISIBLE_DEVICES"]
+
+
 def main() -> int:
     test_idle_claims_highest_priority()
     test_live_holder_is_heartbeated()
@@ -1587,6 +1818,12 @@ def main() -> int:
     test_cuda_live_adoption_records_worker_identity_in_claim()
     test_cuda_live_heartbeat_refreshes_worker_identity_metadata()
     test_loop_pretty_json_emits_json()
+    test_submit_dry_run_expands_tensorcore_job_v1()
+    test_submit_writes_queue_and_cancel_pauses_job()
+    test_cancel_accepts_expanded_pool_job_id()
+    test_submit_rejects_malformed_tensorcore_job_v1_fields()
+    test_status_offline_reports_inventory_jobs_and_drain_updates_copy()
+    test_scheduler_dry_run_includes_launch_plan()
     print("mesh resource scheduler selftest OK")
     return 0
 

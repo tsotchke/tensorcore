@@ -814,6 +814,7 @@ python3 scripts/check_mesh_resource_config_selftest.py
 python3 scripts/check_georefine_qwen_live_selftest.py
 python3 scripts/check_georefine_qwen_artifact_selftest.py
 python3 scripts/start_georefine_qwen_cr025_selftest.py
+python3 scripts/start_georefine_qwen_rank_probe_selftest.py
 python3 scripts/start_qllm_olddonkey_precompute_chain_selftest.py
 python3 scripts/check_mesh_resource_inventory.py
 python3 scripts/check_mesh_resource_jobs.py
@@ -921,15 +922,33 @@ requires at least one result row.
 Starts the GeoRefine Qwen CR025 supervised run from a remote git checkout. It
 clones or fast-forwards GeoRefine on the target host, refuses dirty checkouts by
 default, preserves the CR025 `m2_supervised_run` command, and emits scheduler
-JSON. Keep the scheduler row paused until the target host has the GeoRefine
-Python environment installed. Use `--preflight-only --json` to verify checkout,
-Python imports, calibration text, and evaluation text without launching work.
+JSON. Direct launch is disabled unless
+`TENSORCORE_ALLOW_LEGACY_GEOREFINE_DIRECT_LAUNCH=1` or
+`--allow-legacy-direct-gpu-launch` is set; new trusted GeoRefine GPU work must
+enter through `tensorcore.job.v1` instead. Keep the scheduler row paused until
+the target host has the GeoRefine Python environment installed. Use
+`--preflight-only --json` to verify checkout, Python imports, calibration text,
+and evaluation text without launching work.
 The default repo URL is the SSH GitHub remote for the private GeoRefine repo.
 
 Fixture coverage:
 
 ```sh
 python3 scripts/start_georefine_qwen_cr025_selftest.py
+```
+
+### `start_georefine_qwen_rank_probe.py`
+
+Starts the scheduler-owned GeoRefine Qwen CR070 rank probe on a CUDA mesh
+worker. It requires a scheduler authority lease id, wraps the compressor in the
+qLLM resource-lease controller, and emits scheduler JSON. The checked-in
+`configs/georefine_qwen_job.template.json` pins the run directory so liveness,
+post-start, identity, and completion checks refer to the same artifact.
+
+Fixture coverage:
+
+```sh
+python3 scripts/start_georefine_qwen_rank_probe_selftest.py
 ```
 
 ### `start_qllm_olddonkey_precompute_chain.py`

@@ -1,0 +1,27 @@
+[Unit]
+Description=Tensorcore Cluster Scheduler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tensorcore
+Group=tensorcore
+EnvironmentFile=/etc/tensorcore/scheduler.env
+WorkingDirectory=/opt/tensorcore
+ExecStart=/usr/bin/python3 /opt/tensorcore/scripts/mesh_resource_scheduler.py \
+  --arbiter-cmd ${TC_MESH_ARBITER_CMD} \
+  --jobs-json ${TC_SCHEDULER_JOBS_JSON} \
+  --inventory-json ${TC_SCHEDULER_INVENTORY_JSON} \
+  --state-json ${TC_SCHEDULER_STATE_JSON} \
+  --interval-sec ${TC_SCHEDULER_INTERVAL_SEC} \
+  --max-running-per-tenant ${TC_SCHEDULER_MAX_RUNNING_PER_TENANT} \
+  --loop \
+  --json
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

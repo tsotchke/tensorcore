@@ -5,6 +5,83 @@ shared hardware such as `cosbox:cuda3090`. It sits above individual projects:
 qLLM, GeoRefine, tensorcore demos, and future agents should submit desired
 work to this scheduler instead of starting CUDA jobs directly.
 
+## Cluster Scheduler V1 Boundary
+
+The scheduler is now the required control-plane API for trusted GPU work. A
+client submits a `tensorcore.job.v1` document; the scheduler validates it
+against `configs/mesh_resources.json`, converts it to the existing mesh job
+row, writes it to the scheduler-owned jobs queue, and only then can a scheduler
+loop claim a canonical resource and launch the worker command.
+
+The v1 boundary is intentionally backend-neutral:
+
+- `tensorcore.job.v1` describes owner, tenant, priority, resource selector,
+  command, environment, artifact root, quality gates, and preemption policy.
+- `submit` validates and queues the job or emits a dry-run launch plan.
+- `status` reports inventory, queued jobs, and arbiter leases.
+- `cancel` disables a queued job without claiming to have killed live work.
+- `drain` and `undrain` update inventory state for operator maintenance.
+- `audit` verifies that CUDA jobs have admission, post-start probe, worker
+  identity, and run-intent contracts.
+
+This keeps Tensorcore as the first-party scheduler while preserving a clean
+adapter boundary for a later Slurm or Kubernetes backend.
+
+Example dry run:
+
+```sh
+python3 scripts/mesh_resource_scheduler.py submit \
+  --job-json configs/georefine_qwen_job.template.json \
+  --jobs-json /var/lib/tensorcore/mesh_resource_jobs.json \
+  --inventory-json configs/mesh_resources.json \
+  --dry-run --pretty-json
+```
+
+Example scheduler loop:
+
+```sh
+python3 scripts/mesh_resource_scheduler.py \
+  --jobs-json /var/lib/tensorcore/mesh_resource_jobs.json \
+  --inventory-json configs/mesh_resources.json \
+  --state-json /var/lib/tensorcore/mesh_resource_state.json \
+  --loop --json
+```
+
+For a dedicated Linux scheduler VM, use
+`configs/tensorcore-scheduler.service.example` with
+`configs/tensorcore-scheduler.env.example` as the starting systemd unit and
+environment file.
+
+Trusted GeoRefine Qwen compression jobs should start from
+`configs/georefine_qwen_job.template.json` and use
+`scripts/start_georefine_qwen_rank_probe.py`. Direct GPU launchers are legacy
+emergency bypasses and their artifacts are not trusted unless promoted through
+the scheduler/finalizer path; `scripts/start_georefine_qwen_cr025.py` refuses
+non-preflight launches unless the explicit legacy override flag or environment
+variable is present.
+
+## Dedicated Scheduler VM Contract
+
+The scheduler should run on one always-on control-plane VM with SSH reachability
+to workers and arbiter reachability. GPU workers do not need Slurm or
+Kubernetes for v1; they need the Tensorcore checkout, worker probes, and the
+project harnesses that scheduler jobs call.
+
+Provisioning contract:
+
+- `/opt/tensorcore`: read-only or deployment-managed Tensorcore checkout.
+- `/var/lib/tensorcore`: scheduler-owned writable queue/state directory.
+- `/etc/tensorcore/scheduler.env`: environment based on
+  `configs/tensorcore-scheduler.env.example`.
+- `tensorcore-scheduler.service`: systemd unit based on
+  `configs/tensorcore-scheduler.service.example`.
+- `mesh_resource_jobs.json`: scheduler-owned queue; project repos submit into
+  it through `mesh_resource_scheduler.py submit`, not by editing worker state.
+
+The service account should have no GPU-local shell automation beyond the
+scheduler commands. Emergency manual GPU launches are allowed only with an
+explicit override and produce untrusted artifacts.
+
 The scheduler uses the Tsotchke arbiter as the lease backend. Its policy is
 conservative:
 
@@ -339,11 +416,16 @@ Example multi-user pool job:
 }
 ```
 
-For the current GeoRefine Qwen target, completion means the run's
+For legacy CR025 GeoRefine Qwen rows, completion means the run's
 `m2_certificate.json` has `completed=true`, a positive final held-out PPL
 (`ppl_compressed_eval`), a positive final stored size (`size_compressed_bytes`),
-and `size_ratio <= 0.10`. `scripts/check_georefine_qwen_artifact.py` enforces
-that gate. `scripts/check_georefine_qwen_live.py` is the repo-owned liveness
+`size_ratio <= 0.10`, `quality_gate.passed=true`, and passed
+base-vs-artifact chat verification either in the certificate or
+`m2_chat_verification.json`. The CR070 rank-probe template relaxes the size
+ceiling to `0.30` but requires `ppl_delta <= 0.05` and `target_kl <= 0.80`
+through its completion command. `scripts/check_georefine_qwen_artifact.py`
+enforces these gates.
+`scripts/check_georefine_qwen_live.py` is the repo-owned liveness
 probe for the same run family; it checks the supervisor status file and falls
 back to process matching without relying on a host-local wrapper.
 `scripts/start_georefine_qwen_cr025.py` is the matching source-controlled
@@ -351,6 +433,10 @@ starter for the CR025 candidate; it clones or fast-forwards the GeoRefine
 checkout on cosbox and invokes `experiments.georefine.m2_supervised_run` with
 the production CR025 command. Use `--preflight-only --json` to check checkout,
 Python imports, calibration text, and evaluation text without launching.
+`scripts/start_georefine_qwen_rank_probe.py` is the scheduler-owned CR070
+starter used by `configs/georefine_qwen_job.template.json`; the template pins
+a run directory so liveness, post-start, identity, and completion checks cannot
+accidentally match unrelated GeoRefine runs.
 
 ## Running
 

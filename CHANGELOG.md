@@ -133,6 +133,11 @@ every architectural primitive in code and tested:
   command templates receive `{resource}`/`{node}` context, and tenant-aware
   fair-share selection prevents one user from monopolizing every idle machine
   in a single scheduler pass.
+- Mesh resource scheduling now has a `tensorcore.job.v1` submission boundary
+  with submit/status/cancel/drain/undrain/audit commands plus a scheduler-owned
+  GeoRefine Qwen CR070 rank-probe template. The template pins run identity
+  through liveness, worker-identity, and completion gates, and cancel accepts
+  the expanded placement ids reported by status.
 - Mesh scheduler heartbeats for live CUDA-exclusive jobs now refresh worker
   identity metadata on the existing lease instead of leaving identity pending.
 - Mesh scheduler jobs now have a checked-in source of truth

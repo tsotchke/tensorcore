@@ -96,6 +96,7 @@ jobs:
           python3 scripts/check_georefine_qwen_live_selftest.py
           python3 scripts/check_georefine_qwen_artifact_selftest.py
           python3 scripts/start_georefine_qwen_cr025_selftest.py
+          python3 scripts/start_georefine_qwen_rank_probe_selftest.py
           python3 scripts/start_qllm_olddonkey_precompute_chain_selftest.py
           python3 scripts/check_mesh_resource_inventory.py
           python3 scripts/check_mesh_resource_jobs.py

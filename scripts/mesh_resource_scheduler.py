@@ -23,11 +23,13 @@ from typing import Any
 
 DEFAULT_ARBITER_CMD = os.environ.get("TC_MESH_ARBITER_CMD", "tsotchke-arbiter")
 SCHEMA = "tensorcore.mesh_resource_jobs.v1"
+SUBMIT_SCHEMA = "tensorcore.job.v1"
 INVENTORY_SCHEMA = "tensorcore.mesh_resources.v1"
 INVENTORY_STATUSES = {"active", "reserved", "blocked"}
 RESOURCE_CLASSES = {"generic", "cuda_exclusive"}
 DESIRED_STATES = {"running", "paused"}
 ROOT = Path(__file__).resolve().parents[1]
+CONTROL_COMMANDS = {"submit", "status", "cancel", "drain", "undrain", "audit"}
 
 
 def render_command_part(value: str, job: dict | None = None) -> str:
@@ -37,6 +39,7 @@ def render_command_part(value: str, job: dict | None = None) -> str:
         "backend": job.get("resource_backend"),
         "id": job.get("id"),
         "job_id": job.get("id"),
+        "lease_id": job.get("lease_id"),
         "logical_id": job.get("logical_id"),
         "node": job.get("resource_node"),
         "owner": job.get("owner"),
@@ -76,13 +79,59 @@ def command(value: Any, job: dict | None = None) -> list[str]:
     return [resolve_repo_relative_part(part, executable=index == 0) for index, part in enumerate(argv)]
 
 
-def run_capture(argv: list[str], *, timeout: float) -> subprocess.CompletedProcess[str]:
+def job_cwd(job: dict) -> str | None:
+    value = job.get("cwd")
+    if value is None:
+        return None
+    path = Path(str(value)).expanduser()
+    if not path.is_absolute():
+        path = ROOT / path
+    return str(path)
+
+
+def job_env(job: dict) -> dict[str, str] | None:
+    raw = job.get("env")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(f"job {job.get('id', '<unknown>')!r} env must be an object")
+    env = dict(os.environ)
+    for key, value in raw.items():
+        if not isinstance(key, str) or not key:
+            raise ValueError(f"job {job.get('id', '<unknown>')!r} env keys must be non-empty strings")
+        if not isinstance(value, (str, int, float, bool)):
+            raise ValueError(f"job {job.get('id', '<unknown>')!r} env[{key!r}] must be scalar")
+        env[key] = str(value)
+    return env
+
+
+def run_capture_for_job(
+    argv: list[str],
+    job: dict,
+    *,
+    timeout: float,
+    use_job_context: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    if not use_job_context:
+        return run_capture(argv, timeout=timeout)
+    return run_capture(argv, timeout=timeout, cwd=job_cwd(job), env=job_env(job))
+
+
+def run_capture(
+    argv: list[str],
+    *,
+    timeout: float,
+    cwd: str | None = None,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         argv,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         timeout=timeout,
+        cwd=cwd,
+        env=env,
         check=False,
     )
 
@@ -412,6 +461,13 @@ def require_bool(job: dict, key: str, default: bool) -> bool:
     return value
 
 
+def require_submit_bool(spec: dict, key: str, default: bool) -> bool:
+    value = spec.get(key, default)
+    if not isinstance(value, bool):
+        raise ValueError(f"tensorcore.job.v1 field {key!r} must be a JSON boolean")
+    return value
+
+
 def validate_command_field(job: dict, key: str, *, required: bool) -> None:
     value = job.get(key)
     if value is None:
@@ -461,6 +517,14 @@ def normalize_job(job: Any, inventory: dict[str, dict] | None = None) -> dict:
     out["ttl_sec"] = float(out.get("ttl_sec", 900.0))
     if out["ttl_sec"] <= 0:
         raise ValueError(f"job {out['id']!r} field 'ttl_sec' must be positive")
+    if out.get("cwd") is not None and not isinstance(out.get("cwd"), str):
+        raise ValueError(f"job {out['id']!r} field 'cwd' must be a string when set")
+    if out.get("env") is not None:
+        job_env(out)
+    if out.get("preemption_policy") is not None and not isinstance(out.get("preemption_policy"), dict):
+        raise ValueError(f"job {out['id']!r} field 'preemption_policy' must be an object when set")
+    if out.get("quality_gates") is not None and not isinstance(out.get("quality_gates"), list):
+        raise ValueError(f"job {out['id']!r} field 'quality_gates' must be a list when set")
     out["desired_state"] = require_str(out, "desired_state") if "desired_state" in out else "running"
     if out["desired_state"] not in DESIRED_STATES:
         raise ValueError(
@@ -871,7 +935,7 @@ def start_job(job: dict, *, timeout: float) -> dict:
     start_cmd = command(job.get("start_cmd"), job)
     if not start_cmd:
         raise RuntimeError(f"job {job['id']} has no start_cmd")
-    proc = run_capture(start_cmd, timeout=timeout)
+    proc = run_capture_for_job(start_cmd, job, timeout=timeout)
     result = {
         "ok": proc.returncode == 0,
         "rc": proc.returncode,
@@ -976,6 +1040,34 @@ def collect_worker_identity(job: dict, *, timeout: float) -> dict:
     result["ok"] = True
     result["reason"] = "ok"
     return result
+
+
+def launch_plan(job: dict) -> dict:
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    plan = {
+        "schema": "tensorcore.cluster_launch_plan.v1",
+        "job": job.get("id"),
+        "logical_job": job.get("logical_id"),
+        "resource": job.get("resource"),
+        "resource_class": job.get("resource_class"),
+        "owner": job.get("owner"),
+        "tenant": job.get("tenant"),
+        "start_cmd": command(job.get("start_cmd"), job),
+        "probe_cmd": command(job.get("probe_cmd"), job),
+        "completion_cmd": command(job.get("completion_cmd"), job),
+        "admission_cmd": command(job.get("admission_cmd"), job),
+        "post_start_probe_cmd": command(job.get("post_start_probe_cmd"), job),
+        "worker_identity_cmd": command(job.get("worker_identity_cmd"), job),
+        "cwd": job_cwd(job),
+        "env_keys": sorted((job.get("env") or {}).keys()) if isinstance(job.get("env"), dict) else [],
+        "artifact_root": job.get("artifact_root") or metadata.get("artifact_root"),
+        "evidence_path": str(job_evidence_path(job)) if job_evidence_path(job) else None,
+        "finalizer_cmd": command(job.get("finalizer_cmd"), job),
+        "preemption_policy": job.get("preemption_policy") or metadata.get("preemption_policy"),
+        "quality_gates": job.get("quality_gates") or metadata.get("quality_gates") or [],
+        "run_intent_required": metadata.get("require_run_intent") is not False,
+    }
+    return plan
 
 
 def enabled_running_jobs(jobs: list[dict], resource: str) -> list[dict]:
@@ -1518,6 +1610,7 @@ def schedule_resource(
             "probe": probes[candidate["id"]],
             "completion": completions[candidate["id"]],
             "admission": admissions[candidate["id"]],
+            "launch_plan": launch_plan(candidate),
             "ok": True,
         })
         mark_planned(candidate, counts)
@@ -1536,6 +1629,10 @@ def schedule_resource(
     if not claim_payload.get("ok"):
         results.append(result)
         return results, errors
+    lease_id = claim_payload.get("lease_id") or claim_payload.get("id")
+    if lease_id:
+        candidate = dict(candidate)
+        candidate["lease_id"] = str(lease_id)
 
     try:
         start_payload = start_job(candidate, timeout=args.start_timeout_sec)
@@ -1683,6 +1780,319 @@ def emit_json(payload: dict, *, pretty: bool = False) -> None:
     sys.stdout.flush()
 
 
+def read_json_object(path: str | Path) -> dict:
+    payload = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path} must contain a JSON object")
+    return payload
+
+
+def load_jobs_doc(path: str | Path, *, missing_ok: bool = False) -> dict:
+    queue_path = Path(path).expanduser()
+    if missing_ok and not queue_path.exists():
+        return {"schema": SCHEMA, "jobs": []}
+    payload = read_json_object(queue_path)
+    if payload.get("schema") != SCHEMA:
+        raise ValueError(f"{queue_path} schema must be {SCHEMA}")
+    jobs = payload.get("jobs")
+    if not isinstance(jobs, list):
+        raise ValueError(f"{queue_path} jobs must be a list")
+    return {"schema": SCHEMA, "jobs": list(jobs)}
+
+
+def write_jobs_doc(path: str | Path, doc: dict) -> None:
+    write_json(str(Path(path).expanduser()), {"schema": SCHEMA, "jobs": doc.get("jobs", [])})
+
+
+def submit_command_argv(value: Any, *, field: str) -> list[str]:
+    if isinstance(value, list) and value and all(isinstance(item, str) for item in value):
+        return list(value)
+    if isinstance(value, str) and shlex.split(value):
+        return shlex.split(value)
+    if isinstance(value, dict):
+        argv = value.get("argv")
+        if isinstance(argv, list) and argv and all(isinstance(item, str) for item in argv):
+            return list(argv)
+        shell = value.get("shell")
+        if isinstance(shell, str) and shell.strip():
+            return ["sh", "-lc", shell]
+    raise ValueError(f"{field} must be a command string, argv list, or object with argv/shell")
+
+
+def optional_submit_command(spec: dict, *keys: str) -> list[str] | None:
+    for key in keys:
+        if key in spec and spec.get(key) not in (None, ""):
+            return submit_command_argv(spec[key], field=key)
+    return None
+
+
+def submit_resources(spec: dict) -> tuple[str, Any]:
+    resources = spec.get("resources")
+    if isinstance(resources, dict):
+        if resources.get("resource"):
+            return "resource", resources["resource"]
+        if resources.get("resources"):
+            return "resources", resources["resources"]
+        if resources.get("resource_pool"):
+            return "resource_pool", resources["resource_pool"]
+        if resources.get("selector"):
+            return "resource_pool", resources["selector"]
+    for key in ("resource", "resources", "resource_pool", "resource_selector"):
+        if key in spec and spec.get(key) not in (None, ""):
+            return ("resource_pool" if key == "resource_selector" else key), spec[key]
+    raise ValueError("tensorcore.job.v1 requires resources.resource, resources.resources, or resources.selector")
+
+
+def submit_spec_to_mesh_job(spec: dict) -> dict:
+    if spec.get("schema") != SUBMIT_SCHEMA:
+        raise ValueError(f"submit spec schema must be {SUBMIT_SCHEMA}")
+    job_id = require_str(spec, "id")
+    if "artifact" in spec and spec.get("artifact") is not None and not isinstance(spec.get("artifact"), dict):
+        raise ValueError("tensorcore.job.v1 field 'artifact' must be an object when set")
+    if "resources" in spec and spec.get("resources") is not None and not isinstance(spec.get("resources"), dict):
+        raise ValueError("tensorcore.job.v1 field 'resources' must be an object when set")
+    if "preemption_policy" in spec and spec.get("preemption_policy") is not None and not isinstance(spec.get("preemption_policy"), dict):
+        raise ValueError("tensorcore.job.v1 field 'preemption_policy' must be an object when set")
+    if "quality_gates" in spec and spec.get("quality_gates") is not None and not isinstance(spec.get("quality_gates"), list):
+        raise ValueError("tensorcore.job.v1 field 'quality_gates' must be a list when set")
+    command_spec = spec.get("command")
+    start_cmd = optional_submit_command(spec, "start_cmd")
+    if start_cmd is None:
+        if command_spec is None:
+            raise ValueError("tensorcore.job.v1 requires command or start_cmd")
+        start_cmd = submit_command_argv(command_spec, field="command")
+    selector_key, selector_value = submit_resources(spec)
+    resources = spec.get("resources") if isinstance(spec.get("resources"), dict) else {}
+    selector_backend = ""
+    if isinstance(selector_value, dict):
+        selector_backend = str(selector_value.get("backend") or "")
+    metadata = dict(spec.get("metadata") if isinstance(spec.get("metadata"), dict) else {})
+    artifact = spec.get("artifact") if isinstance(spec.get("artifact"), dict) else {}
+    preemption_policy = spec.get("preemption_policy") if isinstance(spec.get("preemption_policy"), dict) else {}
+    quality_gates = spec.get("quality_gates") if isinstance(spec.get("quality_gates"), list) else []
+    metadata.setdefault("surface", "tensorcore_cluster_scheduler")
+    metadata.setdefault("submit_schema", SUBMIT_SCHEMA)
+    metadata.setdefault("scheduler_contract", "tensorcore_job_v1")
+    metadata.setdefault("preemption_policy", preemption_policy)
+    metadata.setdefault("quality_gates", quality_gates)
+    metadata.setdefault("artifact_root", artifact.get("root") or spec.get("artifact_root"))
+    metadata.setdefault("evidence_path", artifact.get("evidence_path") or spec.get("evidence_path"))
+    metadata.setdefault("require_run_intent", True)
+    out: dict[str, Any] = {
+        "id": job_id,
+        "sync_id": str(spec.get("sync_id") or job_id),
+        selector_key: selector_value,
+        "resource_class": str(
+            spec.get("resource_class")
+            or resources.get("resource_class")
+            or ("cuda_exclusive" if resources.get("exclusive") is True or selector_backend.lower() == "cuda" else "")
+            or "generic"
+        ),
+        "owner": require_str(spec, "owner"),
+        "tenant": str(spec.get("tenant") or require_str(spec, "owner").split(":", 1)[0]),
+        "priority": int(spec.get("priority", 0)),
+        "desired_state": str(spec.get("desired_state") or "running"),
+        "ttl_sec": float(spec.get("ttl_sec", 900.0)),
+        "enabled": require_submit_bool(spec, "enabled", True),
+        "start_cmd": start_cmd,
+        "metadata": metadata,
+    }
+    for source_key, target_key in (
+        ("probe", "probe_cmd"),
+        ("completion", "completion_cmd"),
+        ("admission", "admission_cmd"),
+        ("post_start_probe", "post_start_probe_cmd"),
+        ("worker_identity", "worker_identity_cmd"),
+        ("finalizer", "finalizer_cmd"),
+    ):
+        value = optional_submit_command(spec, target_key, source_key)
+        if value is not None:
+            out[target_key] = value
+    if isinstance(command_spec, dict):
+        if isinstance(command_spec.get("cwd"), str):
+            out["cwd"] = command_spec["cwd"]
+        if isinstance(command_spec.get("env"), dict):
+            out["env"] = dict(command_spec["env"])
+    if isinstance(spec.get("cwd"), str):
+        out["cwd"] = spec["cwd"]
+    if isinstance(spec.get("env"), dict):
+        out["env"] = dict(spec["env"])
+    if artifact.get("root") or spec.get("artifact_root"):
+        out["artifact_root"] = artifact.get("root") or spec.get("artifact_root")
+    if preemption_policy:
+        out["preemption_policy"] = preemption_policy
+    if quality_gates:
+        out["quality_gates"] = quality_gates
+    if "max_parallel" in spec:
+        out["max_parallel"] = int(spec["max_parallel"])
+    if "tenant_max_parallel" in spec:
+        out["tenant_max_parallel"] = int(spec["tenant_max_parallel"])
+    return out
+
+
+def upsert_job(jobs: list[dict], job: dict, *, replace: bool) -> list[dict]:
+    out = []
+    found = False
+    for row in jobs:
+        if isinstance(row, dict) and row.get("id") == job["id"]:
+            if not replace:
+                raise ValueError(f"job {job['id']!r} already exists; pass --replace to update it")
+            out.append(job)
+            found = True
+        else:
+            out.append(row)
+    if not found:
+        out.append(job)
+    return out
+
+
+def queued_job_id_matches(row: dict, requested_id: str) -> bool:
+    row_id = row.get("id")
+    if not isinstance(row_id, str) or not row_id:
+        return False
+    if requested_id == row_id:
+        return True
+    if "resource_pool" not in row and "resources" not in row and "resource_selector" not in row:
+        return False
+    return requested_id.startswith(f"{row_id}@") and len(requested_id) > len(row_id) + 1
+
+
+def cmd_submit(args: argparse.Namespace) -> dict:
+    inventory = load_inventory(args.inventory_json)
+    spec = read_json_object(args.job_json)
+    mesh_job = submit_spec_to_mesh_job(spec)
+    expanded = [normalize_job(job, inventory=inventory) for job in expand_job_resources(mesh_job, inventory)]
+    validate_jobs_against_inventory(expanded, inventory)
+    payload = {
+        "schema": "tensorcore.cluster_submit.result.v1",
+        "ok": True,
+        "checked_at_unix": time.time(),
+        "dry_run": args.dry_run,
+        "job": mesh_job,
+        "expanded_jobs": [job["id"] for job in expanded],
+        "launch_plans": [launch_plan(job) for job in expanded],
+    }
+    if args.dry_run:
+        return payload
+    doc = load_jobs_doc(args.jobs_json, missing_ok=True)
+    doc["jobs"] = upsert_job(doc["jobs"], mesh_job, replace=args.replace)
+    write_jobs_doc(args.jobs_json, doc)
+    payload["jobs_json"] = str(Path(args.jobs_json).expanduser())
+    payload["queued"] = True
+    return payload
+
+
+def cmd_status(args: argparse.Namespace) -> dict:
+    inventory = load_inventory(args.inventory_json)
+    jobs = load_jobs(args.jobs_json, inventory=inventory) if args.jobs_json else []
+    status = {"leases": []}
+    if not args.offline:
+        status = run_json(command(args.arbiter_cmd) + ["status", "--json"], timeout=args.timeout_sec)
+    resources = []
+    for resource_id, row in sorted(inventory.items()):
+        resource_jobs = [job for job in jobs if job["resource"] == resource_id]
+        resource_leases = leases_for_resource(status, resource_id)
+        resources.append({
+            "resource": resource_id,
+            "backend": row.get("backend"),
+            "class": row.get("class"),
+            "status": row.get("status", "active"),
+            "control_plane": row.get("control_plane"),
+            "jobs": [job["id"] for job in resource_jobs],
+            "leases": [lease.get("id") for lease in resource_leases],
+            "busy": bool(resource_leases),
+        })
+    return {
+        "schema": "tensorcore.cluster_status.v1",
+        "ok": True,
+        "checked_at_unix": time.time(),
+        "resources": resources,
+        "jobs": [{"id": job["id"], "resource": job["resource"], "desired_state": job["desired_state"]} for job in jobs],
+        "leases": status.get("leases") or [],
+    }
+
+
+def cmd_cancel(args: argparse.Namespace) -> dict:
+    doc = load_jobs_doc(args.jobs_json)
+    matched = []
+    for job in doc["jobs"]:
+        if not isinstance(job, dict) or not queued_job_id_matches(job, args.job_id):
+            continue
+        metadata = dict(job.get("metadata") if isinstance(job.get("metadata"), dict) else {})
+        metadata["cancelled_at_unix"] = time.time()
+        metadata["cancel_reason"] = args.reason
+        job["metadata"] = metadata
+        job["enabled"] = False
+        job["desired_state"] = "paused"
+        matched.append(job.get("id"))
+    if not matched:
+        raise ValueError(f"job {args.job_id!r} not found")
+    if not args.dry_run:
+        write_jobs_doc(args.jobs_json, doc)
+    return {
+        "schema": "tensorcore.cluster_cancel.result.v1",
+        "ok": True,
+        "checked_at_unix": time.time(),
+        "dry_run": args.dry_run,
+        "cancelled_jobs": matched,
+    }
+
+
+def update_inventory_status(args: argparse.Namespace, *, drained: bool) -> dict:
+    payload = read_json_object(args.inventory_json)
+    resources = payload.get("resources")
+    if not isinstance(resources, list):
+        raise ValueError("--inventory-json resources must be a list")
+    found = False
+    for row in resources:
+        if not isinstance(row, dict) or row.get("id") != args.resource:
+            continue
+        found = True
+        if drained:
+            row["status"] = "blocked"
+            row["blocked_reason"] = args.reason
+        else:
+            row["status"] = "active"
+            row.pop("blocked_reason", None)
+    if not found:
+        raise ValueError(f"resource {args.resource!r} not found")
+    if not args.dry_run:
+        out_path = args.out_inventory_json or args.inventory_json
+        write_json(str(Path(out_path).expanduser()), payload)
+    return {
+        "schema": "tensorcore.cluster_drain.result.v1",
+        "ok": True,
+        "checked_at_unix": time.time(),
+        "dry_run": args.dry_run,
+        "resource": args.resource,
+        "status": "blocked" if drained else "active",
+    }
+
+
+def cmd_audit(args: argparse.Namespace) -> dict:
+    inventory = load_inventory(args.inventory_json)
+    jobs = load_jobs(args.jobs_json, inventory=inventory)
+    errors: list[str] = []
+    try:
+        validate_jobs_against_inventory(jobs, inventory)
+    except ValueError as exc:
+        errors.append(str(exc))
+    for job in jobs:
+        if job["resource_class"] == "cuda_exclusive":
+            metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+            if metadata.get("require_run_intent") is False:
+                errors.append(f"CUDA job {job['id']!r} disables run_intent requirement")
+            if not job.get("admission_cmd") or not job.get("post_start_probe_cmd") or not job.get("worker_identity_cmd"):
+                errors.append(f"CUDA job {job['id']!r} lacks admission/post-start/identity contract")
+    return {
+        "schema": "tensorcore.cluster_audit.result.v1",
+        "ok": not errors,
+        "checked_at_unix": time.time(),
+        "errors": errors,
+        "job_count": len(jobs),
+    }
+
+
 def run_loop(args: argparse.Namespace) -> int:
     iteration = 0
     all_ok = True
@@ -1717,6 +2127,60 @@ def run_loop(args: argparse.Namespace) -> int:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
+    if argv and argv[0] in CONTROL_COMMANDS:
+        parser = argparse.ArgumentParser(description=__doc__)
+        sub = parser.add_subparsers(dest="control_command", required=True)
+
+        def add_output_flags(p: argparse.ArgumentParser) -> None:
+            p.add_argument("--json", action="store_true")
+            p.add_argument("--pretty-json", action="store_true")
+
+        submit = sub.add_parser("submit", help="Validate and enqueue a tensorcore.job.v1 spec")
+        submit.add_argument("--job-json", required=True)
+        submit.add_argument("--jobs-json", required=True)
+        submit.add_argument("--inventory-json", required=True)
+        submit.add_argument("--replace", action="store_true")
+        submit.add_argument("--dry-run", action="store_true")
+        add_output_flags(submit)
+
+        status = sub.add_parser("status", help="Report inventory, jobs, and arbiter leases")
+        status.add_argument("--arbiter-cmd", default=DEFAULT_ARBITER_CMD)
+        status.add_argument("--jobs-json")
+        status.add_argument("--inventory-json", required=True)
+        status.add_argument("--timeout-sec", type=float, default=10.0)
+        status.add_argument("--offline", action="store_true")
+        add_output_flags(status)
+
+        cancel = sub.add_parser("cancel", help="Disable a queued job without releasing leases")
+        cancel.add_argument("--jobs-json", required=True)
+        cancel.add_argument("--job-id", required=True)
+        cancel.add_argument("--reason", default="operator_cancelled")
+        cancel.add_argument("--dry-run", action="store_true")
+        add_output_flags(cancel)
+
+        drain = sub.add_parser("drain", help="Mark a resource blocked in an inventory file")
+        drain.add_argument("--inventory-json", required=True)
+        drain.add_argument("--out-inventory-json")
+        drain.add_argument("--resource", required=True)
+        drain.add_argument("--reason", required=True)
+        drain.add_argument("--dry-run", action="store_true")
+        add_output_flags(drain)
+
+        undrain = sub.add_parser("undrain", help="Mark a resource active in an inventory file")
+        undrain.add_argument("--inventory-json", required=True)
+        undrain.add_argument("--out-inventory-json")
+        undrain.add_argument("--resource", required=True)
+        undrain.add_argument("--reason", default="operator_undrain")
+        undrain.add_argument("--dry-run", action="store_true")
+        add_output_flags(undrain)
+
+        audit = sub.add_parser("audit", help="Validate queue and inventory scheduler contracts")
+        audit.add_argument("--jobs-json", required=True)
+        audit.add_argument("--inventory-json", required=True)
+        add_output_flags(audit)
+
+        return parser.parse_args(argv)
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--arbiter-cmd", default=DEFAULT_ARBITER_CMD)
     parser.add_argument("--jobs-json", required=True)
@@ -1752,6 +2216,37 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
+    if getattr(args, "control_command", None):
+        try:
+            if args.control_command == "submit":
+                payload = cmd_submit(args)
+            elif args.control_command == "status":
+                payload = cmd_status(args)
+            elif args.control_command == "cancel":
+                payload = cmd_cancel(args)
+            elif args.control_command == "drain":
+                payload = update_inventory_status(args, drained=True)
+            elif args.control_command == "undrain":
+                payload = update_inventory_status(args, drained=False)
+            elif args.control_command == "audit":
+                payload = cmd_audit(args)
+            else:
+                raise RuntimeError(f"unhandled control command {args.control_command!r}")
+        except Exception as exc:
+            payload = {
+                "schema": "tensorcore.cluster_command.result.v1",
+                "ok": False,
+                "checked_at_unix": time.time(),
+                "errors": [{"error": str(exc)}],
+            }
+        if args.json or args.pretty_json:
+            emit_json(payload, pretty=args.pretty_json)
+        else:
+            if "results" in payload:
+                emit_text(payload)
+            else:
+                print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0 if payload.get("ok") else 2
     if args.loop:
         return run_loop(args)
     try:

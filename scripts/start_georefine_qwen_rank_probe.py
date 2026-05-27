@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Start the GeoRefine Qwen CR025 supervised run from a git checkout over SSH."""
+"""Start a scheduler-owned GeoRefine Qwen rank-search probe over SSH."""
 
 from __future__ import annotations
 
@@ -15,16 +15,15 @@ import uuid
 from typing import Any
 
 
-SCHEMA = "tensorcore.georefine_qwen_cr025.start.v1"
+SCHEMA = "tensorcore.georefine_qwen_rank_probe.start.v1"
 RESOURCE = "cosbox:cuda3090"
-LEGACY_DIRECT_OVERRIDE_ENV = "TENSORCORE_ALLOW_LEGACY_GEOREFINE_DIRECT_LAUNCH"
 DEFAULT_REPO_URL = "git@github.com:Tsotchke-Corporation/GeoRefineInternal.git"
 DEFAULT_REPO_DIR = "~/src/georefine"
+DEFAULT_QLLM_REPO_DIR = "/home/tyr/projects/semiclassical_qllm"
+DEFAULT_LEASE_HELPER = "/home/tyr/.tsotchke/bin/_tsotchke_resource_lease.py"
 DEFAULT_REF = "master"
-DEFAULT_RUN_DIR = (
-    "/home/tyr/bytehole/georefine/runs/"
-    "qwen3_5_0_8b_cr025_emb1024_fint4_cal4096_kd2048_t010_q005_20260525_043850"
-)
+DEFAULT_OUTPUT_ROOT = "/home/tyr/bytehole/georefine/good_qwen_results_20260526"
+DEFAULT_EVIDENCE_ROOT = "/home/tyr/.local/share/georefine_trusted/evidence"
 
 
 def shq(value: str) -> str:
@@ -40,22 +39,42 @@ def render_remote_script(args: argparse.Namespace) -> str:
 set -eu
 
 schema={shq(SCHEMA)}
+resource={shq(args.resource)}
+worker_resource={shq(args.worker_resource)}
+authority_lease_id={shq(args.authority_lease_id)}
+authority_owner={shq(args.authority_owner)}
 repo_url={shq(args.repo_url)}
 repo_dir={shq(args.repo_dir)}
+qllm_repo_dir={shq(args.qllm_repo_dir)}
+lease_helper={shq(args.lease_helper)}
 ref={shq(args.ref)}
 run_dir={shq(args.run_dir)}
+output_root={shq(args.output_root)}
+evidence_root={shq(args.evidence_root)}
 python_bin={shq(args.python_bin)}
 start_log={shq(args.start_log)}
 require_clean={require_clean}
 trust_remote_code={trust_remote_code}
 live_agent={live_agent}
 preflight_only={preflight_only}
-cal_text=/home/tyr/bytehole/georefine/qwen35_calibration/wikitext_merged_calibration_20260525.txt
-eval_text=/home/tyr/projects/GeoRefineInternal/results/m2/qwen35_0_8b_investor_eval_wikitext_validation_20260522.txt
+cal_text={shq(args.cal_text)}
+eval_text={shq(args.eval_text)}
+embedding_rank={int(args.embedding_rank)}
+compression_ratio={float(args.compression_ratio)}
+target_kl={float(args.target_kl)}
+target_kl_kd_steps={int(args.target_kl_kd_steps)}
+max_size_ratio={float(args.max_size_ratio)}
+quality_floor={float(args.quality_floor)}
+target_kl_max_iterations={int(args.target_kl_max_iterations)}
+target_kl_layers_per_iter={int(args.target_kl_layers_per_iter)}
 
 case "$repo_dir" in
   "~") repo_dir="$HOME" ;;
   "~/"*) repo_dir="$HOME/${{repo_dir#\\~/}}" ;;
+esac
+case "$qllm_repo_dir" in
+  "~") qllm_repo_dir="$HOME" ;;
+  "~/"*) qllm_repo_dir="$HOME/${{qllm_repo_dir#\\~/}}" ;;
 esac
 
 json_escape() {{
@@ -67,9 +86,9 @@ emit() {{
   reason="$2"
   pid="${{3:-0}}"
   head="${{4:-}}"
-  printf '{{"head":"%s","ok":%s,"pid":%s,"reason":"%s","repo_dir":"%s","resource":"cosbox:cuda3090","run_dir":"%s","schema":"%s"}}\\n' \\
+  printf '{{"head":"%s","ok":%s,"pid":%s,"reason":"%s","repo_dir":"%s","resource":"%s","run_dir":"%s","schema":"%s"}}\\n' \\
     "$(json_escape "$head")" "$ok" "$pid" "$(json_escape "$reason")" \\
-    "$(json_escape "$repo_dir")" "$(json_escape "$run_dir")" "$(json_escape "$schema")"
+    "$(json_escape "$repo_dir")" "$(json_escape "$resource")" "$(json_escape "$run_dir")" "$(json_escape "$schema")"
 }}
 
 if [ ! -d "$repo_dir/.git" ]; then
@@ -124,6 +143,25 @@ PY
   emit false python_env_not_ready 0 "$head"
   exit 1
 fi
+if [ -z "$run_dir" ]; then
+  stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  rank_label=$(printf '%04d' "$embedding_rank")
+  ratio_label=$(printf '%s' "$compression_ratio" | tr -d '.')
+  tkl_label=$(printf '%s' "$target_kl" | tr -d '.')
+  size_label=$(printf '%s' "$max_size_ratio" | tr -d '.')
+  run_dir="${{output_root}}/qwen35_0_8b_cr${{ratio_label}}_emb${{rank_label}}_tkl${{tkl_label}}_size${{size_label}}_${{stamp}}"
+fi
+if [ -z "$worker_resource" ]; then
+  case "$resource" in
+    cosbox:cuda3090) worker_resource=gpu:cosbox:0 ;;
+    jack-blupc:cuda3060) worker_resource=gpu:jack-blupc:0 ;;
+    old-donkey:cuda3050) worker_resource=gpu:old-donkey:0 ;;
+    *) worker_resource="$resource" ;;
+  esac
+fi
+if [ -z "$authority_owner" ]; then
+  authority_owner=georefine:qwen-rank-probe
+fi
 if [ ! -r "$cal_text" ]; then
   emit false calibration_text_missing 0 "$head"
   exit 1
@@ -133,7 +171,7 @@ if [ ! -r "$eval_text" ]; then
   exit 1
 fi
 
-if "$python_bin" - "$run_dir" <<'PY'
+if "$python_bin" - "$run_dir" "$max_size_ratio" "$quality_floor" "$target_kl" <<'PY'
 import json
 import math
 import pathlib
@@ -163,6 +201,9 @@ def target_kl_value(cert):
     return first_number(cert, "m2_kl_mean", "final_kl_mean", "kl_mean")
 
 cert = pathlib.Path(sys.argv[1]) / "m2_certificate.json"
+max_size_ratio = float(sys.argv[2])
+quality_floor = float(sys.argv[3])
+target_kl_threshold = float(sys.argv[4])
 try:
     data = json.loads(cert.read_text(encoding="utf-8"))
 except Exception:
@@ -207,9 +248,9 @@ if size_ratio is None and stored_size and original_size and original_size > 0:
 target_kl = target_kl_value(data)
 if (
     heldout_ppl is not None and heldout_ppl > 0
-    and ppl_delta is not None and ppl_delta <= 0.05
-    and size_ratio is not None and size_ratio <= 0.10
-    and target_kl is not None and target_kl <= 0.10
+    and ppl_delta is not None and ppl_delta <= quality_floor
+    and size_ratio is not None and size_ratio <= max_size_ratio
+    and target_kl is not None and target_kl <= target_kl_threshold
 ):
     raise SystemExit(0)
 raise SystemExit(1)
@@ -251,6 +292,31 @@ then
   exit 0
 fi
 
+lease_wrapper="$qllm_repo_dir/scripts/qllm_resource_lease.py"
+reconciler_script="$qllm_repo_dir/scripts/georefine_live_control_reconciler.py"
+finalizer_script="$qllm_repo_dir/scripts/finalize_georefine_artifact.py"
+run_intent_json="$run_dir/run_intent.json"
+final_manifest_output="$evidence_root/$(basename "$run_dir").trusted_final_manifest.json"
+if [ ! -r "$lease_wrapper" ]; then
+  emit false qllm_resource_lease_missing 0 "$head"
+  exit 1
+fi
+if [ ! -r "$lease_helper" ]; then
+  emit false qllm_lease_helper_missing 0 "$head"
+  exit 1
+fi
+if [ ! -r "$reconciler_script" ]; then
+  emit false qllm_reconciler_missing 0 "$head"
+  exit 1
+fi
+if [ ! -r "$finalizer_script" ]; then
+  emit false qllm_finalizer_missing 0 "$head"
+  exit 1
+fi
+if [ -z "$authority_lease_id" ]; then
+  emit false authority_lease_id_missing 0 "$head"
+  exit 1
+fi
 if [ "$preflight_only" = "1" ]; then
   emit true preflight_ok 0 "$head"
   exit 0
@@ -264,8 +330,8 @@ fi
 set -- "$python_bin" -m experiments.georefine.m2_supervised_run \\
   --artifact-dir "$run_dir" \\
   --heartbeat-seconds 15 \\
-  --target-size-ratio 0.10 \\
-  --quality-floor 0.05 \\
+  --target-size-ratio "$max_size_ratio" \\
+  --quality-floor "$quality_floor" \\
   --max-state-age-seconds 240
 if [ "$live_agent" != "1" ]; then
   set -- "$@" --no-live-agent
@@ -279,7 +345,7 @@ set -- "$@" -- "$python_bin" -m experiments.georefine.m2_compress \\
   --cal-tokens 4096 \\
   --eval-text-file "$eval_text" \\
   --eval-tokens 1024 \\
-  --compression-ratio 0.25 \\
+  --compression-ratio "$compression_ratio" \\
   --min-rank 4 \\
   --streaming-asvd \\
   --resume \\
@@ -287,16 +353,16 @@ set -- "$@" -- "$python_bin" -m experiments.georefine.m2_compress \\
   --no-canonicalize \\
   --no-null-head-filter \\
   --factor-embeddings \\
-  --embedding-rank 1024 \\
+  --embedding-rank "$embedding_rank" \\
   --factor-inactive-linears \\
   --inactive-linear-prefix model.visual \\
   --inactive-linear-compression-ratio 0.20 \\
   --inactive-linear-min-params 262144 \\
-  --target-kl 0.10 \\
-  --target-kl-max-iterations 4 \\
-  --target-kl-layers-per-iter 64 \\
+  --target-kl "$target_kl" \\
+  --target-kl-max-iterations "$target_kl_max_iterations" \\
+  --target-kl-layers-per-iter "$target_kl_layers_per_iter" \\
   --target-kl-rank-growth 1.15 \\
-  --target-kl-kd-steps 2048 \\
+  --target-kl-kd-steps "$target_kl_kd_steps" \\
   --target-kl-kd-lr 3e-5 \\
   --target-kl-kd-temperature 2.0 \\
   --target-kl-kd-hidden-state-weight 0.03 \\
@@ -305,9 +371,9 @@ set -- "$@" -- "$python_bin" -m experiments.georefine.m2_compress \\
   --quantize-residual-tensors none \\
   --storage-quantization-recovery auto \\
   --residual-quantization-preflight off \\
-  --max-size-ratio 0.10 \\
+  --max-size-ratio "$max_size_ratio" \\
   --fail-on-size-gate \\
-  --quality-floor 0.05 \\
+  --quality-floor "$quality_floor" \\
   --quality-floor-retries 0 \\
   --fail-on-quality-gate \\
   --require-held-out-quality \\
@@ -316,6 +382,37 @@ set -- "$@" -- "$python_bin" -m experiments.georefine.m2_compress \\
 if [ "$trust_remote_code" = "1" ]; then
   set -- "$@" --trust-remote-code
 fi
+metadata_json=$(printf '{{"surface":"tensorcore_scheduler","service":"georefine-qwen-rank-probe","run_dir":"%s"}}' "$(json_escape "$run_dir")")
+set -- "$python_bin" "$lease_wrapper" \\
+  --helper "$lease_helper" \\
+  --resource "$worker_resource" \\
+  --owner "$authority_owner" \\
+  --ttl-sec 21600 \\
+  --heartbeat-failure-policy terminate \\
+  --exclusive-cuda 1 \\
+  --metadata-json "$metadata_json" \\
+  --run-intent-json "$run_intent_json" \\
+  --artifact-dir "$run_dir" \\
+  --controller-mode observe \\
+  --allowed-mutator tensorcore-georefine-reconciler \\
+  --run-target qwen-cr070-rank-search \\
+  --authority-resource "$resource" \\
+  --authority-lease-id "$authority_lease_id" \\
+  --authority-owner "$authority_owner" \\
+  --authority-source tensorcore-scheduler \\
+  --require-substrate-contract \\
+  --finalizer-script "$finalizer_script" \\
+  --finalizer-python "$python_bin" \\
+  --final-manifest-evidence-root "$evidence_root" \\
+  --final-manifest-output "$final_manifest_output" \\
+  --finalizer-failure-policy fail \\
+  --reconciler-script "$reconciler_script" \\
+  --reconciler-python "$python_bin" \\
+  --reconciler-actor tensorcore-georefine-reconciler \\
+  --reconciler-require-active-lease \\
+  --reconciler-failure-policy terminate \\
+  -- \\
+  "$@"
 
 cd "$repo_dir"
 nohup "$@" >>"$start_log" 2>&1 &
@@ -333,43 +430,62 @@ exit 1
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", required=True)
+    parser.add_argument("--resource", default=RESOURCE)
+    parser.add_argument("--worker-resource", default="")
+    parser.add_argument("--authority-lease-id", default="")
+    parser.add_argument("--authority-owner", default="georefine:qwen-rank-probe")
     parser.add_argument("--repo-url", default=DEFAULT_REPO_URL)
     parser.add_argument("--repo-dir", default=DEFAULT_REPO_DIR)
+    parser.add_argument("--qllm-repo-dir", default=DEFAULT_QLLM_REPO_DIR)
+    parser.add_argument("--lease-helper", default=DEFAULT_LEASE_HELPER)
     parser.add_argument("--ref", default=DEFAULT_REF)
-    parser.add_argument("--run-dir", default=DEFAULT_RUN_DIR)
+    parser.add_argument("--run-dir", default="")
+    parser.add_argument("--output-root", default=DEFAULT_OUTPUT_ROOT)
+    parser.add_argument("--evidence-root", default=DEFAULT_EVIDENCE_ROOT)
     parser.add_argument("--python-bin", default="")
     parser.add_argument("--start-log", default="")
+    parser.add_argument(
+        "--cal-text",
+        default="/home/tyr/bytehole/georefine/qwen35_calibration/wikitext_merged_calibration_20260525.txt",
+    )
+    parser.add_argument(
+        "--eval-text",
+        default="/home/tyr/projects/GeoRefineInternal/results/m2/qwen35_0_8b_investor_eval_wikitext_validation_20260522.txt",
+    )
+    parser.add_argument("--embedding-rank", type=int, default=1024)
+    parser.add_argument("--compression-ratio", type=float, default=0.70)
+    parser.add_argument("--target-kl", type=float, default=0.80)
+    parser.add_argument("--target-kl-kd-steps", type=int, default=2048)
+    parser.add_argument("--target-kl-max-iterations", type=int, default=4)
+    parser.add_argument("--target-kl-layers-per-iter", type=int, default=64)
+    parser.add_argument("--max-size-ratio", type=float, default=0.30)
+    parser.add_argument("--quality-floor", type=float, default=0.05)
     parser.add_argument("--require-clean", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--trust-remote-code", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--live-agent", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--preflight-only", action="store_true")
-    parser.add_argument(
-        "--allow-legacy-direct-gpu-launch",
-        action="store_true",
-        default=os.environ.get(LEGACY_DIRECT_OVERRIDE_ENV, "0") == "1",
-        help="Emergency-only bypass. New trusted GeoRefine jobs must use tensorcore.job.v1.",
-    )
     parser.add_argument("--timeout-sec", type=float, default=120.0)
     parser.add_argument("--print-script", action="store_true")
     parser.add_argument("--json", action="store_true")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.embedding_rank < 1:
+        parser.error("--embedding-rank must be positive")
+    if args.compression_ratio <= 0 or args.compression_ratio > 1:
+        parser.error("--compression-ratio must be in (0, 1]")
+    if args.max_size_ratio <= 0 or args.max_size_ratio > 1:
+        parser.error("--max-size-ratio must be in (0, 1]")
+    if args.target_kl <= 0:
+        parser.error("--target-kl must be positive")
+    if args.target_kl_kd_steps < 0:
+        parser.error("--target-kl-kd-steps must be >= 0")
+    if args.target_kl_max_iterations < 0:
+        parser.error("--target-kl-max-iterations must be >= 0")
+    if args.target_kl_layers_per_iter < 1:
+        parser.error("--target-kl-layers-per-iter must be positive")
+    return args
 
 
 def run_start(args: argparse.Namespace) -> dict[str, Any]:
-    if (
-        not args.preflight_only
-        and not args.print_script
-        and not args.allow_legacy_direct_gpu_launch
-    ):
-        return {
-            "schema": SCHEMA,
-            "ok": False,
-            "reason": "legacy_direct_gpu_launcher_disabled",
-            "resource": RESOURCE,
-            "target": args.target,
-            "required_path": "tensorcore.job.v1",
-            "override_env": LEGACY_DIRECT_OVERRIDE_ENV,
-        }
     script = render_remote_script(args)
     if args.print_script:
         return {"schema": SCHEMA, "ok": True, "target": args.target, "script": script}
@@ -380,13 +496,13 @@ def run_start(args: argparse.Namespace) -> dict[str, Any]:
             "schema": SCHEMA,
             "ok": False,
             "reason": "start_timeout",
-            "resource": RESOURCE,
+            "resource": args.resource,
             "target": args.target,
         }
     if proc.returncode != 0:
         payload = parse_remote_payload(proc.stdout)
         if payload is not None:
-            invalid = validate_remote_payload(payload, target=args.target)
+            invalid = validate_remote_payload(payload, target=args.target, resource=args.resource)
             if invalid is not None:
                 invalid["rc"] = proc.returncode
                 invalid["stderr_tail"] = proc.stderr.strip()[-1000:]
@@ -403,7 +519,7 @@ def run_start(args: argparse.Namespace) -> dict[str, Any]:
             "schema": SCHEMA,
             "ok": False,
             "reason": "remote_start_failed",
-            "resource": RESOURCE,
+            "resource": args.resource,
             "target": args.target,
             "rc": proc.returncode,
             "stdout_tail": proc.stdout.strip()[-1000:],
@@ -415,12 +531,12 @@ def run_start(args: argparse.Namespace) -> dict[str, Any]:
             "schema": SCHEMA,
             "ok": False,
             "reason": "invalid_start_json",
-            "resource": RESOURCE,
+            "resource": args.resource,
             "target": args.target,
             "stdout_tail": proc.stdout.strip()[-1000:],
             "stderr_tail": proc.stderr.strip()[-1000:],
         }
-    invalid = validate_remote_payload(payload, target=args.target)
+    invalid = validate_remote_payload(payload, target=args.target, resource=args.resource)
     if invalid is not None:
         invalid["stdout_tail"] = proc.stdout.strip()[-1000:]
         invalid["stderr_tail"] = proc.stderr.strip()[-1000:]
@@ -429,23 +545,23 @@ def run_start(args: argparse.Namespace) -> dict[str, Any]:
     return payload
 
 
-def validate_remote_payload(payload: dict[str, Any], *, target: str) -> dict[str, Any] | None:
+def validate_remote_payload(payload: dict[str, Any], *, target: str, resource: str) -> dict[str, Any] | None:
     if payload.get("schema") != SCHEMA:
         return {
             "schema": SCHEMA,
             "ok": False,
             "reason": "invalid_start_schema",
-            "resource": RESOURCE,
+            "resource": resource,
             "target": target,
             "start_schema": payload.get("schema"),
         }
-    if payload.get("resource") != RESOURCE:
+    if payload.get("resource") != resource:
         return {
             "schema": SCHEMA,
             "ok": False,
             "reason": "start_resource_mismatch",
             "target": target,
-            "resource": RESOURCE,
+            "resource": resource,
             "start_resource": payload.get("resource"),
         }
     return None
@@ -473,7 +589,7 @@ def classify_remote_failure(reason: str, stderr: str) -> str:
 
 def run_remote_script(target: str, script: str, *, timeout: float) -> subprocess.CompletedProcess[str]:
     local_name = ""
-    remote_path = f"/tmp/tensorcore-georefine-cr025-{os.getpid()}-{uuid.uuid4().hex}.sh"
+    remote_path = f"/tmp/tensorcore-georefine-rank-probe-{os.getpid()}-{uuid.uuid4().hex}.sh"
     try:
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
             handle.write(script)
@@ -521,7 +637,7 @@ def run_remote_script(target: str, script: str, *, timeout: float) -> subprocess
 
 
 def run_remote_inline_script(target: str, script: str, *, timeout: float) -> subprocess.CompletedProcess[str]:
-    remote_path = f"/tmp/tensorcore-georefine-cr025-{os.getpid()}-{uuid.uuid4().hex}.sh"
+    remote_path = f"/tmp/tensorcore-georefine-rank-probe-{os.getpid()}-{uuid.uuid4().hex}.sh"
     b64_path = f"{remote_path}.b64"
     quoted_path = shlex.quote(remote_path)
     quoted_b64_path = shlex.quote(b64_path)
