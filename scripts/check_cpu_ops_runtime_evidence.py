@@ -22,11 +22,13 @@ REQUIRED_CHECKS = {
 }
 REQUIRED_FUNCTIONS = {
     "lib/ops/gemm_cpu.cpp": {
+        "f16_to_f32",
         "gemm_compute",
         "gemm_compute_cblas_bf16",
         "gemm_compute_cblas_f16",
     },
     "lib/ops/conv2d_cpu.cpp": {
+        "conv_dims_valid",
         "direct_sgemm_f32",
         "im2col_fp16",
     },

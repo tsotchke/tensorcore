@@ -50,8 +50,8 @@ every architectural primitive in code and tested:
 - TensorOps selection now includes the planned narrow Metal 4 attention
   kernel/shape envelope (`D=64/128`, tiled sequence lengths, no LSE/window/
   ALiBi variants), with unit coverage before the M5 runtime path is promoted.
-- CPU ops evidence now claims the Conv2D im2col staging helper when
-  `test_conv2d` passes, covering `lib/ops/conv2d_cpu.cpp:im2col_fp16`.
+- CPU ops evidence now claims the Conv2D shape guard and im2col staging helper
+  when `test_conv2d` passes, covering `conv_dims_valid` and `im2col_fp16`.
 - Python packaging evidence now covers the full `setup.py` native-artifact
   helper chain, including artifact discovery, platform selection, metallib
   requirement checks, macOS dylib/tag validation, and `_run_tool`.
@@ -209,7 +209,7 @@ every architectural primitive in code and tested:
   blockers when the host cannot genuinely execute them.
 - Portable CPU ops evidence now wraps `test_portable_cpu` and `test_conv2d`,
   emitting ICC-readable coverage for `gemm_compute`, CBLAS f16/bf16 helpers
-  when compiled, and the Conv2D `direct_sgemm_f32` backward helper.
+  when compiled, fp16 conversion, and the Conv2D validation/backward helpers.
 - Metal ops evidence now wraps attention correctness and Metal Conv2D smokes
   with `TC_TRACE=1`, emitting coverage for attention `encode_forward` and
   Conv2D `conv_bytes` while leaving shader-internal async-copy coverage

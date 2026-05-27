@@ -19,16 +19,18 @@ CHECKER = ROOT / "scripts" / "check_cpu_ops_runtime_evidence.py"
 def coverage() -> dict[str, Any]:
     return {
         "lib/ops/gemm_cpu.cpp": {
-            "executed_lines": [315, 354, 419],
+            "executed_lines": [162, 315, 354, 419],
             "functions": {
+                "f16_to_f32": {"start_line": 162, "executed_lines": [162]},
                 "gemm_compute": {"start_line": 419, "executed_lines": [419]},
                 "gemm_compute_cblas_bf16": {"start_line": 315, "executed_lines": [315]},
                 "gemm_compute_cblas_f16": {"start_line": 354, "executed_lines": [354]},
             },
         },
         "lib/ops/conv2d_cpu.cpp": {
-            "executed_lines": [44, 186],
+            "executed_lines": [44, 91, 186],
             "functions": {
+                "conv_dims_valid": {"start_line": 91, "executed_lines": [91]},
                 "direct_sgemm_f32": {"start_line": 44, "executed_lines": [44]},
                 "im2col_fp16": {"start_line": 186, "executed_lines": [186]},
             },
@@ -67,15 +69,19 @@ def passed_evidence() -> dict[str, Any]:
             "blocked_reasons": [],
             "failure_reasons": [],
             "required_functions": [
+                "lib/ops/conv2d_cpu.cpp:conv_dims_valid",
                 "lib/ops/conv2d_cpu.cpp:direct_sgemm_f32",
                 "lib/ops/conv2d_cpu.cpp:im2col_fp16",
+                "lib/ops/gemm_cpu.cpp:f16_to_f32",
                 "lib/ops/gemm_cpu.cpp:gemm_compute",
                 "lib/ops/gemm_cpu.cpp:gemm_compute_cblas_bf16",
                 "lib/ops/gemm_cpu.cpp:gemm_compute_cblas_f16",
             ],
             "covered_functions": [
+                "lib/ops/conv2d_cpu.cpp:conv_dims_valid",
                 "lib/ops/conv2d_cpu.cpp:direct_sgemm_f32",
                 "lib/ops/conv2d_cpu.cpp:im2col_fp16",
+                "lib/ops/gemm_cpu.cpp:f16_to_f32",
                 "lib/ops/gemm_cpu.cpp:gemm_compute",
                 "lib/ops/gemm_cpu.cpp:gemm_compute_cblas_bf16",
                 "lib/ops/gemm_cpu.cpp:gemm_compute_cblas_f16",
@@ -99,10 +105,12 @@ def blocked_evidence() -> dict[str, Any]:
     evidence["summary"]["checks_passed"] = False
     evidence["summary"]["blocked_reasons"] = ["portable_cpu:test_binary_missing"]
     evidence["summary"]["covered_functions"] = [
+        "lib/ops/conv2d_cpu.cpp:conv_dims_valid",
         "lib/ops/conv2d_cpu.cpp:direct_sgemm_f32",
         "lib/ops/conv2d_cpu.cpp:im2col_fp16",
     ]
     evidence["summary"]["missing_functions"] = [
+        "lib/ops/gemm_cpu.cpp:f16_to_f32",
         "lib/ops/gemm_cpu.cpp:gemm_compute",
         "lib/ops/gemm_cpu.cpp:gemm_compute_cblas_bf16",
         "lib/ops/gemm_cpu.cpp:gemm_compute_cblas_f16",
@@ -152,8 +160,12 @@ def main() -> int:
     missing_function = copy.deepcopy(passed)
     del missing_function["files"]["lib/ops/gemm_cpu.cpp"]["functions"]["gemm_compute"]
     missing_function["summary"]["covered_functions"] = [
+        "lib/ops/conv2d_cpu.cpp:conv_dims_valid",
         "lib/ops/conv2d_cpu.cpp:direct_sgemm_f32",
         "lib/ops/conv2d_cpu.cpp:im2col_fp16",
+        "lib/ops/gemm_cpu.cpp:f16_to_f32",
+        "lib/ops/gemm_cpu.cpp:gemm_compute_cblas_bf16",
+        "lib/ops/gemm_cpu.cpp:gemm_compute_cblas_f16",
     ]
     missing_function["summary"]["missing_functions"] = [
         "lib/ops/gemm_cpu.cpp:gemm_compute"
