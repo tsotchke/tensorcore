@@ -182,15 +182,17 @@ threadgroup memory at D=128.
 
 ### `tensorops_flash_attention.metal` — M5 path (SDK 26+)
 
-Builds FlashAttention-2 on top of two `mpp::tensor_ops::matmul2d`
-invocations (QK^T then SV) with an online softmax pass between them.
-Cooperative-tensor accumulators stay in registers across the inner
-softmax.
+Planned FlashAttention-2 path on top of two `mpp::tensor_ops::matmul2d`
+invocations (QK^T then SV) with an online softmax pass between them. The
+host selector now records the first supported envelope, but public dispatch
+still stays on the validated simdgroup-matrix implementation until M5
+runtime evidence proves this backend numerically.
 
 - **Tile:** Br = Bc = 64 (the M5 tensor units can sustain this without
   threadgroup memory pressure on the GEMM piece)
 - **Two entry points:** D=64 and D=128
-- **v0.1 scope:** alpha=1, beta=0, causal mask, fp16 IO + fp32 accum
+- **Initial promotion scope:** fully tiled sequence lengths, no LSE/window/
+  ALiBi variants, fp16 IO + fp32 accum
 - **v0.2 scope:** backward, GQA, ALiBi
 
 Requires Xcode 26.0+ SDK (gated at CMake time via `TC_HAVE_METAL4`).

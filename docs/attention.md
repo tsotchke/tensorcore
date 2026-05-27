@@ -68,7 +68,7 @@ dK, dV in a single fused pass.
 | `flash_attention_d128.metal` | 128 | forward | 16 × 16 (v0.1) | Apple7+ |
 | `flash_attention_backward.metal` | 64 | backward | 32 × 32 | Apple7+ |
 | `flash_attention_backward_d128.metal` | 128 | backward | 16 × 16 (v0.1) | Apple7+ |
-| `tensorops_flash_attention.metal` | 64 / 128 | forward | 64 × 64 (M5 tensor_ops) | Apple11 + SDK 26+ |
+| `tensorops_flash_attention.metal` | 64 / 128 | forward scaffold | 64 × 64 (M5 tensor_ops) | Apple11 + SDK 26+ |
 
 ### Why Br × Bc = 32 × 32 at D=64, and 16 × 16 at D=128?
 

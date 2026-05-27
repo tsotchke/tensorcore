@@ -47,6 +47,9 @@ every architectural primitive in code and tested:
   `tg_sum32` shader reduction helper, and GEMM tracing reports selected
   Metal kernel names so async-copy wrapper coverage is claimed only when an
   async-copy kernel is actually selected at runtime.
+- TensorOps selection now includes the planned narrow Metal 4 attention
+  kernel/shape envelope (`D=64/128`, tiled sequence lengths, no LSE/window/
+  ALiBi variants), with unit coverage before the M5 runtime path is promoted.
 - CPU ops evidence now claims the Conv2D im2col staging helper when
   `test_conv2d` passes, covering `lib/ops/conv2d_cpu.cpp:im2col_fp16`.
 - Python packaging evidence now covers the full `setup.py` native-artifact

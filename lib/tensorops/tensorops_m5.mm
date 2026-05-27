@@ -69,6 +69,54 @@ bool uses_default_layout(const tc_gemm_desc* d) {
            ldc == d->N;
 }
 
+bool tensorops_attention_runtime_enabled(void) {
+    /* The selector and host wiring are real, but the SDK26 attention shader
+     * still needs M5 numerical proof before the public dispatch can use it. */
+    return false;
+}
+
+id<MTLComputePipelineState> resolve_attention_pipeline(tc_context* ctx,
+                                                       NSString* name,
+                                                       bool causal,
+                                                       bool return_lse,
+                                                       tc_status_t* err) {
+    NSString* key = [NSString stringWithFormat:@"%@:c=%d:l=%d",
+                                                name,
+                                                causal ? 1 : 0,
+                                                return_lse ? 1 : 0];
+    {
+        id<MTLComputePipelineState> cached = nil;
+        @synchronized(ctx->pipelines) {
+            cached = [(TCPipelineCache*)ctx->pipelines pipelines][key];
+        }
+        if (cached) { if (err) *err = TC_OK; return cached; }
+    }
+
+    MTLFunctionConstantValues* cv = [MTLFunctionConstantValues new];
+    [cv setConstantValue:&causal type:MTLDataTypeBool atIndex:0];
+    [cv setConstantValue:&return_lse type:MTLDataTypeBool atIndex:1];
+
+    NSError* nserr = nil;
+    id<MTLFunction> fn = [ctx->library newFunctionWithName:name
+                                            constantValues:cv
+                                                     error:&nserr];
+    if (!fn) {
+        if (err) *err = TC_ERR_KERNEL_NOT_FOUND;
+        return nil;
+    }
+    id<MTLComputePipelineState> pso =
+        [ctx->device newComputePipelineStateWithFunction:fn error:&nserr];
+    if (!pso) {
+        if (err) *err = TC_ERR_PIPELINE;
+        return nil;
+    }
+    @synchronized(ctx->pipelines) {
+        [(TCPipelineCache*)ctx->pipelines pipelines][key] = pso;
+    }
+    if (err) *err = TC_OK;
+    return pso;
+}
+
 }  /* namespace */
 
 extern "C" tc_status_t tc_tensorops_available(tc_context* ctx, bool* out) {
@@ -158,23 +206,28 @@ extern "C" tc_status_t tc_tensorops_attention_attempt(tc_context* ctx,
         return TC_ERR_UNSUPPORTED_FAMILY;
     }
 
-    /* The Metal 4 attention kernel is still a compile-time scaffold. Keep the
-     * production path on the validated simdgroup_matrix implementation until
-     * an M5 correctness probe can prove this backend numerically. */
-    (void)LSE;
-    return TC_ERR_UNSUPPORTED_FAMILY;
-
-    if (d->io_dtype != TC_DTYPE_F16 || d->accum_dtype != TC_DTYPE_F32) {
-        return TC_ERR_UNSUPPORTED_DTYPE;
+    tc_status_t err = TC_OK;
+    const char* cname = tc_tensorops_attention_kernel_name(d, &err);
+    if (!cname) return err;
+    if (!tc_tensorops_attention_shape_supported(d)) {
+        return TC_ERR_INVALID_SHAPE;
     }
 
-    NSString* kname = nil;
-    if (d->head_dim == 64)       kname = @"tc4_flash_attention_f16_d64";
-    else if (d->head_dim == 128) kname = @"tc4_flash_attention_f16_d128";
-    else return TC_ERR_UNSUPPORTED_DTYPE;
+    /* Keep the production path on the validated simdgroup_matrix
+     * implementation until an M5 correctness probe proves this backend
+     * numerically. The validation above makes the future enablement surface
+     * explicit and testable before hardware is available here. */
+    if (!tensorops_attention_runtime_enabled()) {
+        (void)cname;
+        (void)LSE;
+        return TC_ERR_UNSUPPORTED_FAMILY;
+    }
 
-    tc_status_t err = TC_OK;
-    id<MTLComputePipelineState> pso = tc_pipeline_get(ctx, kname, &err);
+    NSString* kname = [NSString stringWithUTF8String:cname];
+    id<MTLComputePipelineState> pso = resolve_attention_pipeline(ctx, kname,
+                                                                 d->causal,
+                                                                 d->return_lse,
+                                                                 &err);
     if (!pso) return err;
 
     const uint32_t batch    = (uint32_t)d->batch;
