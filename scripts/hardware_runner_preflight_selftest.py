@@ -122,7 +122,13 @@ def main() -> int:
         assert online["status"] == "matching_runner_online"
         assert online["online_matching_runner_count"] == 1
         assert online["diagnostics"][0]["diagnostic_class"] == "runner_online"
+        assert "m5-tensorops-release-smoke" in online["diagnostics"][0]["recommended_action"]
         assert online["label_candidate_runners"][0]["missing_required_labels"] == []
+
+        assert (
+            "apple-gpu-release-smoke"
+            in generic["diagnostics"][0]["recommended_action"]
+        )
 
         summary = tmp / "summary.md"
         preflight.append_summary(summary, missing)

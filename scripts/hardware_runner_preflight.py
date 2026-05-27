@@ -254,13 +254,20 @@ def diagnostics_for_status(
         ]
     if status == "matching_runner_online":
         names = ", ".join(str(item.get("name") or "<unnamed>") for item in online_matching)
+        next_job = (
+            "m5-tensorops-release-smoke"
+            if "metal4-tensorops" in required_labels
+            else "apple-gpu-release-smoke"
+        )
         return [
             {
                 "id": "hardware_runner_preflight.runner_online",
                 "diagnostic_class": RUNNER_ONLINE,
                 "status": "passed",
                 "message": f"Online matching runner(s): {names}",
-                "recommended_action": "Wait for apple-gpu-release-smoke to run and upload hardware evidence.",
+                "recommended_action": (
+                    f"Wait for {next_job} to run and upload hardware evidence."
+                ),
             }
         ]
     return []
