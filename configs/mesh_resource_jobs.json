@@ -43,91 +43,6 @@
       }
     },
     {
-      "id": "georefine-m2-cosbox",
-      "sync_id": "georefine-m2-cosbox",
-      "resource": "cosbox:cuda3090",
-      "resource_class": "cuda_exclusive",
-      "owner": "georefine:m2:cosbox",
-      "tenant": "georefine",
-      "priority": 100,
-      "desired_state": "paused",
-      "ttl_sec": 900,
-      "adopt_unknown_lease_metadata_keys": [
-        "project",
-        "service",
-        "run_dir"
-      ],
-      "probe_cmd": [
-        "ssh",
-        "cosbox",
-        "cd ~/src/tensorcore && python3 scripts/check_georefine_qwen_live.py --run-dir /home/tyr/bytehole/georefine/runs/qwen3_5_0_8b_cr025_emb1024_fint4_cal4096_kd2048_t010_q005_20260525_043850 --match-regex 'experiments.georefine.m2_compress.*qwen3_5_0_8b_cr025_emb1024_fint4_cal4096_kd2048_t010_q005_20260525_043850' --json"
-      ],
-      "preflight_cmd": [
-        "python3",
-        "scripts/start_georefine_qwen_cr025.py",
-        "--target",
-        "cosbox",
-        "--repo-dir",
-        "~/src/georefine",
-        "--python-bin",
-        "/home/tyr/work/qllm-venv/bin/python",
-        "--require-clean",
-        "--preflight-only",
-        "--json"
-      ],
-      "completion_cmd": [
-        "ssh",
-        "cosbox",
-        "cd ~/src/tensorcore && python3 scripts/check_georefine_qwen_artifact.py /home/tyr/bytehole/georefine/runs/qwen3_5_0_8b_cr025_emb1024_fint4_cal4096_kd2048_t010_q005_20260525_043850 --max-size-ratio 0.10"
-      ],
-      "admission_cmd": [
-        "ssh",
-        "cosbox",
-        "cd ~/src/tensorcore && python3 scripts/check_cuda_resource_admission.py --resource cosbox:cuda3090 --allow-process-regex '(steamwebhelper$|/opt/google/chrome/chrome)' --allowed-process-max-memory-mib 256 --json"
-      ],
-      "start_cmd": [
-        "python3",
-        "scripts/start_georefine_qwen_cr025.py",
-        "--target",
-        "cosbox",
-        "--repo-dir",
-        "~/src/georefine",
-        "--python-bin",
-        "/home/tyr/work/qllm-venv/bin/python",
-        "--require-clean",
-        "--json"
-      ],
-      "post_start_probe_cmd": [
-        "ssh",
-        "cosbox",
-        "cd ~/src/tensorcore && python3 scripts/check_georefine_qwen_live.py --run-dir /home/tyr/bytehole/georefine/runs/qwen3_5_0_8b_cr025_emb1024_fint4_cal4096_kd2048_t010_q005_20260525_043850 --match-regex 'experiments.georefine.m2_compress.*qwen3_5_0_8b_cr025_emb1024_fint4_cal4096_kd2048_t010_q005_20260525_043850' --json"
-      ],
-      "worker_identity_cmd": [
-        "ssh",
-        "cosbox",
-        "cd ~/src/tensorcore && python3 scripts/mesh_worker_identity.py --resource cosbox:cuda3090 --match-regex experiments.georefine.m2_compress.*qwen3_5_0_8b_cr025_emb1024_fint4_cal4096_kd2048_t010_q005_20260525_043850 --artifact-dir /home/tyr/bytehole/georefine/runs/qwen3_5_0_8b_cr025_emb1024_fint4_cal4096_kd2048_t010_q005_20260525_043850 --require-matching-process --require-matched-cuda"
-      ],
-      "metadata": {
-        "admission_policy": "allow low-memory steamwebhelper/chrome GPU helper only",
-        "artifact_gate": "completed + ppl_compressed_eval + size_compressed_bytes + size_ratio<=0.10 + quality_loss<=0.05 + target_kl<=0.10",
-        "code_commit": "a9458c9",
-        "last_failed_at_unix": 1779725919.4935071,
-        "last_failed_run_dir": "/home/tyr/bytehole/georefine/runs/qwen3_5_0_8b_cr020_emb1024_fint4_kd1200_t010_q005_20260524_102543",
-        "last_failure": "quality_gate_failed_pre_storage",
-        "last_failure_evidence": "CR020 size gate passed at projected_size_ratio=0.0908186834, but quality failed: held-out PPL delta=0.0768095022 > 0.05, validation_kl_mean=0.2464159429, target_kl_not_met.",
-        "launcher_contract": "no-live-agent-supervised-cr025-cal4096-kd2048",
-        "operator_note": "adopted live cr025 Qwen candidate under scheduler lease",
-        "probe": "m2_supervisor_status_pid_liveness",
-        "project": "georefine",
-        "resumed_at_unix": 1779727191.9594738,
-        "run_dir": "/home/tyr/bytehole/georefine/runs/qwen3_5_0_8b_cr025_emb1024_fint4_cal4096_kd2048_t010_q005_20260525_043850",
-        "scheduler_contract": "cuda_exclusive_admission_poststart_identity",
-        "scheduler_pause_reason": "source-controlled CR025 starter preflight passes on cosbox; keep paused until an operator intentionally resumes this long-running artifact workload",
-        "service": "m2",
-        "target": "qwen-cr025-supervised-cal4096-kd2048-size10-artifact"
-      }
-    },
-    {
       "id": "old-donkey-precompute-chain",
       "sync_id": "old-donkey-precompute-chain",
       "resource": "old-donkey:cuda3050",
@@ -368,6 +283,128 @@
         "scheduler_contract": "scheduler_registered_lane",
         "scheduler_pause_reason": "no submitted Atlas validation workload yet",
         "service": "validation"
+      }
+    },
+    {
+      "id": "georefine-qwen-rank-probe-cosbox",
+      "sync_id": "georefine-qwen-rank-probe-cosbox",
+      "resource": "cosbox:cuda3090",
+      "resource_class": "cuda_exclusive",
+      "owner": "georefine:qwen-rank-probe",
+      "tenant": "georefine",
+      "priority": 100,
+      "desired_state": "paused",
+      "ttl_sec": 21600,
+      "adopt_unknown_lease_metadata_keys": [
+        "project",
+        "service",
+        "run_dir"
+      ],
+      "probe_cmd": [
+        "ssh",
+        "cosbox",
+        "cd ~/src/tensorcore && python3 scripts/check_georefine_qwen_live.py --run-dir /home/tyr/.local/share/georefine_trusted/runs/qwen_rank_probe_cosbox --json"
+      ],
+      "completion_cmd": [
+        "ssh",
+        "cosbox",
+        "/home/tyr/work/venv/bin/python /home/tyr/.local/share/georefine_substrate_tools/20260526/scripts/finalize_georefine_artifact.py verify /home/tyr/.local/share/georefine_trusted/evidence/qwen_rank_probe_cosbox.trusted_final_manifest.json >/dev/null && /home/tyr/work/venv/bin/python /home/tyr/.local/share/georefine_substrate_tools/20260526/scripts/check_georefine_qwen_artifact.py /home/tyr/.local/share/georefine_trusted/runs/qwen_rank_probe_cosbox --max-size-ratio 0.3 --max-ppl-delta 0.05 --max-target-kl 0.8"
+      ],
+      "preflight_cmd": [
+        "python3",
+        "scripts/start_georefine_qwen_rank_probe.py",
+        "--target",
+        "cosbox",
+        "--resource",
+        "{authority_resource}",
+        "--worker-resource",
+        "gpu:cosbox:0",
+        "--authority-lease-id",
+        "{lease_id}",
+        "--authority-owner",
+        "{authority_owner}",
+        "--repo-dir",
+        "/home/tyr/projects/GeoRefineInternal",
+        "--qllm-repo-dir",
+        "/home/tyr/.local/share/georefine_substrate_tools/20260526",
+        "--python-bin",
+        "/home/tyr/work/venv/bin/python",
+        "--run-dir",
+        "/home/tyr/.local/share/georefine_trusted/runs/qwen_rank_probe_cosbox",
+        "--evidence-root",
+        "/home/tyr/.local/share/georefine_trusted/evidence",
+        "--compression-ratio",
+        "0.7",
+        "--max-size-ratio",
+        "0.3",
+        "--target-kl",
+        "0.8",
+        "--target-kl-kd-steps",
+        "2048",
+        "--json",
+        "--preflight-only"
+      ],
+      "admission_cmd": [
+        "ssh",
+        "cosbox",
+        "cd ~/src/tensorcore && python3 scripts/check_cuda_resource_admission.py --resource cosbox:cuda3090 --allow-process-regex '(steamwebhelper$|/opt/google/chrome/chrome)' --allowed-process-max-memory-mib 256 --json"
+      ],
+      "start_cmd": [
+        "python3",
+        "scripts/start_georefine_qwen_rank_probe.py",
+        "--target",
+        "cosbox",
+        "--resource",
+        "{authority_resource}",
+        "--worker-resource",
+        "gpu:cosbox:0",
+        "--authority-lease-id",
+        "{lease_id}",
+        "--authority-owner",
+        "{authority_owner}",
+        "--repo-dir",
+        "/home/tyr/projects/GeoRefineInternal",
+        "--qllm-repo-dir",
+        "/home/tyr/.local/share/georefine_substrate_tools/20260526",
+        "--python-bin",
+        "/home/tyr/work/venv/bin/python",
+        "--run-dir",
+        "/home/tyr/.local/share/georefine_trusted/runs/qwen_rank_probe_cosbox",
+        "--evidence-root",
+        "/home/tyr/.local/share/georefine_trusted/evidence",
+        "--compression-ratio",
+        "0.7",
+        "--max-size-ratio",
+        "0.3",
+        "--target-kl",
+        "0.8",
+        "--target-kl-kd-steps",
+        "2048",
+        "--json"
+      ],
+      "post_start_probe_cmd": [
+        "ssh",
+        "cosbox",
+        "cd ~/src/tensorcore && python3 scripts/check_georefine_qwen_live.py --run-dir /home/tyr/.local/share/georefine_trusted/runs/qwen_rank_probe_cosbox --json"
+      ],
+      "worker_identity_cmd": [
+        "ssh",
+        "cosbox",
+        "cd ~/src/tensorcore && python3 scripts/mesh_worker_identity.py --resource cosbox:cuda3090 --match-regex 'run-georefine-qwen|experiments\\.georefine\\.m2_compress' --artifact-dir /home/tyr/.local/share/georefine_trusted/runs/qwen_rank_probe_cosbox --require-matching-process --require-matched-cuda --json"
+      ],
+      "metadata": {
+        "project": "georefine",
+        "service": "qwen-rank-probe",
+        "scheduler_pause_reason": "source-controlled substrate proof job; keep paused until an operator intentionally starts the protected-root GPU proof run",
+        "cuda_uuid": "GPU-bec86da6-3a28-5130-d477-0849176c5967",
+        "georefine_scheduler_contract": "georefine_tensorcore_substrate_claim_bound_launch",
+        "launcher_contract": "georefine_tensorcore_substrate_v1",
+        "pci_bus_id": "00000000:01:00.0",
+        "trusted_final_manifest_path": "/home/tyr/.local/share/georefine_trusted/evidence/qwen_rank_probe_cosbox.trusted_final_manifest.json",
+        "run_dir": "/home/tyr/.local/share/georefine_trusted/runs/qwen_rank_probe_cosbox",
+        "scheduler_contract": "tensorcore_job_v1_cuda_exclusive_trusted_artifact",
+        "trusted_evidence_root": "/home/tyr/.local/share/georefine_trusted/evidence",
+        "worker_alias": "gpu:cosbox:0"
       }
     }
   ]
