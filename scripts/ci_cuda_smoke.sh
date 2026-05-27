@@ -57,6 +57,7 @@ REQUIRED_FUNCTIONS = {
     "lib/cuda/training.cu": [
         "adamw_step_fp16_kernel",
         "adamw_step_fp32_kernel",
+        "block_reduce_sum_f32",
     ],
 }
 
@@ -619,6 +620,7 @@ try:
         _add_function(evidence, "lib/cuda/gemm.cpp", "cuda_gemm_i8")
     _add_function(evidence, "lib/cuda/training.cu", "adamw_step_fp32_kernel")
     _add_function(evidence, "lib/cuda/training.cu", "adamw_step_fp16_kernel")
+    _add_function(evidence, "lib/cuda/training.cu", "block_reduce_sum_f32")
     evidence["runtime_status"] = "passed"
     _write_evidence(evidence)
     print(

@@ -47,6 +47,7 @@ REQUIRED_FUNCTIONS = {
     "lib/cuda/training.cu": {
         "adamw_step_fp32_kernel",
         "adamw_step_fp16_kernel",
+        "block_reduce_sum_f32",
     },
 }
 
@@ -127,6 +128,7 @@ def cuda_required_functions(evidence: dict) -> list[str]:
         "lib/cuda/gemm.cpp:cuda_gemm_hgemm",
         "lib/cuda/training.cu:adamw_step_fp16_kernel",
         "lib/cuda/training.cu:adamw_step_fp32_kernel",
+        "lib/cuda/training.cu:block_reduce_sum_f32",
     ]
     device = evidence.get("device")
     if isinstance(device, dict) and device.get("supports_bf16"):

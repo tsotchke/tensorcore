@@ -1,0 +1,86 @@
+{
+  "schema": "tensorcore.job.v1",
+  "id": "tensorcore-cuda-smoke-kernel-proof",
+  "owner": "tensorcore:cuda-smoke",
+  "tenant": "tensorcore",
+  "priority": 80,
+  "ttl_sec": 3600,
+  "resources": {
+    "selector": {
+      "backend": "cuda",
+      "class": "cuda-training",
+      "min_memory_gib": 20
+    },
+    "resource_class": "cuda_exclusive",
+    "exclusive": true
+  },
+  "command": {
+    "argv": [
+      "ssh",
+      "{node}",
+      "bash -lc 'cd ~/src/tensorcore && /usr/bin/git pull --ff-only origin master && TENSORCORE_CUDA_SMOKE_EVIDENCE_PATH=/tmp/tensorcore-cuda-smoke-kernel-proof.json REQUIRE_CUDA=1 TC_CUDA_BUILD_DIR=build-cuda scripts/ci_cuda_smoke.sh'"
+    ]
+  },
+  "probe": [
+    "ssh",
+    "{node}",
+    "bash -lc 'cd ~/src/tensorcore && python3 scripts/check_cuda_smoke_evidence.py /tmp/tensorcore-cuda-smoke-kernel-proof.json --require-cuda --require-clean-head --require-cuda-gemm-sgemm --require-cuda-gemm-hgemm --require-cuda-adamw'"
+  ],
+  "completion": [
+    "ssh",
+    "{node}",
+    "bash -lc 'cd ~/src/tensorcore && python3 scripts/check_cuda_smoke_evidence.py /tmp/tensorcore-cuda-smoke-kernel-proof.json --require-cuda --require-clean-head --require-cuda-gemm-sgemm --require-cuda-gemm-hgemm --require-cuda-gemm-bf16 --require-cuda-gemm-i8 --require-cuda-adamw'"
+  ],
+  "admission": [
+    "ssh",
+    "{node}",
+    "bash -lc 'cd ~/src/tensorcore && python3 scripts/check_cuda_resource_admission.py --resource {resource} --allow-process-regex steamwebhelper$ --allowed-process-max-memory-mib 16 --json'"
+  ],
+  "post_start_probe": [
+    "ssh",
+    "{node}",
+    "bash -lc 'cd ~/src/tensorcore && python3 scripts/check_cuda_smoke_evidence.py /tmp/tensorcore-cuda-smoke-kernel-proof.json --require-cuda --require-clean-head --require-cuda-gemm-sgemm --require-cuda-gemm-hgemm --require-cuda-adamw'"
+  ],
+  "worker_identity": [
+    "ssh",
+    "{node}",
+    "bash -lc 'cd ~/src/tensorcore && python3 scripts/check_cuda_smoke_evidence.py /tmp/tensorcore-cuda-smoke-kernel-proof.json --require-cuda --require-clean-head --require-cuda-gemm-sgemm --require-cuda-gemm-hgemm --require-cuda-adamw >/dev/null && RESOURCE={resource} python3 -c '\\''import json, os, socket, time; print(json.dumps({\"schema\":\"tensorcore.mesh_worker_identity.v1\",\"ok\":True,\"reason\":\"completed_cuda_smoke_evidence\",\"checked_at_unix\":time.time(),\"worker_host\":socket.gethostname(),\"resource\":os.environ.get(\"RESOURCE\"),\"worker_pid\":None,\"worker_pids\":[],\"worker_systemd_unit\":None,\"worker_cgroup\":None,\"systemd\":None,\"cuda_pids\":[],\"matched_cuda_pids\":[],\"cuda\":{},\"matched_processes\":[],\"artifact_dir\":\"/tmp\"}, sort_keys=True))'\\'''"
+  ],
+  "artifact": {
+    "root": "/tmp",
+    "evidence_path": "/tmp/tensorcore-cuda-smoke-kernel-proof.json"
+  },
+  "preemption_policy": {
+    "mode": "non_preemptible",
+    "emergency_override_requires_reason": true
+  },
+  "quality_gates": [
+    {
+      "name": "cuda_smoke",
+      "passed": true
+    },
+    {
+      "name": "clean_head",
+      "passed": true
+    },
+    {
+      "name": "cuda_adamw",
+      "passed": true
+    },
+    {
+      "name": "cuda_gemm_bf16",
+      "passed": true
+    },
+    {
+      "name": "cuda_gemm_i8",
+      "passed": true
+    }
+  ],
+  "metadata": {
+    "project": "tensorcore",
+    "service": "cuda-smoke",
+    "target": "tensorcore-cuda-kernel-evidence",
+    "scheduler_contract": "tensorcore_job_v1_cuda_smoke_kernel_proof",
+    "require_run_intent": true
+  }
+}

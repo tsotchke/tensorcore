@@ -955,6 +955,22 @@ Fixture coverage:
 python3 scripts/start_georefine_qwen_rank_probe_selftest.py
 ```
 
+### `tensorcore_cuda_smoke_job.template.json`
+
+Scheduler submission template for the Linux CUDA kernel evidence lane. It
+selects a `cuda-training` resource, runs `scripts/ci_cuda_smoke.sh` on the
+remote checkout, and validates `/tmp/tensorcore-cuda-smoke-kernel-proof.json`
+with `scripts/check_cuda_smoke_evidence.py`. Use it as a dry-run before
+submitting a real remote CUDA proof:
+
+```sh
+python3 scripts/mesh_resource_scheduler.py submit \
+  --job-json configs/tensorcore_cuda_smoke_job.template.json \
+  --jobs-json /tmp/tensorcore-cuda-smoke-jobs.json \
+  --inventory-json configs/mesh_resources.json \
+  --dry-run --pretty-json
+```
+
 ### `start_qllm_olddonkey_precompute_chain.py`
 
 Starts the old-donkey qLLM teacher-logit chain from a remote git checkout. It
@@ -1156,8 +1172,8 @@ GEMM output, `backend=cuda`, expected managed-memory cuBLAS kernel names,
 explicit `TC_DISABLE_CUDA_GEMM=1` CPU fallback, and CUDA dispatch for RMSNorm,
 LayerNorm, RoPE, SwiGLU, softmax, and AdamW fp32/fp16-gradient updates.
 The JSON records per-kernel `gemm_kernels` for fp32, fp16, bf16, and int8
-where the device supports them, plus ICC-readable coverage for CUDA GEMM and
-AdamW kernel entry points.
+where the device supports them, plus ICC-readable coverage for CUDA GEMM,
+AdamW kernel entry points, and the shared CUDA reduction helper.
 
 If `TENSORCORE_CUDA_SMOKE_EVIDENCE_PATH` is set, the script writes
 `tensorcore.cuda_smoke.evidence.v1`-style JSON with `runtime_status` set to
@@ -1366,6 +1382,7 @@ workflow will pass too.
 | Prove portable CPU GEMM and Conv2D helpers | `python3 scripts/run_cpu_ops_runtime_evidence.py --require-pass` |
 | Prove Metal attention and Conv2D dispatch helpers | `python3 scripts/run_metal_ops_runtime_evidence.py --require-pass` |
 | Prove quantized GEMV and GGUF matrix metadata helpers | `python3 scripts/run_quantized_gguf_runtime_evidence.py --require-pass` |
+| Dry-run remote CUDA kernel proof job | `python3 scripts/mesh_resource_scheduler.py submit --job-json configs/tensorcore_cuda_smoke_job.template.json --jobs-json /tmp/tensorcore-cuda-smoke-jobs.json --inventory-json configs/mesh_resources.json --dry-run --pretty-json` |
 | Probe Eshkol bridge runtime evidence | `python3 scripts/run_eshkol_tensorcore_bridge_smoke.py --build-dir build-portable-cpu-current --require-pass` |
 | Pre-release wide smoke | `scripts/release_smoke.sh` (add `REQUIRE_GPU=1` if you have one) |
 | Cross-check version triple | `scripts/check_version_consistency.sh` |

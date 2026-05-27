@@ -98,8 +98,9 @@ def cuda_evidence() -> dict[str, Any]:
                 },
             },
             "lib/cuda/training.cu": {
-                "executed_lines": [128, 156],
+                "executed_lines": [40, 128, 156],
                 "functions": {
+                    "block_reduce_sum_f32": {"start_line": 40, "executed_lines": [40]},
                     "adamw_step_fp32_kernel": {"start_line": 128, "executed_lines": [128]},
                     "adamw_step_fp16_kernel": {"start_line": 156, "executed_lines": [156]},
                 },
@@ -113,6 +114,7 @@ def cuda_evidence() -> dict[str, Any]:
                 "lib/cuda/gemm.cpp:cuda_gemm_sgemm",
                 "lib/cuda/training.cu:adamw_step_fp16_kernel",
                 "lib/cuda/training.cu:adamw_step_fp32_kernel",
+                "lib/cuda/training.cu:block_reduce_sum_f32",
             ],
             "covered_functions": [
                 "lib/cuda/gemm.cpp:cuda_gemm_bf16",
@@ -121,6 +123,7 @@ def cuda_evidence() -> dict[str, Any]:
                 "lib/cuda/gemm.cpp:cuda_gemm_sgemm",
                 "lib/cuda/training.cu:adamw_step_fp16_kernel",
                 "lib/cuda/training.cu:adamw_step_fp32_kernel",
+                "lib/cuda/training.cu:block_reduce_sum_f32",
             ],
             "missing_functions": [],
         },

@@ -66,6 +66,9 @@ every architectural primitive in code and tested:
 - GeoRefine Qwen rank-probe launches now pass `--worker-lease-mode mirror`
   through the qLLM lease wrapper so scheduler authority and worker lease
   handoff stay aligned.
+- CUDA smoke evidence now names the shared `block_reduce_sum_f32` helper, and
+  `configs/tensorcore_cuda_smoke_job.template.json` provides a scheduler-owned
+  remote CUDA kernel proof path for the remaining NVIDIA-only evidence.
 - `test_dist_remote` now accepts `--elements` and `--iters`, making short
   WAN ring proofs possible without changing the default 4 MB throughput
   probe.
