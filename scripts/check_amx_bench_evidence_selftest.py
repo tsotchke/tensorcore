@@ -19,11 +19,12 @@ CHECKER = ROOT / "scripts" / "check_amx_bench_evidence.py"
 def coverage() -> dict[str, Any]:
     return {
         "lib/ops/gemm_cpu_amx.cpp": {
-            "executed_lines": [394, 440, 520, 591, 623, 715, 840, 853, 876],
+            "executed_lines": [394, 440, 520, 564, 591, 623, 715, 840, 853, 876],
             "functions": {
                 "amx_worker_local": {"start_line": 394, "executed_lines": [394]},
                 "amx_process_tile_strip": {"start_line": 440, "executed_lines": [440]},
                 "amx_worker_thread_entry": {"start_line": 520, "executed_lines": [520]},
+                "amx_pool_init_once": {"start_line": 564, "executed_lines": [564]},
                 "amx_pool_dispatch_pair": {"start_line": 591, "executed_lines": [591]},
                 "tc_amx_gemm_f32_core": {"start_line": 623, "executed_lines": [623]},
                 "tc_amx_gemm_f32": {"start_line": 715, "executed_lines": [715]},
@@ -129,6 +130,7 @@ def passed_evidence() -> dict[str, Any]:
                 "bench/bench_gemm.c:trim_token",
                 "lib/ops/gemm_cpu_amx.cpp:amx_process_tile_strip",
                 "lib/ops/gemm_cpu_amx.cpp:amx_pool_dispatch_pair",
+                "lib/ops/gemm_cpu_amx.cpp:amx_pool_init_once",
                 "lib/ops/gemm_cpu_amx.cpp:amx_worker_local",
                 "lib/ops/gemm_cpu_amx.cpp:amx_worker_thread_entry",
                 "lib/ops/gemm_cpu_amx.cpp:tc_amx_cluster_count",
@@ -154,6 +156,7 @@ def passed_evidence() -> dict[str, Any]:
                 "bench/bench_gemm.c:trim_token",
                 "lib/ops/gemm_cpu_amx.cpp:amx_process_tile_strip",
                 "lib/ops/gemm_cpu_amx.cpp:amx_pool_dispatch_pair",
+                "lib/ops/gemm_cpu_amx.cpp:amx_pool_init_once",
                 "lib/ops/gemm_cpu_amx.cpp:amx_worker_local",
                 "lib/ops/gemm_cpu_amx.cpp:amx_worker_thread_entry",
                 "lib/ops/gemm_cpu_amx.cpp:tc_amx_cluster_count",
@@ -216,6 +219,7 @@ def blocked_evidence() -> dict[str, Any]:
     evidence["summary"]["missing_functions"] = sorted([
         "lib/ops/gemm_cpu_amx.cpp:amx_process_tile_strip",
         "lib/ops/gemm_cpu_amx.cpp:amx_pool_dispatch_pair",
+        "lib/ops/gemm_cpu_amx.cpp:amx_pool_init_once",
         "lib/ops/gemm_cpu_amx.cpp:tc_amx_gemm_f32",
         "lib/ops/gemm_cpu_amx.cpp:tc_amx_gemm_f32_core",
         "lib/ops/gemm_cpu_amx.cpp:amx_worker_local",

@@ -34,6 +34,7 @@ REQUIRED_FUNCTIONS = {
     "lib/ops/gemm_cpu_amx.cpp": {
         "amx_process_tile_strip",
         "amx_pool_dispatch_pair",
+        "amx_pool_init_once",
         "tc_amx_cluster_count",
         "tc_amx_gemm_f32",
         "tc_amx_gemm_f32_available",

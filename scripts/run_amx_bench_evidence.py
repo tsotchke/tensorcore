@@ -20,6 +20,7 @@ REQUIRED_FUNCTIONS = {
     "lib/ops/gemm_cpu_amx.cpp": {
         "amx_process_tile_strip",
         "amx_pool_dispatch_pair",
+        "amx_pool_init_once",
         "amx_worker_local",
         "amx_worker_thread_entry",
         "tc_amx_cluster_count",
@@ -417,6 +418,7 @@ def build_evidence(args: argparse.Namespace) -> dict[str, Any]:
             "tc_amx_gemm_f32",
             "tc_amx_gemm_f32_core",
             "tc_amx_cluster_count",
+            "amx_pool_init_once",
             "amx_pool_dispatch_pair",
             "amx_worker_thread_entry",
             "amx_worker_local",

@@ -58,6 +58,8 @@ every architectural primitive in code and tested:
 - AMX/bench evidence now covers benchmark parser/timing helpers in
   `bench_gemm.c` and can cover the optional FlashAttention helpers in
   `bench_attention.c` when the host exposes Metal to evidence subprocesses.
+- AMX/bench evidence now claims the AMX worker-pool one-time initializer when
+  the two-worker AMX GEMM path dispatches successfully.
 - AMX/bench evidence now keeps FlashAttention benchmark coverage optional
   when nested Python evidence subprocesses cannot acquire a Metal device,
   preventing AMX worker evidence from being blocked by host Metal visibility.
