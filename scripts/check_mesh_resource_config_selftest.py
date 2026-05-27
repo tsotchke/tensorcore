@@ -256,6 +256,73 @@ def test_georefine_template_policy_requires_reconciliation_admission_placeholder
     assert any("gpu_reconciliation_admission_args" in error for error in errors)
 
 
+def cuda_smoke_template() -> dict:
+    remote = "cd ~/src/tensorcore && python3 scripts/check_cuda_smoke_evidence.py /tmp/cuda-smoke.json --json"
+    return {
+        "schema": "tensorcore.job.v1",
+        "id": "tensorcore-cuda-smoke-kernel-proof",
+        "owner": "tensorcore:cuda-smoke",
+        "tenant": "tensorcore",
+        "resources": {
+            "selector": {"backend": "cuda", "class": "cuda-training"},
+            "resource_class": "cuda_exclusive",
+            "exclusive": True,
+        },
+        "command": {"argv": ["ssh", "{node}", "cd ~/src/tensorcore && scripts/ci_cuda_smoke.sh"]},
+        "probe": ["ssh", "{node}", remote],
+        "completion": ["ssh", "{node}", remote],
+        "admission": [
+            "ssh",
+            "{node}",
+            "admit --resource {resource} {gpu_reconciliation_admission_args}",
+        ],
+        "post_start_probe": ["ssh", "{node}", remote],
+        "worker_identity": ["ssh", "{node}", "identity --resource {resource}"],
+        "metadata": {
+            "project": "tensorcore",
+            "require_run_intent": True,
+            "scheduler_contract": "tensorcore_job_v1_cuda_smoke_kernel_proof",
+            "service": "cuda-smoke",
+        },
+    }
+
+
+def test_cuda_smoke_template_policy_accepts_generic_selector_template() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_cuda_smoke_template_policy(errors, cuda_smoke_template(), owner="template")
+    assert errors == []
+
+
+def test_cuda_smoke_template_policy_rejects_hardcoded_admission_allowlist() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    template = cuda_smoke_template()
+    template["admission"] = [
+        "ssh",
+        "{node}",
+        "admit --resource {resource} --allow-process-regex steamwebhelper$",
+    ]
+    errors: list[str] = []
+    jobs.validate_cuda_smoke_template_policy(errors, template, owner="template")
+    assert any("gpu_reconciliation_admission_args" in error for error in errors)
+    assert any("hardcoded host/process literal" in error for error in errors)
+
+
+def test_cuda_smoke_template_policy_rejects_rendered_host_template() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    template = cuda_smoke_template()
+    template["id"] = "tensorcore-cuda-smoke-kernel-proof-cosbox"
+    template["sync_id"] = "tensorcore-cuda-smoke-kernel-proof-cosbox"
+    template["resources"] = {"resource": "cosbox:cuda3090", "resource_class": "cuda_exclusive"}
+    template["command"] = copy.deepcopy(template["command"])
+    template["command"]["argv"] = ["ssh", "cosbox", "cd ~/src/tensorcore && scripts/ci_cuda_smoke.sh"]
+    errors: list[str] = []
+    jobs.validate_cuda_smoke_template_policy(errors, template, owner="template")
+    assert any("resources.selector" in error for error in errors)
+    assert any("must use {node}" in error for error in errors)
+    assert any("hardcoded host/process literal" in error for error in errors)
+
+
 def qllm_phase1_cached_job(**overrides: object) -> dict:
     row = {
         "id": "qllm-phase1",
@@ -616,6 +683,9 @@ def main() -> int:
     test_georefine_template_policy_accepts_generic_selector_template()
     test_georefine_template_policy_rejects_rendered_cosbox_template()
     test_georefine_template_policy_requires_reconciliation_admission_placeholder()
+    test_cuda_smoke_template_policy_accepts_generic_selector_template()
+    test_cuda_smoke_template_policy_rejects_hardcoded_admission_allowlist()
+    test_cuda_smoke_template_policy_rejects_rendered_host_template()
     test_tensorcore_job_v1_qllm_contract_requires_phase1_starter()
     test_tensorcore_job_v1_qllm_contract_requires_completion_checker()
     test_tensorcore_job_v1_qllm_contract_rejects_bytehole_evidence_root()

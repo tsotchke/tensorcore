@@ -69,6 +69,9 @@ every architectural primitive in code and tested:
 - CUDA smoke evidence now names the shared `block_reduce_sum_f32` helper, and
   `configs/tensorcore_cuda_smoke_job.template.json` provides a scheduler-owned
   remote CUDA kernel proof path for the remaining NVIDIA-only evidence.
+- The CUDA smoke submission template now takes admission helper-process
+  allowances from inventory reconciliation settings instead of embedding them
+  in the checked-in template.
 - `test_dist_remote` now accepts `--elements` and `--iters`, making short
   WAN ring proofs possible without changing the default 4 MB throughput
   probe.

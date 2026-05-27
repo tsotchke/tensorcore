@@ -988,10 +988,10 @@ python3 scripts/start_georefine_qwen_rank_probe_selftest.py
 Scheduler submission template for the Linux CUDA kernel evidence lane. It
 selects a `cuda-training` resource, runs `scripts/ci_cuda_smoke.sh` on the
 remote checkout, and validates `/tmp/tensorcore-cuda-smoke-kernel-proof.json`
-with `scripts/check_cuda_smoke_evidence.py`. Admission mirrors the GeoRefine
-CUDA policy: it allows only `steamwebhelper$` and `/opt/google/chrome/chrome`
-GPU helper processes, capped at 256 MiB each, before the exclusive proof
-starts. Any other CUDA process, or either helper above that cap, blocks launch.
+with `scripts/check_cuda_smoke_evidence.py`. Admission uses the selected
+resource's inventory-driven `{gpu_reconciliation_admission_args}` so desktop
+helper allowances live in `configs/mesh_resources.json` instead of being
+duplicated in the template. Any CUDA process outside that policy blocks launch.
 Use it as a dry-run before submitting a real remote CUDA proof:
 
 ```sh
