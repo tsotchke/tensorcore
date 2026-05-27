@@ -1061,6 +1061,7 @@ def launch_plan(job: dict) -> dict:
         "probe_cmd": command(job.get("probe_cmd"), job),
         "completion_cmd": command(job.get("completion_cmd"), job),
         "admission_cmd": command(job.get("admission_cmd"), job),
+        "preflight_cmd": command(job.get("preflight_cmd"), job),
         "post_start_probe_cmd": command(job.get("post_start_probe_cmd"), job),
         "worker_identity_cmd": command(job.get("worker_identity_cmd"), job),
         "cwd": job_cwd(job),
@@ -1261,6 +1262,57 @@ def resource_leases_after_reconcile(
         if lease_id is not None and row.get("ok")
     }
     return [lease for lease in leases if str(lease.get("id")) not in released]
+
+
+def unknown_lease_quarantine_candidate(
+    resource: str,
+    unknown_leases: list[dict],
+    *,
+    age_threshold_sec: float,
+) -> dict | None:
+    if age_threshold_sec <= 0:
+        return None
+    now = time.time()
+    candidates = []
+    for lease in unknown_leases:
+        metadata = lease.get("metadata") if isinstance(lease.get("metadata"), dict) else {}
+        if isinstance(metadata.get("worker_identity"), dict):
+            continue
+        if metadata.get("worker_identity_pending") is False:
+            continue
+        timestamp = None
+        for key in ("acquired_at", "created_at", "updated_at"):
+            raw = lease.get(key)
+            if isinstance(raw, (int, float)):
+                timestamp = float(raw)
+                break
+        if timestamp is None:
+            continue
+        age_sec = max(0.0, now - timestamp)
+        if age_sec < age_threshold_sec:
+            continue
+        candidates.append(
+            {
+                "id": lease.get("id"),
+                "owner": lease.get("owner"),
+                "age_sec": age_sec,
+                "metadata_keys": sorted(str(key) for key in metadata.keys()),
+            }
+        )
+    if not candidates:
+        return None
+    return {
+        "resource": resource,
+        "action": "stale_unknown_quarantine_candidate",
+        "lease_ids": [row.get("id") for row in candidates],
+        "ok": True,
+        "quarantine_recommended": True,
+        "evidence": {
+            "age_threshold_sec": age_threshold_sec,
+            "reason": "unknown lease has no scheduler job and no worker identity metadata",
+            "unknown_leases": candidates,
+        },
+    }
 
 
 def handle_live_holders(
@@ -1494,12 +1546,20 @@ def schedule_resource(
         return results, errors
 
     if unknown_leases:
-        results.append({
-            "resource": resource,
-            "action": "resource_busy_unknown_lease",
-            "lease_ids": [lease.get("id") for lease in unknown_leases],
-            "ok": True,
-        })
+        quarantine = unknown_lease_quarantine_candidate(
+            resource,
+            unknown_leases,
+            age_threshold_sec=args.unknown_lease_quarantine_age_sec,
+        )
+        if quarantine is not None:
+            results.append(quarantine)
+        else:
+            results.append({
+                "resource": resource,
+                "action": "resource_busy_unknown_lease",
+                "lease_ids": [lease.get("id") for lease in unknown_leases],
+                "ok": True,
+            })
         return results, errors
 
     if known_leases:
@@ -1906,6 +1966,7 @@ def submit_spec_to_mesh_job(spec: dict) -> dict:
         ("probe", "probe_cmd"),
         ("completion", "completion_cmd"),
         ("admission", "admission_cmd"),
+        ("preflight", "preflight_cmd"),
         ("post_start_probe", "post_start_probe_cmd"),
         ("worker_identity", "worker_identity_cmd"),
         ("finalizer", "finalizer_cmd"),
@@ -2198,6 +2259,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--post-start-timeout-sec", type=float, default=30.0)
     parser.add_argument("--post-start-interval-sec", type=float, default=2.0)
     parser.add_argument("--worker-identity-timeout-sec", type=float, default=10.0)
+    parser.add_argument("--unknown-lease-quarantine-age-sec", type=float, default=900.0)
     parser.add_argument("--max-running-per-tenant", type=int, default=0)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", action="store_true")
@@ -2214,6 +2276,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error("--post-start-interval-sec must be >= 0")
     if args.worker_identity_timeout_sec <= 0:
         parser.error("--worker-identity-timeout-sec must be > 0")
+    if args.unknown_lease_quarantine_age_sec < 0:
+        parser.error("--unknown-lease-quarantine-age-sec must be >= 0")
     if args.max_running_per_tenant < 0:
         parser.error("--max-running-per-tenant must be >= 0")
     return args

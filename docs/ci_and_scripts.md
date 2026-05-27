@@ -772,7 +772,10 @@ templates such as `{resource}` and `{node}`. Tenant counts are tracked across
 resources so idle machines are assigned fair-share first, then by priority.
 CUDA-exclusive jobs add admission, post-start, and worker-identity gates before
 a launch is considered healthy. Unknown leases and unknown liveness block
-scheduling instead of killing another agent's work. When `--inventory-json` is
+scheduling instead of killing another agent's work; old unknown leases are
+reported as `stale_unknown_quarantine_candidate` after
+`--unknown-lease-quarantine-age-sec` so operators get a concrete review target.
+When `--inventory-json` is
 supplied, inventory rows with `backend: "cuda"` infer `cuda_exclusive` for
 omitted job classes and reject explicit `generic` CUDA jobs before any lease can
 be claimed. The checked-in default job set lives at
@@ -1053,6 +1056,10 @@ state. Their regular `probe_cmd` must still require a live artifact, while
 `completion_cmd` requires a completed passing artifact; that prevents a stale
 completed smoke from being adopted as live work. The starter itself accepts a
 running or completed passing artifact for scheduled-task launch success.
+The same checker also guards `tensorcore_job_v1_qllm_phase1_cached` rows: they
+must use the cached Phase 1 starter, live/complete QLLM training probes,
+matched-CUDA worker identity, and a trusted evidence root outside scratch or
+bytehole paths.
 
 ### `mesh_worker_identity.py`
 

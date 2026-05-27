@@ -390,6 +390,7 @@ set -- "$python_bin" "$lease_wrapper" \\
   --ttl-sec 21600 \\
   --heartbeat-failure-policy terminate \\
   --worker-lease-mode mirror \\
+  --verify-gpu-identity \\
   --exclusive-cuda 1 \\
   --metadata-json "$metadata_json" \\
   --run-intent-json "$run_intent_json" \\

@@ -94,6 +94,10 @@ conservative:
 - Known stale leases are released only when that job's probe says dead.
 - Unknown leases block the resource unless the live job explicitly declares
   matching adoption metadata.
+- Stale unknown leases still block scheduling, but after the quarantine age
+  threshold they are reported as `stale_unknown_quarantine_candidate` with
+  lease age and metadata-key evidence so an operator can review them without
+  the scheduler taking destructive action.
 - A live known job without a lease is adopted by claiming a lease for it.
 - A live known job may adopt an otherwise-unknown lease only when
   `adopt_unknown_lease_metadata_keys` is set, the lease has the same tenant,
@@ -462,6 +466,7 @@ scripts/mesh_resource_scheduler.py \
   --post-start-timeout-sec 30 \
   --post-start-interval-sec 2 \
   --worker-identity-timeout-sec 10 \
+  --unknown-lease-quarantine-age-sec 900 \
   --interval-sec 30
 ```
 

@@ -86,6 +86,7 @@ def args_for(
         post_start_timeout_sec=1.0,
         post_start_interval_sec=0.0,
         worker_identity_timeout_sec=1.0,
+        unknown_lease_quarantine_age_sec=900.0,
         max_running_per_tenant=max_running_per_tenant,
         dry_run=dry_run,
         json=False,
@@ -426,6 +427,29 @@ def test_unknown_lease_blocks_launch() -> None:
             ("status", "--json"),
         ],
     )
+
+
+def test_stale_unknown_lease_reports_quarantine_candidate() -> None:
+    runtime = FakeRuntime(
+        leases=[
+            {
+                "id": "lease-other",
+                "resource": "cosbox:cuda3090",
+                "owner": "unknown-agent",
+                "acquired_at": 0,
+                "metadata": {"sync_job_id": "unknown"},
+            }
+        ],
+        live={"qllm-phase1": False, "georefine-m2": False},
+    )
+    result = run_case(
+        [job("qllm-phase1", priority=50), job("georefine-m2", priority=10)],
+        runtime,
+    )
+    row = result["results"][0]
+    assert row["action"] == "stale_unknown_quarantine_candidate"
+    assert row["quarantine_recommended"] is True
+    assert row["evidence"]["unknown_leases"][0]["id"] == "lease-other"
 
 
 def test_live_holder_adopts_unknown_lease_when_metadata_matches() -> None:
@@ -1805,6 +1829,7 @@ def main() -> int:
     test_live_holder_without_lease_is_adopted()
     test_stale_known_lease_is_released_before_launch()
     test_unknown_lease_blocks_launch()
+    test_stale_unknown_lease_reports_quarantine_candidate()
     test_live_holder_adopts_unknown_lease_when_metadata_matches()
     test_unknown_lease_metadata_match_still_requires_same_tenant()
     test_known_lease_with_unknown_liveness_blocks_live_adoption()

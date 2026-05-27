@@ -36,6 +36,10 @@ HOST_LOCAL_SCRIPT_PREFIXES = (
     "/home/tyr/bytehole/qllm/runs/",
 )
 REPO_RELATIVE_PREFIXES = ("scripts/", "configs/")
+QLLM_CLIENT_REPO_RELATIVE_PARTS = (
+    "scripts/check_qllm_training_run.py",
+    "configs/qllm_small.json",
+)
 WINDOWS_CUDA_SCHEDULED_SMOKE_CONTRACT = "windows_cuda_scheduled_smoke"
 WINDOWS_CUDA_SMOKE_SCRIPT = "scripts/start_windows_cuda_smoke.py"
 WINDOWS_PERSISTENT_LAUNCH_SCRIPT = "scripts/check_windows_persistent_launch.py"
@@ -43,6 +47,10 @@ WINDOWS_CUDA_SMOKE_MAX_DURATION_SEC = 5
 LEGACY_GEOREFINE_CR025_STARTER = "scripts/start_georefine_qwen_cr025.py"
 GEOREFINE_QWEN_RANK_PROBE_STARTER = "scripts/start_georefine_qwen_rank_probe.py"
 TENSORCORE_JOB_V1_GEOREFINE_CONTRACT = "tensorcore_job_v1_cuda_exclusive_trusted_artifact"
+QLLM_PHASE1_CACHED_CONTRACT = "tensorcore_job_v1_qllm_phase1_cached"
+QLLM_PHASE1_CACHED_STARTER = "scripts/start_qllm_phase1_cached.py"
+QLLM_TRAINING_CHECKER = "scripts/check_qllm_training_run.py"
+TENSORCORE_WORKER_IDENTITY = "scripts/mesh_worker_identity.py"
 HOST_LOCAL_SERVICE_STARTS = (
     "systemctl --user start",
     "systemctl start",
@@ -97,6 +105,12 @@ def command_has_part(value: Any, expected: str) -> bool:
     return expected in command_parts(value)
 
 
+def command_has_script(value: Any, expected: str) -> bool:
+    expected = expected.lstrip("./")
+    candidates = {expected, f"./{expected}"}
+    return any(part.lstrip("./") in candidates or part.endswith("/" + expected) for part in command_parts(value))
+
+
 def command_flag_value(value: Any, flag: str) -> str | None:
     parts = command_parts(value)
     for index, part in enumerate(parts[:-1]):
@@ -115,11 +129,14 @@ def validate_checked_in_command(
     owner: str,
     field: str,
     value: Any,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
+    scheduler_contract = (metadata or {}).get("scheduler_contract")
     parts = command_parts(value)
     if len(parts) <= 1:
         return
     for part in parts:
+        normalized = part.lstrip("./")
         if any(pattern in part for pattern in PRIVATE_COMMAND_PATTERNS):
             errors.append(
                 f"{owner} {field} must use git-checkout commands, not private wrapper path {part!r}"
@@ -128,7 +145,14 @@ def validate_checked_in_command(
             errors.append(
                 f"{owner} {field} must launch repo-owned scripts, not host-local script {part!r}"
             )
-        if part.startswith(REPO_RELATIVE_PREFIXES) and not (ROOT / part).exists():
+        if (
+            part.startswith(REPO_RELATIVE_PREFIXES)
+            and not (ROOT / part).exists()
+            and not (
+                scheduler_contract == QLLM_PHASE1_CACHED_CONTRACT
+                and normalized in QLLM_CLIENT_REPO_RELATIVE_PARTS
+            )
+        ):
             errors.append(f"{owner} {field} references missing repo path {part!r}")
 
 
@@ -160,13 +184,70 @@ def validate_job_policy(errors: list[str], job: dict[str, Any]) -> None:
             f"{LEGACY_GEOREFINE_CR025_STARTER}; submit tensorcore.job.v1 instead"
         )
     if metadata.get("scheduler_contract") == TENSORCORE_JOB_V1_GEOREFINE_CONTRACT:
-        if not command_has_part(job.get("start_cmd"), GEOREFINE_QWEN_RANK_PROBE_STARTER):
+        if not command_has_script(job.get("start_cmd"), GEOREFINE_QWEN_RANK_PROBE_STARTER):
             errors.append(
                 f"job {job_id!r} {TENSORCORE_JOB_V1_GEOREFINE_CONTRACT} "
                 f"requires {GEOREFINE_QWEN_RANK_PROBE_STARTER} start_cmd"
             )
+    if metadata.get("scheduler_contract") == QLLM_PHASE1_CACHED_CONTRACT:
+        if not command_has_script(job.get("start_cmd"), QLLM_PHASE1_CACHED_STARTER):
+            errors.append(
+                f"job {job_id!r} {QLLM_PHASE1_CACHED_CONTRACT} "
+                f"requires {QLLM_PHASE1_CACHED_STARTER} start_cmd"
+            )
+        if not command_has_script(job.get("probe_cmd"), QLLM_TRAINING_CHECKER):
+            errors.append(
+                f"job {job_id!r} {QLLM_PHASE1_CACHED_CONTRACT} "
+                f"requires {QLLM_TRAINING_CHECKER} probe_cmd"
+            )
+        if not command_has_part(job.get("probe_cmd"), "--require-live"):
+            errors.append(
+                f"job {job_id!r} {QLLM_PHASE1_CACHED_CONTRACT} "
+                "probe_cmd must require a live training run"
+            )
+        if not command_has_script(job.get("post_start_probe_cmd"), QLLM_TRAINING_CHECKER):
+            errors.append(
+                f"job {job_id!r} {QLLM_PHASE1_CACHED_CONTRACT} "
+                f"requires {QLLM_TRAINING_CHECKER} post_start_probe_cmd"
+            )
+        if not command_has_part(job.get("post_start_probe_cmd"), "--require-live"):
+            errors.append(
+                f"job {job_id!r} {QLLM_PHASE1_CACHED_CONTRACT} "
+                "post_start_probe_cmd must require a live training run"
+            )
+        if not command_has_script(job.get("completion_cmd"), QLLM_TRAINING_CHECKER):
+            errors.append(
+                f"job {job_id!r} {QLLM_PHASE1_CACHED_CONTRACT} "
+                f"requires {QLLM_TRAINING_CHECKER} completion_cmd"
+            )
+        if not command_has_part(job.get("completion_cmd"), "--require-complete"):
+            errors.append(
+                f"job {job_id!r} {QLLM_PHASE1_CACHED_CONTRACT} "
+                "completion_cmd must require a complete training run"
+            )
+        if not command_has_script(job.get("worker_identity_cmd"), TENSORCORE_WORKER_IDENTITY):
+            errors.append(
+                f"job {job_id!r} {QLLM_PHASE1_CACHED_CONTRACT} "
+                f"requires {TENSORCORE_WORKER_IDENTITY} worker_identity_cmd"
+            )
+        if not command_has_part(job.get("worker_identity_cmd"), "--require-matched-cuda"):
+            errors.append(
+                f"job {job_id!r} {QLLM_PHASE1_CACHED_CONTRACT} "
+                "worker_identity_cmd must require matched CUDA ownership"
+            )
+        trusted_root = str(metadata.get("trusted_evidence_root") or job.get("artifact_root") or "")
+        if not trusted_root:
+            errors.append(
+                f"job {job_id!r} {QLLM_PHASE1_CACHED_CONTRACT} "
+                "requires trusted_evidence_root/artifact_root"
+            )
+        elif any(marker in trusted_root for marker in ("/bytehole/", "/tmp/", "/var/tmp/", "/private/tmp/")):
+            errors.append(
+                f"job {job_id!r} {QLLM_PHASE1_CACHED_CONTRACT} "
+                "trusted evidence root must not be scratch or bytehole"
+            )
     if metadata.get("scheduler_contract") == WINDOWS_CUDA_SCHEDULED_SMOKE_CONTRACT:
-        if not command_has_part(job.get("start_cmd"), WINDOWS_CUDA_SMOKE_SCRIPT):
+        if not command_has_script(job.get("start_cmd"), WINDOWS_CUDA_SMOKE_SCRIPT):
             errors.append(
                 f"job {job_id!r} {WINDOWS_CUDA_SCHEDULED_SMOKE_CONTRACT} "
                 f"requires {WINDOWS_CUDA_SMOKE_SCRIPT} start_cmd"
@@ -264,7 +345,13 @@ def validate_jobs(inventory_path: pathlib.Path, jobs_path: pathlib.Path) -> list
     for job in jobs:
         for field in COMMAND_FIELDS:
             if field in job:
-                validate_checked_in_command(errors, f"job {job['id']!r}", field, job[field])
+                validate_checked_in_command(
+                    errors,
+                    f"job {job['id']!r}",
+                    field,
+                    job[field],
+                    job.get("metadata") if isinstance(job.get("metadata"), dict) else None,
+                )
         validate_job_policy(errors, job)
         if job["desired_state"] == "running" and job["resource_class"] == "cuda_exclusive":
             for field in ("admission_cmd", "post_start_probe_cmd", "worker_identity_cmd"):

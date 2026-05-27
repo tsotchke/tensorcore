@@ -146,6 +146,92 @@ def test_tensorcore_job_v1_georefine_contract_requires_rank_probe_starter() -> N
     assert any("start_georefine_qwen_rank_probe.py" in error for error in errors)
 
 
+def qllm_phase1_cached_job(**overrides: object) -> dict:
+    row = {
+        "id": "qllm-phase1",
+        "desired_state": "paused",
+        "start_cmd": [
+            "python3",
+            "./scripts/start_qllm_phase1_cached.py",
+            "--target",
+            "cosbox",
+            "--json",
+        ],
+        "preflight_cmd": [
+            "python3",
+            "./scripts/start_qllm_phase1_cached.py",
+            "--target",
+            "cosbox",
+            "--preflight-only",
+            "--json",
+        ],
+        "probe_cmd": [
+            "ssh",
+            "cosbox",
+            "cd /home/tyr/projects/semiclassical_qllm && python3 scripts/check_qllm_training_run.py /home/tyr/.local/share/qllm_trusted/runs/phase1 --require-live --json",
+        ],
+        "post_start_probe_cmd": [
+            "ssh",
+            "cosbox",
+            "cd /home/tyr/projects/semiclassical_qllm && python3 scripts/check_qllm_training_run.py /home/tyr/.local/share/qllm_trusted/runs/phase1 --require-live --json",
+        ],
+        "completion_cmd": [
+            "ssh",
+            "cosbox",
+            "cd /home/tyr/projects/semiclassical_qllm && python3 scripts/check_qllm_training_run.py /home/tyr/.local/share/qllm_trusted/runs/phase1 --require-complete --json",
+        ],
+        "worker_identity_cmd": [
+            "ssh",
+            "cosbox",
+            "cd ~/src/tensorcore && python3 scripts/mesh_worker_identity.py --resource cosbox:cuda3090 --require-matched-cuda --json",
+        ],
+        "artifact_root": "/home/tyr/.local/share/qllm_trusted/evidence",
+        "metadata": {
+            "scheduler_contract": "tensorcore_job_v1_qllm_phase1_cached",
+            "scheduler_pause_reason": "operator-started proof run",
+            "trusted_evidence_root": "/home/tyr/.local/share/qllm_trusted/evidence",
+        },
+    }
+    row.update(overrides)
+    return row
+
+
+def test_tensorcore_job_v1_qllm_contract_requires_phase1_starter() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_job_policy(
+        errors,
+        qllm_phase1_cached_job(start_cmd=["python3", "scripts/start_windows_cuda_smoke.py", "--json"]),
+    )
+    assert any("start_qllm_phase1_cached.py" in error for error in errors)
+
+
+def test_tensorcore_job_v1_qllm_contract_requires_completion_checker() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_job_policy(
+        errors,
+        qllm_phase1_cached_job(completion_cmd=["python3", "scripts/check_windows_cuda_smoke_artifact.py", "--json"]),
+    )
+    assert any("check_qllm_training_run.py" in error for error in errors)
+
+
+def test_tensorcore_job_v1_qllm_contract_rejects_bytehole_evidence_root() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    row = qllm_phase1_cached_job(artifact_root="/home/tyr/bytehole/qllm/evidence")
+    row["metadata"]["trusted_evidence_root"] = "/home/tyr/bytehole/qllm/evidence"
+    jobs.validate_job_policy(errors, row)
+    assert any("trusted evidence root" in error for error in errors)
+
+
+def test_tensorcore_job_v1_qllm_contract_passes_policy() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_job_policy(errors, qllm_phase1_cached_job())
+    assert errors == []
+
+
 def test_preflight_commands_must_emit_json() -> None:
     jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
     errors: list[str] = []
@@ -362,6 +448,10 @@ def main() -> int:
     test_running_jobs_reject_host_local_systemd_starts()
     test_running_jobs_reject_legacy_georefine_direct_starter()
     test_tensorcore_job_v1_georefine_contract_requires_rank_probe_starter()
+    test_tensorcore_job_v1_qllm_contract_requires_phase1_starter()
+    test_tensorcore_job_v1_qllm_contract_requires_completion_checker()
+    test_tensorcore_job_v1_qllm_contract_rejects_bytehole_evidence_root()
+    test_tensorcore_job_v1_qllm_contract_passes_policy()
     test_preflight_commands_must_emit_json()
     test_git_access_preflight_requires_resource()
     test_paused_launchable_job_with_preflight_passes_policy()
