@@ -1220,6 +1220,32 @@ def test_command_resolution_preserves_remote_tilde_arguments() -> None:
     assert argv[3] == "~/src/georefine"
 
 
+def test_command_resolution_supports_authority_and_worker_alias_placeholders() -> None:
+    scheduler = load_scheduler()
+    argv = scheduler.command(
+        [
+            "start",
+            "{authority_resource}",
+            "{authority_owner}",
+            "{worker_alias}",
+            "{worker_gpu_alias}",
+        ],
+        {
+            "id": "georefine",
+            "resource": "cosbox:cuda3090",
+            "owner": "georefine:qwen",
+            "metadata": {"worker_alias": "gpu:cosbox:0"},
+        },
+    )
+    assert argv == [
+        "start",
+        "cosbox:cuda3090",
+        "georefine:qwen",
+        "gpu:cosbox:0",
+        "gpu:cosbox:0",
+    ]
+
+
 def test_resource_pool_respects_global_tenant_parallel_limit() -> None:
     runtime = FakeRuntime()
     result = run_case(
@@ -1808,6 +1834,7 @@ def main() -> int:
     test_resource_pool_filters_blocked_and_unowned_reserved_resources()
     test_resource_pool_command_templates_receive_placement_context()
     test_command_resolution_preserves_remote_tilde_arguments()
+    test_command_resolution_supports_authority_and_worker_alias_placeholders()
     test_resource_pool_respects_global_tenant_parallel_limit()
     test_cuda_launch_runs_post_start_and_identity()
     test_cuda_launch_rejects_invalid_identity_json()

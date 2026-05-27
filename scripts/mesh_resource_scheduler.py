@@ -35,7 +35,10 @@ CONTROL_COMMANDS = {"submit", "status", "cancel", "drain", "undrain", "audit"}
 def render_command_part(value: str, job: dict | None = None) -> str:
     if job is None:
         return value
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
     replacements = {
+        "authority_owner": job.get("authority_owner") or job.get("owner"),
+        "authority_resource": job.get("authority_resource") or job.get("resource"),
         "backend": job.get("resource_backend"),
         "id": job.get("id"),
         "job_id": job.get("id"),
@@ -48,6 +51,8 @@ def render_command_part(value: str, job: dict | None = None) -> str:
         "resource_class": job.get("resource_class"),
         "sync_id": job.get("sync_id"),
         "tenant": job.get("tenant"),
+        "worker_alias": job.get("worker_alias") or metadata.get("worker_alias"),
+        "worker_gpu_alias": job.get("worker_alias") or metadata.get("worker_alias"),
     }
     out = value
     for key, replacement in replacements.items():
