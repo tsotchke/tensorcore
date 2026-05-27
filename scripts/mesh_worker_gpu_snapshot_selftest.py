@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import argparse
 import pathlib
+import subprocess
 from types import ModuleType
 
 
@@ -30,6 +32,55 @@ def test_snapshot_parses_nvidia_smi_rows() -> None:
     assert apps[0]["used_memory_mib"] == 8192
     assert gpus[0]["uuid"] == "GPU-test"
     assert gpus[0]["memory_total_mib"] == 24576
+
+
+def test_snapshot_supports_ssh_polling_command_prefix() -> None:
+    mod = load_script("mesh_worker_gpu_snapshot_under_test", ROOT / "scripts" / "mesh_worker_gpu_snapshot.py")
+    args = argparse.Namespace(ssh_host="cosbox", nvidia_smi="nvidia-smi")
+    argv = mod.nvidia_smi_command(args, ["--query-gpu=index"])
+    assert argv == ["ssh", "cosbox", "nvidia-smi", "--query-gpu=index"]
+    args.ssh_host = ""
+    assert mod.nvidia_smi_command(args, ["--query-gpu=index"]) == [
+        "nvidia-smi",
+        "--query-gpu=index",
+    ]
+
+
+def test_snapshot_records_worker_and_poller_hosts_for_ssh() -> None:
+    mod = load_script("mesh_worker_gpu_snapshot_under_test", ROOT / "scripts" / "mesh_worker_gpu_snapshot.py")
+
+    def fake_run_capture(argv: list[str], *, timeout: float) -> subprocess.CompletedProcess[str]:
+        del timeout
+        if "--query-gpu=index,uuid,pci.bus_id,name,memory.total,memory.used,memory.free,utilization.gpu" in argv:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                stdout="0, GPU-test, 00000000:01:00.0, RTX 3090, 24576, 1024, 23552, 7\n",
+                stderr="",
+            )
+        return subprocess.CompletedProcess(argv, 0, stdout="1234, python, 8192\n", stderr="")
+
+    original_run_capture = mod.run_capture
+    original_hostname = mod.socket.gethostname
+    mod.run_capture = fake_run_capture
+    mod.socket.gethostname = lambda: "poller"
+    try:
+        payload = mod.build_payload(
+            argparse.Namespace(
+                resource="cosbox:cuda3090",
+                nvidia_smi="nvidia-smi",
+                ssh_host="cosbox",
+                timeout_sec=1.0,
+            )
+        )
+    finally:
+        mod.run_capture = original_run_capture
+        mod.socket.gethostname = original_hostname
+
+    assert payload["worker_host"] == "cosbox"
+    assert payload["poller_host"] == "poller"
+    assert payload["cuda_pids"] == [1234]
+    assert "cmdline" not in payload["cuda_apps"][0]
 
 
 def test_reconcile_drains_unleased_cuda() -> None:
@@ -65,6 +116,8 @@ def test_reconcile_allows_leased_cuda() -> None:
 
 def main() -> int:
     test_snapshot_parses_nvidia_smi_rows()
+    test_snapshot_supports_ssh_polling_command_prefix()
+    test_snapshot_records_worker_and_poller_hosts_for_ssh()
     test_reconcile_drains_unleased_cuda()
     test_reconcile_allows_leased_cuda()
     print("mesh worker GPU snapshot selftest OK")

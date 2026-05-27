@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Emit host-local GPU process state for scheduler reconciliation."""
+"""Emit local or SSH-polled GPU process state for scheduler reconciliation."""
 
 from __future__ import annotations
 
@@ -28,6 +28,12 @@ def run_capture(argv: list[str], *, timeout: float) -> subprocess.CompletedProce
         timeout=timeout,
         check=False,
     )
+
+
+def nvidia_smi_command(args: argparse.Namespace, nvidia_smi_args: list[str]) -> list[str]:
+    if args.ssh_host:
+        return ["ssh", args.ssh_host, args.nvidia_smi, *nvidia_smi_args]
+    return [args.nvidia_smi, *nvidia_smi_args]
 
 
 def parse_compute_apps(stdout: str) -> list[dict[str, Any]]:
@@ -92,15 +98,17 @@ def parse_gpu_rows(stdout: str) -> list[dict[str, Any]]:
     return rows
 
 
-def query_compute_apps(nvidia_smi: str, timeout: float) -> dict[str, Any]:
+def query_compute_apps(args: argparse.Namespace) -> dict[str, Any]:
     try:
         proc = run_capture(
-            [
-                nvidia_smi,
-                "--query-compute-apps=pid,process_name,used_gpu_memory",
-                "--format=csv,noheader,nounits",
-            ],
-            timeout=timeout,
+            nvidia_smi_command(
+                args,
+                [
+                    "--query-compute-apps=pid,process_name,used_gpu_memory",
+                    "--format=csv,noheader,nounits",
+                ],
+            ),
+            timeout=args.timeout_sec,
         )
     except FileNotFoundError as exc:
         return {"ok": False, "reason": "nvidia_smi_not_found", "error": str(exc), "apps": []}
@@ -115,15 +123,17 @@ def query_compute_apps(nvidia_smi: str, timeout: float) -> dict[str, Any]:
     }
 
 
-def query_gpus(nvidia_smi: str, timeout: float) -> dict[str, Any]:
+def query_gpus(args: argparse.Namespace) -> dict[str, Any]:
     try:
         proc = run_capture(
-            [
-                nvidia_smi,
-                "--query-gpu=index,uuid,pci.bus_id,name,memory.total,memory.used,memory.free,utilization.gpu",
-                "--format=csv,noheader,nounits",
-            ],
-            timeout=timeout,
+            nvidia_smi_command(
+                args,
+                [
+                    "--query-gpu=index,uuid,pci.bus_id,name,memory.total,memory.used,memory.free,utilization.gpu",
+                    "--format=csv,noheader,nounits",
+                ],
+            ),
+            timeout=args.timeout_sec,
         )
     except FileNotFoundError as exc:
         return {"ok": False, "reason": "nvidia_smi_not_found", "error": str(exc), "gpus": []}
@@ -146,22 +156,24 @@ def proc_cmdline(pid: int) -> str:
         return ""
 
 
-def enrich_apps(apps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def enrich_apps(apps: list[dict[str, Any]], *, include_cmdline: bool) -> list[dict[str, Any]]:
     enriched = []
     for app in apps:
         row = dict(app)
         pid = row.get("pid")
-        if isinstance(pid, int):
+        if include_cmdline and isinstance(pid, int):
             row["cmdline"] = proc_cmdline(pid)
         enriched.append(row)
     return enriched
 
 
 def build_payload(args: argparse.Namespace) -> dict[str, Any]:
-    gpu_query = query_gpus(args.nvidia_smi, args.timeout_sec)
-    compute_query = query_compute_apps(args.nvidia_smi, args.timeout_sec)
-    apps = enrich_apps(compute_query.get("apps", []))
+    gpu_query = query_gpus(args)
+    compute_query = query_compute_apps(args)
+    apps = enrich_apps(compute_query.get("apps", []), include_cmdline=not args.ssh_host)
     ok = bool(gpu_query.get("ok")) and bool(compute_query.get("ok"))
+    poller_host = socket.gethostname()
+    worker_host = args.ssh_host or poller_host
     reasons = []
     if not gpu_query.get("ok"):
         reasons.append(str(gpu_query.get("reason") or "gpu_query_failed"))
@@ -172,7 +184,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
         "ok": ok,
         "reason": "ok" if ok else ",".join(reasons),
         "checked_at_unix": time.time(),
-        "worker_host": socket.gethostname(),
+        "worker_host": worker_host,
+        "poller_host": poller_host,
+        "ssh_host": args.ssh_host,
         "resource": args.resource,
         "nvidia_smi": args.nvidia_smi,
         "gpus": gpu_query.get("gpus", []),
@@ -188,6 +202,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--resource", default="cuda")
     parser.add_argument("--nvidia-smi", default="nvidia-smi")
+    parser.add_argument("--ssh-host", default="")
     parser.add_argument("--timeout-sec", type=float, default=10.0)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)

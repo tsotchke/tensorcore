@@ -1089,7 +1089,8 @@ python3 scripts/mesh_worker_gpu_snapshot_selftest.py
 
 ### `mesh_worker_gpu_snapshot.py` and `mesh_worker_gpu_reconcile.py`
 
-`mesh_worker_gpu_snapshot.py` emits host-local `nvidia-smi` GPU/process state.
+`mesh_worker_gpu_snapshot.py` emits host-local `nvidia-smi` GPU/process state,
+or SSH-polled state with `--ssh-host` for the scheduler-VM v0 deployment model.
 `mesh_worker_gpu_reconcile.py` compares that worker snapshot with central
 arbiter lease state and reports a failed reconciliation when CUDA processes are
 running without an active lease for the resource. Feed reconciliation JSON into
@@ -1098,6 +1099,10 @@ GPU activity fail the control-plane audit.
 
 ```sh
 python3 scripts/mesh_worker_gpu_snapshot.py --resource cosbox:cuda3090 --json
+python3 scripts/mesh_worker_gpu_snapshot.py \
+  --resource cosbox:cuda3090 \
+  --ssh-host cosbox \
+  --json
 python3 scripts/mesh_worker_gpu_reconcile.py \
   --snapshot-json worker_gpu_snapshot.json \
   --arbiter-status-json arbiter_status.json \
