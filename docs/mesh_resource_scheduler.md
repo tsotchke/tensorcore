@@ -22,7 +22,9 @@ The v1 boundary is intentionally backend-neutral:
 - `cancel` disables a queued job without claiming to have killed live work.
 - `drain` and `undrain` update inventory state for operator maintenance.
 - `audit` verifies that CUDA jobs have admission, post-start probe, worker
-  identity, and run-intent contracts.
+  identity, and run-intent contracts. It can also consume worker GPU
+  reconciliation reports so unleased CUDA processes fail the control-plane
+  audit before new work is admitted.
 
 This keeps Tensorcore as the first-party scheduler while preserving a clean
 adapter boundary for a later Slurm or Kubernetes backend.

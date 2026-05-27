@@ -1084,6 +1084,30 @@ Fixture coverage:
 python3 scripts/mesh_worker_identity_selftest.py
 python3 scripts/mesh_cuda_worker_identity_selftest.py
 python3 scripts/mesh_windows_worker_identity_selftest.py
+python3 scripts/mesh_worker_gpu_snapshot_selftest.py
+```
+
+### `mesh_worker_gpu_snapshot.py` and `mesh_worker_gpu_reconcile.py`
+
+`mesh_worker_gpu_snapshot.py` emits host-local `nvidia-smi` GPU/process state.
+`mesh_worker_gpu_reconcile.py` compares that worker snapshot with central
+arbiter lease state and reports a failed reconciliation when CUDA processes are
+running without an active lease for the resource. Feed reconciliation JSON into
+the scheduler audit with `--worker-reconciliation-json` to make unleased worker
+GPU activity fail the control-plane audit.
+
+```sh
+python3 scripts/mesh_worker_gpu_snapshot.py --resource cosbox:cuda3090 --json
+python3 scripts/mesh_worker_gpu_reconcile.py \
+  --snapshot-json worker_gpu_snapshot.json \
+  --arbiter-status-json arbiter_status.json \
+  --resource cosbox:cuda3090 \
+  --json
+python3 scripts/mesh_resource_scheduler.py audit \
+  --jobs-json configs/mesh_resource_jobs.json \
+  --inventory-json configs/mesh_resources.json \
+  --worker-reconciliation-json worker_gpu_reconciliation.json \
+  --json
 ```
 
 ### `check_live_mesh_training_evidence.py`

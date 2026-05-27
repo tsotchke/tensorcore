@@ -2150,12 +2150,30 @@ def cmd_audit(args: argparse.Namespace) -> dict:
                 errors.append(f"CUDA job {job['id']!r} disables run_intent requirement")
             if not job.get("admission_cmd") or not job.get("post_start_probe_cmd") or not job.get("worker_identity_cmd"):
                 errors.append(f"CUDA job {job['id']!r} lacks admission/post-start/identity contract")
+    reconciliation_reports = []
+    for raw_path in getattr(args, "worker_reconciliation_json", []) or []:
+        path = Path(raw_path).expanduser()
+        try:
+            report = read_json_object(path)
+        except Exception as exc:
+            errors.append(f"worker reconciliation report {path} could not be read: {exc}")
+            continue
+        reconciliation_reports.append(report)
+        if report.get("schema") != "tensorcore.mesh_worker_gpu_reconciliation.v1":
+            errors.append(f"worker reconciliation report {path} has invalid schema")
+            continue
+        if report.get("ok") is not True:
+            errors.append(
+                "worker reconciliation failed for "
+                f"{report.get('resource')}: {report.get('reason')}"
+            )
     return {
         "schema": "tensorcore.cluster_audit.result.v1",
         "ok": not errors,
         "checked_at_unix": time.time(),
         "errors": errors,
         "job_count": len(jobs),
+        "worker_reconciliation_reports": reconciliation_reports,
     }
 
 
@@ -2243,6 +2261,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         audit = sub.add_parser("audit", help="Validate queue and inventory scheduler contracts")
         audit.add_argument("--jobs-json", required=True)
         audit.add_argument("--inventory-json", required=True)
+        audit.add_argument("--worker-reconciliation-json", action="append", default=[])
         add_output_flags(audit)
 
         return parser.parse_args(argv)

@@ -1823,6 +1823,81 @@ def test_scheduler_dry_run_includes_launch_plan() -> None:
     assert row["launch_plan"]["env_keys"] == ["CUDA_VISIBLE_DEVICES"]
 
 
+def test_audit_consumes_worker_reconciliation_reports() -> None:
+    scheduler = load_scheduler()
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        queue_path = write_jobs(
+            root,
+            [
+                job(
+                    "georefine-qwen-rank-probe",
+                    priority=100,
+                    resource="cosbox:cuda3090",
+                    resource_class="cuda_exclusive",
+                    admission_cmd=True,
+                    post_start_probe_cmd=True,
+                    worker_identity_cmd=True,
+                )
+            ],
+        )
+        inventory_path = write_inventory(root, cuda_inventory())
+        good_report = root / "worker-reconciliation-good.json"
+        bad_report = root / "worker-reconciliation-bad.json"
+        good_report.write_text(
+            json.dumps(
+                {
+                    "schema": "tensorcore.mesh_worker_gpu_reconciliation.v1",
+                    "ok": True,
+                    "reason": "ok",
+                    "action": "none",
+                    "resource": "cosbox:cuda3090",
+                    "cuda_app_count": 0,
+                    "active_lease_count": 0,
+                    "errors": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        bad_report.write_text(
+            json.dumps(
+                {
+                    "schema": "tensorcore.mesh_worker_gpu_reconciliation.v1",
+                    "ok": False,
+                    "reason": "stale_unknown_unleased_cuda",
+                    "action": "drain",
+                    "resource": "cosbox:cuda3090",
+                    "cuda_app_count": 1,
+                    "cuda_pids": [1234],
+                    "active_lease_count": 0,
+                    "errors": [{"code": "stale_unknown_unleased_cuda"}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        base_args = {
+            "jobs_json": str(queue_path),
+            "inventory_json": str(inventory_path),
+        }
+        good_payload = scheduler.cmd_audit(
+            argparse.Namespace(
+                **base_args,
+                worker_reconciliation_json=[str(good_report)],
+            )
+        )
+        bad_payload = scheduler.cmd_audit(
+            argparse.Namespace(
+                **base_args,
+                worker_reconciliation_json=[str(bad_report)],
+            )
+        )
+    assert good_payload["ok"] is True
+    assert good_payload["worker_reconciliation_reports"][0]["ok"] is True
+    assert bad_payload["ok"] is False
+    assert bad_payload["worker_reconciliation_reports"][0]["action"] == "drain"
+    assert any("worker reconciliation failed" in error for error in bad_payload["errors"])
+
+
 def main() -> int:
     test_idle_claims_highest_priority()
     test_live_holder_is_heartbeated()
@@ -1876,6 +1951,7 @@ def main() -> int:
     test_submit_rejects_malformed_tensorcore_job_v1_fields()
     test_status_offline_reports_inventory_jobs_and_drain_updates_copy()
     test_scheduler_dry_run_includes_launch_plan()
+    test_audit_consumes_worker_reconciliation_reports()
     print("mesh resource scheduler selftest OK")
     return 0
 
