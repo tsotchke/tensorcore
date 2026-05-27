@@ -243,6 +243,141 @@ def require_queue_event_log(args: argparse.Namespace, *, command: str) -> str:
     return str(path)
 
 
+def queue_event_log_required(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "require_queue_event_log_integrity", False))
+
+
+def queue_event_log_path(args: argparse.Namespace) -> str | None:
+    value = getattr(args, "event_log_jsonl", None)
+    return str(value) if value else None
+
+
+def load_queue_events(path: str | Path) -> tuple[list[dict], list[str]]:
+    events: list[dict] = []
+    errors: list[str] = []
+    event_path = Path(path).expanduser()
+    try:
+        lines = event_path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return [], [f"queue event log not found: {event_path}"]
+    except Exception as exc:
+        return [], [f"queue event log unreadable {event_path}: {exc}"]
+    for lineno, line in enumerate(lines, 1):
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError as exc:
+            errors.append(f"{event_path}:{lineno}: invalid JSON: {exc}")
+            continue
+        if not isinstance(payload, dict):
+            errors.append(f"{event_path}:{lineno}: event must be a JSON object")
+            continue
+        events.append(payload)
+    return events, errors
+
+
+def queue_event_integrity(
+    *,
+    jobs_json: str | Path,
+    event_log_jsonl: str | Path,
+) -> dict[str, Any]:
+    queue_path = Path(jobs_json).expanduser()
+    doc = load_jobs_doc(queue_path)
+    raw_jobs = doc.get("jobs") if isinstance(doc.get("jobs"), list) else []
+    events, errors = load_queue_events(event_log_jsonl)
+    latest: dict[str, dict[str, Any]] = {}
+    queue_path_str = str(queue_path)
+    for event in events:
+        if event.get("schema") != "tensorcore.scheduler_queue_event.v1":
+            errors.append(
+                f"event has invalid schema for job {event.get('job_id') or event.get('requested_job_id')}"
+            )
+            continue
+        event_jobs_json = event.get("jobs_json")
+        if isinstance(event_jobs_json, str) and event_jobs_json != queue_path_str:
+            continue
+        if event.get("event") == "submit":
+            job_id = event.get("job_id")
+            job_sha256 = event.get("job_sha256")
+            if isinstance(job_id, str) and isinstance(job_sha256, str):
+                latest[job_id] = {
+                    "event": "submit",
+                    "job_sha256": job_sha256,
+                    "created_at_unix": event.get("created_at_unix"),
+                }
+            else:
+                errors.append(f"submit event missing job id/hash: {event!r}")
+        elif event.get("event") == "cancel":
+            hashes = event.get("job_sha256_after")
+            if not isinstance(hashes, dict):
+                errors.append(
+                    f"cancel event missing post-cancel job hashes: {event.get('requested_job_id')}"
+                )
+                continue
+            for job_id, job_sha256 in hashes.items():
+                if isinstance(job_id, str) and isinstance(job_sha256, str):
+                    latest[job_id] = {
+                        "event": "cancel",
+                        "job_sha256": job_sha256,
+                        "created_at_unix": event.get("created_at_unix"),
+                    }
+    checked_jobs = []
+    for row in raw_jobs:
+        if not isinstance(row, dict):
+            errors.append("queue contains non-object job")
+            continue
+        job_id = row.get("id")
+        if not isinstance(job_id, str) or not job_id:
+            errors.append("queue contains job without id")
+            continue
+        current_sha256 = canonical_sha256(row)
+        expected = latest.get(job_id)
+        if expected is None:
+            errors.append(f"job {job_id!r} has no submit/cancel event in queue log")
+            continue
+        if expected.get("job_sha256") != current_sha256:
+            errors.append(
+                f"job {job_id!r} hash mismatch: queue={current_sha256} "
+                f"event={expected.get('job_sha256')}"
+            )
+            continue
+        checked_jobs.append(job_id)
+    return {
+        "schema": "tensorcore.scheduler_queue_integrity.v1",
+        "ok": not errors,
+        "checked_at_unix": time.time(),
+        "jobs_json": queue_path_str,
+        "event_log_jsonl": str(Path(event_log_jsonl).expanduser()),
+        "job_count": len(raw_jobs),
+        "checked_jobs": checked_jobs,
+        "event_count": len(events),
+        "errors": errors,
+    }
+
+
+def queue_integrity_gate(args: argparse.Namespace) -> dict[str, Any] | None:
+    event_log = queue_event_log_path(args)
+    if not event_log:
+        if queue_event_log_required(args):
+            return {
+                "schema": "tensorcore.scheduler_queue_integrity.v1",
+                "ok": False,
+                "checked_at_unix": time.time(),
+                "jobs_json": str(Path(args.jobs_json).expanduser()),
+                "event_log_jsonl": None,
+                "job_count": 0,
+                "checked_jobs": [],
+                "event_count": 0,
+                "errors": ["--require-queue-event-log-integrity requires --event-log-jsonl"],
+            }
+        return None
+    return queue_event_integrity(
+        jobs_json=args.jobs_json,
+        event_log_jsonl=event_log,
+    )
+
+
 def parse_stdout_json(stdout: str) -> dict | None:
     for line in reversed(stdout.splitlines()):
         try:
@@ -1979,6 +2114,19 @@ def schedule_once(args: argparse.Namespace) -> dict:
     if not arbiter_cmd:
         raise SystemExit("--arbiter-cmd resolved to an empty command")
     inventory = load_inventory(args.inventory_json)
+    queue_integrity = queue_integrity_gate(args)
+    if queue_integrity is not None and queue_integrity.get("ok") is not True:
+        return {
+            "schema": "tensorcore.mesh_resource_scheduler.result.v1",
+            "ok": False,
+            "checked_at_unix": time.time(),
+            "dry_run": args.dry_run,
+            "queue_event_log_integrity": queue_integrity,
+            "results": [],
+            "errors": [
+                {"error": "queue event log integrity failed", "details": queue_integrity}
+            ],
+        }
     jobs = load_jobs(args.jobs_json, inventory=inventory)
     validate_jobs_against_inventory(jobs, inventory)
     reconciliation_gate = gpu_reconciliation_gate(args, jobs)
@@ -2020,6 +2168,7 @@ def schedule_once(args: argparse.Namespace) -> dict:
         "checked_at_unix": time.time(),
         "dry_run": args.dry_run,
         "gpu_reconciliation_audit": reconciliation_gate,
+        "queue_event_log_integrity": queue_integrity,
         "results": results,
         "errors": errors,
     }
@@ -2293,6 +2442,7 @@ def cmd_submit(args: argparse.Namespace) -> dict:
 
 def cmd_status(args: argparse.Namespace) -> dict:
     inventory = load_inventory(args.inventory_json)
+    queue_integrity = queue_integrity_gate(args) if args.jobs_json else None
     jobs = load_jobs(args.jobs_json, inventory=inventory) if args.jobs_json else []
     reconciliation_gate = None
     if getattr(args, "gpu_reconciliation_audit_json", None):
@@ -2316,21 +2466,24 @@ def cmd_status(args: argparse.Namespace) -> dict:
         })
     payload = {
         "schema": "tensorcore.cluster_status.v1",
-        "ok": True,
+        "ok": queue_integrity is None or queue_integrity.get("ok") is True,
         "checked_at_unix": time.time(),
         "resources": resources,
         "jobs": [{"id": job["id"], "resource": job["resource"], "desired_state": job["desired_state"]} for job in jobs],
         "leases": status.get("leases") or [],
     }
+    if queue_integrity is not None:
+        payload["queue_event_log_integrity"] = queue_integrity
     if reconciliation_gate is not None:
         payload["gpu_reconciliation_audit"] = reconciliation_gate
     return payload
 
 
 def cmd_cancel(args: argparse.Namespace) -> dict:
-    def cancelled_doc() -> tuple[dict, list[str], float]:
+    def cancelled_doc() -> tuple[dict, list[str], dict[str, str], float]:
         doc = load_jobs_doc(args.jobs_json)
         matched = []
+        hashes_after: dict[str, str] = {}
         for job in doc["jobs"]:
             if not isinstance(job, dict) or not queued_job_id_matches(job, args.job_id):
                 continue
@@ -2340,17 +2493,19 @@ def cmd_cancel(args: argparse.Namespace) -> dict:
             job["metadata"] = metadata
             job["enabled"] = False
             job["desired_state"] = "paused"
-            matched.append(job.get("id"))
+            job_id = str(job.get("id") or "")
+            matched.append(job_id)
+            hashes_after[job_id] = canonical_sha256(job)
         if not matched:
             raise ValueError(f"job {args.job_id!r} not found")
-        return doc, matched, time.time()
+        return doc, matched, hashes_after, time.time()
 
     if args.dry_run:
-        _, matched, checked_at = cancelled_doc()
+        _, matched, hashes_after, checked_at = cancelled_doc()
     else:
         event_log_jsonl = require_queue_event_log(args, command="cancel")
         with locked_queue(args.jobs_json):
-            doc, matched, checked_at = cancelled_doc()
+            doc, matched, hashes_after, checked_at = cancelled_doc()
             write_jobs_doc(args.jobs_json, doc)
             append_jsonl(
                 event_log_jsonl,
@@ -2361,6 +2516,7 @@ def cmd_cancel(args: argparse.Namespace) -> dict:
                     "jobs_json": str(Path(args.jobs_json).expanduser()),
                     "requested_job_id": args.job_id,
                     "cancelled_jobs": matched,
+                    "job_sha256_after": hashes_after,
                     "reason": args.reason,
                     "queue_lock": str(queue_lock_path(args.jobs_json)),
                 },
@@ -2371,6 +2527,7 @@ def cmd_cancel(args: argparse.Namespace) -> dict:
         "checked_at_unix": checked_at,
         "dry_run": args.dry_run,
         "cancelled_jobs": matched,
+        "job_sha256_after": hashes_after,
         "queue_lock": str(queue_lock_path(args.jobs_json)),
     }
 
@@ -2408,8 +2565,11 @@ def update_inventory_status(args: argparse.Namespace, *, drained: bool) -> dict:
 
 def cmd_audit(args: argparse.Namespace) -> dict:
     inventory = load_inventory(args.inventory_json)
+    queue_integrity = queue_integrity_gate(args)
     jobs = load_jobs(args.jobs_json, inventory=inventory)
     errors: list[str] = []
+    if queue_integrity is not None and queue_integrity.get("ok") is not True:
+        errors.extend(str(error) for error in queue_integrity.get("errors", []))
     try:
         validate_jobs_against_inventory(jobs, inventory)
     except ValueError as exc:
@@ -2450,6 +2610,7 @@ def cmd_audit(args: argparse.Namespace) -> dict:
         "checked_at_unix": time.time(),
         "errors": errors,
         "job_count": len(jobs),
+        "queue_event_log_integrity": queue_integrity,
         "worker_reconciliation_reports": reconciliation_reports,
     }
 
@@ -2509,6 +2670,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         status.add_argument("--arbiter-cmd", default=DEFAULT_ARBITER_CMD)
         status.add_argument("--jobs-json")
         status.add_argument("--inventory-json", required=True)
+        status.add_argument("--event-log-jsonl", default=os.environ.get("TC_SCHEDULER_EVENT_LOG_JSONL"))
+        status.add_argument("--require-queue-event-log-integrity", action="store_true")
         status.add_argument("--gpu-reconciliation-audit-json")
         status.add_argument("--gpu-reconciliation-max-age-sec", type=float, default=120.0)
         status.add_argument("--timeout-sec", type=float, default=10.0)
@@ -2542,6 +2705,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         audit = sub.add_parser("audit", help="Validate queue and inventory scheduler contracts")
         audit.add_argument("--jobs-json", required=True)
         audit.add_argument("--inventory-json", required=True)
+        audit.add_argument("--event-log-jsonl", default=os.environ.get("TC_SCHEDULER_EVENT_LOG_JSONL"))
+        audit.add_argument("--require-queue-event-log-integrity", action="store_true")
         audit.add_argument("--worker-reconciliation-json", action="append", default=[])
         audit.add_argument("--worker-reconciliation-dir", action="append", default=[])
         add_output_flags(audit)
@@ -2558,6 +2723,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--arbiter-cmd", default=DEFAULT_ARBITER_CMD)
     parser.add_argument("--jobs-json", required=True)
     parser.add_argument("--inventory-json")
+    parser.add_argument("--event-log-jsonl", default=os.environ.get("TC_SCHEDULER_EVENT_LOG_JSONL"))
+    parser.add_argument("--require-queue-event-log-integrity", action="store_true")
     parser.add_argument("--state-json")
     parser.add_argument("--gpu-reconciliation-audit-json")
     parser.add_argument("--gpu-reconciliation-max-age-sec", type=float, default=120.0)

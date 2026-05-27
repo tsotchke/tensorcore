@@ -47,7 +47,10 @@ queue file, named like `.mesh_resource_jobs.json.lock`, before the
 load-modify-write cycle and before appending the queue event. Scheduler-VM
 clients should call the submit/cancel CLI instead of editing the queue file
 directly. On the scheduler VM, set `TC_SCHEDULER_EVENT_LOG_JSONL` so submit and
-cancel clients inherit the canonical queue event log path.
+cancel clients inherit the canonical queue event log path. Add
+`--require-queue-event-log-integrity` to the loop, `status`, or `audit` when
+the scheduler should reject queue rows whose current hashes do not match the
+append-only submit/cancel log.
 
 Example scheduler loop:
 
@@ -56,6 +59,8 @@ python3 scripts/mesh_resource_scheduler.py \
   --jobs-json /var/lib/tensorcore/mesh_resource_jobs.json \
   --inventory-json configs/mesh_resources.json \
   --state-json /var/lib/tensorcore/mesh_resource_state.json \
+  --event-log-jsonl /var/lib/tensorcore/mesh_resource_queue_events.jsonl \
+  --require-queue-event-log-integrity \
   --gpu-reconciliation-audit-json /var/lib/tensorcore/gpu-reconciliation-audit.json \
   --gpu-reconciliation-max-age-sec 120 \
   --loop --json

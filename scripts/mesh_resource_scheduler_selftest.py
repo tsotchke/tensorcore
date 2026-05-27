@@ -88,6 +88,8 @@ def args_for(
         post_start_interval_sec=0.0,
         worker_identity_timeout_sec=1.0,
         unknown_lease_quarantine_age_sec=900.0,
+        event_log_jsonl=None,
+        require_queue_event_log_integrity=False,
         gpu_reconciliation_audit_json=None,
         gpu_reconciliation_max_age_sec=120.0,
         max_running_per_tenant=max_running_per_tenant,
@@ -1832,6 +1834,10 @@ def test_submit_writes_queue_and_cancel_pauses_job() -> None:
             json.loads(line)
             for line in event_log.read_text(encoding="utf-8").splitlines()
         ]
+        integrity = scheduler.queue_event_integrity(
+            jobs_json=queue_path,
+            event_log_jsonl=event_log,
+        )
     assert submit_payload["queued"] is True
     assert submit_payload["queue_lock"].endswith(".queue.json.lock")
     assert cancel_payload["cancelled_jobs"] == ["georefine-qwen-rank-probe"]
@@ -1851,13 +1857,121 @@ def test_submit_writes_queue_and_cancel_pauses_job() -> None:
     assert events[0]["queue_lock"].endswith(".queue.json.lock")
     assert events[1]["cancelled_jobs"] == ["georefine-qwen-rank-probe"]
     assert events[1]["reason"] == "test_cancel"
+    assert (
+        len(events[1]["job_sha256_after"]["georefine-qwen-rank-probe"])
+        == 64
+    )
     assert events[1]["queue_lock"].endswith(".queue.json.lock")
+    assert integrity["ok"] is True
+    assert integrity["checked_jobs"] == ["georefine-qwen-rank-probe"]
     assert lock_calls == [
         FakeFcntl.LOCK_EX,
         FakeFcntl.LOCK_UN,
         FakeFcntl.LOCK_EX,
         FakeFcntl.LOCK_UN,
     ]
+
+
+def test_queue_event_integrity_detects_out_of_band_queue_edit() -> None:
+    scheduler = load_scheduler()
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        spec_path = root / "job.json"
+        queue_path = root / "queue.json"
+        event_log = root / "queue-events.jsonl"
+        inventory_path = write_inventory(root, cuda_inventory())
+        spec_path.write_text(json.dumps(tensorcore_job_v1_spec()), encoding="utf-8")
+        scheduler.cmd_submit(
+            argparse.Namespace(
+                job_json=str(spec_path),
+                jobs_json=str(queue_path),
+                inventory_json=str(inventory_path),
+                event_log_jsonl=str(event_log),
+                replace=False,
+                dry_run=False,
+            )
+        )
+        queue = json.loads(queue_path.read_text(encoding="utf-8"))
+        queue["jobs"][0]["priority"] = 999
+        queue_path.write_text(json.dumps(queue), encoding="utf-8")
+        payload = scheduler.cmd_audit(
+            argparse.Namespace(
+                jobs_json=str(queue_path),
+                inventory_json=str(inventory_path),
+                event_log_jsonl=str(event_log),
+                require_queue_event_log_integrity=True,
+                worker_reconciliation_json=[],
+                worker_reconciliation_dir=[],
+            )
+        )
+
+    assert payload["ok"] is False
+    assert payload["queue_event_log_integrity"]["ok"] is False
+    assert any("hash mismatch" in error for error in payload["errors"])
+
+
+def test_scheduler_blocks_when_queue_event_integrity_fails() -> None:
+    scheduler = load_scheduler()
+    runtime = FakeRuntime(live={"georefine-qwen-rank-probe": False})
+    scheduler.run_json = runtime.run_json
+    scheduler.run_capture = runtime.run_capture
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        spec_path = root / "job.json"
+        queue_path = root / "queue.json"
+        event_log = root / "queue-events.jsonl"
+        inventory_path = write_inventory(root, cuda_inventory())
+        spec_path.write_text(json.dumps(tensorcore_job_v1_spec()), encoding="utf-8")
+        scheduler.cmd_submit(
+            argparse.Namespace(
+                job_json=str(spec_path),
+                jobs_json=str(queue_path),
+                inventory_json=str(inventory_path),
+                event_log_jsonl=str(event_log),
+                replace=False,
+                dry_run=False,
+            )
+        )
+        queue = json.loads(queue_path.read_text(encoding="utf-8"))
+        queue["jobs"][0]["priority"] = 999
+        queue_path.write_text(json.dumps(queue), encoding="utf-8")
+        args = args_for(queue_path, inventory_json=inventory_path, dry_run=True)
+        args.event_log_jsonl = str(event_log)
+        args.require_queue_event_log_integrity = True
+        payload = scheduler.schedule_once(args)
+
+    assert payload["ok"] is False
+    assert payload["results"] == []
+    assert payload["queue_event_log_integrity"]["ok"] is False
+    assert payload["errors"][0]["error"] == "queue event log integrity failed"
+
+
+def test_queue_event_integrity_requirement_fails_without_log() -> None:
+    scheduler = load_scheduler()
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        queue_path = write_jobs(root, [job("qllm-phase1", priority=50)])
+        inventory_path = write_inventory(root, cuda_inventory())
+        payload = scheduler.cmd_status(
+            argparse.Namespace(
+                arbiter_cmd="arbiter",
+                jobs_json=str(queue_path),
+                inventory_json=str(inventory_path),
+                event_log_jsonl=None,
+                require_queue_event_log_integrity=True,
+                gpu_reconciliation_audit_json=None,
+                gpu_reconciliation_max_age_sec=120.0,
+                timeout_sec=1.0,
+                offline=True,
+            )
+        )
+
+    assert payload["ok"] is False
+    assert payload["queue_event_log_integrity"]["ok"] is False
+    assert (
+        "requires --event-log-jsonl"
+        in payload["queue_event_log_integrity"]["errors"][0]
+    )
 
 
 def test_submit_and_cancel_require_event_log_for_queue_mutation() -> None:
@@ -2464,6 +2578,9 @@ def main() -> int:
     test_submit_dry_run_expands_tensorcore_job_v1()
     test_submit_dry_run_renders_gpu_reconciliation_admission_args()
     test_submit_writes_queue_and_cancel_pauses_job()
+    test_queue_event_integrity_detects_out_of_band_queue_edit()
+    test_scheduler_blocks_when_queue_event_integrity_fails()
+    test_queue_event_integrity_requirement_fails_without_log()
     test_submit_and_cancel_require_event_log_for_queue_mutation()
     test_submit_and_cancel_parse_event_log_default_from_env()
     test_cancel_accepts_expanded_pool_job_id()

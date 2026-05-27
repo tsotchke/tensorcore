@@ -788,7 +788,9 @@ take an advisory lock beside the queue file before updating jobs or appending
 the queue event. Scheduler-VM clients should use those commands instead of
 editing `mesh_resource_jobs.json` directly. Set
 `TC_SCHEDULER_EVENT_LOG_JSONL` in the scheduler environment so clients inherit
-the canonical event-log path.
+the canonical event-log path. Use `--require-queue-event-log-integrity` on the
+scheduler loop, `status`, or `audit` to fail closed when current queue hashes
+no longer match the append-only submit/cancel log.
 
 Run one dry pass:
 
@@ -807,6 +809,8 @@ scripts/mesh_resource_scheduler.py \
   --arbiter-cmd tsotchke-arbiter \
   --inventory-json configs/mesh_resources.json \
   --jobs-json ~/.tsotchke/state/mesh-resource-jobs.json \
+  --event-log-jsonl ~/.tsotchke/state/mesh-resource-queue-events.jsonl \
+  --require-queue-event-log-integrity \
   --state-json ~/.tsotchke/state/mesh-resource-scheduler-state.json \
   --loop --interval-sec 30 \
   --admission-timeout-sec 10 \

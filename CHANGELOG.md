@@ -157,7 +157,9 @@ every architectural primitive in code and tested:
   sweeps worker GPU occupancy without hardcoded arbiter or resource aliases.
   `scripts/mesh_gpu_reconciliation_audit.py` wraps the sweep plus scheduler
   audit for one-step control-plane checks, and the scheduler can require that
-  fresh audit artifact before placing CUDA jobs.
+  fresh audit artifact before placing CUDA jobs. Scheduler loop/status/audit
+  commands can also require queue event-log integrity so out-of-band queue
+  edits fail closed.
 - The GeoRefine Qwen rank-probe launcher now takes host, path, model, worker
   resource, and quality gate values from scheduler config or environment
   instead of embedding cosbox/private-path defaults in code.
