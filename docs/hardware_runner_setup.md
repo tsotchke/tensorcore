@@ -8,17 +8,21 @@ when it is dispatched with `require_metal4_tensorops=true`.
 
 As of the current M5/SDK26 evidence handoff:
 
-- Latest pushed head: `040a221` (resolve to the full SHA locally before
+- Latest pushed head: `ecf140d` (resolve to the full SHA locally before
   passing it as `--expected-head`).
+- Hardware Evidence run `26492773197` was dispatched for `ecf140d` and then
+  cancelled after the runner preflight artifact reported
+  `runner_api_unavailable` with HTTP 403.
 - Local release smoke records
   `checks.metal4_tensorops.runtime_compile_status=skipped_sdk_too_old`
   because Atlas has SDK 15.2.
 - Local M5 TensorOps preflight is blocked by `display_gpu` and `sdk26`
   because Atlas is M2 Ultra with Xcode 16.2 / SDK 15.2.
-- GitHub runner API currently reports zero repository self-hosted runners, so
-  the expected Hardware Evidence preflight status is
-  `blocked_no_matching_runner` until an M5 runner with the required labels is
-  registered and online.
+- An operator-authenticated `gh api repos/tsotchke/tensorcore/actions/runners`
+  call reports zero repository self-hosted runners. After
+  `TC_RUNNER_READ_TOKEN` is fixed, the expected Hardware Evidence preflight
+  status is `blocked_no_matching_runner` until an M5 runner with the required
+  labels is registered and online.
 
 GitHub-hosted CI and local release smoke do not prove the M5 TensorOps runtime
 path. The runtime blocker is closed only when the Hardware Evidence artifact
@@ -40,11 +44,11 @@ staging repository is intentionally being tested:
 
 ```sh
 REPO=tsotchke/tensorcore
-EXPECTED_HEAD="$(git rev-parse 040a221)"
+EXPECTED_HEAD="$(git rev-parse ecf140d)"
 ```
 
 `EXPECTED_HEAD` must be the full SHA for the pushed commit that the workflow
-will run. If `040a221` is not present locally, fetch first and resolve the
+will run. If `ecf140d` is not present locally, fetch first and resolve the
 pushed ref:
 
 ```sh
@@ -392,7 +396,7 @@ has built and passed the runtime probe on the M5 host.
 3. The runner host local preflight is at least `candidate`; `ready` is expected
    after the runtime smoke has built the test binary.
 4. The Hardware Evidence workflow is dispatched for the full `EXPECTED_HEAD`
-   corresponding to pushed head `040a221` or its successor.
+   corresponding to pushed head `ecf140d` or its successor.
 5. `scripts/fetch_m5_tensorops_runtime_evidence.py --latest-for-head` accepts
    the artifact with `compile=compiled`, `runtime=passed`, and a clean matching
    head.
