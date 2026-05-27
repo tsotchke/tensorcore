@@ -131,6 +131,14 @@ The self-hosted runner exercises the deepest hardware path and emits a
 The workflow first emits a GitHub-hosted
 `tensorcore-hardware-runner-preflight` artifact that records the required
 self-hosted labels and whether a matching runner was visible.
+Validate that artifact after download with:
+
+```sh
+python3 scripts/check_hardware_runner_preflight.py \
+  build/hardware_runner_preflight.json \
+  --expected-head "$(git rev-parse HEAD)" \
+  --require-metal4-tensorops
+```
 
 Before registering or debugging the runner, run:
 

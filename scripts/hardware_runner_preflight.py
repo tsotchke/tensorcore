@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import sys
 from typing import Any
 
 
 SCHEMA = "tensorcore.hardware_runner_preflight.v1"
+FORMAT_VERSION = 1
 DEFAULT_REQUIRED_LABELS = ["self-hosted", "macOS", "ARM64"]
 
 
@@ -23,6 +25,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--summary", type=pathlib.Path)
     parser.add_argument("--repository", required=True)
     parser.add_argument("--require-metal4-tensorops", default="false")
+    parser.add_argument("--head-sha", default=os.environ.get("GITHUB_SHA", ""))
+    parser.add_argument("--run-id", default=os.environ.get("GITHUB_RUN_ID", ""))
+    parser.add_argument("--run-attempt", default=os.environ.get("GITHUB_RUN_ATTEMPT", ""))
+    parser.add_argument("--workflow", default=os.environ.get("GITHUB_WORKFLOW", ""))
     parser.add_argument(
         "--required-label",
         action="append",
@@ -66,6 +72,10 @@ def build_evidence(
     repository: str,
     require_metal4_tensorops: str,
     required_labels: list[str],
+    head_sha: str = "",
+    run_id: str = "",
+    run_attempt: str = "",
+    workflow: str = "",
 ) -> dict[str, Any]:
     api_note = read_text(api_error).strip()
     runners: list[dict[str, Any]] = []
@@ -103,6 +113,14 @@ def build_evidence(
 
     return {
         "schema": SCHEMA,
+        "meta": {
+            "format": FORMAT_VERSION,
+            "source": "tensorcore_hardware_runner_preflight",
+            "head_sha": head_sha,
+            "run_id": run_id,
+            "run_attempt": run_attempt,
+            "workflow": workflow,
+        },
         "status": status,
         "repository": repository,
         "required_labels": required_labels,
@@ -145,6 +163,10 @@ def main() -> int:
         repository=args.repository,
         require_metal4_tensorops=args.require_metal4_tensorops,
         required_labels=required_labels,
+        head_sha=args.head_sha,
+        run_id=args.run_id,
+        run_attempt=args.run_attempt,
+        workflow=args.workflow,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")

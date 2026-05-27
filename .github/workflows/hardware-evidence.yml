@@ -40,6 +40,10 @@ jobs:
             --output build/hardware_runner_preflight.json \
             --summary "$GITHUB_STEP_SUMMARY" \
             --repository "$GITHUB_REPOSITORY" \
+            --head-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --workflow "$GITHUB_WORKFLOW" \
             --require-metal4-tensorops "$REQUIRE_METAL4_TENSOROPS"
 
       - name: Upload runner preflight

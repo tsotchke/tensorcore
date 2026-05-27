@@ -69,7 +69,22 @@ Writes the `tensorcore-hardware-runner-preflight` diagnostic used by
 and the required self-hosted labels to this script; it emits JSON with
 `matching_runner_online`, `matching_runner_offline`,
 `blocked_no_matching_runner`, or `runner_api_unavailable`, plus a concise job
-summary.
+summary. The artifact includes `meta.head_sha`, `meta.run_id`,
+`meta.run_attempt`, and `meta.workflow` so a downloaded preflight can be tied
+back to the workflow run and commit that produced it.
+
+Validate a downloaded artifact with:
+
+```sh
+python3 scripts/check_hardware_runner_preflight.py \
+  build/hardware_runner_preflight.json \
+  --expected-head "$(git rev-parse HEAD)" \
+  --require-metal4-tensorops
+```
+
+Use `--require-online-runner` only when the preflight is supposed to prove that
+an eligible `[self-hosted, macOS, ARM64]` runner is online; blocked/no-API
+artifacts are still useful diagnostics before that point.
 
 ### `m5_tensorops_runner_preflight.py`
 

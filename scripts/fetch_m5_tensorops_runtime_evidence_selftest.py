@@ -96,9 +96,60 @@ def test_latest_run_id_fails_without_match() -> None:
         fetch.run = original
 
 
+def test_default_dispatch_ref_uses_current_branch() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def fake_git_output(*args: str) -> str:
+        calls.append(args)
+        if args == ("symbolic-ref", "--short", "HEAD"):
+            return "master"
+        raise SystemExit("unexpected git call")
+
+    original = fetch.git_output
+    fetch.git_output = fake_git_output
+    try:
+        assert fetch.default_dispatch_ref() == "master"
+        assert calls == [("symbolic-ref", "--short", "HEAD")]
+    finally:
+        fetch.git_output = original
+
+
+def test_default_dispatch_ref_falls_back_to_origin_head() -> None:
+    def fake_git_output(*args: str) -> str:
+        if args == ("symbolic-ref", "--short", "HEAD"):
+            raise SystemExit("detached")
+        if args == ("symbolic-ref", "--short", "refs/remotes/origin/HEAD"):
+            return "origin/main"
+        raise SystemExit("unexpected git call")
+
+    original = fetch.git_output
+    fetch.git_output = fake_git_output
+    try:
+        assert fetch.default_dispatch_ref() == "main"
+    finally:
+        fetch.git_output = original
+
+
+def test_check_dispatch_ref_fails_on_mismatch() -> None:
+    original = fetch.resolve_local_ref
+    fetch.resolve_local_ref = lambda ref: "actual"
+    try:
+        try:
+            fetch.check_dispatch_ref("master", "expected")
+        except SystemExit as exc:
+            assert "resolves to actual" in str(exc)
+        else:
+            raise AssertionError("check_dispatch_ref unexpectedly passed")
+    finally:
+        fetch.resolve_local_ref = original
+
+
 def main() -> int:
     test_latest_run_id_selects_successful_matching_head()
     test_latest_run_id_fails_without_match()
+    test_default_dispatch_ref_uses_current_branch()
+    test_default_dispatch_ref_falls_back_to_origin_head()
+    test_check_dispatch_ref_fails_on_mismatch()
     print("M5 TensorOps runtime evidence fetch selftest OK")
     return 0
 

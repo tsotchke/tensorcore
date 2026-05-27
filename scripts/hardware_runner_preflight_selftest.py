@@ -48,6 +48,10 @@ def build(tmp: pathlib.Path, api_rc: int, runners: list[dict[str, Any]] | None =
         repository="owner/repo",
         require_metal4_tensorops="true",
         required_labels=["self-hosted", "macOS", "ARM64"],
+        head_sha="abc123",
+        run_id="456",
+        run_attempt="1",
+        workflow="Hardware Evidence",
     )
 
 
@@ -58,6 +62,8 @@ def main() -> int:
         unavailable = build(tmp, 1, None)
         assert unavailable["status"] == "runner_api_unavailable"
         assert "permission denied" in unavailable["runner_api_error"]
+        assert unavailable["meta"]["head_sha"] == "abc123"
+        assert unavailable["meta"]["run_id"] == "456"
 
         missing = build(tmp, 0, [runner("linux", "online", ["self-hosted", "Linux", "X64"])])
         assert missing["status"] == "blocked_no_matching_runner"

@@ -50,6 +50,13 @@ def git_output(*args: str) -> str:
     return run(["git", *args]).stdout.strip()
 
 
+def optional_git_output(*args: str) -> str:
+    try:
+        return git_output(*args)
+    except SystemExit:
+        return ""
+
+
 def default_repo() -> str:
     try:
         value = git_output("config", "--get", "remote.origin.url")
@@ -60,6 +67,22 @@ def default_repo() -> str:
     elif value.startswith("https://github.com/"):
         value = value.removeprefix("https://github.com/").removesuffix(".git")
     return value
+
+
+def default_dispatch_ref() -> str:
+    branch = optional_git_output("symbolic-ref", "--short", "HEAD")
+    if branch and branch != "HEAD":
+        return branch
+    remote_head = optional_git_output("symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+    if remote_head.startswith("origin/"):
+        return remote_head.removeprefix("origin/")
+    if remote_head:
+        return remote_head
+    return "master"
+
+
+def resolve_local_ref(ref: str) -> str:
+    return git_output("rev-parse", ref)
 
 
 def load_json(path: pathlib.Path) -> dict[str, Any]:
@@ -132,6 +155,15 @@ def dispatch(repo: str, ref: str) -> None:
     )
 
 
+def check_dispatch_ref(ref: str, expected_head: str) -> None:
+    actual = resolve_local_ref(ref)
+    if actual != expected_head:
+        raise SystemExit(
+            f"dispatch ref {ref!r} resolves to {actual}, not expected head {expected_head}; "
+            "pass --ref for the branch/tag that contains the expected head"
+        )
+
+
 def download_artifact(repo: str, run_id: str, output_dir: pathlib.Path, keep: bool) -> pathlib.Path:
     if output_dir.exists() and not keep:
         shutil.rmtree(output_dir)
@@ -191,7 +223,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=default_repo(), help="GitHub repo as owner/name.")
     parser.add_argument("--expected-head", default=git_output("rev-parse", "HEAD"))
-    parser.add_argument("--ref", default=None, help="Ref to dispatch; defaults to expected head.")
+    parser.add_argument(
+        "--ref",
+        default=None,
+        help="Branch or tag to dispatch; defaults to the current branch.",
+    )
     parser.add_argument("--run-id", help="Existing hardware-evidence workflow run id to fetch.")
     parser.add_argument(
         "--latest-for-head",
@@ -218,7 +254,9 @@ def main() -> int:
     if not args.repo:
         raise SystemExit("--repo is required when remote.origin.url is not a GitHub repo")
     if args.dispatch:
-        dispatch(args.repo, args.ref or args.expected_head)
+        ref = args.ref or default_dispatch_ref()
+        check_dispatch_ref(ref, args.expected_head)
+        dispatch(args.repo, ref)
         return 0
     run_id = args.run_id
     if not run_id:
