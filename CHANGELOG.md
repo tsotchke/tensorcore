@@ -102,6 +102,9 @@ every architectural primitive in code and tested:
 - Eshkol bridge diagnostics now expose C-string device/backend/version/status
   pointers through real `tc_eshkol_*` C shims, exported with the existing
   bridge ABI and exercised by the Scheme bridge smoke.
+- Eshkol bridge smoke now defaults to `build-portable-cpu-current` when that
+  build exists, giving backend-independent `--require-pass` evidence for the
+  Scheme/C bridge while preserving `--build-dir build` for Metal-path probes.
 - Metal kernel builds now track local Metal headers, emit collision-resistant
   AIR filenames, and fail early with explicit `xcrun metal`/`metallib`
   discovery diagnostics.

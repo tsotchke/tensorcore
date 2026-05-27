@@ -74,9 +74,10 @@ The `.esk` files in this directory (`tensorcore.esk`, `hello_tensorcore.esk`)
 describe the intended Eshkol-side interface and a sample program.
 
 `scripts/run_eshkol_tensorcore_bridge_smoke.py` records the current runtime
-state in `build/eshkol_tensorcore_bridge_evidence.json`. Run it with
-`--build-dir build-portable-cpu-current --require-pass` for backend-independent
-runtime evidence. On a Metal build where the host exposes no usable Metal
+state in `build/eshkol_tensorcore_bridge_evidence.json`. It selects
+`build-portable-cpu-current` by default when that build exists, which gives
+backend-independent runtime evidence; pass `--build-dir build` when you need
+to validate the local Metal path. On a Metal build where the host exposes no usable Metal
 device, the artifact stays `status=blocked` with `skipped_no_gpu` runtime
 checks instead of reporting a bridge failure. The runner normalizes expected
 no-GPU command tails in that blocked artifact, while retaining hashes, so

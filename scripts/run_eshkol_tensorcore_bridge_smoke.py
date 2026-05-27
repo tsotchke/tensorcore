@@ -107,7 +107,7 @@ ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--eshkol-run", type=pathlib.Path, default=None)
-    parser.add_argument("--build-dir", type=pathlib.Path, default=ROOT / "build")
+    parser.add_argument("--build-dir", type=pathlib.Path, default=default_build_dir())
     parser.add_argument(
         "--evidence-path",
         type=pathlib.Path,
@@ -117,6 +117,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--require-pass", action="store_true")
     parser.add_argument("--json", action="store_true", help="Print evidence JSON to stdout.")
     return parser.parse_args()
+
+
+def default_build_dir() -> pathlib.Path:
+    env_path = os.environ.get("TC_ESHKOL_BRIDGE_BUILD_DIR")
+    if env_path:
+        return pathlib.Path(env_path)
+    portable = ROOT / "build-portable-cpu-current"
+    if any((portable / name).exists() for name in ("libtensorcore.dylib", "libtensorcore.so", "libtensorcore.a")):
+        return portable
+    return ROOT / "build"
 
 
 def git_value(*args: str) -> str | None:

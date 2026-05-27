@@ -506,7 +506,8 @@ claiming GGUF-backed quantized GEMV coverage.
 
 Focused evidence for the Eshkol bridge surface. The script uses a local
 `eshkol-run` binary, defaults to `~/Desktop/eshkol/build/eshkol-run` when
-available, and tries to compile and run:
+available, selects `build-portable-cpu-current` when that portable build is
+present, and tries to compile and run:
 
 - `eshkol/hello_tensorcore.esk`
 - `eshkol/tensorcore_bridge_smoke.esk`
@@ -536,9 +537,9 @@ python3 scripts/check_eshkol_tensorcore_bridge_evidence.py \
   build/eshkol_tensorcore_bridge_evidence.json --require-pass
 ```
 
-Use the portable CPU build when you need backend-independent bridge evidence.
-Use the default Metal build when specifically validating the local Apple GPU
-path.
+The portable CPU build is the default when available because it proves the
+bridge ABI without depending on nested Metal device discovery. Pass
+`--build-dir build` when specifically validating the local Apple GPU path.
 
 ### `ci_portable_cpu.sh`
 
