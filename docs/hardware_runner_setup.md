@@ -6,22 +6,23 @@ when it is dispatched with `require_metal4_tensorops=true`.
 
 ## Current blocker snapshot
 
-As of the M5/SDK26 evidence handoff:
+As of the current M5/SDK26 evidence handoff:
 
-- Latest pushed head: `316f8f3` (resolve to the full SHA locally before
+- Latest pushed head: `040a221` (resolve to the full SHA locally before
   passing it as `--expected-head`).
-- CI run `26487283337` passed.
-- Hardware Evidence runner preflight reports `runner_api_unavailable`
-  with HTTP 403 because the repository secret `TC_RUNNER_READ_TOKEN` is
-  missing or unusable.
-- The repository has zero self-hosted runners registered, so after the
-  token is fixed the next expected blocker is `blocked_no_matching_runner`
-  until an M5 runner with the Hardware Evidence labels is registered and
-  online.
+- Local release smoke records
+  `checks.metal4_tensorops.runtime_compile_status=skipped_sdk_too_old`
+  because Atlas has SDK 15.2.
+- Local M5 TensorOps preflight is blocked by `display_gpu` and `sdk26`
+  because Atlas is M2 Ultra with Xcode 16.2 / SDK 15.2.
+- GitHub runner API currently reports zero repository self-hosted runners, so
+  the expected Hardware Evidence preflight status is
+  `blocked_no_matching_runner` until an M5 runner with the required labels is
+  registered and online.
 
-The CI run proves the pushed source is green on GitHub-hosted runners. It
-does not prove the M5 TensorOps runtime path. The runtime blocker is closed
-only when the Hardware Evidence artifact validates with
+GitHub-hosted CI and local release smoke do not prove the M5 TensorOps runtime
+path. The runtime blocker is closed only when the Hardware Evidence artifact
+validates with
 `checks.metal4_tensorops.compile_status=compiled`,
 `checks.metal4_tensorops.runtime_status=passed`, and a clean git head matching
 the expected pushed commit.
@@ -39,11 +40,11 @@ staging repository is intentionally being tested:
 
 ```sh
 REPO=tsotchke/tensorcore
-EXPECTED_HEAD="$(git rev-parse 316f8f3)"
+EXPECTED_HEAD="$(git rev-parse 040a221)"
 ```
 
 `EXPECTED_HEAD` must be the full SHA for the pushed commit that the workflow
-will run. If `316f8f3` is not present locally, fetch first and resolve the
+will run. If `040a221` is not present locally, fetch first and resolve the
 pushed ref:
 
 ```sh
@@ -60,8 +61,8 @@ gh api "repos/${GITHUB_REPOSITORY}/actions/runners"
 ```
 
 The workflow sets `GH_TOKEN` to `secrets.TC_RUNNER_READ_TOKEN` when present and
-falls back to `github.token` otherwise. The current 403 means the fallback token
-cannot list repository Actions runners.
+falls back to `github.token` otherwise. A 403 from this call means the active
+token cannot list repository Actions runners.
 
 Create a fine-grained personal access token for the preflight:
 
@@ -317,8 +318,8 @@ routing only. It does not prove M5 runtime support.
 
 | Status | Meaning | Operator action |
 |---|---|---|
-| `runner_api_unavailable` | The workflow could not list repository Actions runners. `runner_api_rc` is non-zero and `runner_api_error` usually contains the GitHub API failure. | Add or fix `TC_RUNNER_READ_TOKEN`, then redispatch. For the current blocker, HTTP 403 maps here. |
-| `blocked_no_matching_runner` | The runner API was available, but no registered runner had all required labels. | Register an M5/SDK26 macOS ARM64 runner. With the current zero-runner repo state, this is expected immediately after fixing the secret. |
+| `runner_api_unavailable` | The workflow could not list repository Actions runners. `runner_api_rc` is non-zero and `runner_api_error` usually contains the GitHub API failure. | Add or fix `TC_RUNNER_READ_TOKEN`, then redispatch. HTTP 403 maps here. |
+| `blocked_no_matching_runner` | The runner API was available, but no registered runner had all required labels. | Register an M5/SDK26 macOS ARM64 runner. With the current zero-runner repo state, this is the expected blocker. |
 | `matching_runner_offline` | A runner has the required labels, but none are online. | Start the runner service on the M5 host, then redispatch. |
 | `matching_runner_online` | At least one required-label runner is online. | Wait for `apple-gpu-release-smoke` to run and upload runtime evidence. |
 
@@ -391,7 +392,7 @@ has built and passed the runtime probe on the M5 host.
 3. The runner host local preflight is at least `candidate`; `ready` is expected
    after the runtime smoke has built the test binary.
 4. The Hardware Evidence workflow is dispatched for the full `EXPECTED_HEAD`
-   corresponding to pushed head `316f8f3` or its successor.
+   corresponding to pushed head `040a221` or its successor.
 5. `scripts/fetch_m5_tensorops_runtime_evidence.py --latest-for-head` accepts
    the artifact with `compile=compiled`, `runtime=passed`, and a clean matching
    head.
