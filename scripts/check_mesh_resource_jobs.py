@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import importlib.machinery
 import importlib.util
+import json
 import pathlib
 import shlex
 from types import ModuleType
@@ -15,6 +16,7 @@ from typing import Any
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 DEFAULT_INVENTORY = ROOT / "configs" / "mesh_resources.json"
 DEFAULT_JOBS = ROOT / "configs" / "mesh_resource_jobs.json"
+DEFAULT_GEOREFINE_TEMPLATE = ROOT / "configs" / "georefine_qwen_job.template.json"
 COMMAND_FIELDS = (
     "probe_cmd",
     "completion_cmd",
@@ -51,6 +53,33 @@ QLLM_PHASE1_CACHED_CONTRACT = "tensorcore_job_v1_qllm_phase1_cached"
 QLLM_PHASE1_CACHED_STARTER = "scripts/start_qllm_phase1_cached.py"
 QLLM_TRAINING_CHECKER = "scripts/check_qllm_training_run.py"
 TENSORCORE_WORKER_IDENTITY = "scripts/mesh_worker_identity.py"
+GEOREFINE_TEMPLATE_REQUIRED_ENV = (
+    "TC_GEOREFINE_CAL_TEXT",
+    "TC_GEOREFINE_DEVICE",
+    "TC_GEOREFINE_DTYPE",
+    "TC_GEOREFINE_EVAL_TEXT",
+    "TC_GEOREFINE_EVIDENCE_ROOT",
+    "TC_GEOREFINE_MODEL",
+    "TC_GEOREFINE_QLLM_REPO_DIR",
+    "TC_GEOREFINE_REF",
+    "TC_GEOREFINE_REPO_DIR",
+    "TC_GEOREFINE_REPO_URL",
+    "TC_GEOREFINE_RUN_TARGET",
+)
+GEOREFINE_TEMPLATE_FORBIDDEN_SUBSTRINGS = (
+    "cosbox",
+    "old-donkey",
+    "jack-blupc",
+    "gpu:cosbox:0",
+    "gpu:old-donkey:0",
+    "gpu:jack-blupc:0",
+    "/Users/",
+    "/home/tyr/",
+    "/bytehole/",
+    "/.local/",
+    "steamwebhelper",
+    "/opt/google/chrome/chrome",
+)
 HOST_LOCAL_SERVICE_STARTS = (
     "systemctl --user start",
     "systemctl start",
@@ -76,6 +105,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--inventory-json", type=pathlib.Path, default=DEFAULT_INVENTORY)
     parser.add_argument("--jobs-json", type=pathlib.Path, default=DEFAULT_JOBS)
+    parser.add_argument("--georefine-template-json", type=pathlib.Path, default=DEFAULT_GEOREFINE_TEMPLATE)
     return parser.parse_args()
 
 
@@ -117,6 +147,32 @@ def command_flag_value(value: Any, flag: str) -> str | None:
         if part == flag:
             return parts[index + 1]
     return None
+
+
+def scalar_strings(value: Any) -> list[str]:
+    if isinstance(value, dict):
+        out: list[str] = []
+        for key, item in value.items():
+            out.extend(scalar_strings(key))
+            out.extend(scalar_strings(item))
+        return out
+    if isinstance(value, list):
+        out = []
+        for item in value:
+            out.extend(scalar_strings(item))
+        return out
+    if isinstance(value, (str, int, float, bool)):
+        return [str(value)]
+    return []
+
+
+def require_submit_command(spec: dict[str, Any], key: str) -> list[str]:
+    raw = spec.get(key)
+    if isinstance(raw, dict):
+        raw = raw.get("argv")
+    if isinstance(raw, list) and all(isinstance(item, str) for item in raw):
+        return list(raw)
+    return []
 
 
 def command_uses_host_local_service_start(value: Any) -> bool:
@@ -355,7 +411,106 @@ def validate_gpu_reconciliation_policy(
         )
 
 
-def validate_jobs(inventory_path: pathlib.Path, jobs_path: pathlib.Path) -> list[str]:
+def validate_georefine_template_policy(errors: list[str], template: dict[str, Any], *, owner: str) -> None:
+    if template.get("schema") != "tensorcore.job.v1":
+        errors.append(f"{owner} schema must be tensorcore.job.v1")
+    if str(template.get("id") or "") != "georefine-qwen-rank-probe":
+        errors.append(f"{owner} id must stay generic georefine-qwen-rank-probe")
+    if template.get("sync_id") is not None:
+        errors.append(f"{owner} must not pin sync_id; placement expansion owns concrete ids")
+    if template.get("desired_state") is not None:
+        errors.append(f"{owner} must not set desired_state; queue state belongs to the scheduler queue")
+
+    resources = template.get("resources")
+    if not isinstance(resources, dict):
+        errors.append(f"{owner} resources must be an object")
+        resources = {}
+    selector = resources.get("selector")
+    if not isinstance(selector, dict):
+        errors.append(f"{owner} resources.selector is required; do not pin a concrete resource")
+    if resources.get("resource") is not None:
+        errors.append(f"{owner} must use resources.selector, not resources.resource")
+    if resources.get("resource_class") != "cuda_exclusive":
+        errors.append(f"{owner} resources.resource_class must be cuda_exclusive")
+
+    command = template.get("command")
+    if not isinstance(command, dict):
+        errors.append(f"{owner} command must be an object")
+        command = {}
+    argv = require_submit_command(template, "command")
+    if not argv:
+        errors.append(f"{owner} command.argv must be a non-empty string list")
+    expected_flags = {
+        "--target": "{node}",
+        "--resource": "{resource}",
+        "--worker-resource": "{worker_alias}",
+        "--run-dir": "{run_dir}",
+    }
+    for flag, expected in expected_flags.items():
+        actual = command_flag_value(argv, flag)
+        if actual != expected:
+            errors.append(f"{owner} command.argv must pass {flag} {expected}")
+    env = command.get("env")
+    if not isinstance(env, dict):
+        errors.append(f"{owner} command.env must provide TC_GEOREFINE_* defaults/placeholders")
+        env = {}
+    for key in GEOREFINE_TEMPLATE_REQUIRED_ENV:
+        if not str(env.get(key) or "").strip():
+            errors.append(f"{owner} command.env missing {key}")
+
+    metadata = template.get("metadata") if isinstance(template.get("metadata"), dict) else {}
+    if metadata.get("require_run_intent") is not True:
+        errors.append(f"{owner} metadata.require_run_intent must be true")
+    if metadata.get("scheduler_contract") != TENSORCORE_JOB_V1_GEOREFINE_CONTRACT:
+        errors.append(f"{owner} metadata.scheduler_contract must be {TENSORCORE_JOB_V1_GEOREFINE_CONTRACT}")
+    if metadata.get("run_dir") != "REPLACE_WITH_RUN_DIR":
+        errors.append(f"{owner} metadata.run_dir must remain REPLACE_WITH_RUN_DIR")
+
+    for field in ("probe", "completion", "admission", "post_start_probe", "worker_identity"):
+        cmd = require_submit_command(template, field)
+        if not cmd:
+            errors.append(f"{owner} {field} must be a non-empty string list")
+            continue
+        if cmd[0] == "ssh" and (len(cmd) < 2 or cmd[1] != "{node}"):
+            errors.append(f"{owner} {field} must use {{node}} instead of a concrete host")
+    admission = require_submit_command(template, "admission")
+    if admission and "{gpu_reconciliation_admission_args}" not in " ".join(admission):
+        errors.append(f"{owner} admission must use {{gpu_reconciliation_admission_args}}")
+    preflight = require_submit_command(template, "preflight")
+    if not preflight:
+        errors.append(f"{owner} preflight must be a non-empty string list")
+    else:
+        for flag, expected in expected_flags.items():
+            actual = command_flag_value(preflight, flag)
+            if actual != expected:
+                errors.append(f"{owner} preflight must pass {flag} {expected}")
+        if "--preflight-only" not in preflight:
+            errors.append(f"{owner} preflight must pass --preflight-only")
+
+    for text in scalar_strings(template):
+        for forbidden in GEOREFINE_TEMPLATE_FORBIDDEN_SUBSTRINGS:
+            if forbidden in text:
+                errors.append(f"{owner} must not contain hardcoded host/path literal {forbidden!r}")
+                return
+
+
+def validate_georefine_template(path: pathlib.Path) -> list[str]:
+    try:
+        payload = json.loads(path.expanduser().read_text(encoding="utf-8"))
+    except Exception as exc:
+        return [f"{path} could not be read: {exc}"]
+    if not isinstance(payload, dict):
+        return [f"{path} must contain a JSON object"]
+    errors: list[str] = []
+    validate_georefine_template_policy(errors, payload, owner=str(path))
+    return errors
+
+
+def validate_jobs(
+    inventory_path: pathlib.Path,
+    jobs_path: pathlib.Path,
+    georefine_template_path: pathlib.Path | None = DEFAULT_GEOREFINE_TEMPLATE,
+) -> list[str]:
     scheduler_path = next((item for item in SCHEDULER_CANDIDATES if item.exists()), SCHEDULER_CANDIDATES[0])
     scheduler = load_module("mesh_resource_scheduler_for_jobs_check", scheduler_path)
     inventory = scheduler.load_inventory(str(inventory_path))
@@ -402,12 +557,15 @@ def validate_jobs(inventory_path: pathlib.Path, jobs_path: pathlib.Path) -> list
         if not str(job.get("tenant") or "").strip():
             errors.append(f"job {job['id']!r} must declare tenant")
 
+    if georefine_template_path is not None:
+        errors.extend(validate_georefine_template(georefine_template_path))
+
     return errors
 
 
 def main() -> int:
     args = parse_args()
-    errors = validate_jobs(args.inventory_json, args.jobs_json)
+    errors = validate_jobs(args.inventory_json, args.jobs_json, args.georefine_template_json)
     if errors:
         for error in errors:
             print(f"mesh resource jobs error: {error}")

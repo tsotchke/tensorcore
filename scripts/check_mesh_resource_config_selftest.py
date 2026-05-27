@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.machinery
 import importlib.util
 import pathlib
@@ -144,6 +145,115 @@ def test_tensorcore_job_v1_georefine_contract_requires_rank_probe_starter() -> N
         },
     )
     assert any("start_georefine_qwen_rank_probe.py" in error for error in errors)
+
+
+def georefine_template() -> dict:
+    required_env = {
+        "TC_GEOREFINE_CAL_TEXT": "REPLACE_WITH_CALIBRATION_TEXT_PATH",
+        "TC_GEOREFINE_DEVICE": "cuda",
+        "TC_GEOREFINE_DTYPE": "auto",
+        "TC_GEOREFINE_EVAL_TEXT": "REPLACE_WITH_EVAL_TEXT_PATH",
+        "TC_GEOREFINE_EVIDENCE_ROOT": "REPLACE_WITH_TRUSTED_EVIDENCE_ROOT",
+        "TC_GEOREFINE_MODEL": "Qwen/Qwen3.5-0.8B",
+        "TC_GEOREFINE_QLLM_REPO_DIR": "REPLACE_WITH_QGTL_OR_SUBSTRATE_TOOLS_CHECKOUT",
+        "TC_GEOREFINE_REF": "master",
+        "TC_GEOREFINE_REPO_DIR": "REPLACE_WITH_GEOREFINE_CHECKOUT",
+        "TC_GEOREFINE_REPO_URL": "REPLACE_WITH_GEOREFINE_GIT_URL",
+        "TC_GEOREFINE_RUN_TARGET": "qwen-cr070-rank-search",
+    }
+    launcher = [
+        "python3",
+        "scripts/start_georefine_qwen_rank_probe.py",
+        "--target",
+        "{node}",
+        "--resource",
+        "{resource}",
+        "--worker-resource",
+        "{worker_alias}",
+        "--authority-lease-id",
+        "{lease_id}",
+        "--authority-owner",
+        "{authority_owner}",
+        "--run-dir",
+        "{run_dir}",
+        "--json",
+    ]
+    return {
+        "schema": "tensorcore.job.v1",
+        "id": "georefine-qwen-rank-probe",
+        "owner": "georefine:qwen-rank-probe",
+        "tenant": "georefine",
+        "resources": {
+            "selector": {"backend": "cuda", "class": "cuda-training"},
+            "resource_class": "cuda_exclusive",
+            "exclusive": True,
+        },
+        "command": {"argv": launcher, "env": required_env},
+        "probe": ["ssh", "{node}", "check --run-dir {run_dir}"],
+        "completion": ["ssh", "{node}", "complete --run-dir {run_dir}"],
+        "admission": [
+            "ssh",
+            "{node}",
+            "admit --resource {resource} {gpu_reconciliation_admission_args}",
+        ],
+        "preflight": [*launcher, "--preflight-only"],
+        "post_start_probe": ["ssh", "{node}", "live --run-dir {run_dir}"],
+        "worker_identity": ["ssh", "{node}", "identity --resource {resource} --artifact-dir {run_dir}"],
+        "artifact": {
+            "root": "REPLACE_WITH_TRUSTED_EVIDENCE_ROOT",
+            "evidence_path": "REPLACE_WITH_TRUSTED_EVIDENCE_ROOT/georefine.scheduler.json",
+        },
+        "metadata": {
+            "project": "georefine",
+            "require_run_intent": True,
+            "run_dir": "REPLACE_WITH_RUN_DIR",
+            "scheduler_contract": "tensorcore_job_v1_cuda_exclusive_trusted_artifact",
+            "service": "qwen-rank-probe",
+        },
+    }
+
+
+def test_georefine_template_policy_accepts_generic_selector_template() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_georefine_template_policy(errors, georefine_template(), owner="template")
+    assert errors == []
+
+
+def test_georefine_template_policy_rejects_rendered_cosbox_template() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    template = georefine_template()
+    template["id"] = "georefine-qwen-rank-probe-cosbox"
+    template["sync_id"] = "georefine-qwen-rank-probe-cosbox"
+    template["desired_state"] = "paused"
+    template["resources"] = {"resource": "cosbox:cuda3090", "resource_class": "cuda_exclusive"}
+    template["command"] = copy.deepcopy(template["command"])
+    template["command"]["argv"] = [
+        "python3",
+        "scripts/start_georefine_qwen_rank_probe.py",
+        "--target",
+        "cosbox",
+        "--resource",
+        "{authority_resource}",
+        "--worker-resource",
+        "gpu:cosbox:0",
+        "--run-dir",
+        "/home/tyr/.local/share/georefine_trusted/runs/qwen_rank_probe_cosbox",
+    ]
+    errors: list[str] = []
+    jobs.validate_georefine_template_policy(errors, template, owner="template")
+    assert any("resources.selector" in error for error in errors)
+    assert any("command.argv must pass --target {node}" in error for error in errors)
+    assert any("hardcoded host/path literal" in error for error in errors)
+
+
+def test_georefine_template_policy_requires_reconciliation_admission_placeholder() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    template = georefine_template()
+    template["admission"] = ["ssh", "{node}", "admit --resource {resource}"]
+    errors: list[str] = []
+    jobs.validate_georefine_template_policy(errors, template, owner="template")
+    assert any("gpu_reconciliation_admission_args" in error for error in errors)
 
 
 def qllm_phase1_cached_job(**overrides: object) -> dict:
@@ -503,6 +613,9 @@ def main() -> int:
     test_running_jobs_reject_host_local_systemd_starts()
     test_running_jobs_reject_legacy_georefine_direct_starter()
     test_tensorcore_job_v1_georefine_contract_requires_rank_probe_starter()
+    test_georefine_template_policy_accepts_generic_selector_template()
+    test_georefine_template_policy_rejects_rendered_cosbox_template()
+    test_georefine_template_policy_requires_reconciliation_admission_placeholder()
     test_tensorcore_job_v1_qllm_contract_requires_phase1_starter()
     test_tensorcore_job_v1_qllm_contract_requires_completion_checker()
     test_tensorcore_job_v1_qllm_contract_rejects_bytehole_evidence_root()

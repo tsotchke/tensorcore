@@ -29,6 +29,7 @@ compile_commands.json
 .claude/
 .cache/
 artifacts/
+*.json.lock
 configs/*.bak_*
 
 # Autotune cache

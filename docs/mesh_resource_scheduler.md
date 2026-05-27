@@ -87,6 +87,10 @@ emergency bypasses and their artifacts are not trusted unless promoted through
 the scheduler/finalizer path; `scripts/start_georefine_qwen_cr025.py` refuses
 non-preflight launches unless the explicit legacy override flag or environment
 variable is present.
+`scripts/check_mesh_resource_jobs.py` keeps the checked-in GeoRefine template
+generic: it must use inventory selectors, `{node}`/`{resource}`/`{worker_alias}`
+placeholders, and `TC_GEOREFINE_*` environment entries instead of concrete
+hosts or private paths.
 
 ## Dedicated Scheduler VM Contract
 

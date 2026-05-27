@@ -847,6 +847,11 @@ python3 scripts/check_mesh_resource_jobs.py
 python3 scripts/mesh_system_audit_selftest.py
 ```
 
+`check_mesh_resource_jobs.py` also validates
+`configs/georefine_qwen_job.template.json`: that checked-in submission template
+must stay selector-based and placeholder-driven, with host paths supplied by
+`TC_GEOREFINE_*` environment values instead of rendered into the template.
+
 Use `scripts/mesh_arbiter_with_inventory.py` when arbiter capacity/status
 output should be seeded from `configs/mesh_resources.json` before the scheduler
 claims leases.
@@ -968,8 +973,9 @@ python3 scripts/start_georefine_qwen_cr025_selftest.py
 Starts the scheduler-owned GeoRefine Qwen CR070 rank probe on a CUDA mesh
 worker. It requires a scheduler authority lease id, wraps the compressor in the
 qLLM resource-lease controller, and emits scheduler JSON. The checked-in
-`configs/georefine_qwen_job.template.json` pins the run directory so liveness,
-post-start, identity, and completion checks refer to the same artifact.
+`configs/georefine_qwen_job.template.json` stays generic: resource, node,
+worker alias, and run directory are scheduler placeholders, while host-local
+GeoRefine paths are supplied through `TC_GEOREFINE_*` environment entries.
 
 Fixture coverage:
 

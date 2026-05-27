@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import shlex
@@ -33,12 +34,48 @@ RESOURCE_CLASSES = {"generic", "cuda_exclusive"}
 DESIRED_STATES = {"running", "paused"}
 ROOT = Path(__file__).resolve().parents[1]
 CONTROL_COMMANDS = {"submit", "status", "cancel", "drain", "undrain", "audit"}
+UNRESOLVED_START_TEMPLATES = (
+    "{lease_id}",
+    "{authority_resource}",
+    "{authority_owner}",
+    "{worker_alias}",
+    "{worker_gpu_alias}",
+    "{trusted_evidence_root}",
+    "{evidence_root}",
+)
+
+
+def canonical_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def canonical_sha256(value: Any) -> str:
+    return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def source_provenance_from_metadata(metadata: Any) -> dict[str, Any]:
+    if not isinstance(metadata, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key, value in metadata.items():
+        if not isinstance(key, str) or not isinstance(value, (str, int, float, bool)):
+            continue
+        if (
+            key.endswith("_sha256")
+            or key.endswith("_renderer_contract")
+            or key in {"renderer_contract", "rendered_from", "source_provenance"}
+        ):
+            out[key] = value
+    return out
 
 
 def render_command_part(value: str, job: dict | None = None) -> str:
     if job is None:
         return value
     metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    gpu_reconciliation_args = job.get("gpu_reconciliation_admission_args")
+    if gpu_reconciliation_args is None:
+        gpu_reconciliation_args = metadata.get("gpu_reconciliation_admission_args")
     replacements = {
         "authority_owner": job.get("authority_owner") or job.get("owner"),
         "authority_resource": job.get("authority_resource") or job.get("resource"),
@@ -47,6 +84,7 @@ def render_command_part(value: str, job: dict | None = None) -> str:
         "job_id": job.get("id"),
         "lease_id": job.get("lease_id"),
         "logical_id": job.get("logical_id"),
+        "gpu_reconciliation_admission_args": gpu_reconciliation_args,
         "node": job.get("resource_node"),
         "owner": job.get("owner"),
         "repo_root": ROOT,
@@ -65,6 +103,24 @@ def render_command_part(value: str, job: dict | None = None) -> str:
         if replacement is not None:
             out = out.replace("{" + key + "}", str(replacement))
     return out
+
+
+def gpu_reconciliation_admission_args(row: dict | None) -> str:
+    if not isinstance(row, dict):
+        return ""
+    cfg = row.get("gpu_reconciliation")
+    if not isinstance(cfg, dict) or cfg.get("enabled", True) is not True:
+        return ""
+    args: list[str] = []
+    allow = cfg.get("allow_process_regex", [])
+    if isinstance(allow, list):
+        for pattern in allow:
+            if isinstance(pattern, str) and pattern:
+                args.extend(["--allow-process-regex", shlex.quote(pattern)])
+    memory_cap = cfg.get("allowed_process_max_memory_mib")
+    if isinstance(memory_cap, int) and memory_cap >= 0:
+        args.extend(["--allowed-process-max-memory-mib", str(memory_cap)])
+    return " ".join(args)
 
 
 def resolve_repo_relative_part(value: str, *, executable: bool = False) -> str:
@@ -571,12 +627,14 @@ def normalize_job(job: Any, inventory: dict[str, dict] | None = None) -> dict:
         out["resource_node"] = str(inventory_row.get("node") or out["resource"].split(":", 1)[0])
         out["resource_backend"] = str(inventory_row.get("backend") or "")
         out["inventory_class"] = str(inventory_row.get("class") or "")
+        out["gpu_reconciliation_admission_args"] = gpu_reconciliation_admission_args(inventory_row)
         if not out.get("worker_alias") and inventory_row.get("worker_alias"):
             out["worker_alias"] = str(inventory_row["worker_alias"])
     else:
         out["resource_node"] = str(out.get("resource_node") or out["resource"].split(":", 1)[0])
         out["resource_backend"] = str(out.get("resource_backend") or "")
         out["inventory_class"] = str(out.get("inventory_class") or "")
+        out["gpu_reconciliation_admission_args"] = str(out.get("gpu_reconciliation_admission_args") or "")
     requires_host_gate = out["resource_class"] == "cuda_exclusive"
     validate_command_field(out, "probe_cmd", required=False)
     validate_command_field(out, "start_cmd", required=out["desired_state"] == "running")
@@ -595,6 +653,8 @@ def normalize_job(job: Any, inventory: dict[str, dict] | None = None) -> dict:
     metadata["resource"] = out["resource"]
     metadata["resource_backend"] = out["resource_backend"]
     metadata["resource_node"] = out["resource_node"]
+    if out.get("gpu_reconciliation_admission_args"):
+        metadata["gpu_reconciliation_admission_args"] = out["gpu_reconciliation_admission_args"]
     if out.get("worker_alias"):
         metadata["worker_alias"] = out["worker_alias"]
     metadata["scheduler_host"] = os.uname().nodename
@@ -968,6 +1028,15 @@ def start_job(job: dict, *, timeout: float) -> dict:
     start_cmd = command(job.get("start_cmd"), job)
     if not start_cmd:
         raise RuntimeError(f"job {job['id']} has no start_cmd")
+    unresolved = [
+        part
+        for part in start_cmd
+        if any(template in part for template in UNRESOLVED_START_TEMPLATES)
+    ]
+    if unresolved:
+        raise RuntimeError(
+            f"job {job['id']} start_cmd has unresolved template(s): {unresolved!r}"
+        )
     proc = run_capture_for_job(start_cmd, job, timeout=timeout)
     result = {
         "ok": proc.returncode == 0,
@@ -2176,6 +2245,9 @@ def cmd_submit(args: argparse.Namespace) -> dict:
     inventory = load_inventory(args.inventory_json)
     spec = read_json_object(args.job_json)
     mesh_job = submit_spec_to_mesh_job(spec)
+    spec_sha256 = canonical_sha256(spec)
+    job_sha256 = canonical_sha256(mesh_job)
+    source_provenance = source_provenance_from_metadata(mesh_job.get("metadata"))
     expanded = [normalize_job(job, inventory=inventory) for job in expand_job_resources(mesh_job, inventory)]
     validate_jobs_against_inventory(expanded, inventory)
     payload = {
@@ -2184,6 +2256,9 @@ def cmd_submit(args: argparse.Namespace) -> dict:
         "checked_at_unix": time.time(),
         "dry_run": args.dry_run,
         "job": mesh_job,
+        "job_sha256": job_sha256,
+        "spec_sha256": spec_sha256,
+        "source_provenance": source_provenance,
         "expanded_jobs": [job["id"] for job in expanded],
         "launch_plans": [launch_plan(job) for job in expanded],
     }
@@ -2202,6 +2277,9 @@ def cmd_submit(args: argparse.Namespace) -> dict:
                 "created_at_unix": payload["checked_at_unix"],
                 "jobs_json": str(Path(args.jobs_json).expanduser()),
                 "job_id": mesh_job["id"],
+                "job_sha256": job_sha256,
+                "spec_sha256": spec_sha256,
+                "source_provenance": source_provenance,
                 "replace": bool(args.replace),
                 "expanded_jobs": payload["expanded_jobs"],
                 "queue_lock": str(queue_lock_path(args.jobs_json)),

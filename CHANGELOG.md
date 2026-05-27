@@ -158,6 +158,9 @@ every architectural primitive in code and tested:
 - The GeoRefine Qwen rank-probe launcher now takes host, path, model, worker
   resource, and quality gate values from scheduler config or environment
   instead of embedding cosbox/private-path defaults in code.
+- `scripts/check_mesh_resource_jobs.py` now rejects rendered GeoRefine
+  submission templates that pin concrete hosts, worker aliases, private paths,
+  or queue state instead of using selector/placeholders plus `TC_GEOREFINE_*`.
 - Mesh scheduler heartbeats for live CUDA-exclusive jobs now refresh worker
   identity metadata on the existing lease instead of leaving identity pending.
 - Mesh scheduler jobs now have a checked-in source of truth

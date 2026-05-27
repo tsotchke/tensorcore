@@ -69,7 +69,7 @@
   "admission": [
     "ssh",
     "{node}",
-    "cd ~/src/tensorcore && python3 scripts/check_cuda_resource_admission.py --resource {resource} --allow-process-regex '(steamwebhelper$|/opt/google/chrome/chrome)' --allowed-process-max-memory-mib 256 --json"
+    "cd ~/src/tensorcore && python3 scripts/check_cuda_resource_admission.py --resource {resource} {gpu_reconciliation_admission_args} --json"
   ],
   "preflight": [
     "python3",

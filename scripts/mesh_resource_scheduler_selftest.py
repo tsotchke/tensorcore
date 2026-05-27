@@ -1278,6 +1278,46 @@ def test_command_resolution_supports_authority_and_worker_alias_placeholders() -
     ]
 
 
+def test_command_resolution_supports_gpu_reconciliation_admission_placeholder() -> None:
+    scheduler = load_scheduler()
+    argv = scheduler.command(
+        [
+            "ssh",
+            "cosbox",
+            "admit --resource {resource} {gpu_reconciliation_admission_args} --json",
+        ],
+        {
+            "id": "georefine",
+            "resource": "cosbox:cuda3090",
+            "metadata": {
+                "gpu_reconciliation_admission_args": "--allow-process-regex 'steamwebhelper$' --allow-process-regex '/opt/google/chrome/chrome' --allowed-process-max-memory-mib 256",
+            },
+        },
+    )
+    assert argv == [
+        "ssh",
+        "cosbox",
+        "admit --resource cosbox:cuda3090 --allow-process-regex 'steamwebhelper$' --allow-process-regex '/opt/google/chrome/chrome' --allowed-process-max-memory-mib 256 --json",
+    ]
+    empty = scheduler.command(
+        ["admit", "{gpu_reconciliation_admission_args}"],
+        {"id": "georefine", "resource": "cosbox:cuda3090", "gpu_reconciliation_admission_args": ""},
+    )
+    assert empty == ["admit", ""]
+
+
+def test_start_job_rejects_unresolved_claim_template() -> None:
+    scheduler = load_scheduler()
+    row = job("georefine-unresolved", priority=100)
+    row["start_cmd"] = ["start", "--lease-id", "{lease_id}"]
+    try:
+        scheduler.start_job(row, timeout=1.0)
+    except RuntimeError as exc:
+        assert "unresolved template" in str(exc)
+    else:
+        raise AssertionError("expected unresolved launch template to fail")
+
+
 def test_resource_pool_respects_global_tenant_parallel_limit() -> None:
     runtime = FakeRuntime()
     result = run_case(
@@ -1602,6 +1642,24 @@ def test_loop_pretty_json_emits_json() -> None:
     assert out.getvalue().startswith("{\n")
 
 
+def test_source_provenance_from_metadata_is_generic() -> None:
+    scheduler = load_scheduler()
+    provenance = scheduler.source_provenance_from_metadata(
+        {
+            "georefine_gpu_pool_sha256": "a" * 64,
+            "job_source_sha256": "b" * 64,
+            "renderer_contract": "renderer.v1",
+            "scheduler_contract": "tensorcore_job_v1",
+            "target": "qwen",
+        }
+    )
+    assert provenance == {
+        "georefine_gpu_pool_sha256": "a" * 64,
+        "job_source_sha256": "b" * 64,
+        "renderer_contract": "renderer.v1",
+    }
+
+
 def tensorcore_job_v1_spec() -> dict[str, Any]:
     return {
         "schema": "tensorcore.job.v1",
@@ -1631,6 +1689,11 @@ def tensorcore_job_v1_spec() -> dict[str, Any]:
         },
         "preemption_policy": {"mode": "non_preemptible"},
         "quality_gates": [{"name": "size_ratio", "max": 0.30}],
+        "metadata": {
+            "georefine_gpu_pool_sha256": "a" * 64,
+            "georefine_job_source_sha256": "b" * 64,
+            "georefine_renderer_contract": "georefine_tensorcore_jobs_render_v1",
+        },
     }
 
 
@@ -1670,6 +1733,13 @@ def test_submit_dry_run_expands_tensorcore_job_v1() -> None:
     assert payload["ok"] is True
     assert payload["dry_run"] is True
     assert payload["expanded_jobs"] == ["georefine-qwen-rank-probe@cosbox:cuda3090"]
+    assert len(payload["spec_sha256"]) == 64
+    assert len(payload["job_sha256"]) == 64
+    assert payload["source_provenance"] == {
+        "georefine_gpu_pool_sha256": "a" * 64,
+        "georefine_job_source_sha256": "b" * 64,
+        "georefine_renderer_contract": "georefine_tensorcore_jobs_render_v1",
+    }
     plan = payload["launch_plans"][0]
     assert plan["schema"] == "tensorcore.cluster_launch_plan.v1"
     assert plan["resource"] == "cosbox:cuda3090"
@@ -1677,6 +1747,45 @@ def test_submit_dry_run_expands_tensorcore_job_v1() -> None:
     assert plan["completion_cmd"] == ["complete", "georefine-qwen-rank-probe"]
     assert plan["artifact_root"] == "/evidence/georefine"
     assert plan["quality_gates"] == [{"name": "size_ratio", "max": 0.30}]
+
+
+def test_submit_dry_run_renders_gpu_reconciliation_admission_args() -> None:
+    scheduler = load_scheduler()
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        spec = tensorcore_job_v1_spec()
+        spec["admission"] = [
+            "ssh",
+            "{node}",
+            "admit --resource {resource} {gpu_reconciliation_admission_args} --json",
+        ]
+        spec_path = root / "job.json"
+        queue_path = root / "queue.json"
+        inventory = cuda_inventory()
+        inventory[0]["gpu_reconciliation"] = {
+            "enabled": True,
+            "poll_host": "cosbox",
+            "allow_process_regex": [
+                "steamwebhelper$",
+                "/opt/google/chrome/chrome",
+            ],
+            "allowed_process_max_memory_mib": 256,
+        }
+        inventory_path = write_inventory(root, inventory)
+        spec_path.write_text(json.dumps(spec), encoding="utf-8")
+        payload = scheduler.cmd_submit(
+            argparse.Namespace(
+                job_json=str(spec_path),
+                jobs_json=str(queue_path),
+                inventory_json=str(inventory_path),
+                replace=False,
+                dry_run=True,
+            )
+        )
+    admission = payload["launch_plans"][0]["admission_cmd"][2]
+    assert "--allow-process-regex 'steamwebhelper$'" in admission
+    assert "--allow-process-regex /opt/google/chrome/chrome" in admission
+    assert "--allowed-process-max-memory-mib 256" in admission
 
 
 def test_submit_writes_queue_and_cancel_pauses_job() -> None:
@@ -1732,6 +1841,13 @@ def test_submit_writes_queue_and_cancel_pauses_job() -> None:
     assert queue["jobs"][0]["metadata"]["cancel_reason"] == "test_cancel"
     assert [event["event"] for event in events] == ["submit", "cancel"]
     assert events[0]["job_id"] == "georefine-qwen-rank-probe"
+    assert len(events[0]["spec_sha256"]) == 64
+    assert len(events[0]["job_sha256"]) == 64
+    assert events[0]["source_provenance"] == {
+        "georefine_gpu_pool_sha256": "a" * 64,
+        "georefine_job_source_sha256": "b" * 64,
+        "georefine_renderer_contract": "georefine_tensorcore_jobs_render_v1",
+    }
     assert events[0]["queue_lock"].endswith(".queue.json.lock")
     assert events[1]["cancelled_jobs"] == ["georefine-qwen-rank-probe"]
     assert events[1]["reason"] == "test_cancel"
@@ -2332,6 +2448,8 @@ def main() -> int:
     test_resource_pool_command_templates_receive_placement_context()
     test_command_resolution_preserves_remote_tilde_arguments()
     test_command_resolution_supports_authority_and_worker_alias_placeholders()
+    test_command_resolution_supports_gpu_reconciliation_admission_placeholder()
+    test_start_job_rejects_unresolved_claim_template()
     test_resource_pool_respects_global_tenant_parallel_limit()
     test_cuda_launch_runs_post_start_and_identity()
     test_cuda_launch_rejects_invalid_identity_json()
@@ -2342,7 +2460,9 @@ def main() -> int:
     test_cuda_live_adoption_records_worker_identity_in_claim()
     test_cuda_live_heartbeat_refreshes_worker_identity_metadata()
     test_loop_pretty_json_emits_json()
+    test_source_provenance_from_metadata_is_generic()
     test_submit_dry_run_expands_tensorcore_job_v1()
+    test_submit_dry_run_renders_gpu_reconciliation_admission_args()
     test_submit_writes_queue_and_cancel_pauses_job()
     test_submit_and_cancel_require_event_log_for_queue_mutation()
     test_submit_and_cancel_parse_event_log_default_from_env()
