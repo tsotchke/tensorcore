@@ -252,7 +252,7 @@ Validate it with:
 ```sh
 python3 scripts/check_pytorch_smoke_evidence.py /tmp/pytorch.json
 python3 scripts/check_pytorch_smoke_evidence.py /tmp/pytorch.json \
-  --require-pytorch --require-backend-allocation
+  --require-pytorch --require-backend-allocation --require-clean-head
 ```
 
 Run locally:

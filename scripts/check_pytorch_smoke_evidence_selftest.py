@@ -172,6 +172,7 @@ def main() -> int:
     assert_passes(good)
     assert_passes(good, "--require-pytorch")
     assert_passes(good, "--require-backend-allocation")
+    assert_passes(good, "--git-head", "abc123", "--require-clean-head")
 
     skipped = skipped_evidence()
     assert_passes(skipped)
@@ -198,6 +199,14 @@ def main() -> int:
         "tc_to_tensorcore"
     ]
     assert_fails(missing_coverage, "missing function coverage")
+
+    dirty = copy.deepcopy(good)
+    dirty["git_dirty"] = True
+    assert_fails(dirty, "clean git tree", "--git-head", "abc123", "--require-clean-head")
+
+    stale = copy.deepcopy(good)
+    stale["git_head"] = "old"
+    assert_fails(stale, "git_head mismatch", "--git-head", "abc123", "--require-clean-head")
 
     assert_fails(
         skipped,

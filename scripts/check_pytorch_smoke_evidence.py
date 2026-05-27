@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import subprocess
 import sys
 
 
@@ -59,6 +60,18 @@ def fail(message: str) -> int:
     return 1
 
 
+def git_head() -> str | None:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=pathlib.Path(__file__).resolve().parents[1],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return None
+
+
 def covered_functions(evidence: dict) -> dict[str, set[str]]:
     files = evidence.get("files")
     if not isinstance(files, dict):
@@ -90,8 +103,10 @@ def check_function_coverage(evidence: dict) -> str | None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("path", type=pathlib.Path)
+    parser.add_argument("--git-head", default=git_head())
     parser.add_argument("--require-pytorch", action="store_true")
     parser.add_argument("--require-backend-allocation", action="store_true")
+    parser.add_argument("--require-clean-head", action="store_true")
     args = parser.parse_args()
 
     try:
@@ -107,6 +122,17 @@ def main() -> int:
 
     if args.require_pytorch and status != "passed":
         return fail(f"--require-pytorch needs passed evidence, got {status}")
+
+    if args.require_clean_head:
+        if not args.git_head:
+            return fail("expected git head is unavailable for PyTorch evidence check")
+        if evidence.get("git_dirty") is not False:
+            return fail("PyTorch evidence must be from a clean git tree")
+        if evidence.get("git_head") != args.git_head:
+            return fail(
+                "PyTorch evidence git_head mismatch: "
+                f"{evidence.get('git_head')!r} != {args.git_head!r}"
+            )
 
     allocation = evidence.get("direct_device_allocation")
     if not isinstance(allocation, dict):
