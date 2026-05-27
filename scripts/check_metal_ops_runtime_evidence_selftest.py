@@ -18,6 +18,12 @@ CHECKER = ROOT / "scripts" / "check_metal_ops_runtime_evidence.py"
 
 def coverage() -> dict[str, Any]:
     return {
+        "kernels/metal/fused_norm_gemv.metal": {
+            "executed_lines": [29],
+            "functions": {
+                "tg_sum32": {"start_line": 29, "executed_lines": [29]},
+            },
+        },
         "lib/ops/attention.mm": {
             "executed_lines": [205],
             "functions": {
@@ -56,6 +62,7 @@ def passed_evidence() -> dict[str, Any]:
         "checks": {
             "attention_correctness": {"status": "passed", "binary": "/repo/build/tests/test_attention_correctness", "trace": "attention_correctness"},
             "conv2d": {"status": "passed", "binary": "/repo/build/tests/test_conv2d", "trace": "conv2d"},
+            "fused_norm_gemv": {"status": "passed", "binary": "/repo/build/tests/test_fused_norm_gemv", "trace": "fused_norm_gemv"},
             "gemm_batched": {"status": "passed", "binary": "/repo/build/tests/test_gemm_f16", "trace": "gemm_batched"},
             "async_copy_shader": {
                 "status": "blocked",
@@ -66,6 +73,7 @@ def passed_evidence() -> dict[str, Any]:
         "trace": [
             {"name": "attention_correctness", "cmd": ["test_attention_correctness"], "cwd": "/repo", "rc": 0},
             {"name": "conv2d", "cmd": ["test_conv2d"], "cwd": "/repo", "rc": 0},
+            {"name": "fused_norm_gemv", "cmd": ["test_fused_norm_gemv"], "cwd": "/repo", "rc": 0},
             {"name": "gemm_batched", "cmd": ["test_gemm_f16"], "cwd": "/repo", "rc": 0},
         ],
         "files": coverage(),
@@ -75,11 +83,13 @@ def passed_evidence() -> dict[str, Any]:
             "failure_reasons": [],
             "optional_blocked_reasons": ["async_copy_shader:shader_line_execution_trace_unavailable"],
             "required_functions": [
+                "kernels/metal/fused_norm_gemv.metal:tg_sum32",
                 "lib/ops/attention.mm:encode_forward",
                 "lib/ops/conv.mm:conv_bytes",
                 "lib/ops/gemm.mm:batched_matrix_bytes",
             ],
             "covered_functions": [
+                "kernels/metal/fused_norm_gemv.metal:tg_sum32",
                 "lib/ops/attention.mm:encode_forward",
                 "lib/ops/conv.mm:conv_bytes",
                 "lib/ops/gemm.mm:batched_matrix_bytes",
@@ -87,6 +97,9 @@ def passed_evidence() -> dict[str, Any]:
             "missing_functions": [],
             "optional_missing_functions": [
                 "kernels/metal/metal_simdgroup_event.h:async_copy",
+                "kernels/metal/metal_simdgroup_event.h:async_copy_clamp_mode",
+                "kernels/metal/metal_simdgroup_event.h:tc",
+                "kernels/metal/metal_simdgroup_event.h:wait",
             ],
         },
     }
@@ -101,12 +114,14 @@ def blocked_evidence() -> dict[str, Any]:
         "binary": None,
     }
     evidence["files"] = {
+        "kernels/metal/fused_norm_gemv.metal": coverage()["kernels/metal/fused_norm_gemv.metal"],
         "lib/ops/conv.mm": coverage()["lib/ops/conv.mm"],
         "lib/ops/gemm.mm": coverage()["lib/ops/gemm.mm"],
     }
     evidence["summary"]["checks_passed"] = False
     evidence["summary"]["blocked_reasons"] = ["attention_correctness:test_binary_missing"]
     evidence["summary"]["covered_functions"] = [
+        "kernels/metal/fused_norm_gemv.metal:tg_sum32",
         "lib/ops/conv.mm:conv_bytes",
         "lib/ops/gemm.mm:batched_matrix_bytes",
     ]
@@ -156,6 +171,7 @@ def main() -> int:
     missing_function = copy.deepcopy(passed)
     del missing_function["files"]["lib/ops/attention.mm"]["functions"]["encode_forward"]
     missing_function["summary"]["covered_functions"] = [
+        "kernels/metal/fused_norm_gemv.metal:tg_sum32",
         "lib/ops/conv.mm:conv_bytes",
         "lib/ops/gemm.mm:batched_matrix_bytes",
     ]

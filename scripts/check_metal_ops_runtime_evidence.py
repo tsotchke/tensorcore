@@ -19,15 +19,20 @@ VALID_CHECK_STATUSES = {"passed", "failed", "blocked", "skipped"}
 REQUIRED_CHECKS = {
     "attention_correctness",
     "conv2d",
+    "fused_norm_gemv",
     "gemm_batched",
     "async_copy_shader",
 }
 REQUIRE_PASS_CHECKS = {
     "attention_correctness",
     "conv2d",
+    "fused_norm_gemv",
     "gemm_batched",
 }
 REQUIRED_FUNCTIONS = {
+    "kernels/metal/fused_norm_gemv.metal": {
+        "tg_sum32",
+    },
     "lib/ops/attention.mm": {
         "encode_forward",
     },

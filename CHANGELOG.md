@@ -43,6 +43,10 @@ every architectural primitive in code and tested:
 - Metal ops evidence now includes the batched-GEMM host validation path:
   `run_metal_ops_runtime_evidence.py` runs `test_gemm_f16` and covers
   `lib/ops/gemm.mm:batched_matrix_bytes`.
+- Metal ops evidence now also runs `test_fused_norm_gemv`, covering the
+  `tg_sum32` shader reduction helper, and GEMM tracing reports selected
+  Metal kernel names so async-copy wrapper coverage is claimed only when an
+  async-copy kernel is actually selected at runtime.
 - CPU ops evidence now claims the Conv2D im2col staging helper when
   `test_conv2d` passes, covering `lib/ops/conv2d_cpu.cpp:im2col_fp16`.
 - Python packaging evidence now covers the full `setup.py` native-artifact

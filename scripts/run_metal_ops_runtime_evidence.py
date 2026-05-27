@@ -17,6 +17,9 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCHEMA = "tensorcore.metal_ops_runtime_evidence.v1"
 FORMAT_VERSION = 1
 REQUIRED_FUNCTIONS = {
+    "kernels/metal/fused_norm_gemv.metal": {
+        "tg_sum32",
+    },
     "lib/ops/attention.mm": {
         "encode_forward",
     },
@@ -30,6 +33,9 @@ REQUIRED_FUNCTIONS = {
 OPTIONAL_FUNCTIONS = {
     "kernels/metal/metal_simdgroup_event.h": {
         "async_copy",
+        "async_copy_clamp_mode",
+        "tc",
+        "wait",
     },
 }
 TESTS = {
@@ -75,7 +81,24 @@ TESTS = {
             },
         },
     },
+    "fused_norm_gemv": {
+        "path": "tests/test_fused_norm_gemv",
+        "required_markers": (
+            "trace op=tc_fused_rmsnorm_gemv status=ok backend=metal_compute",
+            "trace op=tc_fused_layernorm_gemv status=ok backend=metal_compute",
+            "fused_rmsnorm_gemv",
+            "fused_layernorm_gemv",
+            "OK",
+        ),
+        "covers": {
+            "kernels/metal/fused_norm_gemv.metal": {
+                "tg_sum32",
+            },
+        },
+    },
 }
+
+ASYNC_KERNEL_RE = re.compile(r"kernel=(tc_gemm_(?:f16|bf16)_f32_async(?:_128|_db)?)")
 
 
 def parse_args() -> argparse.Namespace:
@@ -179,11 +202,15 @@ def function_line(rel_path: str, name: str) -> int:
     regex = re.compile(
         rf"^\s*(?:extern\s+\"C\"\s+)?(?:[A-Za-z_][\w:<>,\s\*&]*\s+)+{re.escape(name)}\s*\("
     )
+    namespace_regex = re.compile(rf"^\s*namespace\s+{re.escape(name)}\b")
+    enum_regex = re.compile(rf"^\s*enum\s+(?:class\s+)?{re.escape(name)}\b")
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return 1
     for index, line in enumerate(lines, start=1):
+        if namespace_regex.search(line) or enum_regex.search(line):
+            return index
         if not regex.search(line):
             continue
         signature = line
@@ -237,7 +264,7 @@ def classify_attempt(attempt: dict[str, Any], markers: tuple[str, ...]) -> tuple
     return "failed", "test_failed"
 
 
-def async_copy_shader_check(build_dir: pathlib.Path) -> dict[str, Any]:
+def async_copy_shader_check(build_dir: pathlib.Path, trace: list[dict[str, Any]]) -> dict[str, Any]:
     metallib = build_dir / "tensorcore.metallib"
     if not metallib.exists():
         return {
@@ -255,6 +282,19 @@ def async_copy_shader_check(build_dir: pathlib.Path) -> dict[str, Any]:
             "error": str(exc),
         }
     compiled_async = b"tc_gemm_f16_f32_async" in blob or b"air.simdgroup_async_copy_2d" in blob
+    trace_text = "\n".join(
+        "\n".join([str(item.get("stdout_tail", "")), str(item.get("stderr_tail", ""))])
+        for item in trace
+    )
+    runtime_kernels = sorted(set(ASYNC_KERNEL_RE.findall(trace_text)))
+    if runtime_kernels:
+        return {
+            "status": "passed",
+            "metallib": str(metallib),
+            "compiled_async_kernel": compiled_async,
+            "runtime_kernels": runtime_kernels,
+            "reason": "A traced GEMM smoke selected an async-copy Metal kernel at runtime.",
+        }
     return {
         "status": "blocked",
         "blocked_reason": "shader_line_execution_trace_unavailable",
@@ -306,12 +346,16 @@ def build_evidence(args: argparse.Namespace) -> dict[str, Any]:
         else:
             failure_reasons.append(f"{name}:{reason}")
 
-    async_check = async_copy_shader_check(build_dir)
+    async_check = async_copy_shader_check(build_dir, trace)
     checks["async_copy_shader"] = async_check
     if async_check["status"] == "blocked":
         optional_blocked_reasons.append(f"async_copy_shader:{async_check.get('blocked_reason')}")
     elif async_check["status"] == "failed":
         failure_reasons.append(f"async_copy_shader:{async_check.get('reason')}")
+    elif async_check["status"] == "passed":
+        for rel_path, names in OPTIONAL_FUNCTIONS.items():
+            for function in names:
+                add_function(files, rel_path, function)
 
     for entry in files.values():
         entry["executed_lines"] = sorted(set(entry["executed_lines"]))

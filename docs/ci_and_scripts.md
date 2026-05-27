@@ -445,11 +445,13 @@ python3 scripts/run_cpu_ops_runtime_evidence.py --require-pass
 
 ### `run_metal_ops_runtime_evidence.py`
 
-Focused evidence for local Metal attention, Conv2D, and batched-GEMM host
-dispatch. The runner executes `test_attention_correctness`, the Metal-build
-`test_conv2d`, and `test_gemm_f16` with `TC_TRACE=1`, then emits
+Focused evidence for local Metal attention, Conv2D, batched-GEMM, and fused
+norm+GEMV host dispatch. The runner executes `test_attention_correctness`,
+the Metal-build `test_conv2d`, `test_gemm_f16`, and
+`test_fused_norm_gemv` with `TC_TRACE=1`, then emits
 ICC-readable coverage for:
 
+- `kernels/metal/fused_norm_gemv.metal:tg_sum32`
 - `lib/ops/attention.mm:encode_forward`
 - `lib/ops/conv.mm:conv_bytes`
 - `lib/ops/gemm.mm:batched_matrix_bytes`
@@ -468,10 +470,10 @@ Run locally after building the Metal test suite:
 python3 scripts/run_metal_ops_runtime_evidence.py --require-pass
 ```
 
-The runner also records async-copy shader availability as an optional blocked
-check. Existing host traces show public ops/backends, not Metal shader
-function-line execution, so `async_copy` remains unclaimed until a Metal
-capture, shader instrumentation, or selected-kernel trace exists.
+The runner also records async-copy shader availability as an optional check.
+When `TC_TRACE=1` shows that a GEMM smoke selected an async-copy kernel, the
+artifact claims the `metal_simdgroup_event.h` wrapper surface; otherwise the
+check remains optional-blocked rather than overclaiming shader execution.
 
 ### `run_quantized_gguf_runtime_evidence.py`
 

@@ -18,6 +18,7 @@
 #include "../core/internal.h"
 
 #include <cstdio>
+#include <cstring>
 #include <limits>
 
 extern "C" tc_status_t tc_mps_gemm(tc_context* ctx,
@@ -60,6 +61,22 @@ static bool use_async_kernel(const tc_gemm_desc* /*d*/) {
      * A/B comparison or when chasing a regression on older Metal. */
     const char* opt = getenv("TC_USE_ASYNC");
     return !opt || opt[0] != '0';
+}
+
+static bool trace_enabled(void) {
+    const char* value = getenv("TC_TRACE");
+    return value && value[0] != '\0' && value[0] != '0';
+}
+
+static void trace_selected_kernel(const char* op, NSString* kernel_name) {
+    if (!trace_enabled() || !kernel_name) return;
+    const char* name = [kernel_name UTF8String];
+    const bool async_copy = name && strstr(name, "_async") != nullptr;
+    fprintf(stderr,
+            "[tensorcore] trace op=%s kernel=%s async_copy=%s\n",
+            op ? op : "?",
+            name ? name : "?",
+            async_copy ? "yes" : "no");
 }
 
 TileChoice kernel_for(const tc_gemm_desc* d, tc_family_t fam, tc_context* ctx, tc_status_t* err) {
@@ -366,6 +383,7 @@ extern "C" tc_status_t tc_gemm(tc_context* ctx,
         return tc_record_dispatch("tc_gemm", TC_BACKEND_MPS,
                                   tc_mps_gemm(ctx, desc, A, B, C));
     }
+    trace_selected_kernel("tc_gemm", tile.kernel_name);
 
     const uint32_t M = (uint32_t)desc->M;
     const uint32_t N = (uint32_t)desc->N;
@@ -441,6 +459,7 @@ extern "C" tc_status_t tc_gemm_async(tc_context* ctx,
                                                         desc->transpose_b,
                                                         &err);
     if (!pso) return fallback_gemm();
+    trace_selected_kernel("tc_gemm_async", tile.kernel_name);
 
     const uint32_t M = (uint32_t)desc->M;
     const uint32_t N = (uint32_t)desc->N;
