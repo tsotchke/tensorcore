@@ -388,16 +388,16 @@ as a code failure.
 Focused evidence for local AMX and GEMM benchmark paths. The runner executes
 the AMX metadata probe, the opt-in direct AMX GEMM regression, and a tiny
 `bench_gemm` run with `TC_BENCH_SIZES=16`, `TC_BENCH_DTYPES=f32`,
-`TC_BENCH_WARMUP=0`, and `TC_BENCH_ITERS=1`. It also runs a bounded
+`TC_BENCH_WARMUP=0`, and `TC_BENCH_ITERS=1`. It also attempts a bounded
 FlashAttention benchmark with `TC_ATTENTION_BENCH_SINGLE=1`,
 `TC_ATTENTION_BENCH_S=16`, `TC_ATTENTION_BENCH_WARMUP=0`, and
-`TC_ATTENTION_BENCH_ITERS=1`, falling back to the portable CPU build when
-Metal is unavailable to the evidence subprocess. It records ICC-readable
-coverage for:
+`TC_ATTENTION_BENCH_ITERS=1`; that check is optional because nested Python
+evidence subprocesses can lack Metal device access on otherwise healthy macOS
+hosts, and the portable CPU attention benchmark is not a bounded substitute.
+It records required ICC-readable coverage for:
 
 - `lib/ops/gemm_cpu_amx.cpp`
 - `bench/bench_gemm.c`
-- `bench/bench_attention.c`
 
 The default artifact is `build/amx_bench_evidence.json`. Validate it with:
 
@@ -412,10 +412,12 @@ Run locally after building the portable CPU AMX tests and GEMM benchmark:
 python3 scripts/run_amx_bench_evidence.py --require-pass
 ```
 
-TensorOps M5 layout helpers are probed as an optional layout check. On current
-non-SDK26 or non-M5 hosts the artifact stays `status=passed` for AMX/bench
-coverage while recording `summary.optional_blocked_reasons` such as
-`tensorops_layout:skipped_no_metal4_sdk` or `tensorops_layout:skipped_no_m5`.
+FlashAttention benchmark helpers and TensorOps M5 layout helpers are optional
+checks. The artifact stays `status=passed` for AMX/bench coverage while
+recording `optional_checks` and `summary.optional_skipped_reasons` such as
+`bench_attention:metal_device_unavailable`,
+`tensorops_layout:skipped_no_metal4_sdk`, or
+`tensorops_layout:skipped_no_m5`.
 
 ### `run_cpu_ops_runtime_evidence.py`
 

@@ -20,6 +20,8 @@ REQUIRED_CHECKS = {
     "amx_probe",
     "amx_gemm",
     "bench_gemm",
+}
+OPTIONAL_CHECKS = {
     "bench_attention",
     "tensorops_layout",
 }
@@ -27,7 +29,6 @@ REQUIRE_PASS_CHECKS = {
     "amx_probe",
     "amx_gemm",
     "bench_gemm",
-    "bench_attention",
 }
 REQUIRED_FUNCTIONS = {
     "lib/ops/gemm_cpu_amx.cpp": {
@@ -52,12 +53,6 @@ REQUIRED_FUNCTIONS = {
         "parse_sizes",
         "print_throughput",
         "trim_token",
-    },
-    "bench/bench_attention.c": {
-        "bench_one",
-        "cmp_double",
-        "env_int",
-        "now_seconds",
     },
 }
 
@@ -175,24 +170,46 @@ def check_clean_head(errors: list[str], data: dict[str, Any], expected_head: str
         )
 
 
-def check_checks(errors: list[str], checks: Any, require_pass: bool) -> None:
+def check_checks(
+    errors: list[str],
+    checks: Any,
+    optional_checks: Any,
+    require_pass: bool,
+) -> None:
     if not isinstance(checks, dict):
         errors.append("checks must be an object")
+    else:
+        missing = sorted(REQUIRED_CHECKS - set(checks))
+        if missing:
+            errors.append(f"checks missing required entries: {missing!r}")
+        for name, item in checks.items():
+            if not isinstance(item, dict):
+                errors.append(f"checks.{name} must be an object")
+                continue
+            status = item.get("status")
+            if status not in VALID_CHECK_STATUSES:
+                errors.append(
+                    f"checks.{name}.status must be one of {sorted(VALID_CHECK_STATUSES)!r}, got {status!r}"
+                )
+            if require_pass and name in REQUIRE_PASS_CHECKS and status != "passed":
+                errors.append(f"checks.{name}.status must be passed, got {status!r}")
+    if not isinstance(optional_checks, dict):
+        errors.append("optional_checks must be an object")
         return
-    missing = sorted(REQUIRED_CHECKS - set(checks))
-    if missing:
-        errors.append(f"checks missing required entries: {missing!r}")
-    for name, item in checks.items():
+    missing_optional = sorted(OPTIONAL_CHECKS - set(optional_checks))
+    if missing_optional:
+        errors.append(f"optional_checks missing entries: {missing_optional!r}")
+    for name, item in optional_checks.items():
         if not isinstance(item, dict):
-            errors.append(f"checks.{name} must be an object")
+            errors.append(f"optional_checks.{name} must be an object")
             continue
         status = item.get("status")
         if status not in VALID_CHECK_STATUSES:
             errors.append(
-                f"checks.{name}.status must be one of {sorted(VALID_CHECK_STATUSES)!r}, got {status!r}"
+                f"optional_checks.{name}.status must be one of {sorted(VALID_CHECK_STATUSES)!r}, got {status!r}"
             )
-        if require_pass and name in REQUIRE_PASS_CHECKS and status != "passed":
-            errors.append(f"checks.{name}.status must be passed, got {status!r}")
+        if status == "skipped" and not item.get("skip_reason"):
+            errors.append(f"optional_checks.{name}.skip_reason is required when skipped")
 
 
 def check_status_consistency(errors: list[str], data: dict[str, Any]) -> None:
@@ -203,13 +220,13 @@ def check_status_consistency(errors: list[str], data: dict[str, Any]) -> None:
         return
     blocked = summary.get("blocked_reasons")
     failures = summary.get("failure_reasons")
-    optional_blocked = summary.get("optional_blocked_reasons")
+    optional_skipped = summary.get("optional_skipped_reasons")
     if not isinstance(blocked, list):
         errors.append("summary.blocked_reasons must be a list")
     if not isinstance(failures, list):
         errors.append("summary.failure_reasons must be a list")
-    if not isinstance(optional_blocked, list):
-        errors.append("summary.optional_blocked_reasons must be a list")
+    if not isinstance(optional_skipped, list):
+        errors.append("summary.optional_skipped_reasons must be a list")
     if status == "passed":
         if blocked:
             errors.append(f"passed evidence must not include blocked_reasons={blocked!r}")
@@ -242,7 +259,7 @@ def main() -> int:
     if data.get("status") not in VALID_STATUSES:
         errors.append(f"status must be one of {sorted(VALID_STATUSES)!r}, got {data.get('status')!r}")
 
-    check_checks(errors, data.get("checks"), args.require_pass)
+    check_checks(errors, data.get("checks"), data.get("optional_checks"), args.require_pass)
     check_status_consistency(errors, data)
     check_summary_contract(errors, data)
     trace = data.get("trace")
@@ -265,11 +282,11 @@ def main() -> int:
     summary = data.get("summary")
     optional_reason = ""
     if isinstance(summary, dict):
-        optional_reason = ",".join(summary.get("optional_blocked_reasons") or [])
+        optional_reason = ",".join(summary.get("optional_skipped_reasons") or [])
     print(
         "AMX/bench evidence OK: "
         f"status={data.get('status')} covered_functions={covered_count} "
-        f"optional_blocked={optional_reason or 'none'}"
+        f"optional_skipped={optional_reason or 'none'}"
     )
     return 0
 

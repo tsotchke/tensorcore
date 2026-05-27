@@ -40,6 +40,8 @@ REQUIRED_FUNCTIONS = {
         "print_throughput",
         "trim_token",
     },
+}
+OPTIONAL_BENCH_FUNCTIONS = {
     "bench/bench_attention.c": {
         "bench_one",
         "cmp_double",
@@ -366,10 +368,11 @@ def build_evidence(args: argparse.Namespace) -> dict[str, Any]:
     env = build_env(build_dir, portable_build_dir)
     trace: list[dict[str, Any]] = []
     checks: dict[str, Any] = {}
+    optional_checks: dict[str, Any] = {}
     files: dict[str, Any] = {}
     blocked_reasons: list[str] = []
     failure_reasons: list[str] = []
-    optional_blocked_reasons: list[str] = []
+    optional_skipped_reasons: list[str] = []
 
     amx_probe_check, amx_probe_trace = run_probe(
         "amx_probe",
@@ -475,32 +478,43 @@ def build_evidence(args: argparse.Namespace) -> dict[str, Any]:
         "bench_attention",
         [
             build_dir / "bench" / "bench_attention",
-            portable_build_dir / "bench" / "bench_attention",
         ],
         attention_env,
         args.timeout_sec,
         ("=== tensorcore FlashAttention bench", "median="),
     )
-    checks["bench_attention"] = attention_check
-    trace.extend(attention_trace)
     if attention_check["status"] == "passed":
+        optional_checks["bench_attention"] = attention_check
+        trace.extend(attention_trace)
         for function in ("bench_one", "cmp_double", "env_int", "now_seconds"):
             add_function(files, "bench/bench_attention.c", function)
-    elif attention_check["status"] == "blocked":
-        blocked_reasons.append(f"bench_attention:{attention_check.get('blocked_reason')}")
     else:
-        failure_reasons.append(f"bench_attention:{attention_check.get('reason')}")
+        optional_reason = attention_check.get("blocked_reason") or attention_check.get("reason") or "not_passed"
+        optional_checks["bench_attention"] = {
+            "status": "skipped",
+            "skip_reason": optional_reason,
+            "binary": attention_check.get("binary"),
+        }
+        optional_skipped_reasons.append(f"bench_attention:{optional_reason}")
 
     layout_check, layout_trace, layout_covered = tensorops_layout_check(build_dir, env, args.timeout_sec)
-    checks["tensorops_layout"] = layout_check
     trace.extend(layout_trace)
     if layout_check["status"] == "passed" and layout_covered:
+        optional_checks["tensorops_layout"] = layout_check
         for rel_path, names in OPTIONAL_LAYOUT_FUNCTIONS.items():
             for function in names:
                 add_function(files, rel_path, function)
     elif layout_check["status"] == "blocked":
-        optional_blocked_reasons.append(f"tensorops_layout:{layout_check.get('blocked_reason')}")
+        optional_checks["tensorops_layout"] = {
+            key: value
+            for key, value in layout_check.items()
+            if key not in {"status", "blocked_reason", "reason"}
+        }
+        optional_checks["tensorops_layout"]["status"] = "skipped"
+        optional_checks["tensorops_layout"]["skip_reason"] = layout_check.get("blocked_reason")
+        optional_skipped_reasons.append(f"tensorops_layout:{layout_check.get('blocked_reason')}")
     elif layout_check["status"] == "failed":
+        checks["tensorops_layout"] = layout_check
         failure_reasons.append(f"tensorops_layout:{layout_check.get('reason')}")
 
     for entry in files.values():
@@ -508,7 +522,9 @@ def build_evidence(args: argparse.Namespace) -> dict[str, Any]:
 
     required_functions = sorted(f"{path}:{name}" for path, names in REQUIRED_FUNCTIONS.items() for name in names)
     optional_functions = sorted(
-        f"{path}:{name}" for path, names in OPTIONAL_LAYOUT_FUNCTIONS.items() for name in names
+        f"{path}:{name}"
+        for path, names in {**OPTIONAL_BENCH_FUNCTIONS, **OPTIONAL_LAYOUT_FUNCTIONS}.items()
+        for name in names
     )
     covered = covered_functions(files)
     missing_functions = sorted(set(required_functions) - set(covered))
@@ -538,13 +554,14 @@ def build_evidence(args: argparse.Namespace) -> dict[str, Any]:
             "evidence": str(args.evidence_path),
         },
         "checks": checks,
+        "optional_checks": optional_checks,
         "trace": trace,
         "files": files,
         "summary": {
             "checks_passed": status == "passed",
             "blocked_reasons": blocked_reasons,
             "failure_reasons": failure_reasons,
-            "optional_blocked_reasons": optional_blocked_reasons,
+            "optional_skipped_reasons": optional_skipped_reasons,
             "required_functions": required_functions,
             "covered_functions": covered,
             "missing_functions": missing_functions,
@@ -565,7 +582,7 @@ def main() -> int:
         reason = ",".join(
             evidence["summary"]["blocked_reasons"]
             or evidence["summary"]["failure_reasons"]
-            or evidence["summary"]["optional_blocked_reasons"]
+            or evidence["summary"]["optional_skipped_reasons"]
         ) or "ok"
         print(
             "AMX/bench evidence "

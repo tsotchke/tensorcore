@@ -90,14 +90,16 @@ def passed_evidence() -> dict[str, Any]:
                 "binary": "/repo/build/bench/bench_gemm",
                 "trace": "bench_gemm",
             },
+        },
+        "optional_checks": {
             "bench_attention": {
                 "status": "passed",
                 "binary": "/repo/build/bench/bench_attention",
                 "trace": "bench_attention",
             },
             "tensorops_layout": {
-                "status": "blocked",
-                "blocked_reason": "skipped_no_metal4_sdk",
+                "status": "skipped",
+                "skip_reason": "skipped_no_metal4_sdk",
                 "metal4_sdk_compiled": False,
                 "tensorops_m5_source_compiled": False,
             },
@@ -113,12 +115,8 @@ def passed_evidence() -> dict[str, Any]:
             "checks_passed": True,
             "blocked_reasons": [],
             "failure_reasons": [],
-            "optional_blocked_reasons": ["tensorops_layout:skipped_no_metal4_sdk"],
+            "optional_skipped_reasons": ["tensorops_layout:skipped_no_metal4_sdk"],
             "required_functions": sorted([
-                "bench/bench_attention.c:bench_one",
-                "bench/bench_attention.c:cmp_double",
-                "bench/bench_attention.c:env_int",
-                "bench/bench_attention.c:now_seconds",
                 "bench/bench_gemm.c:bench_one",
                 "bench/bench_gemm.c:cmp_double",
                 "bench/bench_gemm.c:env_int",

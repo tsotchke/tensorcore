@@ -56,9 +56,11 @@ every architectural primitive in code and tested:
   helper chain, including artifact discovery, platform selection, metallib
   requirement checks, macOS dylib/tag validation, and `_run_tool`.
 - AMX/bench evidence now covers benchmark parser/timing helpers in
-  `bench_gemm.c` plus the FlashAttention benchmark helpers in
-  `bench_attention.c`; `bench_attention` has a bounded environment-controlled
-  single-case mode for evidence subprocesses and slow portable hosts.
+  `bench_gemm.c` and can cover the optional FlashAttention helpers in
+  `bench_attention.c` when the host exposes Metal to evidence subprocesses.
+- AMX/bench evidence now keeps FlashAttention benchmark coverage optional
+  when nested Python evidence subprocesses cannot acquire a Metal device,
+  preventing AMX worker evidence from being blocked by host Metal visibility.
 - `test_dist_remote` now accepts `--elements` and `--iters`, making short
   WAN ring proofs possible without changing the default 4 MB throughput
   probe.
