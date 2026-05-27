@@ -131,6 +131,9 @@ The self-hosted runner exercises the deepest hardware path and emits a
 The workflow first emits a GitHub-hosted
 `tensorcore-hardware-runner-preflight` artifact that records the required
 self-hosted labels and whether a matching runner was visible.
+The artifact's `diagnostics[*].recommended_action` field is the operational
+handoff: it distinguishes an unavailable runner-list token from an absent or
+offline self-hosted M5 runner.
 Validate that artifact after download with:
 
 ```sh

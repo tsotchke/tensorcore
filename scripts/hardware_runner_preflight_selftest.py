@@ -64,24 +64,29 @@ def main() -> int:
         assert "permission denied" in unavailable["runner_api_error"]
         assert unavailable["meta"]["head_sha"] == "abc123"
         assert unavailable["meta"]["run_id"] == "456"
+        assert unavailable["diagnostics"][0]["diagnostic_class"] == "token_unavailable"
 
         missing = build(tmp, 0, [runner("linux", "online", ["self-hosted", "Linux", "X64"])])
         assert missing["status"] == "blocked_no_matching_runner"
         assert missing["registered_runner_count"] == 1
+        assert missing["diagnostics"][0]["diagnostic_class"] == "runner_absent"
 
         offline = build(tmp, 0, [runner("m5", "offline", ["self-hosted", "macOS", "ARM64"])])
         assert offline["status"] == "matching_runner_offline"
         assert offline["matching_runner_count"] == 1
+        assert offline["diagnostics"][0]["diagnostic_class"] == "runner_offline"
 
         online = build(tmp, 0, [runner("m5", "online", ["self-hosted", "macOS", "ARM64"])])
         assert online["status"] == "matching_runner_online"
         assert online["online_matching_runner_count"] == 1
+        assert online["diagnostics"][0]["diagnostic_class"] == "runner_online"
 
         summary = tmp / "summary.md"
         preflight.append_summary(summary, online)
         text = summary.read_text(encoding="utf-8")
         assert "Hardware Evidence runner preflight" in text
         assert "matching_runner_online" in text
+        assert "Recommended action" in text
 
     print("hardware runner preflight selftest OK")
     return 0

@@ -14,6 +14,10 @@ from typing import Any
 SCHEMA = "tensorcore.hardware_runner_preflight.v1"
 FORMAT_VERSION = 1
 DEFAULT_REQUIRED_LABELS = ["self-hosted", "macOS", "ARM64"]
+TOKEN_UNAVAILABLE = "token_unavailable"
+RUNNER_ABSENT = "runner_absent"
+RUNNER_OFFLINE = "runner_offline"
+RUNNER_ONLINE = "runner_online"
 
 
 def parse_args() -> argparse.Namespace:
@@ -111,6 +115,14 @@ def build_evidence(
     else:
         status = "blocked_no_matching_runner"
 
+    diagnostics = diagnostics_for_status(
+        status=status,
+        api_note=api_note,
+        required_labels=required_labels,
+        matching=matching,
+        online_matching=online_matching,
+    )
+
     return {
         "schema": SCHEMA,
         "meta": {
@@ -131,7 +143,71 @@ def build_evidence(
         "matching_runner_count": len(matching),
         "online_matching_runner_count": len(online_matching),
         "matching_runners": matching,
+        "diagnostics": diagnostics,
     }
+
+
+def diagnostics_for_status(
+    *,
+    status: str,
+    api_note: str,
+    required_labels: list[str],
+    matching: list[dict[str, Any]],
+    online_matching: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    labels = ", ".join(required_labels)
+    if status == "runner_api_unavailable":
+        return [
+            {
+                "id": "hardware_runner_preflight.runner_api",
+                "diagnostic_class": TOKEN_UNAVAILABLE,
+                "status": "failed",
+                "message": api_note or "GitHub runner API was unavailable",
+                "recommended_action": (
+                    "Add or fix the TC_RUNNER_READ_TOKEN repository secret with permission "
+                    "to list Actions runners, then redispatch hardware-evidence.yml."
+                ),
+            }
+        ]
+    if status == "blocked_no_matching_runner":
+        return [
+            {
+                "id": "hardware_runner_preflight.matching_runner",
+                "diagnostic_class": RUNNER_ABSENT,
+                "status": "failed",
+                "message": f"No runner matched required labels: {labels}",
+                "recommended_action": (
+                    "Register an M5/SDK26 macOS ARM64 self-hosted runner with the required "
+                    "labels, then redispatch hardware-evidence.yml."
+                ),
+            }
+        ]
+    if status == "matching_runner_offline":
+        names = ", ".join(str(item.get("name") or "<unnamed>") for item in matching)
+        return [
+            {
+                "id": "hardware_runner_preflight.runner_online",
+                "diagnostic_class": RUNNER_OFFLINE,
+                "status": "failed",
+                "message": f"Matching runner(s) are offline: {names}",
+                "recommended_action": (
+                    "Start the matching self-hosted runner service on the M5/SDK26 host, "
+                    "then redispatch hardware-evidence.yml."
+                ),
+            }
+        ]
+    if status == "matching_runner_online":
+        names = ", ".join(str(item.get("name") or "<unnamed>") for item in online_matching)
+        return [
+            {
+                "id": "hardware_runner_preflight.runner_online",
+                "diagnostic_class": RUNNER_ONLINE,
+                "status": "passed",
+                "message": f"Online matching runner(s): {names}",
+                "recommended_action": "Wait for apple-gpu-release-smoke to run and upload hardware evidence.",
+            }
+        ]
+    return []
 
 
 def append_summary(path: pathlib.Path, evidence: dict[str, Any]) -> None:
@@ -149,6 +225,14 @@ def append_summary(path: pathlib.Path, evidence: dict[str, Any]) -> None:
     ]
     if note:
         lines.append(f"- Runner API note: `{note}`")
+    diagnostics = evidence.get("diagnostics")
+    if isinstance(diagnostics, list) and diagnostics:
+        for item in diagnostics:
+            if not isinstance(item, dict):
+                continue
+            action = str(item.get("recommended_action") or "")
+            if action:
+                lines.append(f"- Recommended action: {action}")
     with path.open("a", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n")
 

@@ -205,7 +205,9 @@ every architectural primitive in code and tested:
   required self-hosted M5 workflow artifact and validate it against a clean
   expected head. The GitHub-hosted hardware runner preflight artifact now also
   records workflow/run/head provenance and has a checker for validating runner
-  visibility diagnostics after download.
+  visibility diagnostics after download. Its diagnostics now include the
+  explicit next action for token, absent-runner, offline-runner, and
+  online-runner states.
 - HIP smoke evidence now proves both fp32 `hip_gemm_sgemm` and fp16
   `hip_gemm_hgemm`, records per-kernel `gemm_kernels`, and emits
   ICC-readable source coverage for remote chipStar/HIP runs.

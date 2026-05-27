@@ -18,6 +18,12 @@ VALID_STATUSES = {
     "matching_runner_offline",
     "blocked_no_matching_runner",
 }
+VALID_DIAGNOSTIC_CLASSES = {
+    "token_unavailable",
+    "runner_absent",
+    "runner_offline",
+    "runner_online",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -108,6 +114,44 @@ def validate_status_consistency(errors: list[str], data: dict[str, Any]) -> None
         errors.append("blocked_no_matching_runner requires matching_runner_count == 0")
 
 
+def validate_diagnostics(errors: list[str], data: dict[str, Any]) -> None:
+    diagnostics = data.get("diagnostics")
+    if not isinstance(diagnostics, list):
+        errors.append("diagnostics must be a list")
+        return
+    if not diagnostics:
+        errors.append("diagnostics must not be empty")
+        return
+    classes: set[str] = set()
+    for index, item in enumerate(diagnostics):
+        if not isinstance(item, dict):
+            errors.append(f"diagnostics[{index}] must be an object")
+            continue
+        diagnostic_class = item.get("diagnostic_class")
+        if diagnostic_class not in VALID_DIAGNOSTIC_CLASSES:
+            errors.append(
+                f"diagnostics[{index}].diagnostic_class must be one of "
+                f"{sorted(VALID_DIAGNOSTIC_CLASSES)!r}, got {diagnostic_class!r}"
+            )
+        else:
+            classes.add(str(diagnostic_class))
+        if item.get("status") not in {"passed", "failed"}:
+            errors.append(f"diagnostics[{index}].status must be passed or failed")
+        for key in ("id", "message", "recommended_action"):
+            if not isinstance(item.get(key), str) or not item.get(key):
+                errors.append(f"diagnostics[{index}].{key} must be a non-empty string")
+
+    expected_by_status = {
+        "runner_api_unavailable": "token_unavailable",
+        "blocked_no_matching_runner": "runner_absent",
+        "matching_runner_offline": "runner_offline",
+        "matching_runner_online": "runner_online",
+    }
+    expected = expected_by_status.get(str(data.get("status")))
+    if expected and expected not in classes:
+        errors.append(f"diagnostics must include diagnostic_class={expected!r}")
+
+
 def main() -> int:
     args = parse_args()
     data = load_json(args.evidence)
@@ -135,6 +179,7 @@ def main() -> int:
 
     validate_counts(errors, data)
     validate_status_consistency(errors, data)
+    validate_diagnostics(errors, data)
 
     if args.expected_head and get_path(data, "meta.head_sha") != args.expected_head:
         errors.append(

@@ -62,6 +62,20 @@ def evidence(status: str = "matching_runner_online") -> dict[str, Any]:
         "matching_runner_count": len(matching),
         "online_matching_runner_count": len(online),
         "matching_runners": matching,
+        "diagnostics": [
+            {
+                "id": f"hardware_runner_preflight.{status}",
+                "diagnostic_class": {
+                    "runner_api_unavailable": "token_unavailable",
+                    "matching_runner_online": "runner_online",
+                    "matching_runner_offline": "runner_offline",
+                    "blocked_no_matching_runner": "runner_absent",
+                }[status],
+                "status": "passed" if status == "matching_runner_online" else "failed",
+                "message": status,
+                "recommended_action": "act",
+            }
+        ],
     }
 
 
@@ -112,6 +126,10 @@ def main() -> int:
     bad_count = copy.deepcopy(online)
     bad_count["matching_runner_count"] = 0
     assert_fails(bad_count, "matching_runner_count")
+
+    missing_diag = copy.deepcopy(online)
+    missing_diag["diagnostics"] = []
+    assert_fails(missing_diag, "diagnostics must not be empty")
 
     print("hardware runner preflight checker selftest OK")
     return 0

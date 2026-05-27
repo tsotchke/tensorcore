@@ -71,7 +71,9 @@ and the required self-hosted labels to this script; it emits JSON with
 `blocked_no_matching_runner`, or `runner_api_unavailable`, plus a concise job
 summary. The artifact includes `meta.head_sha`, `meta.run_id`,
 `meta.run_attempt`, and `meta.workflow` so a downloaded preflight can be tied
-back to the workflow run and commit that produced it.
+back to the workflow run and commit that produced it. Its `diagnostics` array
+also carries the immediate next action: fix `TC_RUNNER_READ_TOKEN`, register a
+matching runner, start an offline runner, or wait for the online runner job.
 
 Validate a downloaded artifact with:
 
