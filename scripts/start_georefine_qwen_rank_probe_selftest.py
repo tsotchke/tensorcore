@@ -46,6 +46,7 @@ def test_print_script_renders_scheduler_contract() -> None:
     assert "authority_lease_id=lease-test" in script
     assert "run_dir=/runs/qwen-rank-probe" in script
     assert "--authority-source tensorcore-scheduler" in script
+    assert "--worker-lease-mode mirror" in script
     assert "--run-target qwen-cr070-rank-search" in script
     assert script.index("qllm_resource_lease_missing") < script.index("preflight_ok")
     assert script.index("authority_lease_id_missing") < script.index("preflight_ok")

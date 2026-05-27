@@ -61,6 +61,9 @@ every architectural primitive in code and tested:
 - AMX/bench evidence now keeps FlashAttention benchmark coverage optional
   when nested Python evidence subprocesses cannot acquire a Metal device,
   preventing AMX worker evidence from being blocked by host Metal visibility.
+- GeoRefine Qwen rank-probe launches now pass `--worker-lease-mode mirror`
+  through the qLLM lease wrapper so scheduler authority and worker lease
+  handoff stay aligned.
 - `test_dist_remote` now accepts `--elements` and `--iters`, making short
   WAN ring proofs possible without changing the default 4 MB throughput
   probe.
