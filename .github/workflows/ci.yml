@@ -79,6 +79,8 @@ jobs:
         run: |
           python3 scripts/hardware_runner_preflight_selftest.py
           python3 scripts/m5_tensorops_runner_preflight_selftest.py
+          python3 scripts/check_m5_tensorops_runner_preflight_selftest.py
+          python3 scripts/fetch_m5_tensorops_runtime_evidence_selftest.py
 
       - name: Mesh resource scheduler fixtures
         run: python3 scripts/mesh_resource_scheduler_selftest.py

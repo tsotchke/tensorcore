@@ -89,7 +89,7 @@ def normalize_optional_paths(args: argparse.Namespace) -> None:
     for name in (
         "release", "sdk26", "cuda", "hip", "hip_toolchain", "pytorch",
         "windows", "windows_cuda", "windows_cuda_smoke", "mesh_preflights",
-        "live_mesh",
+        "live_mesh", "m5_preflight",
     ):
         path = getattr(args, name)
         if path is not None:
@@ -109,6 +109,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--windows-cuda-smoke", type=pathlib.Path)
     parser.add_argument("--mesh-preflights", type=pathlib.Path)
     parser.add_argument("--live-mesh", type=pathlib.Path)
+    parser.add_argument("--m5-preflight", type=pathlib.Path)
     parser.add_argument("--git-head", default=git_head())
     parser.add_argument("--require-release", action="store_true")
     parser.add_argument("--require-sdk26", action="store_true")
@@ -136,6 +137,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mesh-preflight-skipped-default-job", action="append", default=[])
     parser.add_argument("--mesh-preflight-allowed-failure", action="append", default=[])
     parser.add_argument("--require-live-mesh", action="store_true")
+    parser.add_argument("--require-m5-preflight", action="store_true")
+    parser.add_argument("--require-m5-ready", action="store_true")
     parser.add_argument("--require-release-clean-head", action="store_true")
     parser.add_argument("--require-sdk26-clean-head", action="store_true")
     parser.add_argument("--require-cuda-clean-head", action="store_true")
@@ -145,6 +148,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--require-windows-clean-head", action="store_true")
     parser.add_argument("--require-windows-cuda-clean-head", action="store_true")
     parser.add_argument("--require-live-clean-head", action="store_true")
+    parser.add_argument("--require-m5-preflight-clean-head", action="store_true")
     parser.add_argument("--min-live-outer-steps", type=int, default=1)
     parser.add_argument("--require-direct-ring", action="store_true")
     parser.add_argument("--require-checkpoint", action="store_true")
@@ -197,6 +201,8 @@ def main() -> int:
         args.mesh_preflights = require_path("--mesh-preflights", args.mesh_preflights)
     if args.require_live_mesh:
         args.live_mesh = require_path("--live-mesh", args.live_mesh)
+    if args.require_m5_preflight or args.require_m5_ready:
+        args.m5_preflight = require_path("--m5-preflight", args.m5_preflight)
     normalize_optional_paths(args)
 
     if args.release is not None:
@@ -358,6 +364,15 @@ def main() -> int:
                 "meta.git_dirty",
             )
         checked.append("live_mesh")
+
+    if args.m5_preflight is not None:
+        cmd = ["scripts/check_m5_tensorops_runner_preflight.py", str(args.m5_preflight)]
+        if args.require_m5_ready:
+            cmd.append("--require-ready")
+        if args.require_m5_preflight_clean_head:
+            cmd.extend(["--git-head", args.git_head or "", "--require-clean-head"])
+        run_checker(cmd)
+        checked.append("m5_preflight")
 
     if not checked:
         raise SystemExit("no evidence paths were provided")

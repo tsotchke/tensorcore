@@ -77,12 +77,22 @@ Local host preflight for the final M5 TensorOps runtime evidence gate. It
 checks that the host is macOS/arm64, has Xcode plus SDK 26.0 or newer, reports
 an M5-or-newer display device name, and optionally runs an existing
 `test_tensorops_runtime` binary from the selected build directory. The default
-artifact is `build/m5_tensorops_runner_preflight.json`.
+artifact is `build/m5_tensorops_runner_preflight.json`; it records git
+provenance plus structured diagnostic classes so environment gaps stay separate
+from source failures.
+When a prerequisite is not ready, the artifact also emits top-level
+`diagnostics` records with `diagnostic_class=environment_unavailable` or
+`source_failed`, so readers can tell runner/toolchain problems apart from a
+TensorOps runtime regression. A missing runtime binary stays diagnostic as
+`checks.tensorops_runtime_probe.diagnostic_class=artifact_missing`, because the
+workflow preflight normally runs before the full M5 build.
 
 Run it before registering or debugging a self-hosted M5 runner:
 
 ```sh
 python3 scripts/m5_tensorops_runner_preflight.py --json
+python3 scripts/check_m5_tensorops_runner_preflight.py \
+  build/m5_tensorops_runner_preflight.json
 python3 scripts/m5_tensorops_runner_preflight.py --require-ready
 ```
 
@@ -94,6 +104,36 @@ remains:
 ```sh
 scripts/run_m5_tensorops_runtime_smoke.sh
 ```
+
+To turn a completed self-hosted M5 workflow run into local clean-head evidence,
+use the fetch/check helper:
+
+```sh
+# Dispatch the required M5 run for the current pushed head.
+python3 scripts/fetch_m5_tensorops_runtime_evidence.py --dispatch \
+  --expected-head "$(git rev-parse HEAD)"
+
+# After the workflow completes, fetch the latest successful run for that head
+# and validate it with --require-gpu, --require-metal4-tensorops, and
+# --require-clean-head.
+python3 scripts/fetch_m5_tensorops_runtime_evidence.py --latest-for-head \
+  --expected-head "$(git rev-parse HEAD)"
+
+# Or validate a known workflow run id explicitly.
+python3 scripts/fetch_m5_tensorops_runtime_evidence.py --run-id "$RUN_ID" \
+  --expected-head "$(git rev-parse HEAD)"
+```
+
+The accepted artifact is
+`build/m5-tensorops-hardware-evidence/release_smoke_runtime_evidence.json`.
+It must report `checks.metal4_tensorops.compile_status=compiled`,
+`checks.metal4_tensorops.runtime_status=passed`, and a clean
+`meta.git_head` matching `--expected-head`.
+
+`scripts/check_operational_evidence.py` accepts `--m5-preflight` to include
+this host-readiness artifact in a release evidence bundle. Use
+`--require-m5-ready` only on the actual M5/SDK26 runner; blocked preflight
+evidence is diagnostic and does not satisfy the Metal 4 TensorOps runtime gate.
 
 ### `check_version_consistency.sh`
 

@@ -18,6 +18,9 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCHEMA = "tensorcore.m5_tensorops_runner_preflight.v1"
 FORMAT_VERSION = 1
 M5_NAME_RE = re.compile(r"\b(?:Apple\s+)?M(?:[5-9]|\d{2,})(?:\b|[^0-9])", re.IGNORECASE)
+ENVIRONMENT_UNAVAILABLE = "environment_unavailable"
+ARTIFACT_MISSING = "artifact_missing"
+SOURCE_FAILED = "source_failed"
 
 
 def parse_args() -> argparse.Namespace:
@@ -80,6 +83,39 @@ def run_cmd(cmd: list[str], timeout_sec: float) -> dict[str, Any]:
         }
 
 
+def git_value(*args: str) -> str | None:
+    try:
+        return subprocess.check_output(
+            ["git", *args],
+            cwd=ROOT,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return None
+
+
+def git_dirty() -> bool | None:
+    try:
+        subprocess.check_call(
+            ["git", "diff", "--quiet"],
+            cwd=ROOT,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        subprocess.check_call(
+            ["git", "diff", "--cached", "--quiet"],
+            cwd=ROOT,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return False
+    except subprocess.CalledProcessError:
+        return True
+    except Exception:
+        return None
+
+
 def collect_string_values(value: Any) -> list[str]:
     out: list[str] = []
     if isinstance(value, str):
@@ -132,29 +168,46 @@ def runtime_status_from_output(text: str) -> str | None:
 def host_platform_check() -> dict[str, Any]:
     system = platform.system()
     machine = platform.machine()
+    passed = system == "Darwin" and machine in {"arm64", "aarch64"}
     return {
-        "status": "passed" if system == "Darwin" and machine in {"arm64", "aarch64"} else "blocked",
+        "status": "passed" if passed else "blocked",
         "system": system,
         "machine": machine,
+        **(
+            {}
+            if passed
+            else {
+                "diagnostic_class": ENVIRONMENT_UNAVAILABLE,
+                "diagnostic_message": f"host is {system}/{machine}; M5 TensorOps requires Darwin/arm64",
+            }
+        ),
     }
 
 
 def xcode_check(timeout_sec: float) -> dict[str, Any]:
     attempt = run_cmd(["xcodebuild", "-version"], timeout_sec)
     status = "passed" if attempt.get("rc") == 0 else "blocked"
-    return {"status": status, "attempt": attempt}
+    result: dict[str, Any] = {"status": status, "attempt": attempt}
+    if status == "blocked":
+        result["diagnostic_class"] = ENVIRONMENT_UNAVAILABLE
+        result["diagnostic_message"] = "xcodebuild -version did not complete; Xcode is unavailable"
+    return result
 
 
 def sdk26_check(timeout_sec: float) -> dict[str, Any]:
     attempt = run_cmd(["xcrun", "--show-sdk-version"], timeout_sec)
     sdk_version = str(attempt.get("stdout_tail") or "").strip()
     status = "passed" if attempt.get("rc") == 0 and version_at_least(sdk_version, (26, 0)) else "blocked"
-    return {
+    result: dict[str, Any] = {
         "status": status,
         "sdk_version": sdk_version,
         "minimum": "26.0",
         "attempt": attempt,
     }
+    if status == "blocked":
+        result["diagnostic_class"] = ENVIRONMENT_UNAVAILABLE
+        result["diagnostic_message"] = f"SDK {sdk_version or 'unknown'} is below the SDK 26.0 TensorOps requirement"
+    return result
 
 
 def display_check(timeout_sec: float) -> dict[str, Any]:
@@ -167,12 +220,17 @@ def display_check(timeout_sec: float) -> dict[str, Any]:
         status = "passed"
     else:
         status = "blocked"
-    return {
+    result: dict[str, Any] = {
         "status": status,
         "m5_name_candidate": is_m5,
         "device_names": names,
         "attempt": attempt,
     }
+    if status == "blocked":
+        display_names = ", ".join(names) if names else "none reported"
+        result["diagnostic_class"] = ENVIRONMENT_UNAVAILABLE
+        result["diagnostic_message"] = f"display GPU is not M5 or newer ({display_names})"
+    return result
 
 
 def runtime_probe_check(build_dir: pathlib.Path, timeout_sec: float) -> dict[str, Any]:
@@ -182,16 +240,52 @@ def runtime_probe_check(build_dir: pathlib.Path, timeout_sec: float) -> dict[str
             "status": "skipped",
             "reason": "test_tensorops_runtime_missing",
             "path": str(binary),
+            "diagnostic_class": ARTIFACT_MISSING,
+            "diagnostic_message": "test_tensorops_runtime is not built yet; run the M5 build before requiring readiness",
         }
     attempt = run_cmd([str(binary)], timeout_sec)
     output = "\n".join([str(attempt.get("stdout_tail") or ""), str(attempt.get("stderr_tail") or "")])
     runtime_status = runtime_status_from_output(output)
-    return {
-        "status": "passed" if attempt.get("rc") == 0 and runtime_status == "passed" else "blocked",
+    status = "passed" if attempt.get("rc") == 0 and runtime_status == "passed" else "blocked"
+    result: dict[str, Any] = {
+        "status": status,
         "runtime_status": runtime_status,
         "path": str(binary),
         "attempt": attempt,
     }
+    if status == "blocked":
+        if runtime_status in {"skipped_no_m5", "skipped_no_gpu", "skipped_sdk_too_old"}:
+            result["diagnostic_class"] = ENVIRONMENT_UNAVAILABLE
+            result["diagnostic_message"] = f"runtime probe was environment-skipped with {runtime_status}"
+        elif attempt.get("rc") not in (0, None):
+            result["diagnostic_class"] = SOURCE_FAILED
+            result["diagnostic_message"] = f"runtime probe exited with {attempt.get('rc')}"
+        else:
+            result["diagnostic_class"] = SOURCE_FAILED
+            result["diagnostic_message"] = "runtime probe did not emit tensorops_runtime_status=passed"
+    return result
+
+
+def diagnostics_for_checks(checks: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    diagnostics: list[dict[str, Any]] = []
+    for name, check in sorted(checks.items()):
+        status = check.get("status")
+        diagnostic_class = check.get("diagnostic_class")
+        if status not in {"blocked", "skipped"} or not diagnostic_class:
+            continue
+        message = str(check.get("diagnostic_message") or check.get("reason") or f"{name} is not ready")
+        diagnostics.append(
+            {
+                "id": f"m5_tensorops_preflight_diagnostic.{name}",
+                "name": name,
+                "status": "blocked" if status == "blocked" else "skipped",
+                "message": message,
+                "reason": message,
+                "diagnostic_class": diagnostic_class,
+                "check_status": status,
+            }
+        )
+    return diagnostics
 
 
 def overall_status(checks: dict[str, dict[str, Any]]) -> str:
@@ -215,11 +309,18 @@ def build_evidence(args: argparse.Namespace) -> dict[str, Any]:
         "tensorops_runtime_probe": runtime_probe_check(args.build_dir, args.timeout_sec),
     }
     status = overall_status(checks)
+    diagnostics = diagnostics_for_checks(checks)
+    diagnostic_class_counts = {
+        diagnostic_class: sum(1 for item in diagnostics if item.get("diagnostic_class") == diagnostic_class)
+        for diagnostic_class in sorted({str(item.get("diagnostic_class")) for item in diagnostics})
+    }
     return {
         "schema": SCHEMA,
         "meta": {
             "format": FORMAT_VERSION,
             "source": "tensorcore_m5_tensorops_runner_preflight",
+            "git_head": git_value("rev-parse", "HEAD"),
+            "git_dirty": git_dirty(),
         },
         "status": status,
         "generated_at": _datetime.datetime.now(_datetime.timezone.utc)
@@ -230,12 +331,16 @@ def build_evidence(args: argparse.Namespace) -> dict[str, Any]:
             "output": str(args.output),
         },
         "checks": checks,
+        "diagnostics": diagnostics,
         "summary": {
             "ready_for_m5_tensorops_runtime": status == "ready",
             "candidate_host": status in {"ready", "candidate"},
             "blocked_checks": sorted(
                 name for name, check in checks.items() if check.get("status") == "blocked"
             ),
+            "diagnostic_class_counts": diagnostic_class_counts,
+            "environment_unavailable": ENVIRONMENT_UNAVAILABLE in diagnostic_class_counts,
+            "source_failed": SOURCE_FAILED in diagnostic_class_counts,
         },
     }
 

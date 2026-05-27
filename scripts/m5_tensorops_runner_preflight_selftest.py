@@ -22,6 +22,14 @@ def check(status: str) -> dict[str, Any]:
     return {"status": status}
 
 
+def diagnostic_check(status: str, diagnostic_class: str, message: str) -> dict[str, Any]:
+    return {
+        "status": status,
+        "diagnostic_class": diagnostic_class,
+        "diagnostic_message": message,
+    }
+
+
 def main() -> int:
     assert preflight.version_at_least("26.0", (26, 0))
     assert preflight.version_at_least("26.4", (26, 0))
@@ -78,6 +86,36 @@ def main() -> int:
         )
         == "blocked"
     )
+
+    diagnostics = preflight.diagnostics_for_checks(
+        {
+            "display_gpu": diagnostic_check(
+                "blocked",
+                preflight.ENVIRONMENT_UNAVAILABLE,
+                "display GPU is not M5 or newer",
+            ),
+            "tensorops_runtime_probe": diagnostic_check(
+                "blocked",
+                preflight.SOURCE_FAILED,
+                "runtime probe exited with 1",
+            ),
+            "xcode": check("passed"),
+        }
+    )
+    assert [item["name"] for item in diagnostics] == ["display_gpu", "tensorops_runtime_probe"]
+    assert diagnostics[0]["diagnostic_class"] == preflight.ENVIRONMENT_UNAVAILABLE
+    assert diagnostics[1]["diagnostic_class"] == preflight.SOURCE_FAILED
+
+    missing_binary = preflight.diagnostics_for_checks(
+        {
+            "tensorops_runtime_probe": diagnostic_check(
+                "skipped",
+                preflight.ARTIFACT_MISSING,
+                "test_tensorops_runtime is not built yet",
+            )
+        }
+    )
+    assert [item["diagnostic_class"] for item in missing_binary] == [preflight.ARTIFACT_MISSING]
 
     print("M5 TensorOps runner preflight selftest OK")
     return 0

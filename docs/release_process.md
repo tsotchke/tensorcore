@@ -136,10 +136,23 @@ Before registering or debugging the runner, run:
 
 ```sh
 python3 scripts/m5_tensorops_runner_preflight.py --json
+python3 scripts/check_m5_tensorops_runner_preflight.py \
+  build/m5_tensorops_runner_preflight.json
 ```
 
 On a built checkout, `--require-ready` additionally requires the local
 `test_tensorops_runtime` binary to emit `tensorops_runtime_status=passed`.
+Blocked preflight artifacts include `diagnostics[*].diagnostic_class` metadata so
+ICC/readiness can distinguish environment problems from source/runtime probe
+failures.
+
+After the manual workflow completes, fetch and validate the M5 artifact for the
+expected clean head:
+
+```sh
+python3 scripts/fetch_m5_tensorops_runtime_evidence.py --latest-for-head \
+  --expected-head "$(git rev-parse HEAD)"
+```
 
 ## Running the release pipeline locally
 

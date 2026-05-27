@@ -274,7 +274,7 @@ build is shippable" means in machine-checkable terms. Eight criteria:
 | `no_synthetic_public_prod_paths` | no symbol under `include/`, `lib/`, or `python/tensorcore/` is marked `synthetic_model_only` (i.e. a stub used in tests only) | wire a real path or explicitly mark as a fallback |
 | `metal4_tensorops_compile_status_recorded` | the M5 path's compile status is recorded (`compiled` or `skipped_sdk_too_old`) | emit the status from the smoke |
 | `metal4_tensorops_compiled_with_sdk26` | the M5 path was actually compiled (requires SDK 26+ host) | run release smoke on a host with SDK 26+ |
-| `metal4_tensorops_runtime_covered` | the M5 runtime path was exercised on M5 hardware | run the hardware-evidence workflow on a self-hosted M5 runner |
+| `metal4_tensorops_runtime_covered` | the M5 runtime path was exercised on M5 hardware | run the hardware-evidence workflow on a self-hosted M5 runner, then fetch/check it with `scripts/fetch_m5_tensorops_runtime_evidence.py` |
 
 ICC checks these against the runtime evidence JSON; in CI they form the
 "can we ship this commit?" contract that goes beyond green `ctest`.
