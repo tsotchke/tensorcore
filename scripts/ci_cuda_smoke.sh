@@ -541,10 +541,10 @@ try:
         }
 
     if info.get("supports_int8_tensor_core"):
-        M8, N8, K8 = 2, 2, 16
+        M8, N8, K8 = 16, 16, 16
         A8_vals = (ctypes.c_int8 * (M8 * K8))(*([1] * (M8 * K8)))
         B8_vals = (ctypes.c_int8 * (K8 * N8))(*([1] * (K8 * N8)))
-        C8_vals = (ctypes.c_int32 * (M8 * N8))(0, 0, 0, 0)
+        C8_vals = (ctypes.c_int32 * (M8 * N8))(*([0] * (M8 * N8)))
         A8 = tc.buffer_alloc(ctx, ctypes.sizeof(A8_vals))
         B8 = tc.buffer_alloc(ctx, ctypes.sizeof(B8_vals))
         C8 = tc.buffer_alloc(ctx, ctypes.sizeof(C8_vals))
@@ -570,9 +570,10 @@ try:
                 tc._as_handle(ctx), ctypes.byref(desc),
                 tc._as_handle(A8), tc._as_handle(B8), tc._as_handle(C8),
             ))
-            out8 = (ctypes.c_int32 * 4).from_address(tc.buffer_map(C8).value)
-            if any(out8[i] != K8 for i in range(4)):
-                raise SystemExit(f"bad CUDA int8 GEMM output: {[out8[i] for i in range(4)]}")
+            out8 = (ctypes.c_int32 * (M8 * N8)).from_address(tc.buffer_map(C8).value)
+            if any(out8[i] != K8 for i in range(M8 * N8)):
+                sample = [out8[i] for i in range(min(8, M8 * N8))]
+                raise SystemExit(f"bad CUDA int8 GEMM output: {sample}")
             kernel = tc.cuda_last_kernel_name()
             if tc.last_backend_name() != "cuda":
                 raise SystemExit(f"int8 backend was {tc.last_backend_name()}, expected cuda")
