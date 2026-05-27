@@ -73,6 +73,16 @@ def test_print_script_renders_scheduler_contract() -> None:
     assert "run_dir=/runs/qwen-rank-probe" in script
     assert "--authority-source tensorcore-scheduler" in script
     assert "--worker-lease-mode mirror" in script
+    assert "--verify-gpu-identity" in script
+    assert "--require-substrate-contract" in script
+    assert "--heartbeat-failure-policy terminate" in script
+    assert "--final-manifest-evidence-root \"$evidence_root\"" in script
+    assert "--finalizer-max-size-ratio \"$max_size_ratio\"" in script
+    assert "--finalizer-max-ppl-delta \"$quality_floor\"" in script
+    assert "--finalizer-max-target-kl \"$target_kl\"" in script
+    assert "--finalizer-failure-policy fail" in script
+    assert "--reconciler-require-active-lease" in script
+    assert "--reconciler-failure-policy terminate" in script
     assert '--run-target "$run_target"' in script
     assert "run_target=test-run" in script
     assert script.index("qllm_resource_lease_missing") < script.index("preflight_ok")
@@ -89,6 +99,8 @@ def test_invalid_numeric_arguments_fail() -> None:
         "cosbox:cuda3090",
         "--worker-resource",
         "gpu:cosbox:0",
+        "--authority-lease-id",
+        "lease-test",
         "--authority-owner",
         "georefine:test",
         "--repo-url",
@@ -132,6 +144,8 @@ def test_worker_resource_is_required() -> None:
         "cosbox",
         "--resource",
         "cosbox:cuda3090",
+        "--authority-lease-id",
+        "lease-test",
         "--authority-owner",
         "georefine:test",
         "--repo-url",
@@ -167,10 +181,100 @@ def test_worker_resource_is_required() -> None:
         raise AssertionError(result.stderr + result.stdout)
 
 
+def test_authority_lease_id_is_required_before_ssh() -> None:
+    result = run_starter(
+        "--target",
+        "cosbox",
+        "--resource",
+        "cosbox:cuda3090",
+        "--worker-resource",
+        "gpu:cosbox:0",
+        "--authority-owner",
+        "georefine:test",
+        "--repo-url",
+        "git@example.invalid/georefine.git",
+        "--ref",
+        "main",
+        "--repo-dir",
+        "/repos/georefine",
+        "--qllm-repo-dir",
+        "/repos/qllm-tools",
+        "--run-dir",
+        "/runs/qwen-rank-probe",
+        "--evidence-root",
+        "/runs/evidence",
+        "--cal-text",
+        "/data/cal.txt",
+        "--eval-text",
+        "/data/eval.txt",
+        "--model",
+        "test/model",
+        "--device",
+        "cuda",
+        "--dtype",
+        "auto",
+        "--run-target",
+        "test-run",
+        "--print-script",
+        "--json",
+    )
+    if result.returncode == 0:
+        raise AssertionError("missing authority lease id unexpectedly passed")
+    if "--authority-lease-id is required" not in result.stderr:
+        raise AssertionError(result.stderr + result.stdout)
+
+
+def test_untrusted_run_dir_is_rejected_before_ssh() -> None:
+    result = run_starter(
+        "--target",
+        "cosbox",
+        "--resource",
+        "cosbox:cuda3090",
+        "--worker-resource",
+        "gpu:cosbox:0",
+        "--authority-lease-id",
+        "lease-test",
+        "--authority-owner",
+        "georefine:test",
+        "--repo-url",
+        "git@example.invalid/georefine.git",
+        "--ref",
+        "main",
+        "--repo-dir",
+        "/repos/georefine",
+        "--qllm-repo-dir",
+        "/repos/qllm-tools",
+        "--run-dir",
+        "/home/tyr/bytehole/georefine/runs/qwen-rank-probe",
+        "--evidence-root",
+        "/runs/evidence",
+        "--cal-text",
+        "/data/cal.txt",
+        "--eval-text",
+        "/data/eval.txt",
+        "--model",
+        "test/model",
+        "--device",
+        "cuda",
+        "--dtype",
+        "auto",
+        "--run-target",
+        "test-run",
+        "--print-script",
+        "--json",
+    )
+    if result.returncode == 0:
+        raise AssertionError("untrusted run dir unexpectedly passed")
+    if "--run-dir must be an absolute protected path" not in result.stderr:
+        raise AssertionError(result.stderr + result.stdout)
+
+
 def main() -> int:
     test_print_script_renders_scheduler_contract()
     test_invalid_numeric_arguments_fail()
     test_worker_resource_is_required()
+    test_authority_lease_id_is_required_before_ssh()
+    test_untrusted_run_dir_is_rejected_before_ssh()
     print("GeoRefine Qwen rank probe starter selftest OK")
     return 0
 

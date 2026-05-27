@@ -11,12 +11,14 @@ leases are treated as busy resources.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import shlex
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +27,7 @@ DEFAULT_ARBITER_CMD = os.environ.get("TC_MESH_ARBITER_CMD", "tsotchke-arbiter")
 SCHEMA = "tensorcore.mesh_resource_jobs.v1"
 SUBMIT_SCHEMA = "tensorcore.job.v1"
 INVENTORY_SCHEMA = "tensorcore.mesh_resources.v1"
+GPU_RECONCILIATION_AUDIT_SCHEMA = "tensorcore.gpu_reconciliation_audit.v1"
 INVENTORY_STATUSES = {"active", "reserved", "blocked"}
 RESOURCE_CLASSES = {"generic", "cuda_exclusive"}
 DESIRED_STATES = {"running", "paused"}
@@ -1531,6 +1534,7 @@ def schedule_resource(
     *,
     arbiter_cmd: list[str],
     counts: dict[str, dict[str, int]],
+    gpu_reconciliation_audit: dict | None = None,
 ) -> tuple[list[dict], list[dict]]:
     results, errors = reconcile_stale_leases(
         jobs,
@@ -1595,6 +1599,22 @@ def schedule_resource(
             "ok": True,
         })
         return results, errors
+
+    if resource_requires_gpu_reconciliation_gate(resource, jobs):
+        gate = gpu_reconciliation_audit or gpu_reconciliation_gate(args, jobs)
+        if gate.get("ok") is not True:
+            results.append({
+                "resource": resource,
+                "action": "cuda_placement_blocked_by_gpu_reconciliation_audit",
+                "ok": False,
+                "gpu_reconciliation_audit": gate,
+            })
+            errors.append({
+                "resource": resource,
+                "error": "gpu_reconciliation_audit_blocked",
+                "reason": gate.get("reason"),
+            })
+            return results, errors
 
     candidate = choose_candidate(
         jobs,
@@ -1801,6 +1821,90 @@ def schedule_resource(
     return results, errors
 
 
+def resource_requires_gpu_reconciliation_gate(resource: str, jobs: list[dict]) -> bool:
+    return any(
+        job.get("enabled", True)
+        and job.get("resource") == resource
+        and job.get("resource_class") == "cuda_exclusive"
+        for job in jobs
+    )
+
+
+def gpu_reconciliation_gate(args: argparse.Namespace, jobs: list[dict]) -> dict:
+    path = getattr(args, "gpu_reconciliation_audit_json", None)
+    cuda_jobs = [
+        job["id"]
+        for job in jobs
+        if job.get("enabled", True) and job.get("resource_class") == "cuda_exclusive"
+    ]
+    if not path:
+        return {
+            "ok": True,
+            "required": False,
+            "reason": "not_configured",
+            "cuda_job_count": len(cuda_jobs),
+        }
+    if not cuda_jobs:
+        return {
+            "ok": True,
+            "required": True,
+            "reason": "no_cuda_jobs",
+            "cuda_job_count": 0,
+        }
+    try:
+        payload = read_json_object(path)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "required": True,
+            "reason": "audit_artifact_unreadable",
+            "path": str(Path(path).expanduser()),
+            "error": str(exc),
+            "cuda_job_count": len(cuda_jobs),
+        }
+    if payload.get("schema") != GPU_RECONCILIATION_AUDIT_SCHEMA:
+        return {
+            "ok": False,
+            "required": True,
+            "reason": "audit_artifact_invalid_schema",
+            "path": str(Path(path).expanduser()),
+            "schema": payload.get("schema"),
+            "cuda_job_count": len(cuda_jobs),
+        }
+    checked_at = payload.get("checked_at_unix")
+    if not isinstance(checked_at, (int, float)):
+        return {
+            "ok": False,
+            "required": True,
+            "reason": "audit_artifact_missing_checked_at",
+            "path": str(Path(path).expanduser()),
+            "cuda_job_count": len(cuda_jobs),
+        }
+    age_sec = max(0.0, time.time() - float(checked_at))
+    max_age_sec = float(getattr(args, "gpu_reconciliation_max_age_sec", 120.0))
+    if age_sec > max_age_sec:
+        return {
+            "ok": False,
+            "required": True,
+            "reason": "audit_artifact_stale",
+            "path": str(Path(path).expanduser()),
+            "age_sec": age_sec,
+            "max_age_sec": max_age_sec,
+            "cuda_job_count": len(cuda_jobs),
+        }
+    return {
+        "ok": payload.get("ok") is True,
+        "required": True,
+        "reason": "ok" if payload.get("ok") is True else "audit_artifact_failed",
+        "path": str(Path(path).expanduser()),
+        "age_sec": age_sec,
+        "max_age_sec": max_age_sec,
+        "cuda_job_count": len(cuda_jobs),
+        "sweep_ok": payload.get("sweep", {}).get("ok") if isinstance(payload.get("sweep"), dict) else None,
+        "audit_ok": payload.get("audit", {}).get("ok") if isinstance(payload.get("audit"), dict) else None,
+    }
+
+
 def schedule_once(args: argparse.Namespace) -> dict:
     arbiter_cmd = command(args.arbiter_cmd)
     if not arbiter_cmd:
@@ -1808,6 +1912,7 @@ def schedule_once(args: argparse.Namespace) -> dict:
     inventory = load_inventory(args.inventory_json)
     jobs = load_jobs(args.jobs_json, inventory=inventory)
     validate_jobs_against_inventory(jobs, inventory)
+    reconciliation_gate = gpu_reconciliation_gate(args, jobs)
     probes = {job["id"]: probe_job(job, timeout=args.probe_timeout_sec) for job in jobs}
     completions = {
         job["id"]: complete_job(job, timeout=args.probe_timeout_sec)
@@ -1834,6 +1939,7 @@ def schedule_once(args: argparse.Namespace) -> dict:
                 args,
                 arbiter_cmd=arbiter_cmd,
                 counts=counts,
+                gpu_reconciliation_audit=reconciliation_gate,
             )
             results.extend(resource_results)
             errors.extend(resource_errors)
@@ -1844,6 +1950,7 @@ def schedule_once(args: argparse.Namespace) -> dict:
         "ok": not errors and all(row.get("ok", True) for row in results),
         "checked_at_unix": time.time(),
         "dry_run": args.dry_run,
+        "gpu_reconciliation_audit": reconciliation_gate,
         "results": results,
         "errors": errors,
     }
@@ -1892,6 +1999,23 @@ def load_jobs_doc(path: str | Path, *, missing_ok: bool = False) -> dict:
 
 def write_jobs_doc(path: str | Path, doc: dict) -> None:
     write_json(str(Path(path).expanduser()), {"schema": SCHEMA, "jobs": doc.get("jobs", [])})
+
+
+def queue_lock_path(path: str | Path) -> Path:
+    queue_path = Path(path).expanduser()
+    return queue_path.with_name(f".{queue_path.name}.lock")
+
+
+@contextmanager
+def locked_queue(path: str | Path):
+    lock_path = queue_lock_path(path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def submit_command_argv(value: Any, *, field: str) -> list[str]:
@@ -2066,22 +2190,25 @@ def cmd_submit(args: argparse.Namespace) -> dict:
     if args.dry_run:
         return payload
     event_log_jsonl = require_queue_event_log(args, command="submit")
-    doc = load_jobs_doc(args.jobs_json, missing_ok=True)
-    doc["jobs"] = upsert_job(doc["jobs"], mesh_job, replace=args.replace)
-    write_jobs_doc(args.jobs_json, doc)
-    append_jsonl(
-        event_log_jsonl,
-        {
-            "schema": "tensorcore.scheduler_queue_event.v1",
-            "event": "submit",
-            "created_at_unix": payload["checked_at_unix"],
-            "jobs_json": str(Path(args.jobs_json).expanduser()),
-            "job_id": mesh_job["id"],
-            "replace": bool(args.replace),
-            "expanded_jobs": payload["expanded_jobs"],
-        },
-    )
+    with locked_queue(args.jobs_json):
+        doc = load_jobs_doc(args.jobs_json, missing_ok=True)
+        doc["jobs"] = upsert_job(doc["jobs"], mesh_job, replace=args.replace)
+        write_jobs_doc(args.jobs_json, doc)
+        append_jsonl(
+            event_log_jsonl,
+            {
+                "schema": "tensorcore.scheduler_queue_event.v1",
+                "event": "submit",
+                "created_at_unix": payload["checked_at_unix"],
+                "jobs_json": str(Path(args.jobs_json).expanduser()),
+                "job_id": mesh_job["id"],
+                "replace": bool(args.replace),
+                "expanded_jobs": payload["expanded_jobs"],
+                "queue_lock": str(queue_lock_path(args.jobs_json)),
+            },
+        )
     payload["jobs_json"] = str(Path(args.jobs_json).expanduser())
+    payload["queue_lock"] = str(queue_lock_path(args.jobs_json))
     payload["queued"] = True
     return payload
 
@@ -2117,42 +2244,50 @@ def cmd_status(args: argparse.Namespace) -> dict:
 
 
 def cmd_cancel(args: argparse.Namespace) -> dict:
-    doc = load_jobs_doc(args.jobs_json)
-    matched = []
-    for job in doc["jobs"]:
-        if not isinstance(job, dict) or not queued_job_id_matches(job, args.job_id):
-            continue
-        metadata = dict(job.get("metadata") if isinstance(job.get("metadata"), dict) else {})
-        metadata["cancelled_at_unix"] = time.time()
-        metadata["cancel_reason"] = args.reason
-        job["metadata"] = metadata
-        job["enabled"] = False
-        job["desired_state"] = "paused"
-        matched.append(job.get("id"))
-    if not matched:
-        raise ValueError(f"job {args.job_id!r} not found")
-    checked_at = time.time()
-    if not args.dry_run:
+    def cancelled_doc() -> tuple[dict, list[str], float]:
+        doc = load_jobs_doc(args.jobs_json)
+        matched = []
+        for job in doc["jobs"]:
+            if not isinstance(job, dict) or not queued_job_id_matches(job, args.job_id):
+                continue
+            metadata = dict(job.get("metadata") if isinstance(job.get("metadata"), dict) else {})
+            metadata["cancelled_at_unix"] = time.time()
+            metadata["cancel_reason"] = args.reason
+            job["metadata"] = metadata
+            job["enabled"] = False
+            job["desired_state"] = "paused"
+            matched.append(job.get("id"))
+        if not matched:
+            raise ValueError(f"job {args.job_id!r} not found")
+        return doc, matched, time.time()
+
+    if args.dry_run:
+        _, matched, checked_at = cancelled_doc()
+    else:
         event_log_jsonl = require_queue_event_log(args, command="cancel")
-        write_jobs_doc(args.jobs_json, doc)
-        append_jsonl(
-            event_log_jsonl,
-            {
-                "schema": "tensorcore.scheduler_queue_event.v1",
-                "event": "cancel",
-                "created_at_unix": checked_at,
-                "jobs_json": str(Path(args.jobs_json).expanduser()),
-                "requested_job_id": args.job_id,
-                "cancelled_jobs": matched,
-                "reason": args.reason,
-            },
-        )
+        with locked_queue(args.jobs_json):
+            doc, matched, checked_at = cancelled_doc()
+            write_jobs_doc(args.jobs_json, doc)
+            append_jsonl(
+                event_log_jsonl,
+                {
+                    "schema": "tensorcore.scheduler_queue_event.v1",
+                    "event": "cancel",
+                    "created_at_unix": checked_at,
+                    "jobs_json": str(Path(args.jobs_json).expanduser()),
+                    "requested_job_id": args.job_id,
+                    "cancelled_jobs": matched,
+                    "reason": args.reason,
+                    "queue_lock": str(queue_lock_path(args.jobs_json)),
+                },
+            )
     return {
         "schema": "tensorcore.cluster_cancel.result.v1",
         "ok": True,
         "checked_at_unix": checked_at,
         "dry_run": args.dry_run,
         "cancelled_jobs": matched,
+        "queue_lock": str(queue_lock_path(args.jobs_json)),
     }
 
 
@@ -2332,6 +2467,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--jobs-json", required=True)
     parser.add_argument("--inventory-json")
     parser.add_argument("--state-json")
+    parser.add_argument("--gpu-reconciliation-audit-json")
+    parser.add_argument("--gpu-reconciliation-max-age-sec", type=float, default=120.0)
     parser.add_argument("--timeout-sec", type=float, default=10.0)
     parser.add_argument("--probe-timeout-sec", type=float, default=10.0)
     parser.add_argument("--admission-timeout-sec", type=float, default=10.0)
@@ -2350,6 +2487,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.max_iterations < 0:
         parser.error("--max-iterations must be >= 0")
+    if args.gpu_reconciliation_max_age_sec <= 0:
+        parser.error("--gpu-reconciliation-max-age-sec must be > 0")
     if args.post_start_timeout_sec < 0:
         parser.error("--post-start-timeout-sec must be >= 0")
     if args.post_start_interval_sec < 0:

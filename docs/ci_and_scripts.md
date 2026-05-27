@@ -783,6 +783,10 @@ be claimed. The checked-in default job set lives at
 the control-plane contract changes. Checked-in running jobs must launch through
 repo-owned starters; host-local systemd starts belong in paused adoption-only
 rows until the unit or equivalent launcher is installed from a git checkout.
+Real `submit` and `cancel` queue mutations require `--event-log-jsonl` and
+take an advisory lock beside the queue file before updating jobs or appending
+the queue event. Scheduler-VM clients should use those commands instead of
+editing `mesh_resource_jobs.json` directly.
 
 Run one dry pass:
 
@@ -1087,6 +1091,7 @@ python3 scripts/mesh_windows_worker_identity_selftest.py
 python3 scripts/mesh_worker_gpu_snapshot_selftest.py
 python3 scripts/mesh_worker_gpu_reconcile_sweep_selftest.py
 python3 scripts/mesh_gpu_reconciliation_audit_selftest.py
+python3 scripts/remote_tsotchke_arbiter_selftest.py
 ```
 
 ### `mesh_worker_gpu_snapshot.py` and `mesh_worker_gpu_reconcile.py`
@@ -1105,6 +1110,18 @@ activity fail the control-plane audit.
 CUDA inventory resources, using each resource's `gpu_reconciliation` settings
 and `TC_MESH_ARBITER_CMD` unless `--arbiter-status-json` or `--arbiter-cmd` is
 provided explicitly.
+`mesh_gpu_reconciliation_audit.py` is the scheduler-VM one-shot wrapper used by
+`configs/tensorcore-gpu-reconciliation-audit.service.example` and timer example:
+it cleans old reports, runs the sweep, runs scheduler audit on the report
+directory, writes sweep/audit JSON, and exits nonzero when placement is unsafe.
+The scheduler loop consumes that artifact with `--gpu-reconciliation-audit-json`
+and blocks new idle CUDA placement if the artifact is missing, stale, or failed.
+That gate is per CUDA resource; the loop still reconciles live holders, preserves
+heartbeats, reports stale/unknown leases, and can place non-CUDA jobs.
+If the arbiter runs behind SSH, use `scripts/remote_tsotchke_arbiter.py` as
+`TC_MESH_ARBITER_CMD` and set `TC_REMOTE_ARBITER_HOST` plus
+`TC_REMOTE_ARBITER_BIN`; the wrapper quotes JSON argv values before the remote
+login shell sees them.
 
 ```sh
 python3 scripts/mesh_worker_gpu_snapshot.py --resource cosbox:cuda3090 --json

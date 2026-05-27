@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Tensorcore GPU Reconciliation Audit Periodically
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=30
+AccuracySec=5
+Persistent=true
+Unit=tensorcore-gpu-reconciliation-audit.service
+
+[Install]
+WantedBy=timers.target

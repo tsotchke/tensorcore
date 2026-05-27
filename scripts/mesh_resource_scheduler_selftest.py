@@ -87,6 +87,8 @@ def args_for(
         post_start_interval_sec=0.0,
         worker_identity_timeout_sec=1.0,
         unknown_lease_quarantine_age_sec=900.0,
+        gpu_reconciliation_audit_json=None,
+        gpu_reconciliation_max_age_sec=120.0,
         max_running_per_tenant=max_running_per_tenant,
         dry_run=dry_run,
         json=False,
@@ -1678,6 +1680,17 @@ def test_submit_dry_run_expands_tensorcore_job_v1() -> None:
 
 def test_submit_writes_queue_and_cancel_pauses_job() -> None:
     scheduler = load_scheduler()
+    lock_calls: list[int] = []
+
+    class FakeFcntl:
+        LOCK_EX = scheduler.fcntl.LOCK_EX
+        LOCK_UN = scheduler.fcntl.LOCK_UN
+
+        @staticmethod
+        def flock(fd: int, op: int) -> None:
+            lock_calls.append(op)
+
+    scheduler.fcntl = FakeFcntl
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)
         spec_path = root / "job.json"
@@ -1710,14 +1723,24 @@ def test_submit_writes_queue_and_cancel_pauses_job() -> None:
             for line in event_log.read_text(encoding="utf-8").splitlines()
         ]
     assert submit_payload["queued"] is True
+    assert submit_payload["queue_lock"].endswith(".queue.json.lock")
     assert cancel_payload["cancelled_jobs"] == ["georefine-qwen-rank-probe"]
+    assert cancel_payload["queue_lock"].endswith(".queue.json.lock")
     assert queue["jobs"][0]["enabled"] is False
     assert queue["jobs"][0]["desired_state"] == "paused"
     assert queue["jobs"][0]["metadata"]["cancel_reason"] == "test_cancel"
     assert [event["event"] for event in events] == ["submit", "cancel"]
     assert events[0]["job_id"] == "georefine-qwen-rank-probe"
+    assert events[0]["queue_lock"].endswith(".queue.json.lock")
     assert events[1]["cancelled_jobs"] == ["georefine-qwen-rank-probe"]
     assert events[1]["reason"] == "test_cancel"
+    assert events[1]["queue_lock"].endswith(".queue.json.lock")
+    assert lock_calls == [
+        FakeFcntl.LOCK_EX,
+        FakeFcntl.LOCK_UN,
+        FakeFcntl.LOCK_EX,
+        FakeFcntl.LOCK_UN,
+    ]
 
 
 def test_submit_and_cancel_require_event_log_for_queue_mutation() -> None:
@@ -1893,6 +1916,203 @@ def test_scheduler_dry_run_includes_launch_plan() -> None:
     assert row["launch_plan"]["env_keys"] == ["CUDA_VISIBLE_DEVICES"]
 
 
+def test_scheduler_blocks_cuda_when_gpu_reconciliation_audit_missing() -> None:
+    scheduler = load_scheduler()
+    runtime = FakeRuntime(live={"georefine-qwen-rank-probe": False})
+    scheduler.run_json = runtime.run_json
+    scheduler.run_capture = runtime.run_capture
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        queue_path = write_jobs(
+            root,
+            [
+                job(
+                    "georefine-qwen-rank-probe",
+                    priority=100,
+                    resource="cosbox:cuda3090",
+                    resource_class="cuda_exclusive",
+                    admission_cmd=True,
+                    post_start_probe_cmd=True,
+                    worker_identity_cmd=True,
+                )
+            ],
+        )
+        inventory_path = write_inventory(root, cuda_inventory())
+        args = args_for(queue_path, inventory_json=inventory_path)
+        args.gpu_reconciliation_audit_json = str(root / "missing-audit.json")
+        payload = scheduler.schedule_once(args)
+    assert payload["ok"] is False
+    assert payload["results"][0]["action"] == "cuda_placement_blocked_by_gpu_reconciliation_audit"
+    assert payload["results"][0]["gpu_reconciliation_audit"]["reason"] == "audit_artifact_unreadable"
+
+
+def test_scheduler_keeps_non_cuda_placement_when_gpu_reconciliation_audit_missing() -> None:
+    scheduler = load_scheduler()
+    runtime = FakeRuntime(
+        live={
+            "metadata-lane": False,
+            "georefine-qwen-rank-probe": False,
+        }
+    )
+    scheduler.run_json = runtime.run_json
+    scheduler.run_capture = runtime.run_capture
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        queue_path = write_jobs(
+            root,
+            [
+                job(
+                    "metadata-lane",
+                    priority=100,
+                    resource="atlas:validation",
+                    resource_class="generic",
+                ),
+                job(
+                    "georefine-qwen-rank-probe",
+                    priority=100,
+                    resource="cosbox:cuda3090",
+                    resource_class="cuda_exclusive",
+                    admission_cmd=True,
+                    post_start_probe_cmd=True,
+                    worker_identity_cmd=True,
+                ),
+            ],
+        )
+        args = args_for(queue_path, dry_run=True)
+        args.gpu_reconciliation_audit_json = str(root / "missing-audit.json")
+        payload = scheduler.schedule_once(args)
+    actions = {row["resource"]: row["action"] for row in payload["results"]}
+    assert payload["ok"] is False
+    assert actions["atlas:validation"] == "would_claim_and_launch"
+    assert actions["cosbox:cuda3090"] == "cuda_placement_blocked_by_gpu_reconciliation_audit"
+
+
+def test_scheduler_uses_fresh_gpu_reconciliation_audit_gate() -> None:
+    scheduler = load_scheduler()
+    runtime = FakeRuntime(live={"georefine-qwen-rank-probe": False})
+    scheduler.run_json = runtime.run_json
+    scheduler.run_capture = runtime.run_capture
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        queue_path = write_jobs(
+            root,
+            [
+                job(
+                    "georefine-qwen-rank-probe",
+                    priority=100,
+                    resource="cosbox:cuda3090",
+                    resource_class="cuda_exclusive",
+                    admission_cmd=True,
+                    post_start_probe_cmd=True,
+                    worker_identity_cmd=True,
+                )
+            ],
+        )
+        inventory_path = write_inventory(root, cuda_inventory())
+        audit_path = root / "gpu-reconciliation-audit.json"
+        audit_path.write_text(
+            json.dumps(
+                {
+                    "schema": "tensorcore.gpu_reconciliation_audit.v1",
+                    "ok": True,
+                    "checked_at_unix": scheduler.time.time(),
+                    "sweep": {"ok": True},
+                    "audit": {"ok": True},
+                }
+            ),
+            encoding="utf-8",
+        )
+        args = args_for(queue_path, dry_run=True, inventory_json=inventory_path)
+        args.gpu_reconciliation_audit_json = str(audit_path)
+        payload = scheduler.schedule_once(args)
+    assert payload["ok"] is True
+    assert payload["gpu_reconciliation_audit"]["ok"] is True
+    assert payload["results"][0]["action"] == "would_claim_and_launch"
+
+
+def test_scheduler_blocks_stale_gpu_reconciliation_audit() -> None:
+    scheduler = load_scheduler()
+    runtime = FakeRuntime(live={"georefine-qwen-rank-probe": False})
+    scheduler.run_json = runtime.run_json
+    scheduler.run_capture = runtime.run_capture
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        queue_path = write_jobs(
+            root,
+            [
+                job(
+                    "georefine-qwen-rank-probe",
+                    priority=100,
+                    resource="cosbox:cuda3090",
+                    resource_class="cuda_exclusive",
+                    admission_cmd=True,
+                    post_start_probe_cmd=True,
+                    worker_identity_cmd=True,
+                )
+            ],
+        )
+        inventory_path = write_inventory(root, cuda_inventory())
+        audit_path = root / "gpu-reconciliation-audit.json"
+        audit_path.write_text(
+            json.dumps(
+                {
+                    "schema": "tensorcore.gpu_reconciliation_audit.v1",
+                    "ok": True,
+                    "checked_at_unix": 1,
+                    "sweep": {"ok": True},
+                    "audit": {"ok": True},
+                }
+            ),
+            encoding="utf-8",
+        )
+        args = args_for(queue_path, inventory_json=inventory_path)
+        args.gpu_reconciliation_audit_json = str(audit_path)
+        args.gpu_reconciliation_max_age_sec = 1.0
+        payload = scheduler.schedule_once(args)
+    assert payload["ok"] is False
+    assert payload["results"][0]["gpu_reconciliation_audit"]["reason"] == "audit_artifact_stale"
+
+
+def test_scheduler_keeps_live_cuda_heartbeat_when_gpu_reconciliation_audit_missing() -> None:
+    scheduler = load_scheduler()
+    runtime = FakeRuntime(
+        leases=[
+            {
+                "id": "lease-qwen",
+                "resource": "cosbox:cuda3090",
+                "owner": "georefine-qwen-rank-probe:cosbox",
+                "metadata": {"sync_job_id": "georefine-qwen-rank-probe"},
+            }
+        ],
+        live={"georefine-qwen-rank-probe": True},
+    )
+    scheduler.run_json = runtime.run_json
+    scheduler.run_capture = runtime.run_capture
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        queue_path = write_jobs(
+            root,
+            [
+                job(
+                    "georefine-qwen-rank-probe",
+                    priority=100,
+                    resource="cosbox:cuda3090",
+                    resource_class="cuda_exclusive",
+                    admission_cmd=True,
+                    post_start_probe_cmd=True,
+                    worker_identity_cmd=True,
+                )
+            ],
+        )
+        inventory_path = write_inventory(root, cuda_inventory())
+        args = args_for(queue_path, inventory_json=inventory_path)
+        args.gpu_reconciliation_audit_json = str(root / "missing-audit.json")
+        payload = scheduler.schedule_once(args)
+    assert payload["ok"] is True
+    assert payload["gpu_reconciliation_audit"]["ok"] is False
+    assert payload["results"][0]["action"] == "heartbeated_live_holder"
+
+
 def test_audit_consumes_worker_reconciliation_reports() -> None:
     scheduler = load_scheduler()
     with tempfile.TemporaryDirectory() as tmp:
@@ -2034,6 +2254,11 @@ def main() -> int:
     test_submit_rejects_malformed_tensorcore_job_v1_fields()
     test_status_offline_reports_inventory_jobs_and_drain_updates_copy()
     test_scheduler_dry_run_includes_launch_plan()
+    test_scheduler_blocks_cuda_when_gpu_reconciliation_audit_missing()
+    test_scheduler_keeps_non_cuda_placement_when_gpu_reconciliation_audit_missing()
+    test_scheduler_uses_fresh_gpu_reconciliation_audit_gate()
+    test_scheduler_blocks_stale_gpu_reconciliation_audit()
+    test_scheduler_keeps_live_cuda_heartbeat_when_gpu_reconciliation_audit_missing()
     test_audit_consumes_worker_reconciliation_reports()
     print("mesh resource scheduler selftest OK")
     return 0

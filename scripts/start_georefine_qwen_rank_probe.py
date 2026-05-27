@@ -12,15 +12,27 @@ import subprocess
 import sys
 import tempfile
 import uuid
+from pathlib import PurePosixPath
 from typing import Any
 
 
 SCHEMA = "tensorcore.georefine_qwen_rank_probe.start.v1"
 DEFAULT_REF = os.environ.get("TC_GEOREFINE_REF", "")
+UNTRUSTED_PATH_PREFIXES = ("/tmp", "/var/tmp", "/private/tmp")
+UNTRUSTED_PATH_COMPONENTS = {"bytehole"}
 
 
 def shq(value: str) -> str:
     return shlex.quote(value)
+
+
+def is_protected_path(value: str) -> bool:
+    if not value.startswith("/") or value == "/":
+        return False
+    path = str(PurePosixPath(value))
+    if path in UNTRUSTED_PATH_PREFIXES or path.startswith(tuple(f"{root}/" for root in UNTRUSTED_PATH_PREFIXES)):
+        return False
+    return UNTRUSTED_PATH_COMPONENTS.isdisjoint(PurePosixPath(path).parts)
 
 
 def render_remote_script(args: argparse.Namespace) -> str:
@@ -554,6 +566,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     required_strings = {
         "--resource": args.resource,
         "--worker-resource": args.worker_resource,
+        "--authority-lease-id": args.authority_lease_id,
         "--authority-owner": args.authority_owner,
         "--repo-dir": args.repo_dir,
         "--qllm-repo-dir": args.qllm_repo_dir,
@@ -573,6 +586,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     for flag, value in required_strings.items():
         if not str(value or "").strip():
             parser.error(f"{flag} is required; pass it explicitly or set the matching TC_GEOREFINE_* environment variable")
+    protected_paths = {
+        "--repo-dir": args.repo_dir,
+        "--qllm-repo-dir": args.qllm_repo_dir,
+        "--evidence-root": args.evidence_root,
+    }
+    if args.run_dir:
+        protected_paths["--run-dir"] = args.run_dir
+    else:
+        protected_paths["--output-root"] = args.output_root
+    for flag, value in protected_paths.items():
+        if not is_protected_path(str(value or "")):
+            parser.error(f"{flag} must be an absolute protected path outside bytehole/tmp/scratch roots")
     if args.embedding_rank < 1:
         parser.error("--embedding-rank must be positive")
     if args.compression_ratio <= 0 or args.compression_ratio > 1:

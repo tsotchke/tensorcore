@@ -14,6 +14,8 @@ ExecStart=/usr/bin/python3 /opt/tensorcore/scripts/mesh_resource_scheduler.py \
   --jobs-json ${TC_SCHEDULER_JOBS_JSON} \
   --inventory-json ${TC_SCHEDULER_INVENTORY_JSON} \
   --state-json ${TC_SCHEDULER_STATE_JSON} \
+  --gpu-reconciliation-audit-json ${TC_GPU_RECONCILIATION_AUDIT_JSON} \
+  --gpu-reconciliation-max-age-sec ${TC_GPU_RECONCILIATION_MAX_AGE_SEC} \
   --interval-sec ${TC_SCHEDULER_INTERVAL_SEC} \
   --max-running-per-tenant ${TC_SCHEDULER_MAX_RUNNING_PER_TENANT} \
   --loop \

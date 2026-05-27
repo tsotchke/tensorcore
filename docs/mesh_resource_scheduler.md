@@ -41,7 +41,11 @@ python3 scripts/mesh_resource_scheduler.py submit \
 
 Real `submit` and `cancel` mutations require `--event-log-jsonl`; dry runs do
 not. Keep that path in the scheduler state directory so queue mutations have an
-append-only audit trail.
+append-only audit trail. Mutating commands take an advisory lock beside the
+queue file, named like `.mesh_resource_jobs.json.lock`, before the
+load-modify-write cycle and before appending the queue event. Scheduler-VM
+clients should call the submit/cancel CLI instead of editing the queue file
+directly.
 
 Example scheduler loop:
 
@@ -50,13 +54,18 @@ python3 scripts/mesh_resource_scheduler.py \
   --jobs-json /var/lib/tensorcore/mesh_resource_jobs.json \
   --inventory-json configs/mesh_resources.json \
   --state-json /var/lib/tensorcore/mesh_resource_state.json \
+  --gpu-reconciliation-audit-json /var/lib/tensorcore/gpu-reconciliation-audit.json \
+  --gpu-reconciliation-max-age-sec 120 \
   --loop --json
 ```
 
 For a dedicated Linux scheduler VM, use
 `configs/tensorcore-scheduler.service.example` with
 `configs/tensorcore-scheduler.env.example` as the starting systemd unit and
-environment file.
+environment file. Install
+`configs/tensorcore-gpu-reconciliation-audit.service.example` and
+`configs/tensorcore-gpu-reconciliation-audit.timer.example` beside it for the
+periodic read-only GPU reconciliation audit.
 
 Trusted GeoRefine Qwen compression jobs should start from
 `configs/georefine_qwen_job.template.json` and use
@@ -81,6 +90,8 @@ Provisioning contract:
   `configs/tensorcore-scheduler.env.example`.
 - `tensorcore-scheduler.service`: systemd unit based on
   `configs/tensorcore-scheduler.service.example`.
+- `tensorcore-gpu-reconciliation-audit.timer`: systemd timer based on
+  `configs/tensorcore-gpu-reconciliation-audit.timer.example`.
 - `mesh_resource_jobs.json`: scheduler-owned queue; project repos submit into
   it through `mesh_resource_scheduler.py submit`, not by editing worker state.
 
@@ -402,6 +413,10 @@ The scheduler's default arbiter command is `tsotchke-arbiter` on `PATH` or the
 value of `TC_MESH_ARBITER_CMD`. Install that backend from the `computer_mesh`
 git checkout and add its `tsotchke/bin` directory to the service environment
 instead of hard-coding `~/.tsotchke/bin` in Tensorcore configs.
+When the arbiter must be reached over SSH, set `TC_MESH_ARBITER_CMD` to
+`scripts/remote_tsotchke_arbiter.py` and provide
+`TC_REMOTE_ARBITER_HOST`/`TC_REMOTE_ARBITER_BIN` in the scheduler environment.
+The wrapper intentionally has no checked-in host or key defaults.
 
 Example multi-user pool job:
 
@@ -526,7 +541,16 @@ snapshot agent is not available.
 `mesh_resource_scheduler.py audit` accepts the sweep output directory via
 `--worker-reconciliation-dir`. `scripts/mesh_gpu_reconciliation_audit.py`
 wraps the sweep plus scheduler audit when a single control-plane command is
-preferred.
+preferred. The systemd timer is the v1 worker-enforcement loop: it writes
+fresh per-resource reports, writes sweep/audit JSON artifacts, and exits
+nonzero when stale worker state would make placement unsafe.
+The scheduler loop should be started with `--gpu-reconciliation-audit-json`;
+when that flag is present, new idle CUDA placement is blocked unless the audit
+artifact has schema `tensorcore.gpu_reconciliation_audit.v1`, is fresh, and is
+`ok=true`. The gate is per CUDA resource: live holders are still probed and
+heartbeated, stale/unknown lease state is still reconciled, and non-CUDA
+resources can still schedule while a CUDA audit artifact is missing, stale, or
+failed.
 
 ## Worker Identity
 
