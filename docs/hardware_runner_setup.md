@@ -8,11 +8,13 @@ when it is dispatched with `require_metal4_tensorops=true`.
 
 As of the current M5/SDK26 evidence handoff:
 
-- Latest pushed head: `ecf140d` (resolve to the full SHA locally before
-  passing it as `--expected-head`).
+- Latest pushed head: resolve `origin/master` locally before passing it as
+  `--expected-head`.
 - Hardware Evidence run `26492773197` was dispatched for `ecf140d` and then
   cancelled after the runner preflight artifact reported
-  `runner_api_unavailable` with HTTP 403.
+  `runner_api_unavailable` with HTTP 403. That artifact is useful as the
+  previous blocker proof only; dispatch a fresh Hardware Evidence run for the
+  current pushed head after fixing runner API access.
 - Local release smoke records
   `checks.metal4_tensorops.runtime_compile_status=skipped_sdk_too_old`
   because Atlas has SDK 15.2.
@@ -44,16 +46,16 @@ staging repository is intentionally being tested:
 
 ```sh
 REPO=tsotchke/tensorcore
-EXPECTED_HEAD="$(git rev-parse ecf140d)"
+git fetch origin master
+EXPECTED_HEAD="$(git rev-parse origin/master)"
 ```
 
 `EXPECTED_HEAD` must be the full SHA for the pushed commit that the workflow
-will run. If `ecf140d` is not present locally, fetch first and resolve the
-pushed ref:
+will run. If you intentionally validate a historical workflow run, resolve the
+exact historical commit instead:
 
 ```sh
-git fetch origin master
-EXPECTED_HEAD="$(git rev-parse origin/master)"
+EXPECTED_HEAD="$(git rev-parse <historical-commit>)"
 ```
 
 ## Create `TC_RUNNER_READ_TOKEN`
@@ -399,7 +401,7 @@ has built and passed the runtime probe on the M5 host.
 3. The runner host local preflight is at least `candidate`; `ready` is expected
    after the runtime smoke has built the test binary.
 4. The Hardware Evidence workflow is dispatched for the full `EXPECTED_HEAD`
-   corresponding to pushed head `ecf140d` or its successor.
+   corresponding to the current pushed head.
 5. `scripts/fetch_m5_tensorops_runtime_evidence.py --latest-for-head` accepts
    the artifact with `compile=compiled`, `runtime=passed`, and a clean matching
    head.
