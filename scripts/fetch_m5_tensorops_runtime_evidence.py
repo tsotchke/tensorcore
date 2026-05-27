@@ -22,6 +22,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 WORKFLOW = "hardware-evidence.yml"
 ARTIFACT = "tensorcore-hardware-evidence"
 RUNNER_PREFLIGHT_ARTIFACT = "tensorcore-hardware-runner-preflight"
+ONLINE_RUNNER_STATUS = "matching_runner_online"
+NO_ONLINE_RUNNER_STATUSES = {"blocked_no_matching_runner", "matching_runner_offline"}
 
 
 def run(
@@ -280,6 +282,10 @@ def validate_runner_preflight(
     return data
 
 
+def should_cancel_for_runner_preflight(data: dict[str, Any]) -> bool:
+    return data.get("status") in NO_ONLINE_RUNNER_STATUSES
+
+
 def cancel_run(repo: str, run_id: str) -> None:
     run(["gh", "run", "cancel", run_id, "--repo", repo], capture=False)
 
@@ -363,10 +369,21 @@ def main() -> int:
         data = validate_runner_preflight(
             evidence,
             args.expected_head,
-            require_online_runner=args.require_online_runner,
+            require_online_runner=(
+                args.require_online_runner and not args.cancel_if_no_online_runner
+            ),
         )
-        if args.cancel_if_no_online_runner and data.get("status") != "matching_runner_online":
-            cancel_run(args.repo, run_id)
+        if args.cancel_if_no_online_runner:
+            status = data.get("status")
+            if should_cancel_for_runner_preflight(data):
+                cancel_run(args.repo, run_id)
+            elif status != ONLINE_RUNNER_STATUS:
+                print(
+                    "not cancelling Hardware Evidence run "
+                    f"{run_id}: preflight status={status!r}; runner availability is unknown"
+                )
+            if args.require_online_runner and status != ONLINE_RUNNER_STATUS:
+                raise SystemExit(f"online matching runner required, got status={status!r}")
         return 0
     evidence = download_artifact(args.repo, run_id, args.output_dir, args.keep_output_dir)
     validate(evidence, args.expected_head)

@@ -21,7 +21,7 @@ def runner(name: str, status: str) -> dict[str, Any]:
         "name": name,
         "status": status,
         "busy": False,
-        "labels": ["ARM64", "macOS", "self-hosted"],
+        "labels": ["ARM64", "m5", "macOS", "metal4-tensorops", "sdk26", "self-hosted"],
     }
 
 
@@ -54,7 +54,7 @@ def evidence(status: str = "matching_runner_online") -> dict[str, Any]:
         },
         "status": status,
         "repository": "owner/repo",
-        "required_labels": ["self-hosted", "macOS", "ARM64"],
+        "required_labels": ["self-hosted", "macOS", "ARM64", "m5", "sdk26", "metal4-tensorops"],
         "require_metal4_tensorops": "true",
         "runner_api_rc": api_rc,
         "runner_api_error": api_error,
@@ -130,6 +130,14 @@ def main() -> int:
     missing_diag = copy.deepcopy(online)
     missing_diag["diagnostics"] = []
     assert_fails(missing_diag, "diagnostics must not be empty")
+
+    missing_metal4_label = copy.deepcopy(online)
+    missing_metal4_label["required_labels"] = ["self-hosted", "macOS", "ARM64"]
+    assert_fails(missing_metal4_label, "missing required runner labels")
+
+    mislabeled_runner = copy.deepcopy(online)
+    mislabeled_runner["matching_runners"][0]["labels"] = ["self-hosted", "macOS", "ARM64"]
+    assert_fails(mislabeled_runner, "missing required labels")
 
     print("hardware runner preflight checker selftest OK")
     return 0

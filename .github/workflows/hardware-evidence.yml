@@ -58,6 +58,7 @@ jobs:
           if-no-files-found: error
 
   apple-gpu-release-smoke:
+    if: ${{ inputs.require_metal4_tensorops != 'true' }}
     needs: hardware-runner-preflight
     runs-on: [self-hosted, macOS, ARM64]
     steps:
@@ -73,8 +74,46 @@ jobs:
           xcrun --show-sdk-version
           system_profiler SPDisplaysDataType || true
 
+      - name: Release smoke with required Metal GPU
+        env:
+          BUILD_DIR: build
+          REQUIRE_GPU: "1"
+        run: |
+          scripts/release_smoke.sh
+
+      - name: Check runtime evidence
+        run: |
+          python3 scripts/check_release_evidence.py build/release_smoke_runtime_evidence.json --require-gpu
+
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: tensorcore-hardware-evidence
+          path: |
+            build/release_smoke_runtime_evidence.json
+            build/release_smoke_device.log
+            build/Testing/Temporary/LastTest.log
+          if-no-files-found: error
+
+  m5-tensorops-release-smoke:
+    if: ${{ inputs.require_metal4_tensorops == 'true' }}
+    needs: hardware-runner-preflight
+    runs-on: [self-hosted, macOS, ARM64, m5, sdk26, metal4-tensorops]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Version consistency
+        run: scripts/check_version_consistency.sh
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          xcrun --show-sdk-version
+          system_profiler SPDisplaysDataType || true
+
       - name: M5 TensorOps runner preflight
-        if: ${{ inputs.require_metal4_tensorops == 'true' }}
         env:
           BUILD_DIR: build
         run: |
@@ -86,23 +125,16 @@ jobs:
         env:
           BUILD_DIR: build
           REQUIRE_GPU: "1"
-          REQUIRE_METAL4_TENSOROPS: ${{ inputs.require_metal4_tensorops == 'true' && '1' || '0' }}
+          REQUIRE_METAL4_TENSOROPS: "1"
         run: |
-          if [ "$REQUIRE_METAL4_TENSOROPS" = "1" ]; then
-            scripts/run_m5_tensorops_runtime_smoke.sh
-          else
-            scripts/release_smoke.sh
-          fi
+          scripts/run_m5_tensorops_runtime_smoke.sh
 
       - name: Check runtime evidence
-        env:
-          REQUIRE_METAL4_TENSOROPS: ${{ inputs.require_metal4_tensorops == 'true' && '1' || '0' }}
         run: |
-          args=(--require-gpu)
-          if [ "$REQUIRE_METAL4_TENSOROPS" = "1" ]; then
-            args+=(--require-metal4-tensorops)
-          fi
-          python3 scripts/check_release_evidence.py build/release_smoke_runtime_evidence.json "${args[@]}"
+          python3 scripts/check_release_evidence.py \
+            build/release_smoke_runtime_evidence.json \
+            --require-gpu \
+            --require-metal4-tensorops
 
       - name: Upload runtime evidence
         if: always()

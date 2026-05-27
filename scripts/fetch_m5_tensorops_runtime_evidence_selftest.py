@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import argparse
+import contextlib
 import importlib.util
+import io
 import json
 import pathlib
 import subprocess
@@ -26,6 +29,26 @@ def completed(stdout: str) -> subprocess.CompletedProcess[str]:
 
 def run_list_payload(items: list[dict[str, Any]]) -> str:
     return json.dumps(items)
+
+
+def preflight_args(**overrides: Any) -> argparse.Namespace:
+    values: dict[str, Any] = {
+        "repo": "owner/repo",
+        "expected_head": "abc123",
+        "ref": None,
+        "run_id": "123",
+        "latest_for_head": False,
+        "latest_preflight_for_head": False,
+        "runner_preflight": True,
+        "require_online_runner": False,
+        "cancel_if_no_online_runner": True,
+        "dispatch": False,
+        "output_dir": pathlib.Path("out"),
+        "keep_output_dir": False,
+        "run_list_limit": 30,
+    }
+    values.update(overrides)
+    return argparse.Namespace(**values)
 
 
 def test_latest_run_id_selects_successful_matching_head() -> None:
@@ -187,6 +210,144 @@ def test_cancel_run_calls_gh() -> None:
         fetch.run = original
 
 
+def test_cancel_decision_requires_known_no_online_runner() -> None:
+    assert fetch.should_cancel_for_runner_preflight({"status": "blocked_no_matching_runner"})
+    assert fetch.should_cancel_for_runner_preflight({"status": "matching_runner_offline"})
+    assert not fetch.should_cancel_for_runner_preflight({"status": "matching_runner_online"})
+    assert not fetch.should_cancel_for_runner_preflight({"status": "runner_api_unavailable"})
+
+
+def test_main_does_not_cancel_when_runner_api_unavailable() -> None:
+    cancelled: list[tuple[str, str]] = []
+
+    def fake_download(
+        repo: str,
+        run_id: str,
+        output_dir: pathlib.Path,
+        keep: bool,
+    ) -> pathlib.Path:
+        del repo, run_id, output_dir, keep
+        return pathlib.Path("hardware_runner_preflight.json")
+
+    def fake_validate(
+        evidence: pathlib.Path,
+        expected_head: str,
+        *,
+        require_online_runner: bool,
+    ) -> dict[str, Any]:
+        assert evidence == pathlib.Path("hardware_runner_preflight.json")
+        assert expected_head == "abc123"
+        assert not require_online_runner
+        return {"status": "runner_api_unavailable"}
+
+    original_parse_args = fetch.parse_args
+    original_download = fetch.download_runner_preflight
+    original_validate = fetch.validate_runner_preflight
+    original_cancel = fetch.cancel_run
+    fetch.parse_args = preflight_args
+    fetch.download_runner_preflight = fake_download
+    fetch.validate_runner_preflight = fake_validate
+    fetch.cancel_run = lambda repo, run_id: cancelled.append((repo, run_id))
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            assert fetch.main() == 0
+        assert cancelled == []
+    finally:
+        fetch.parse_args = original_parse_args
+        fetch.download_runner_preflight = original_download
+        fetch.validate_runner_preflight = original_validate
+        fetch.cancel_run = original_cancel
+
+
+def test_main_cancels_when_runner_is_known_offline() -> None:
+    cancelled: list[tuple[str, str]] = []
+
+    def fake_download(
+        repo: str,
+        run_id: str,
+        output_dir: pathlib.Path,
+        keep: bool,
+    ) -> pathlib.Path:
+        del repo, run_id, output_dir, keep
+        return pathlib.Path("hardware_runner_preflight.json")
+
+    def fake_validate(
+        evidence: pathlib.Path,
+        expected_head: str,
+        *,
+        require_online_runner: bool,
+    ) -> dict[str, Any]:
+        assert evidence == pathlib.Path("hardware_runner_preflight.json")
+        assert expected_head == "abc123"
+        assert not require_online_runner
+        return {"status": "matching_runner_offline"}
+
+    original_parse_args = fetch.parse_args
+    original_download = fetch.download_runner_preflight
+    original_validate = fetch.validate_runner_preflight
+    original_cancel = fetch.cancel_run
+    fetch.parse_args = preflight_args
+    fetch.download_runner_preflight = fake_download
+    fetch.validate_runner_preflight = fake_validate
+    fetch.cancel_run = lambda repo, run_id: cancelled.append((repo, run_id))
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            assert fetch.main() == 0
+        assert cancelled == [("owner/repo", "123")]
+    finally:
+        fetch.parse_args = original_parse_args
+        fetch.download_runner_preflight = original_download
+        fetch.validate_runner_preflight = original_validate
+        fetch.cancel_run = original_cancel
+
+
+def test_main_cancels_before_require_online_failure() -> None:
+    cancelled: list[tuple[str, str]] = []
+
+    def fake_download(
+        repo: str,
+        run_id: str,
+        output_dir: pathlib.Path,
+        keep: bool,
+    ) -> pathlib.Path:
+        del repo, run_id, output_dir, keep
+        return pathlib.Path("hardware_runner_preflight.json")
+
+    def fake_validate(
+        evidence: pathlib.Path,
+        expected_head: str,
+        *,
+        require_online_runner: bool,
+    ) -> dict[str, Any]:
+        assert evidence == pathlib.Path("hardware_runner_preflight.json")
+        assert expected_head == "abc123"
+        assert not require_online_runner
+        return {"status": "matching_runner_offline"}
+
+    original_parse_args = fetch.parse_args
+    original_download = fetch.download_runner_preflight
+    original_validate = fetch.validate_runner_preflight
+    original_cancel = fetch.cancel_run
+    fetch.parse_args = lambda: preflight_args(require_online_runner=True)
+    fetch.download_runner_preflight = fake_download
+    fetch.validate_runner_preflight = fake_validate
+    fetch.cancel_run = lambda repo, run_id: cancelled.append((repo, run_id))
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            try:
+                fetch.main()
+            except SystemExit as exc:
+                assert "online matching runner required" in str(exc)
+            else:
+                raise AssertionError("main unexpectedly accepted an offline runner")
+        assert cancelled == [("owner/repo", "123")]
+    finally:
+        fetch.parse_args = original_parse_args
+        fetch.download_runner_preflight = original_download
+        fetch.validate_runner_preflight = original_validate
+        fetch.cancel_run = original_cancel
+
+
 def main() -> int:
     test_latest_run_id_selects_successful_matching_head()
     test_latest_run_id_fails_without_match()
@@ -195,6 +356,10 @@ def main() -> int:
     test_default_dispatch_ref_falls_back_to_origin_head()
     test_check_dispatch_ref_fails_on_mismatch()
     test_cancel_run_calls_gh()
+    test_cancel_decision_requires_known_no_online_runner()
+    test_main_does_not_cancel_when_runner_api_unavailable()
+    test_main_cancels_when_runner_is_known_offline()
+    test_main_cancels_before_require_online_failure()
     print("M5 TensorOps runtime evidence fetch selftest OK")
     return 0
 

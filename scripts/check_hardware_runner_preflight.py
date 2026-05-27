@@ -24,6 +24,7 @@ VALID_DIAGNOSTIC_CLASSES = {
     "runner_offline",
     "runner_online",
 }
+METAL4_TENSOROPS_REQUIRED_LABELS = {"m5", "sdk26", "metal4-tensorops"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -97,6 +98,24 @@ def validate_counts(errors: list[str], data: dict[str, Any]) -> None:
         )
     if matching_count > registered_count:
         errors.append("matching_runner_count cannot exceed registered_runner_count")
+
+
+def validate_matching_runner_labels(errors: list[str], data: dict[str, Any]) -> None:
+    required = data.get("required_labels")
+    matching = data.get("matching_runners")
+    if not isinstance(required, list) or not isinstance(matching, list):
+        return
+    required_set = {str(item) for item in required}
+    for index, item in enumerate(matching):
+        if not isinstance(item, dict):
+            continue
+        labels = item.get("labels")
+        if not isinstance(labels, list):
+            errors.append(f"matching_runners[{index}].labels must be a list")
+            continue
+        missing = sorted(required_set - {str(label) for label in labels})
+        if missing:
+            errors.append(f"matching_runners[{index}] missing required labels: {missing!r}")
 
 
 def validate_status_consistency(errors: list[str], data: dict[str, Any]) -> None:
@@ -178,6 +197,7 @@ def main() -> int:
         errors.append("require_metal4_tensorops must be true/false")
 
     validate_counts(errors, data)
+    validate_matching_runner_labels(errors, data)
     validate_status_consistency(errors, data)
     validate_diagnostics(errors, data)
 
@@ -192,6 +212,13 @@ def main() -> int:
         errors.append(f"online matching runner required, got status={data.get('status')!r}")
     if args.require_metal4_tensorops and data.get("require_metal4_tensorops") not in {"true", True}:
         errors.append("preflight must be from require_metal4_tensorops=true workflow input")
+    if data.get("require_metal4_tensorops") in {"true", True} and isinstance(
+        data.get("required_labels"), list
+    ):
+        labels = {str(item) for item in data["required_labels"]}
+        missing = sorted(METAL4_TENSOROPS_REQUIRED_LABELS - labels)
+        if missing:
+            errors.append(f"Metal 4 TensorOps preflight missing required runner labels: {missing!r}")
 
     if errors:
         return fail(errors)

@@ -48,17 +48,24 @@ Runs on **macos-15**. Steps:
 
 ### `hardware-evidence.yml` — manual, self-hosted runner
 
-Triggered via `workflow_dispatch`. Runs on a `[self-hosted, macOS, ARM64]`
-runner with real GPU exposure. Executes `scripts/release_smoke.sh` with
-`REQUIRE_GPU=1` and (optionally) `REQUIRE_METAL4_TENSOROPS=1`. Uploads
-`build/release_smoke_runtime_evidence.json` as the artifact — a
-machine-readable record of (chip, family, TensorOps availability, backend
-chosen per call) that downstream integrators can consume.
+Triggered via `workflow_dispatch`. Generic Apple GPU evidence runs on a
+`[self-hosted, macOS, ARM64]` runner with real GPU exposure. Required M5
+TensorOps evidence runs on `[self-hosted, macOS, ARM64, m5, sdk26,
+metal4-tensorops]` so only an explicitly labelled M5/SDK26 host can pick up
+the promotion job. The workflow executes `scripts/release_smoke.sh` with
+`REQUIRE_GPU=1`, or `scripts/run_m5_tensorops_runtime_smoke.sh` when
+`require_metal4_tensorops=true`. Uploads
+`build/release_smoke_runtime_evidence.json` as the artifact: a
+machine-readable record of chip, family, TensorOps availability, and backend
+chosen per call that downstream integrators can consume.
 
 The workflow also starts with a GitHub-hosted runner preflight job. That job
 emits `tensorcore-hardware-runner-preflight` with the required labels and any
 visible matching runner status so a missing self-hosted runner shows up as an
 artifact and job summary instead of only as a queued hardware job.
+See [hardware_runner_setup.md](hardware_runner_setup.md) for the operator
+runbook covering the runner-list token, M5 runner registration, dispatch,
+fetch, cancel, and preflight diagnostics.
 
 ## Scripts
 
@@ -85,8 +92,9 @@ python3 scripts/check_hardware_runner_preflight.py \
 ```
 
 Use `--require-online-runner` only when the preflight is supposed to prove that
-an eligible `[self-hosted, macOS, ARM64]` runner is online; blocked/no-API
-artifacts are still useful diagnostics before that point.
+an eligible runner is online. For `require_metal4_tensorops=true`, eligible
+means `[self-hosted, macOS, ARM64, m5, sdk26, metal4-tensorops]`;
+blocked/no-API artifacts are still useful diagnostics before that point.
 
 ### `m5_tensorops_runner_preflight.py`
 
@@ -123,7 +131,8 @@ scripts/run_m5_tensorops_runtime_smoke.sh
 ```
 
 To turn a completed self-hosted M5 workflow run into local clean-head evidence,
-use the fetch/check helper:
+use the fetch/check helper. The end-to-end operator flow is documented in
+[hardware_runner_setup.md](hardware_runner_setup.md):
 
 ```sh
 # Dispatch the required M5 run for the current pushed head.

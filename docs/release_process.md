@@ -125,12 +125,18 @@ The release URL is
 
 For releases that touch the M5 / TensorOps path, manually dispatch the
 `hardware-evidence.yml` workflow with `require_metal4_tensorops=true`.
+Use [hardware_runner_setup.md](hardware_runner_setup.md) for the operator
+runbook that covers `TC_RUNNER_READ_TOKEN`, M5 self-hosted runner
+registration, preflight interpretation, dispatch, fetch, and queued-run
+cancellation.
 The self-hosted runner exercises the deepest hardware path and emits a
 `tensorcore-hardware-evidence` artifact (JSON evidence of chip / family
 / TensorOps availability / backend chosen per representative call).
 The workflow first emits a GitHub-hosted
 `tensorcore-hardware-runner-preflight` artifact that records the required
-self-hosted labels and whether a matching runner was visible.
+self-hosted labels and whether a matching runner was visible. With
+`require_metal4_tensorops=true`, the hardware job requires
+`[self-hosted, macOS, ARM64, m5, sdk26, metal4-tensorops]`.
 The artifact's `diagnostics[*].recommended_action` field is the operational
 handoff: it distinguishes an unavailable runner-list token from an absent or
 offline self-hosted M5 runner.
@@ -234,7 +240,7 @@ v0.1 series has not removed or renamed any public symbol.
 | Wheel build fails to find native artifacts | `release.yml` "Build wheel" step | Check `TENSORCORE_NATIVE_DIR` setting |
 | Wheel reinstall fails | `release.yml` "Verify wheel" step | The dylib + metallib weren't vendored — re-check `pyproject.toml` `[tool.setuptools.package-data]` |
 | GitHub release upload fails | `release.yml` final step | Usually the tag already has a release — `gh release delete v$NEW && retry` |
-| Self-hosted runner offline | `hardware-evidence.yml` preflight artifact reports no online `[self-hosted, macOS, ARM64]` runner, then the hardware job queues | Bring the runner online; cancel/re-run the queued hardware job |
+| Self-hosted runner offline | `hardware-evidence.yml` preflight artifact reports no online runner with the labels required by that dispatch, then the hardware job queues | Bring the runner online; cancel/re-run the queued hardware job |
 | Runner API unavailable | `hardware-evidence.yml` preflight artifact reports `runner_api_unavailable` | Add a repo secret named `TC_RUNNER_READ_TOKEN` with runner-list permission, or use the artifact as a visibility-only diagnostic |
 
 ## CI workflows that gate

@@ -14,6 +14,7 @@ from typing import Any
 SCHEMA = "tensorcore.hardware_runner_preflight.v1"
 FORMAT_VERSION = 1
 DEFAULT_REQUIRED_LABELS = ["self-hosted", "macOS", "ARM64"]
+METAL4_TENSOROPS_REQUIRED_LABELS = ["m5", "sdk26", "metal4-tensorops"]
 TOKEN_UNAVAILABLE = "token_unavailable"
 RUNNER_ABSENT = "runner_absent"
 RUNNER_OFFLINE = "runner_offline"
@@ -65,6 +66,17 @@ def labels_for(runner: dict[str, Any]) -> set[str]:
     for item in runner.get("labels") or []:
         if isinstance(item, dict) and item.get("name"):
             labels.add(str(item["name"]))
+    return labels
+
+
+def truthy(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def default_required_labels(require_metal4_tensorops: str) -> list[str]:
+    labels = list(DEFAULT_REQUIRED_LABELS)
+    if truthy(require_metal4_tensorops):
+        labels.extend(METAL4_TENSOROPS_REQUIRED_LABELS)
     return labels
 
 
@@ -239,7 +251,7 @@ def append_summary(path: pathlib.Path, evidence: dict[str, Any]) -> None:
 
 def main() -> int:
     args = parse_args()
-    required_labels = args.required_label or list(DEFAULT_REQUIRED_LABELS)
+    required_labels = args.required_label or default_required_labels(args.require_metal4_tensorops)
     evidence = build_evidence(
         api_json=args.api_json,
         api_error=args.api_error,

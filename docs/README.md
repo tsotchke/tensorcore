@@ -101,6 +101,8 @@ are the entry points; everything below goes deeper.
   kernel: tile layouts, function constants, threadgroup memory budget.
 - **[ci_and_scripts.md](ci_and_scripts.md)** — what each CI workflow
   runs and what every helper script in `scripts/` does.
+- **[hardware_runner_setup.md](hardware_runner_setup.md)** — M5/SDK26
+  self-hosted runner setup and Hardware Evidence preflight runbook.
 - **[mesh_resource_scheduler.md](mesh_resource_scheduler.md)** — how agents
   submit shared-resource jobs without killing each other's work.
 

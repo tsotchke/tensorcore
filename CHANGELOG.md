@@ -209,7 +209,12 @@ every architectural primitive in code and tested:
   explicit next action for token, absent-runner, offline-runner, and
   online-runner states. The M5 evidence fetch helper can now fetch that
   preflight artifact for queued runs and cancel the workflow automatically
-  when no online matching runner is visible.
+  when no online matching runner is visible. The required M5 TensorOps
+  workflow path now routes only to explicitly labelled
+  `[self-hosted, macOS, ARM64, m5, sdk26, metal4-tensorops]` runners, the
+  preflight checker enforces those labels for Metal 4 TensorOps dispatches,
+  and the fetch helper no longer auto-cancels API/token failures as if they
+  were known offline-runner states.
 - HIP smoke evidence now proves both fp32 `hip_gemm_sgemm` and fp16
   `hip_gemm_hgemm`, records per-kernel `gemm_kernels`, and emits
   ICC-readable source coverage for remote chipStar/HIP runs.
