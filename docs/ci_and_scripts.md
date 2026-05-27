@@ -1086,6 +1086,7 @@ python3 scripts/mesh_cuda_worker_identity_selftest.py
 python3 scripts/mesh_windows_worker_identity_selftest.py
 python3 scripts/mesh_worker_gpu_snapshot_selftest.py
 python3 scripts/mesh_worker_gpu_reconcile_sweep_selftest.py
+python3 scripts/mesh_gpu_reconciliation_audit_selftest.py
 ```
 
 ### `mesh_worker_gpu_snapshot.py` and `mesh_worker_gpu_reconcile.py`
@@ -1133,6 +1134,11 @@ python3 scripts/mesh_resource_scheduler.py audit \
   --jobs-json configs/mesh_resource_jobs.json \
   --inventory-json configs/mesh_resources.json \
   --worker-reconciliation-dir worker_gpu_reconciliations \
+  --json
+python3 scripts/mesh_gpu_reconciliation_audit.py \
+  --inventory-json configs/mesh_resources.json \
+  --jobs-json configs/mesh_resource_jobs.json \
+  --reports-dir worker_gpu_reconciliations \
   --json
 ```
 

@@ -54,6 +54,9 @@ def render_command_part(value: str, job: dict | None = None) -> str:
         "worker_alias": job.get("worker_alias") or metadata.get("worker_alias"),
         "worker_gpu_alias": job.get("worker_alias") or metadata.get("worker_alias"),
     }
+    for key, replacement in metadata.items():
+        if key not in replacements and isinstance(replacement, (str, int, float)):
+            replacements[key] = replacement
     out = value
     for key, replacement in replacements.items():
         if replacement is not None:
@@ -565,6 +568,8 @@ def normalize_job(job: Any, inventory: dict[str, dict] | None = None) -> dict:
         out["resource_node"] = str(inventory_row.get("node") or out["resource"].split(":", 1)[0])
         out["resource_backend"] = str(inventory_row.get("backend") or "")
         out["inventory_class"] = str(inventory_row.get("class") or "")
+        if not out.get("worker_alias") and inventory_row.get("worker_alias"):
+            out["worker_alias"] = str(inventory_row["worker_alias"])
     else:
         out["resource_node"] = str(out.get("resource_node") or out["resource"].split(":", 1)[0])
         out["resource_backend"] = str(out.get("resource_backend") or "")
@@ -587,6 +592,8 @@ def normalize_job(job: Any, inventory: dict[str, dict] | None = None) -> dict:
     metadata["resource"] = out["resource"]
     metadata["resource_backend"] = out["resource_backend"]
     metadata["resource_node"] = out["resource_node"]
+    if out.get("worker_alias"):
+        metadata["worker_alias"] = out["worker_alias"]
     metadata["scheduler_host"] = os.uname().nodename
     metadata["worker_identity_pending"] = requires_host_gate
     out["metadata"] = metadata

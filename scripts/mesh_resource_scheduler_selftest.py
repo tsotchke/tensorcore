@@ -1253,12 +1253,16 @@ def test_command_resolution_supports_authority_and_worker_alias_placeholders() -
             "{authority_owner}",
             "{worker_alias}",
             "{worker_gpu_alias}",
+            "{run_dir}",
         ],
         {
             "id": "georefine",
             "resource": "cosbox:cuda3090",
             "owner": "georefine:qwen",
-            "metadata": {"worker_alias": "gpu:cosbox:0"},
+            "metadata": {
+                "run_dir": "/runs/georefine",
+                "worker_alias": "gpu:cosbox:0",
+            },
         },
     )
     assert argv == [
@@ -1267,6 +1271,7 @@ def test_command_resolution_supports_authority_and_worker_alias_placeholders() -
         "georefine:qwen",
         "gpu:cosbox:0",
         "gpu:cosbox:0",
+        "/runs/georefine",
     ]
 
 
@@ -1608,7 +1613,7 @@ def tensorcore_job_v1_spec() -> dict[str, Any]:
             "exclusive": True,
         },
         "command": {
-            "argv": ["start", "{resource}"],
+            "argv": ["start", "{resource}", "{worker_alias}"],
             "cwd": "scripts",
             "env": {"CUDA_VISIBLE_DEVICES": "0"},
         },
@@ -1637,6 +1642,7 @@ def cuda_inventory() -> list[dict[str, Any]]:
             "capacity": 1,
             "memory_gib": 24,
             "control_plane": "tensorcore_scheduler",
+            "worker_alias": "gpu:cosbox:0",
         }
     ]
 
@@ -1664,6 +1670,7 @@ def test_submit_dry_run_expands_tensorcore_job_v1() -> None:
     plan = payload["launch_plans"][0]
     assert plan["schema"] == "tensorcore.cluster_launch_plan.v1"
     assert plan["resource"] == "cosbox:cuda3090"
+    assert "gpu:cosbox:0" in plan["start_cmd"]
     assert plan["completion_cmd"] == ["complete", "georefine-qwen-rank-probe"]
     assert plan["artifact_root"] == "/evidence/georefine"
     assert plan["quality_gates"] == [{"name": "size_ratio", "max": 0.30}]

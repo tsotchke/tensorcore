@@ -152,6 +152,8 @@ every architectural primitive in code and tested:
   `--event-log-jsonl`, CUDA inventory rows declare per-resource GPU
   reconciliation policy, and `scripts/mesh_worker_gpu_reconcile_sweep.py`
   sweeps worker GPU occupancy without hardcoded arbiter or resource aliases.
+  `scripts/mesh_gpu_reconciliation_audit.py` wraps the sweep plus scheduler
+  audit for one-step control-plane checks.
 - The GeoRefine Qwen rank-probe launcher now takes host, path, model, worker
   resource, and quality gate values from scheduler config or environment
   instead of embedding cosbox/private-path defaults in code.

@@ -524,7 +524,9 @@ reconciliation report per resource. Provide arbiter state through
 reconciliation only with an explicit reason, for example while a Windows worker
 snapshot agent is not available.
 `mesh_resource_scheduler.py audit` accepts the sweep output directory via
-`--worker-reconciliation-dir`.
+`--worker-reconciliation-dir`. `scripts/mesh_gpu_reconciliation_audit.py`
+wraps the sweep plus scheduler audit when a single control-plane command is
+preferred.
 
 ## Worker Identity
 
