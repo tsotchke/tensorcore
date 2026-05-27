@@ -19,6 +19,7 @@ TOKEN_UNAVAILABLE = "token_unavailable"
 RUNNER_ABSENT = "runner_absent"
 RUNNER_OFFLINE = "runner_offline"
 RUNNER_ONLINE = "runner_online"
+MAX_LABEL_CANDIDATES = 5
 
 
 def parse_args() -> argparse.Namespace:
@@ -67,6 +68,36 @@ def labels_for(runner: dict[str, Any]) -> set[str]:
         if isinstance(item, dict) and item.get("name"):
             labels.add(str(item["name"]))
     return labels
+
+
+def label_candidates_for(
+    runners: list[dict[str, Any]],
+    required_labels: list[str],
+) -> list[dict[str, Any]]:
+    required = set(required_labels)
+    candidates: list[dict[str, Any]] = []
+    for runner in runners:
+        labels = labels_for(runner)
+        matched = sorted(required & labels)
+        if not matched:
+            continue
+        candidates.append(
+            {
+                "name": runner.get("name"),
+                "status": runner.get("status"),
+                "busy": runner.get("busy"),
+                "matched_required_labels": matched,
+                "missing_required_labels": sorted(required - labels),
+                "labels": sorted(labels),
+            }
+        )
+    candidates.sort(
+        key=lambda item: (
+            -len(item["matched_required_labels"]),
+            str(item.get("name") or ""),
+        )
+    )
+    return candidates[:MAX_LABEL_CANDIDATES]
 
 
 def truthy(value: str) -> bool:
@@ -127,12 +158,14 @@ def build_evidence(
     else:
         status = "blocked_no_matching_runner"
 
+    label_candidates = label_candidates_for(runners, required_labels)
     diagnostics = diagnostics_for_status(
         status=status,
         api_note=api_note,
         required_labels=required_labels,
         matching=matching,
         online_matching=online_matching,
+        label_candidates=label_candidates,
     )
 
     return {
@@ -155,6 +188,7 @@ def build_evidence(
         "matching_runner_count": len(matching),
         "online_matching_runner_count": len(online_matching),
         "matching_runners": matching,
+        "label_candidate_runners": label_candidates,
         "diagnostics": diagnostics,
     }
 
@@ -166,6 +200,7 @@ def diagnostics_for_status(
     required_labels: list[str],
     matching: list[dict[str, Any]],
     online_matching: list[dict[str, Any]],
+    label_candidates: list[dict[str, Any]],
 ) -> list[dict[str, str]]:
     labels = ", ".join(required_labels)
     if status == "runner_api_unavailable":
@@ -182,6 +217,14 @@ def diagnostics_for_status(
             }
         ]
     if status == "blocked_no_matching_runner":
+        candidate_hint = ""
+        if label_candidates:
+            parts = []
+            for item in label_candidates[:3]:
+                name = str(item.get("name") or "<unnamed>")
+                missing = ", ".join(str(label) for label in item.get("missing_required_labels") or [])
+                parts.append(f"{name} missing [{missing}]")
+            candidate_hint = " Closest visible runner(s): " + "; ".join(parts) + "."
         return [
             {
                 "id": "hardware_runner_preflight.matching_runner",
@@ -190,7 +233,8 @@ def diagnostics_for_status(
                 "message": f"No runner matched required labels: {labels}",
                 "recommended_action": (
                     "Register an M5/SDK26 macOS ARM64 self-hosted runner with the required "
-                    "labels, then redispatch hardware-evidence.yml."
+                    "labels, or fix the labels on the closest visible runner, then redispatch "
+                    f"hardware-evidence.yml.{candidate_hint}"
                 ),
             }
         ]
@@ -235,6 +279,18 @@ def append_summary(path: pathlib.Path, evidence: dict[str, Any]) -> None:
         f"- Matching runners: `{evidence['matching_runner_count']}`",
         f"- Online matching runners: `{evidence['online_matching_runner_count']}`",
     ]
+    candidates = evidence.get("label_candidate_runners")
+    if isinstance(candidates, list) and candidates:
+        lines.append("- Closest visible runners:")
+        for item in candidates[:MAX_LABEL_CANDIDATES]:
+            if not isinstance(item, dict):
+                continue
+            missing = ", ".join(str(label) for label in item.get("missing_required_labels") or [])
+            matched = ", ".join(str(label) for label in item.get("matched_required_labels") or [])
+            lines.append(
+                f"  - `{item.get('name') or '<unnamed>'}` status=`{item.get('status')}` "
+                f"matched=`{matched}` missing=`{missing}`"
+            )
     if note:
         lines.append(f"- Runner API note: `{note}`")
     diagnostics = evidence.get("diagnostics")

@@ -279,6 +279,27 @@ def validate_runner_preflight(
         f"online_matching={data.get('online_matching_runner_count')} "
         f"artifact={evidence}"
     )
+    diagnostics = data.get("diagnostics")
+    if isinstance(diagnostics, list):
+        for item in diagnostics:
+            if not isinstance(item, dict):
+                continue
+            diagnostic_class = item.get("diagnostic_class")
+            action = item.get("recommended_action")
+            if diagnostic_class and action:
+                print(f"  diagnostic={diagnostic_class}: {action}")
+    candidates = data.get("label_candidate_runners")
+    if isinstance(candidates, list) and candidates:
+        print("  closest visible runner label candidates:")
+        for item in candidates[:5]:
+            if not isinstance(item, dict):
+                continue
+            missing = ",".join(str(label) for label in item.get("missing_required_labels") or [])
+            matched = ",".join(str(label) for label in item.get("matched_required_labels") or [])
+            print(
+                f"    - {item.get('name') or '<unnamed>'}: "
+                f"status={item.get('status')} matched=[{matched}] missing=[{missing}]"
+            )
     return data
 
 

@@ -118,6 +118,27 @@ def validate_matching_runner_labels(errors: list[str], data: dict[str, Any]) -> 
             errors.append(f"matching_runners[{index}] missing required labels: {missing!r}")
 
 
+def validate_label_candidate_runners(errors: list[str], data: dict[str, Any]) -> None:
+    candidates = data.get("label_candidate_runners")
+    if candidates is None:
+        return
+    if not isinstance(candidates, list):
+        errors.append("label_candidate_runners must be a list")
+        return
+    for index, item in enumerate(candidates):
+        if not isinstance(item, dict):
+            errors.append(f"label_candidate_runners[{index}] must be an object")
+            continue
+        for key in ("matched_required_labels", "missing_required_labels", "labels"):
+            value = item.get(key)
+            if not isinstance(value, list) or not all(isinstance(label, str) for label in value):
+                errors.append(f"label_candidate_runners[{index}].{key} must be a list of strings")
+        if item.get("status") is not None and not isinstance(item.get("status"), str):
+            errors.append(f"label_candidate_runners[{index}].status must be a string when present")
+        if item.get("busy") is not None and not isinstance(item.get("busy"), bool):
+            errors.append(f"label_candidate_runners[{index}].busy must be a boolean when present")
+
+
 def validate_status_consistency(errors: list[str], data: dict[str, Any]) -> None:
     status = data.get("status")
     api_rc = data.get("runner_api_rc")
@@ -198,6 +219,7 @@ def main() -> int:
 
     validate_counts(errors, data)
     validate_matching_runner_labels(errors, data)
+    validate_label_candidate_runners(errors, data)
     validate_status_consistency(errors, data)
     validate_diagnostics(errors, data)
 

@@ -85,6 +85,16 @@ def main() -> int:
         assert missing["status"] == "blocked_no_matching_runner"
         assert missing["registered_runner_count"] == 1
         assert missing["diagnostics"][0]["diagnostic_class"] == "runner_absent"
+        assert missing["label_candidate_runners"][0]["name"] == "linux"
+        assert missing["label_candidate_runners"][0]["matched_required_labels"] == ["self-hosted"]
+        assert missing["label_candidate_runners"][0]["missing_required_labels"] == [
+            "ARM64",
+            "m5",
+            "macOS",
+            "metal4-tensorops",
+            "sdk26",
+        ]
+        assert "Closest visible runner" in missing["diagnostics"][0]["recommended_action"]
 
         offline = build(
             tmp,
@@ -112,13 +122,15 @@ def main() -> int:
         assert online["status"] == "matching_runner_online"
         assert online["online_matching_runner_count"] == 1
         assert online["diagnostics"][0]["diagnostic_class"] == "runner_online"
+        assert online["label_candidate_runners"][0]["missing_required_labels"] == []
 
         summary = tmp / "summary.md"
-        preflight.append_summary(summary, online)
+        preflight.append_summary(summary, missing)
         text = summary.read_text(encoding="utf-8")
         assert "Hardware Evidence runner preflight" in text
-        assert "matching_runner_online" in text
+        assert "blocked_no_matching_runner" in text
         assert "Recommended action" in text
+        assert "Closest visible runners" in text
 
     print("hardware runner preflight selftest OK")
     return 0

@@ -62,6 +62,16 @@ def evidence(status: str = "matching_runner_online") -> dict[str, Any]:
         "matching_runner_count": len(matching),
         "online_matching_runner_count": len(online),
         "matching_runners": matching,
+        "label_candidate_runners": [
+            {
+                "name": "m5" if matching else "near-match",
+                "status": "online" if matching else "offline",
+                "busy": False,
+                "matched_required_labels": ["self-hosted", "macOS", "ARM64"],
+                "missing_required_labels": [] if matching else ["m5", "sdk26", "metal4-tensorops"],
+                "labels": ["self-hosted", "macOS", "ARM64"],
+            }
+        ],
         "diagnostics": [
             {
                 "id": f"hardware_runner_preflight.{status}",
@@ -138,6 +148,10 @@ def main() -> int:
     mislabeled_runner = copy.deepcopy(online)
     mislabeled_runner["matching_runners"][0]["labels"] = ["self-hosted", "macOS", "ARM64"]
     assert_fails(mislabeled_runner, "missing required labels")
+
+    bad_candidate = copy.deepcopy(online)
+    bad_candidate["label_candidate_runners"][0]["missing_required_labels"] = "m5"
+    assert_fails(bad_candidate, "label_candidate_runners")
 
     print("hardware runner preflight checker selftest OK")
     return 0

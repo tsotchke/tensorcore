@@ -323,7 +323,7 @@ routing only. It does not prove M5 runtime support.
 | Status | Meaning | Operator action |
 |---|---|---|
 | `runner_api_unavailable` | The workflow could not list repository Actions runners. `runner_api_rc` is non-zero and `runner_api_error` usually contains the GitHub API failure. | Add or fix `TC_RUNNER_READ_TOKEN`, then redispatch. HTTP 403 maps here. |
-| `blocked_no_matching_runner` | The runner API was available, but no registered runner had all required labels. | Register an M5/SDK26 macOS ARM64 runner. With the current zero-runner repo state, this is the expected blocker. |
+| `blocked_no_matching_runner` | The runner API was available, but no registered runner had all required labels. | Register an M5/SDK26 macOS ARM64 runner, or fix labels on the closest visible runner listed in `label_candidate_runners`. With the current zero-runner repo state, this is the expected blocker. |
 | `matching_runner_offline` | A runner has the required labels, but none are online. | Start the runner service on the M5 host, then redispatch. |
 | `matching_runner_online` | At least one required-label runner is online. | Wait for `apple-gpu-release-smoke` to run and upload runtime evidence. |
 
@@ -336,6 +336,9 @@ Important fields:
 - `matching_runner_count`: registered runners containing all required labels.
 - `online_matching_runner_count`: matching runners with `status=online`.
 - `matching_runners[]`: name, status, busy flag, and labels for matched rows.
+- `label_candidate_runners[]`: closest visible runners with matched and
+  missing required labels. This helps distinguish "no runner exists" from
+  "runner labels need repair".
 - `diagnostics[*].diagnostic_class`: one of `token_unavailable`,
   `runner_absent`, `runner_offline`, or `runner_online`.
 - `diagnostics[*].recommended_action`: the handoff text for the next operator
