@@ -136,6 +136,15 @@ python3 scripts/fetch_m5_tensorops_runtime_evidence.py --dispatch \
 python3 scripts/fetch_m5_tensorops_runtime_evidence.py --latest-for-head \
   --expected-head "$(git rev-parse HEAD)"
 
+# If the self-hosted job is queued, fetch and validate the GitHub-hosted
+# runner preflight instead; cancel the run automatically when no matching
+# online runner is visible.
+python3 scripts/fetch_m5_tensorops_runtime_evidence.py \
+  --runner-preflight \
+  --latest-preflight-for-head \
+  --cancel-if-no-online-runner \
+  --expected-head "$(git rev-parse HEAD)"
+
 # Or validate a known workflow run id explicitly.
 python3 scripts/fetch_m5_tensorops_runtime_evidence.py --run-id "$RUN_ID" \
   --expected-head "$(git rev-parse HEAD)"

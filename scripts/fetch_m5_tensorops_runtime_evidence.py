@@ -21,6 +21,7 @@ from typing import Any
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 WORKFLOW = "hardware-evidence.yml"
 ARTIFACT = "tensorcore-hardware-evidence"
+RUNNER_PREFLIGHT_ARTIFACT = "tensorcore-hardware-runner-preflight"
 
 
 def run(
@@ -95,7 +96,7 @@ def load_json(path: pathlib.Path) -> dict[str, Any]:
     return data
 
 
-def latest_run_id(repo: str, expected_head: str, limit: int) -> str:
+def latest_run_id(repo: str, expected_head: str, limit: int, *, require_success: bool = True) -> str:
     proc = run(
         [
             "gh",
@@ -122,14 +123,16 @@ def latest_run_id(repo: str, expected_head: str, limit: int) -> str:
             continue
         if item.get("headSha") != expected_head:
             continue
-        if item.get("status") != "completed" or item.get("conclusion") != "success":
+        if require_success and (
+            item.get("status") != "completed" or item.get("conclusion") != "success"
+        ):
             continue
         run_id = item.get("databaseId")
         if run_id:
             return str(run_id)
     raise SystemExit(
-        f"no successful {WORKFLOW} run found for head {expected_head}; "
-        "pass --run-id after dispatching the workflow if the run is still fresh"
+        f"no {'successful ' if require_success else ''}{WORKFLOW} run found for head {expected_head}; "
+        "pass --run-id after dispatching the workflow if needed"
     )
 
 
@@ -164,7 +167,13 @@ def check_dispatch_ref(ref: str, expected_head: str) -> None:
         )
 
 
-def download_artifact(repo: str, run_id: str, output_dir: pathlib.Path, keep: bool) -> pathlib.Path:
+def download_named_artifact(
+    repo: str,
+    run_id: str,
+    artifact_name: str,
+    output_dir: pathlib.Path,
+    keep: bool,
+) -> None:
     if output_dir.exists() and not keep:
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -177,12 +186,16 @@ def download_artifact(repo: str, run_id: str, output_dir: pathlib.Path, keep: bo
             "--repo",
             repo,
             "--name",
-            ARTIFACT,
+            artifact_name,
             "--dir",
             str(output_dir),
         ],
         capture=False,
     )
+
+
+def download_artifact(repo: str, run_id: str, output_dir: pathlib.Path, keep: bool) -> pathlib.Path:
+    download_named_artifact(repo, run_id, ARTIFACT, output_dir, keep)
     evidence = output_dir / "release_smoke_runtime_evidence.json"
     if not evidence.exists():
         matches = sorted(output_dir.rglob("release_smoke_runtime_evidence.json"))
@@ -192,6 +205,26 @@ def download_artifact(repo: str, run_id: str, output_dir: pathlib.Path, keep: bo
             raise SystemExit(
                 f"artifact {ARTIFACT!r} from run {run_id} did not contain "
                 "release_smoke_runtime_evidence.json"
+            )
+    return evidence
+
+
+def download_runner_preflight(
+    repo: str,
+    run_id: str,
+    output_dir: pathlib.Path,
+    keep: bool,
+) -> pathlib.Path:
+    download_named_artifact(repo, run_id, RUNNER_PREFLIGHT_ARTIFACT, output_dir, keep)
+    evidence = output_dir / "hardware_runner_preflight.json"
+    if not evidence.exists():
+        matches = sorted(output_dir.rglob("hardware_runner_preflight.json"))
+        if matches:
+            evidence = matches[0]
+        else:
+            raise SystemExit(
+                f"artifact {RUNNER_PREFLIGHT_ARTIFACT!r} from run {run_id} did not contain "
+                "hardware_runner_preflight.json"
             )
     return evidence
 
@@ -219,6 +252,38 @@ def validate(evidence: pathlib.Path, expected_head: str) -> None:
     )
 
 
+def validate_runner_preflight(
+    evidence: pathlib.Path,
+    expected_head: str,
+    *,
+    require_online_runner: bool,
+) -> dict[str, Any]:
+    cmd = [
+        sys.executable,
+        str(ROOT / "scripts" / "check_hardware_runner_preflight.py"),
+        str(evidence),
+        "--expected-head",
+        expected_head,
+        "--require-metal4-tensorops",
+    ]
+    if require_online_runner:
+        cmd.append("--require-online-runner")
+    run(cmd, capture=False)
+    data = load_json(evidence)
+    print(
+        "Hardware runner preflight accepted: "
+        f"head={data.get('meta', {}).get('head_sha')} "
+        f"status={data.get('status')} "
+        f"online_matching={data.get('online_matching_runner_count')} "
+        f"artifact={evidence}"
+    )
+    return data
+
+
+def cancel_run(repo: str, run_id: str) -> None:
+    run(["gh", "run", "cancel", run_id, "--repo", repo], capture=False)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=default_repo(), help="GitHub repo as owner/name.")
@@ -233,6 +298,26 @@ def parse_args() -> argparse.Namespace:
         "--latest-for-head",
         action="store_true",
         help="Find the latest successful hardware-evidence run for --expected-head.",
+    )
+    parser.add_argument(
+        "--latest-preflight-for-head",
+        action="store_true",
+        help="Find the latest hardware-evidence run for --expected-head, even if still queued.",
+    )
+    parser.add_argument(
+        "--runner-preflight",
+        action="store_true",
+        help="Download and validate tensorcore-hardware-runner-preflight instead of runtime evidence.",
+    )
+    parser.add_argument(
+        "--require-online-runner",
+        action="store_true",
+        help="With --runner-preflight, require an online matching self-hosted runner.",
+    )
+    parser.add_argument(
+        "--cancel-if-no-online-runner",
+        action="store_true",
+        help="With --runner-preflight, cancel the workflow run when no online matching runner exists.",
     )
     parser.add_argument(
         "--dispatch",
@@ -260,9 +345,29 @@ def main() -> int:
         return 0
     run_id = args.run_id
     if not run_id:
-        if not args.latest_for_head:
-            raise SystemExit("pass --run-id, --latest-for-head, or --dispatch")
-        run_id = latest_run_id(args.repo, args.expected_head, args.run_list_limit)
+        if args.latest_preflight_for_head or args.runner_preflight:
+            run_id = latest_run_id(
+                args.repo,
+                args.expected_head,
+                args.run_list_limit,
+                require_success=False,
+            )
+        elif args.latest_for_head:
+            run_id = latest_run_id(args.repo, args.expected_head, args.run_list_limit)
+        else:
+            raise SystemExit(
+                "pass --run-id, --latest-for-head, --latest-preflight-for-head, or --dispatch"
+            )
+    if args.runner_preflight:
+        evidence = download_runner_preflight(args.repo, run_id, args.output_dir, args.keep_output_dir)
+        data = validate_runner_preflight(
+            evidence,
+            args.expected_head,
+            require_online_runner=args.require_online_runner,
+        )
+        if args.cancel_if_no_online_runner and data.get("status") != "matching_runner_online":
+            cancel_run(args.repo, run_id)
+        return 0
     evidence = download_artifact(args.repo, run_id, args.output_dir, args.keep_output_dir)
     validate(evidence, args.expected_head)
     return 0

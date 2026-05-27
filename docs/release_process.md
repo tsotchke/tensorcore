@@ -165,6 +165,17 @@ python3 scripts/fetch_m5_tensorops_runtime_evidence.py --latest-for-head \
   --expected-head "$(git rev-parse HEAD)"
 ```
 
+If the self-hosted hardware job stays queued, fetch the runner-preflight
+artifact and cancel the queued run when no matching runner is online:
+
+```sh
+python3 scripts/fetch_m5_tensorops_runtime_evidence.py \
+  --runner-preflight \
+  --latest-preflight-for-head \
+  --cancel-if-no-online-runner \
+  --expected-head "$(git rev-parse HEAD)"
+```
+
 ## Running the release pipeline locally
 
 To sanity-check before tagging:

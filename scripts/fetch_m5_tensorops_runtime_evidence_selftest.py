@@ -96,6 +96,33 @@ def test_latest_run_id_fails_without_match() -> None:
         fetch.run = original
 
 
+def test_latest_run_id_can_select_unfinished_preflight_run() -> None:
+    def fake_run(cmd: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+        del cmd
+        return completed(
+            run_list_payload(
+                [
+                    {
+                        "databaseId": 301,
+                        "headSha": "abc123",
+                        "status": "queued",
+                        "conclusion": None,
+                    }
+                ]
+            )
+        )
+
+    original = fetch.run
+    fetch.run = fake_run
+    try:
+        assert (
+            fetch.latest_run_id("owner/repo", "abc123", 10, require_success=False)
+            == "301"
+        )
+    finally:
+        fetch.run = original
+
+
 def test_default_dispatch_ref_uses_current_branch() -> None:
     calls: list[tuple[str, ...]] = []
 
@@ -144,12 +171,30 @@ def test_check_dispatch_ref_fails_on_mismatch() -> None:
         fetch.resolve_local_ref = original
 
 
+def test_cancel_run_calls_gh() -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+        calls.append(cmd)
+        return completed("")
+
+    original = fetch.run
+    fetch.run = fake_run
+    try:
+        fetch.cancel_run("owner/repo", "123")
+        assert calls == [["gh", "run", "cancel", "123", "--repo", "owner/repo"]]
+    finally:
+        fetch.run = original
+
+
 def main() -> int:
     test_latest_run_id_selects_successful_matching_head()
     test_latest_run_id_fails_without_match()
+    test_latest_run_id_can_select_unfinished_preflight_run()
     test_default_dispatch_ref_uses_current_branch()
     test_default_dispatch_ref_falls_back_to_origin_head()
     test_check_dispatch_ref_fails_on_mismatch()
+    test_cancel_run_calls_gh()
     print("M5 TensorOps runtime evidence fetch selftest OK")
     return 0
 
