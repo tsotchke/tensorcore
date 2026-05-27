@@ -18,7 +18,7 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
 | `decode_step.c` | One full synthetic Llama decode step end-to-end (RMSnorm + Q4_0 GEMVs + RoPE + FlashAttention + SwiGLU + residual) | ~30ms / 2 layers |
 | `training_step.c` | One full training iteration: RMSnorm + Linear + softmax forward, backward through softmax+CE / Linear / RMSnorm, AdamW on weights + gamma | ~10ms / step |
 | `mesh_training_demo.c` | Split-rank training loop with RMSNorm, GEMM, softmax+CE, activation checkpointing, AdamW, DiLoCo outer sync, and GLOO rendezvous flags | ~10ms single-rank; network-dependent multi-rank |
-| `native_sdk_consumer/` | Standalone C and C++ consumers for an installed native SDK, shared/static CMake targets, and pkg-config smoke source | build-only |
+| [`native_sdk_consumer/`](native_sdk_consumer/README.md) | Standalone C and C++ consumers for an installed native SDK, shared/static CMake targets, and pkg-config smoke source | build-only |
 
 ## `hello_gemm.c` (60 lines)
 
@@ -136,7 +136,7 @@ outer-step count, and elapsed wall time. The single-rank mode is also
 registered as `example_mesh_training_demo` in CTest; the checkpointed
 variant is registered as `example_mesh_training_demo_checkpoint`.
 
-## `native_sdk_consumer/`
+## [`native_sdk_consumer/`](native_sdk_consumer/README.md)
 
 Out-of-tree consumer fixture for release artifacts and downstream
 projects. It uses `find_package(tensorcore CONFIG REQUIRED)` against an
@@ -152,7 +152,7 @@ the current host.
 3. `decode_step.c` — inference assembly.
 4. `training_step.c` — training assembly.
 5. `mesh_training_demo.c` — split-rank training + DiLoCo assembly.
-6. `native_sdk_consumer/` — proves an installed SDK works out of tree.
+6. [`native_sdk_consumer/`](native_sdk_consumer/README.md) — proves an installed SDK works out of tree.
 
 Each example assumes you've read the corresponding doc:
 
