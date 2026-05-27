@@ -132,6 +132,15 @@ The workflow first emits a GitHub-hosted
 `tensorcore-hardware-runner-preflight` artifact that records the required
 self-hosted labels and whether a matching runner was visible.
 
+Before registering or debugging the runner, run:
+
+```sh
+python3 scripts/m5_tensorops_runner_preflight.py --json
+```
+
+On a built checkout, `--require-ready` additionally requires the local
+`test_tensorops_runtime` binary to emit `tensorops_runtime_status=passed`.
+
 ## Running the release pipeline locally
 
 To sanity-check before tagging:

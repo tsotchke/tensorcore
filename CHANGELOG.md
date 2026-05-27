@@ -196,7 +196,10 @@ every architectural primitive in code and tested:
   artifact and CI-tested preflight script so missing `[self-hosted, macOS,
   ARM64]` runners are visible before the hardware job queues. A live
   dispatch validated that the preflight artifact uploads even when the
-  self-hosted Apple GPU job remains queued.
+  self-hosted Apple GPU job remains queued. M5 TensorOps runners now also
+  have a local host preflight that records macOS/arm64, Xcode/SDK26, display
+  device, and optional `test_tensorops_runtime` readiness before the full
+  hardware smoke runs.
 - HIP smoke evidence now proves both fp32 `hip_gemm_sgemm` and fp16
   `hip_gemm_hgemm`, records per-kernel `gemm_kernels`, and emits
   ICC-readable source coverage for remote chipStar/HIP runs.

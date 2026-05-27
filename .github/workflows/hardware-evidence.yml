@@ -69,6 +69,15 @@ jobs:
           xcrun --show-sdk-version
           system_profiler SPDisplaysDataType || true
 
+      - name: M5 TensorOps runner preflight
+        if: ${{ inputs.require_metal4_tensorops == 'true' }}
+        env:
+          BUILD_DIR: build
+        run: |
+          python3 scripts/m5_tensorops_runner_preflight.py \
+            --build-dir "$BUILD_DIR" \
+            --output "$BUILD_DIR/m5_tensorops_runner_preflight.json"
+
       - name: Release smoke with required Metal GPU
         env:
           BUILD_DIR: build
@@ -97,6 +106,7 @@ jobs:
         with:
           name: tensorcore-hardware-evidence
           path: |
+            build/m5_tensorops_runner_preflight.json
             build/release_smoke_runtime_evidence.json
             build/release_smoke_device.log
             build/Testing/Temporary/LastTest.log

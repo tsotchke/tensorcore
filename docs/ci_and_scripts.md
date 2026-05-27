@@ -71,6 +71,30 @@ and the required self-hosted labels to this script; it emits JSON with
 `blocked_no_matching_runner`, or `runner_api_unavailable`, plus a concise job
 summary.
 
+### `m5_tensorops_runner_preflight.py`
+
+Local host preflight for the final M5 TensorOps runtime evidence gate. It
+checks that the host is macOS/arm64, has Xcode plus SDK 26.0 or newer, reports
+an M5-or-newer display device name, and optionally runs an existing
+`test_tensorops_runtime` binary from the selected build directory. The default
+artifact is `build/m5_tensorops_runner_preflight.json`.
+
+Run it before registering or debugging a self-hosted M5 runner:
+
+```sh
+python3 scripts/m5_tensorops_runner_preflight.py --json
+python3 scripts/m5_tensorops_runner_preflight.py --require-ready
+```
+
+`status=candidate` means host prerequisites look right but the runtime binary
+was not available yet. `status=ready` requires the existing runtime binary to
+emit `tensorops_runtime_status=passed`. The authoritative promotion gate
+remains:
+
+```sh
+scripts/run_m5_tensorops_runtime_smoke.sh
+```
+
 ### `check_version_consistency.sh`
 
 Reads version from `pyproject.toml`, `CMakeLists.txt`, and

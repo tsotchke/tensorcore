@@ -186,6 +186,10 @@ There are two CI workflows + one self-hosted hardware workflow:
 - `.github/workflows/hardware-evidence.yml` — manual workflow that runs
   on a self-hosted M-series runner with `REQUIRE_GPU=1` and (optionally)
   `REQUIRE_METAL4_TENSOROPS=1`. Exercises the real hardware path.
+  Before registering an M5 runner, use
+  `python3 scripts/m5_tensorops_runner_preflight.py --json` to capture host
+  SDK/GPU readiness; the final proof is still
+  `scripts/run_m5_tensorops_runtime_smoke.sh`.
 
 To run the CI Python smoke locally:
 
