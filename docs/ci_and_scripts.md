@@ -960,8 +960,9 @@ python3 scripts/start_georefine_qwen_rank_probe_selftest.py
 Scheduler submission template for the Linux CUDA kernel evidence lane. It
 selects a `cuda-training` resource, runs `scripts/ci_cuda_smoke.sh` on the
 remote checkout, and validates `/tmp/tensorcore-cuda-smoke-kernel-proof.json`
-with `scripts/check_cuda_smoke_evidence.py`. Use it as a dry-run before
-submitting a real remote CUDA proof:
+with `scripts/check_cuda_smoke_evidence.py`. Admission permits only the known
+low-memory Steam/Chrome GPU helper processes before the exclusive proof starts.
+Use it as a dry-run before submitting a real remote CUDA proof:
 
 ```sh
 python3 scripts/mesh_resource_scheduler.py submit \
