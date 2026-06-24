@@ -1,0 +1,90 @@
+;;
+;; poincare.esk — Eshkol bindings for tensorcore's Poincaré ball ops.
+;;
+;; This file is the native Eshkol surface for GeometricLM's hyperbolic
+;; layer: möbius addition, exp/log maps, geodesic distance, parallel
+;; transport, conformal factor. All ops dispatch into the canonical
+;; C primitives in lib/ops/poincare_cpu.cpp through the flat-ABI
+;; tc_eshkol_poincare_* helpers.
+;;
+;; Curvature contract:
+;;   c = 0   → Euclidean limit; mobius_add(x, y) = x + y, etc.
+;;   c > 0   → hyperbolic Poincaré ball of radius 1/√c.
+;;
+;; Numerical safety (norm floor 1e-15, atanh clip 1e-7, ball margin 1e-5)
+;; is enforced inside the C kernels — Eshkol callers don't need to
+;; pre-clamp inputs.
+;;
+;; Usage:
+;;   (require tensorcore-poincare)
+;;   (define ctx (tc-init))
+;;   ;; X, Y, OUT are tc-buffer handles of size N*D*4 bytes (fp32).
+;;   (tc-poincare-mobius-add ctx X Y OUT 1.0 N D)
+;;   (tc-poincare-distance   ctx X Y DIST 1.0 N D)
+;;
+
+(provide tc-poincare-mobius-add
+         tc-poincare-distance
+         tc-poincare-conformal-factor
+         tc-poincare-exp-map-zero
+         tc-poincare-log-map-zero
+         tc-poincare-exp-map
+         tc-poincare-log-map
+         tc-poincare-parallel-transport)
+
+(extern i32 __tc-poincare-mobius-add
+        ptr ptr ptr ptr double i32 i32
+        :real tc_eshkol_poincare_mobius_add)
+
+(extern i32 __tc-poincare-distance
+        ptr ptr ptr ptr double i32 i32
+        :real tc_eshkol_poincare_distance)
+
+(extern i32 __tc-poincare-conformal-factor
+        ptr ptr ptr double i32 i32
+        :real tc_eshkol_poincare_conformal_factor)
+
+(extern i32 __tc-poincare-exp-map-zero
+        ptr ptr ptr double i32 i32
+        :real tc_eshkol_poincare_exp_map_zero)
+
+(extern i32 __tc-poincare-log-map-zero
+        ptr ptr ptr double i32 i32
+        :real tc_eshkol_poincare_log_map_zero)
+
+(extern i32 __tc-poincare-exp-map
+        ptr ptr ptr ptr double i32 i32
+        :real tc_eshkol_poincare_exp_map)
+
+(extern i32 __tc-poincare-log-map
+        ptr ptr ptr ptr double i32 i32
+        :real tc_eshkol_poincare_log_map)
+
+(extern i32 __tc-poincare-parallel-transport
+        ptr ptr ptr ptr ptr double i32 i32
+        :real tc_eshkol_poincare_parallel_transport)
+
+;; Thin Eshkol wrappers — convert curvature to double and forward.
+(define (tc-poincare-mobius-add ctx X Y out c N D)
+  (__tc-poincare-mobius-add ctx X Y out (exact->inexact c) N D))
+
+(define (tc-poincare-distance ctx X Y out c N D)
+  (__tc-poincare-distance ctx X Y out (exact->inexact c) N D))
+
+(define (tc-poincare-conformal-factor ctx X out c N D)
+  (__tc-poincare-conformal-factor ctx X out (exact->inexact c) N D))
+
+(define (tc-poincare-exp-map-zero ctx V out c N D)
+  (__tc-poincare-exp-map-zero ctx V out (exact->inexact c) N D))
+
+(define (tc-poincare-log-map-zero ctx X out c N D)
+  (__tc-poincare-log-map-zero ctx X out (exact->inexact c) N D))
+
+(define (tc-poincare-exp-map ctx X V out c N D)
+  (__tc-poincare-exp-map ctx X V out (exact->inexact c) N D))
+
+(define (tc-poincare-log-map ctx X Y out c N D)
+  (__tc-poincare-log-map ctx X Y out (exact->inexact c) N D))
+
+(define (tc-poincare-parallel-transport ctx V X Y out c N D)
+  (__tc-poincare-parallel-transport ctx V X Y out (exact->inexact c) N D))

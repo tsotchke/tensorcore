@@ -9,6 +9,11 @@
 
 #include "tensorcore/eshkol_bridge.h"
 #include "tensorcore/tensorcore.h"
+#include "tensorcore/poincare.h"
+#include "tensorcore/phase_attention.h"
+#include "tensorcore/riemannian_adam.h"
+#include "tensorcore/sparse_gemm.h"
+#include "tensorcore/remote_tensor.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -183,6 +188,160 @@ int32_t tc_eshkol_attention_forward(void* ctx,
                                                  (const tc_buffer*)V,
                                                  (tc_buffer*)O,
                                                  NULL));
+}
+
+/* ---- Poincaré ball ops (hyperbolic geometric ML) ---- *
+ * All take fp32 [N, D] buffers (row-major contiguous). Each op exposes
+ * its underlying tc_poincare_* function as a flat-ABI Eshkol entry. */
+
+int32_t tc_eshkol_poincare_mobius_add(void* ctx, void* X, void* Y, void* out,
+                                       double c, int32_t N, int32_t D) {
+    return normalize_status(tc_poincare_mobius_add(
+        (tc_context*)ctx, (const tc_buffer*)X, (const tc_buffer*)Y,
+        (tc_buffer*)out, (float)c, N, D));
+}
+
+int32_t tc_eshkol_poincare_distance(void* ctx, void* X, void* Y, void* out,
+                                     double c, int32_t N, int32_t D) {
+    return normalize_status(tc_poincare_distance(
+        (tc_context*)ctx, (const tc_buffer*)X, (const tc_buffer*)Y,
+        (tc_buffer*)out, (float)c, N, D));
+}
+
+int32_t tc_eshkol_poincare_conformal_factor(void* ctx, void* X, void* out,
+                                             double c, int32_t N, int32_t D) {
+    return normalize_status(tc_poincare_conformal_factor(
+        (tc_context*)ctx, (const tc_buffer*)X, (tc_buffer*)out,
+        (float)c, N, D));
+}
+
+int32_t tc_eshkol_poincare_exp_map_zero(void* ctx, void* V, void* out,
+                                         double c, int32_t N, int32_t D) {
+    return normalize_status(tc_poincare_exp_map_zero(
+        (tc_context*)ctx, (const tc_buffer*)V, (tc_buffer*)out,
+        (float)c, N, D));
+}
+
+int32_t tc_eshkol_poincare_log_map_zero(void* ctx, void* X, void* out,
+                                         double c, int32_t N, int32_t D) {
+    return normalize_status(tc_poincare_log_map_zero(
+        (tc_context*)ctx, (const tc_buffer*)X, (tc_buffer*)out,
+        (float)c, N, D));
+}
+
+int32_t tc_eshkol_poincare_exp_map(void* ctx, void* X, void* V, void* out,
+                                    double c, int32_t N, int32_t D) {
+    return normalize_status(tc_poincare_exp_map(
+        (tc_context*)ctx, (const tc_buffer*)X, (const tc_buffer*)V,
+        (tc_buffer*)out, (float)c, N, D));
+}
+
+int32_t tc_eshkol_poincare_log_map(void* ctx, void* X, void* Y, void* out,
+                                    double c, int32_t N, int32_t D) {
+    return normalize_status(tc_poincare_log_map(
+        (tc_context*)ctx, (const tc_buffer*)X, (const tc_buffer*)Y,
+        (tc_buffer*)out, (float)c, N, D));
+}
+
+int32_t tc_eshkol_poincare_parallel_transport(void* ctx, void* V, void* X,
+                                                void* Y, void* out,
+                                                double c, int32_t N, int32_t D) {
+    return normalize_status(tc_poincare_parallel_transport(
+        (tc_context*)ctx, (const tc_buffer*)V, (const tc_buffer*)X,
+        (const tc_buffer*)Y, (tc_buffer*)out, (float)c, N, D));
+}
+
+
+int32_t tc_eshkol_sparse_24_prune(void* ctx, void* W, int32_t dtype,
+                                    int32_t rows, int32_t cols) {
+    return normalize_status(tc_sparse_24_prune(
+        (tc_context*)ctx, (tc_buffer*)W, (tc_dtype_t)dtype, rows, cols));
+}
+
+int32_t tc_eshkol_sparse_24_check(void* ctx, void* W, int32_t dtype,
+                                    int32_t rows, int32_t cols) {
+    return normalize_status(tc_sparse_24_check(
+        (tc_context*)ctx, (const tc_buffer*)W, (tc_dtype_t)dtype, rows, cols));
+}
+
+int32_t tc_eshkol_sparse_24_gemm(void* ctx, void* A, void* B, void* C,
+                                   int32_t M, int32_t N, int32_t K,
+                                   int32_t a_dtype, int32_t b_dtype, int32_t c_dtype,
+                                   double alpha, double beta) {
+    return normalize_status(tc_sparse_24_gemm(
+        (tc_context*)ctx, (const tc_buffer*)A, (const tc_buffer*)B,
+        (tc_buffer*)C, M, N, K,
+        (tc_dtype_t)a_dtype, (tc_dtype_t)b_dtype, (tc_dtype_t)c_dtype,
+        (float)alpha, (float)beta));
+}
+
+int32_t tc_eshkol_sparse_24_available(void) {
+    return tc_sparse_24_available();
+}
+
+/* ---- RiemannianAdam optimizer step (per manifold) ---- */
+
+int32_t tc_eshkol_riemannian_adam_step_poincare(void* ctx, void* params, void* grads,
+                                                  void* m, void* v,
+                                                  int32_t N, int32_t D, double c,
+                                                  double lr, double beta1, double beta2,
+                                                  double eps, double weight_decay,
+                                                  double bc1, double bc2) {
+    return normalize_status(tc_riemannian_adam_step_poincare(
+        (tc_context*)ctx, (tc_buffer*)params, (const tc_buffer*)grads,
+        (tc_buffer*)m, (tc_buffer*)v, N, D, (float)c,
+        (float)lr, (float)beta1, (float)beta2, (float)eps, (float)weight_decay,
+        (float)bc1, (float)bc2));
+}
+
+int32_t tc_eshkol_riemannian_adam_step_sphere(void* ctx, void* params, void* grads,
+                                                void* m, void* v,
+                                                int32_t N, int32_t D,
+                                                double lr, double beta1, double beta2,
+                                                double eps, double weight_decay,
+                                                double bc1, double bc2) {
+    return normalize_status(tc_riemannian_adam_step_sphere(
+        (tc_context*)ctx, (tc_buffer*)params, (const tc_buffer*)grads,
+        (tc_buffer*)m, (tc_buffer*)v, N, D,
+        (float)lr, (float)beta1, (float)beta2, (float)eps, (float)weight_decay,
+        (float)bc1, (float)bc2));
+}
+
+int32_t tc_eshkol_riemannian_adam_step_euclidean(void* ctx, void* params, void* grads,
+                                                   void* m, void* v,
+                                                   int32_t N, int32_t D,
+                                                   double lr, double beta1, double beta2,
+                                                   double eps, double weight_decay,
+                                                   double bc1, double bc2) {
+    return normalize_status(tc_riemannian_adam_step_euclidean(
+        (tc_context*)ctx, (tc_buffer*)params, (const tc_buffer*)grads,
+        (tc_buffer*)m, (tc_buffer*)v, N, D,
+        (float)lr, (float)beta1, (float)beta2, (float)eps, (float)weight_decay,
+        (float)bc1, (float)bc2));
+}
+
+/* ---- Phase attention + Born-rule (qLLM scoring + output) ---- */
+
+int32_t tc_eshkol_phase_attention_combine(void* ctx, void* inner_products,
+                                            void* phase_diffs, void* distances,
+                                            void* weights, void* gammas,
+                                            void* lambdas, void* scores_out,
+                                            int32_t N_pairs, int32_t M) {
+    return normalize_status(tc_phase_attention_combine(
+        (tc_context*)ctx,
+        (const tc_buffer*)inner_products, (const tc_buffer*)phase_diffs,
+        (const tc_buffer*)distances, (const tc_buffer*)weights,
+        (const tc_buffer*)gammas, (const tc_buffer*)lambdas,
+        (tc_buffer*)scores_out, N_pairs, M));
+}
+
+int32_t tc_eshkol_born_rule_output(void* ctx, void* h_amp, void* s_amp,
+                                    void* e_amp, void* probs_out,
+                                    int32_t N, int32_t V) {
+    return normalize_status(tc_born_rule_output(
+        (tc_context*)ctx, (const tc_buffer*)h_amp,
+        (const tc_buffer*)s_amp, (const tc_buffer*)e_amp,
+        (tc_buffer*)probs_out, N, V));
 }
 
 const char* tc_eshkol_last_backend(void) {

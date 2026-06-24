@@ -1,0 +1,122 @@
+;;
+;; lorentz.esk — Eshkol bindings for tensorcore's Lorentz / hyperboloid ops.
+;;
+;; Hyperboloid model of n-dimensional hyperbolic space with curvature κ < 0:
+;;   H^n_κ = { x ∈ R^{n+1} | <x, x>_L = -1/|κ|,  x_0 > 0 }
+;;   <a, b>_L = -a_0 b_0 + Σ_{i≥1} a_i b_i.
+;;
+;; The kernels in lib/ops/lorentz_cpu.cpp take raw fp32 float pointers
+;; and (n+1)-dim ambient vectors — no tc_context or tc_buffer needed.
+;; Use this surface when you want straight-line math (embedding conversion,
+;; single geodesic distance, log/exp for one base point). For batched
+;; tensor ops on N×D tensorcore buffers, use poincare.esk or layer your
+;; own batched wrapper that loops over the row.
+;;
+;; Curvature is passed as a single float (|κ| used internally so the sign
+;; is permissive).
+;;
+;; Usage:
+;;   (require tensorcore-lorentz)
+;;   (define n 8)       ; ambient dim (intrinsic + 1)
+;;   (define c 1.0)     ; curvature magnitude
+;;   ;; p, q, v are float* pointing at n-element fp32 vectors
+;;   (tc-lorentz-exp p v out n c)
+;;   (define d (tc-lorentz-distance p q n c))
+;;
+
+(provide tc-lorentz-minkowski
+         tc-lorentz-project
+         tc-lorentz-tangent-project
+         tc-lorentz-inner-product
+         tc-lorentz-add
+         tc-lorentz-scale
+         tc-lorentz-exp
+         tc-lorentz-log
+         tc-lorentz-distance
+         tc-lorentz-parallel-transport
+         tc-lorentz-to-poincare
+         tc-poincare-to-lorentz)
+
+(extern f32 __tc-lorentz-minkowski
+        ptr ptr u64
+        :real tc_lorentz_minkowski)
+
+(extern void __tc-lorentz-project
+        ptr u64 f32
+        :real tc_lorentz_project)
+
+(extern void __tc-lorentz-tangent-project
+        ptr ptr u64
+        :real tc_lorentz_tangent_project)
+
+(extern f32 __tc-lorentz-inner-product
+        ptr ptr ptr u64
+        :real tc_lorentz_inner_product)
+
+(extern void __tc-lorentz-add
+        ptr ptr ptr ptr u64
+        :real tc_lorentz_add)
+
+(extern void __tc-lorentz-scale
+        ptr f32 ptr u64
+        :real tc_lorentz_scale)
+
+(extern void __tc-lorentz-exp
+        ptr ptr ptr u64 f32
+        :real tc_lorentz_exp)
+
+(extern void __tc-lorentz-log
+        ptr ptr ptr u64 f32
+        :real tc_lorentz_log)
+
+(extern f32 __tc-lorentz-distance
+        ptr ptr u64 f32
+        :real tc_lorentz_distance)
+
+(extern void __tc-lorentz-parallel-transport
+        ptr ptr ptr ptr u64 f32
+        :real tc_lorentz_parallel_transport)
+
+(extern void __tc-lorentz-to-poincare
+        ptr ptr u64 f32
+        :real tc_lorentz_to_poincare)
+
+(extern void __tc-poincare-to-lorentz
+        ptr ptr u64 f32
+        :real tc_poincare_to_lorentz)
+
+(define (tc-lorentz-minkowski a b n)
+  (__tc-lorentz-minkowski a b n))
+
+(define (tc-lorentz-project x n c)
+  (__tc-lorentz-project x n (exact->inexact c)))
+
+(define (tc-lorentz-tangent-project base v n)
+  (__tc-lorentz-tangent-project base v n))
+
+(define (tc-lorentz-inner-product base u v n)
+  (__tc-lorentz-inner-product base u v n))
+
+(define (tc-lorentz-add base tx ty out n)
+  (__tc-lorentz-add base tx ty out n))
+
+(define (tc-lorentz-scale tangent s out n)
+  (__tc-lorentz-scale tangent (exact->inexact s) out n))
+
+(define (tc-lorentz-exp base tangent point n c)
+  (__tc-lorentz-exp base tangent point n (exact->inexact c)))
+
+(define (tc-lorentz-log base point tangent n c)
+  (__tc-lorentz-log base point tangent n (exact->inexact c)))
+
+(define (tc-lorentz-distance p q n c)
+  (__tc-lorentz-distance p q n (exact->inexact c)))
+
+(define (tc-lorentz-parallel-transport from to tangent out n c)
+  (__tc-lorentz-parallel-transport from to tangent out n (exact->inexact c)))
+
+(define (tc-lorentz-to-poincare h p n c)
+  (__tc-lorentz-to-poincare h p n (exact->inexact c)))
+
+(define (tc-poincare-to-lorentz p h n c)
+  (__tc-poincare-to-lorentz p h n (exact->inexact c)))

@@ -591,6 +591,72 @@ if _lib is not None:
     _lib.tc_fused_rmsnorm_gemv.restype = c_int
     _lib.tc_fused_layernorm_gemv.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int, c_int, c_float]
     _lib.tc_fused_layernorm_gemv.restype = c_int
+    # Poincaré ball ops (see include/tensorcore/poincare.h).
+    _lib.tc_poincare_mobius_add.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_float, c_int, c_int]
+    _lib.tc_poincare_mobius_add.restype = c_int
+    _lib.tc_poincare_distance.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_float, c_int, c_int]
+    _lib.tc_poincare_distance.restype = c_int
+    _lib.tc_poincare_conformal_factor.argtypes = [c_void_p, c_void_p, c_void_p, c_float, c_int, c_int]
+    _lib.tc_poincare_conformal_factor.restype = c_int
+    _lib.tc_poincare_exp_map_zero.argtypes = [c_void_p, c_void_p, c_void_p, c_float, c_int, c_int]
+    _lib.tc_poincare_exp_map_zero.restype = c_int
+    _lib.tc_poincare_log_map_zero.argtypes = [c_void_p, c_void_p, c_void_p, c_float, c_int, c_int]
+    _lib.tc_poincare_log_map_zero.restype = c_int
+    _lib.tc_poincare_exp_map.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_float, c_int, c_int]
+    _lib.tc_poincare_exp_map.restype = c_int
+    _lib.tc_poincare_log_map.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_float, c_int, c_int]
+    _lib.tc_poincare_log_map.restype = c_int
+    _lib.tc_poincare_parallel_transport.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_float, c_int, c_int]
+    _lib.tc_poincare_parallel_transport.restype = c_int
+    # Lorentz / hyperboloid ops (see include/tensorcore/lorentz.h).
+    # Raw single-vector ABI: float* + size_t, no buffers; suitable for
+    # one-off math (embedding conversions, geodesic computations) and as
+    # the inner kernel for batched wrappers.
+    _f32p = POINTER(c_float)
+    _lib.tc_lorentz_minkowski.argtypes = [_f32p, _f32p, c_size_t]
+    _lib.tc_lorentz_minkowski.restype = c_float
+    _lib.tc_lorentz_project.argtypes = [_f32p, c_size_t, c_float]
+    _lib.tc_lorentz_project.restype = None
+    _lib.tc_lorentz_tangent_project.argtypes = [_f32p, _f32p, c_size_t]
+    _lib.tc_lorentz_tangent_project.restype = None
+    _lib.tc_lorentz_inner_product.argtypes = [_f32p, _f32p, _f32p, c_size_t]
+    _lib.tc_lorentz_inner_product.restype = c_float
+    _lib.tc_lorentz_add.argtypes = [_f32p, _f32p, _f32p, _f32p, c_size_t]
+    _lib.tc_lorentz_add.restype = None
+    _lib.tc_lorentz_scale.argtypes = [_f32p, c_float, _f32p, c_size_t]
+    _lib.tc_lorentz_scale.restype = None
+    _lib.tc_lorentz_exp.argtypes = [_f32p, _f32p, _f32p, c_size_t, c_float]
+    _lib.tc_lorentz_exp.restype = None
+    _lib.tc_lorentz_log.argtypes = [_f32p, _f32p, _f32p, c_size_t, c_float]
+    _lib.tc_lorentz_log.restype = None
+    _lib.tc_lorentz_distance.argtypes = [_f32p, _f32p, c_size_t, c_float]
+    _lib.tc_lorentz_distance.restype = c_float
+    _lib.tc_lorentz_parallel_transport.argtypes = [_f32p, _f32p, _f32p, _f32p, c_size_t, c_float]
+    _lib.tc_lorentz_parallel_transport.restype = None
+    _lib.tc_lorentz_to_poincare.argtypes = [_f32p, _f32p, c_size_t, c_float]
+    _lib.tc_lorentz_to_poincare.restype = None
+    _lib.tc_poincare_to_lorentz.argtypes = [_f32p, _f32p, c_size_t, c_float]
+    _lib.tc_poincare_to_lorentz.restype = None
+    # Phase attention + Born-rule (see include/tensorcore/phase_attention.h).
+    _lib.tc_phase_attention_combine.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int]
+    _lib.tc_phase_attention_combine.restype = c_int
+    _lib.tc_born_rule_output.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int]
+    _lib.tc_born_rule_output.restype = c_int
+    # RiemannianAdam (see include/tensorcore/riemannian_adam.h).
+    _lib.tc_riemannian_adam_step_poincare.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int, c_float, c_float, c_float, c_float, c_float, c_float, c_float, c_float]
+    _lib.tc_riemannian_adam_step_poincare.restype = c_int
+    _lib.tc_riemannian_adam_step_sphere.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int, c_float, c_float, c_float, c_float, c_float, c_float, c_float]
+    _lib.tc_riemannian_adam_step_sphere.restype = c_int
+    _lib.tc_riemannian_adam_step_euclidean.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int, c_float, c_float, c_float, c_float, c_float, c_float, c_float]
+    _lib.tc_riemannian_adam_step_euclidean.restype = c_int
+    # 2:4 structured-sparse GEMM (see include/tensorcore/sparse_gemm.h).
+    _lib.tc_sparse_24_prune.argtypes = [c_void_p, c_void_p, c_int, c_int, c_int]
+    _lib.tc_sparse_24_prune.restype = c_int
+    _lib.tc_sparse_24_check.argtypes = [c_void_p, c_void_p, c_int, c_int, c_int]
+    _lib.tc_sparse_24_check.restype = c_int
+    _lib.tc_sparse_24_gemm.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int, c_int, c_int, c_int, c_int, c_float, c_float]
+    _lib.tc_sparse_24_gemm.restype = c_int
+    _lib.tc_sparse_24_available.argtypes = []
     _lib.tc_gguf_open.argtypes = [c_char_p, POINTER(c_void_p)]
     _lib.tc_gguf_open.restype = c_int
     _lib.tc_gguf_close.argtypes = [c_void_p]
@@ -1627,6 +1693,147 @@ def gemv_quantized_async(ctx, X, W_quant, Y, fmt, M, N, K, stream):
         _as_handle(ctx), _as_handle(X), _as_handle(W_quant), _as_handle(Y),
         _quant(fmt), int(M), int(N), int(K), _as_handle(stream)
     ))
+
+
+def sparse_24_prune(ctx, W, dtype, rows, cols):
+    """Apply 2:4 sparsity mask in place: each 4-block keeps top-2 |·|, zeros others."""
+    _check(_lib.tc_sparse_24_prune(_as_handle(ctx), _as_handle(W),
+                                     int(dtype), int(rows), int(cols)))
+
+
+def sparse_24_check(ctx, W, dtype, rows, cols):
+    """Verify W satisfies the 2:4 pattern. Returns True if valid, False otherwise."""
+    s = _lib.tc_sparse_24_check(_as_handle(ctx), _as_handle(W),
+                                  int(dtype), int(rows), int(cols))
+    return s == 0
+
+
+def sparse_24_gemm(ctx, A, B, C, M, N, K, a_dtype, b_dtype, c_dtype,
+                    alpha=1.0, beta=0.0):
+    """C = alpha * A @ B + beta * C, where B must be 2:4-pruned (call
+    sparse_24_prune first). Uses cusparseLt tensor cores on Ampere+ when
+    available; dense fallback (still correct) elsewhere."""
+    _check(_lib.tc_sparse_24_gemm(_as_handle(ctx), _as_handle(A), _as_handle(B),
+                                    _as_handle(C), int(M), int(N), int(K),
+                                    int(a_dtype), int(b_dtype), int(c_dtype),
+                                    c_float(float(alpha)), c_float(float(beta))))
+
+
+def sparse_24_available():
+    """Return True if the host has cusparseLt + Ampere+ hardware (real 2× speedup)."""
+    return bool(_lib.tc_sparse_24_available())
+
+
+def riemannian_adam_step_poincare(ctx, params, grads, m, v, N, D, c,
+                                    lr, beta1, beta2, eps, weight_decay,
+                                    bias_correction1, bias_correction2):
+    """One RiemannianAdam step on the Poincaré ball."""
+    _check(_lib.tc_riemannian_adam_step_poincare(
+        _as_handle(ctx), _as_handle(params), _as_handle(grads),
+        _as_handle(m), _as_handle(v), int(N), int(D),
+        c_float(float(c)), c_float(float(lr)), c_float(float(beta1)),
+        c_float(float(beta2)), c_float(float(eps)), c_float(float(weight_decay)),
+        c_float(float(bias_correction1)), c_float(float(bias_correction2))))
+
+
+def riemannian_adam_step_sphere(ctx, params, grads, m, v, N, D,
+                                 lr, beta1, beta2, eps, weight_decay,
+                                 bias_correction1, bias_correction2):
+    """One RiemannianAdam step on the unit sphere."""
+    _check(_lib.tc_riemannian_adam_step_sphere(
+        _as_handle(ctx), _as_handle(params), _as_handle(grads),
+        _as_handle(m), _as_handle(v), int(N), int(D),
+        c_float(float(lr)), c_float(float(beta1)), c_float(float(beta2)),
+        c_float(float(eps)), c_float(float(weight_decay)),
+        c_float(float(bias_correction1)), c_float(float(bias_correction2))))
+
+
+def riemannian_adam_step_euclidean(ctx, params, grads, m, v, N, D,
+                                    lr, beta1, beta2, eps, weight_decay,
+                                    bias_correction1, bias_correction2):
+    """RiemannianAdam Euclidean step (≡ plain AdamW)."""
+    _check(_lib.tc_riemannian_adam_step_euclidean(
+        _as_handle(ctx), _as_handle(params), _as_handle(grads),
+        _as_handle(m), _as_handle(v), int(N), int(D),
+        c_float(float(lr)), c_float(float(beta1)), c_float(float(beta2)),
+        c_float(float(eps)), c_float(float(weight_decay)),
+        c_float(float(bias_correction1)), c_float(float(bias_correction2))))
+
+
+def phase_attention_combine(ctx, inner_products, phase_diffs, distances,
+                              weights, gammas, lambdas, scores_out,
+                              N_pairs, M):
+    """Phase-attention score combine: Σ_m w_m·ip_m·cos(Δφ_m+γ_m)·exp(−λ_m·d_m)."""
+    _check(_lib.tc_phase_attention_combine(
+        _as_handle(ctx), _as_handle(inner_products), _as_handle(phase_diffs),
+        _as_handle(distances), _as_handle(weights), _as_handle(gammas),
+        _as_handle(lambdas), _as_handle(scores_out), int(N_pairs), int(M)))
+
+
+def born_rule_output(ctx, h_amp, s_amp, e_amp, probs_out, N, V):
+    """Born-rule output: P(w) = |h+s+e|² / Z. s_amp/e_amp may be None to omit."""
+    _check(_lib.tc_born_rule_output(
+        _as_handle(ctx), _as_handle(h_amp),
+        _as_handle(s_amp) if s_amp is not None else c_void_p(0),
+        _as_handle(e_amp) if e_amp is not None else c_void_p(0),
+        _as_handle(probs_out), int(N), int(V)))
+
+
+def poincare_mobius_add(ctx, X, Y, out, c, N, D):
+    """Möbius addition X ⊕_c Y on Poincaré ball, [N,D] fp32 in/out."""
+    _check(_lib.tc_poincare_mobius_add(_as_handle(ctx), _as_handle(X),
+                                        _as_handle(Y), _as_handle(out),
+                                        c_float(float(c)), int(N), int(D)))
+
+
+def poincare_distance(ctx, X, Y, dist_out, c, N, D):
+    """Geodesic distance d_c(x,y). dist_out is [N] fp32."""
+    _check(_lib.tc_poincare_distance(_as_handle(ctx), _as_handle(X),
+                                       _as_handle(Y), _as_handle(dist_out),
+                                       c_float(float(c)), int(N), int(D)))
+
+
+def poincare_conformal_factor(ctx, X, lam_out, c, N, D):
+    """Conformal factor λ_x = 2/(1−c‖x‖²). lam_out is [N] fp32."""
+    _check(_lib.tc_poincare_conformal_factor(_as_handle(ctx), _as_handle(X),
+                                              _as_handle(lam_out),
+                                              c_float(float(c)), int(N), int(D)))
+
+
+def poincare_exp_map_zero(ctx, V, out, c, N, D):
+    """exp_0^c(v). [N,D] fp32 in/out."""
+    _check(_lib.tc_poincare_exp_map_zero(_as_handle(ctx), _as_handle(V),
+                                          _as_handle(out),
+                                          c_float(float(c)), int(N), int(D)))
+
+
+def poincare_log_map_zero(ctx, X, out, c, N, D):
+    """log_0^c(x). [N,D] fp32 in/out."""
+    _check(_lib.tc_poincare_log_map_zero(_as_handle(ctx), _as_handle(X),
+                                          _as_handle(out),
+                                          c_float(float(c)), int(N), int(D)))
+
+
+def poincare_exp_map(ctx, X, V, out, c, N, D):
+    """General exp map: exp_x^c(v)."""
+    _check(_lib.tc_poincare_exp_map(_as_handle(ctx), _as_handle(X),
+                                     _as_handle(V), _as_handle(out),
+                                     c_float(float(c)), int(N), int(D)))
+
+
+def poincare_log_map(ctx, X, Y, out, c, N, D):
+    """General log map: log_x^c(y)."""
+    _check(_lib.tc_poincare_log_map(_as_handle(ctx), _as_handle(X),
+                                     _as_handle(Y), _as_handle(out),
+                                     c_float(float(c)), int(N), int(D)))
+
+
+def poincare_parallel_transport(ctx, V, X, Y, out, c, N, D):
+    """Parallel transport of tangent v from x to y on the Poincaré ball."""
+    _check(_lib.tc_poincare_parallel_transport(_as_handle(ctx), _as_handle(V),
+                                                 _as_handle(X), _as_handle(Y),
+                                                 _as_handle(out),
+                                                 c_float(float(c)), int(N), int(D)))
 
 
 def rmsnorm_forward(ctx, X, gamma, Y, rstd_out, N, D, eps=1e-5):

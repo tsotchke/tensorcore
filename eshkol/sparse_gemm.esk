@@ -1,0 +1,47 @@
+;;
+;; sparse_gemm.esk — Eshkol bindings for 2:4 structured-sparse GEMM.
+;;
+;; Ampere+ NVIDIA tensor cores accept a 2:4 sparsity pattern (in each
+;; 4-element block along K, at most 2 non-zeros) and run at 2× the
+;; dense fp16/bf16 throughput when cusparseLt is linked. On hosts
+;; without cusparseLt (Apple Silicon, CPU-only Linux), the same API
+;; falls back to a dense compute path that's bit-correct just without
+;; the speedup — code stays portable.
+;;
+;; GeoRefine track T8 uses this for geometry-guided structured sparsity:
+;; prune the low-importance weights, run inference at 2× speed on the
+;; production NVIDIA cards.
+;;
+
+(provide tc-sparse-24-prune
+         tc-sparse-24-check
+         tc-sparse-24-gemm
+         tc-sparse-24-available)
+
+(extern i32 __tc-sparse-24-prune
+        ptr ptr i32 i32 i32
+        :real tc_eshkol_sparse_24_prune)
+
+(extern i32 __tc-sparse-24-check
+        ptr ptr i32 i32 i32
+        :real tc_eshkol_sparse_24_check)
+
+(extern i32 __tc-sparse-24-gemm
+        ptr ptr ptr ptr i32 i32 i32 i32 i32 i32 double double
+        :real tc_eshkol_sparse_24_gemm)
+
+(extern i32 __tc-sparse-24-available
+        :real tc_eshkol_sparse_24_available)
+
+(define (tc-sparse-24-prune ctx W dtype rows cols)
+  (__tc-sparse-24-prune ctx W dtype rows cols))
+
+(define (tc-sparse-24-check ctx W dtype rows cols)
+  (__tc-sparse-24-check ctx W dtype rows cols))
+
+(define (tc-sparse-24-gemm ctx A B C M N K a-dtype b-dtype c-dtype alpha beta)
+  (__tc-sparse-24-gemm ctx A B C M N K a-dtype b-dtype c-dtype
+    (exact->inexact alpha) (exact->inexact beta)))
+
+(define (tc-sparse-24-available)
+  (__tc-sparse-24-available))

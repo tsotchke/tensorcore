@@ -232,6 +232,41 @@ target_include_directories(test_diloco PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME test_diloco COMMAND test_diloco)
 set_tests_properties(test_diloco PROPERTIES TIMEOUT 60)
 
+# Poincaré ball ops on the Apple/Metal build (the CPU primitives compile + run
+# on both backends since they're fp32 host code).
+add_executable(test_poincare test_poincare.c)
+target_link_libraries(test_poincare PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
+target_include_directories(test_poincare PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME test_poincare COMMAND test_poincare)
+set_tests_properties(test_poincare PROPERTIES TIMEOUT 30)
+
+add_executable(test_phase_attention test_phase_attention.c)
+target_link_libraries(test_phase_attention PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
+target_include_directories(test_phase_attention PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME test_phase_attention COMMAND test_phase_attention)
+set_tests_properties(test_phase_attention PROPERTIES TIMEOUT 30)
+
+add_executable(test_riemannian_adam test_riemannian_adam.c)
+target_link_libraries(test_riemannian_adam PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
+target_include_directories(test_riemannian_adam PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME test_riemannian_adam COMMAND test_riemannian_adam)
+set_tests_properties(test_riemannian_adam PROPERTIES TIMEOUT 30)
+
+add_executable(test_sparse_24 test_sparse_24.c)
+target_link_libraries(test_sparse_24 PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
+target_include_directories(test_sparse_24 PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME test_sparse_24 COMMAND test_sparse_24)
+set_tests_properties(test_sparse_24 PROPERTIES TIMEOUT 30)
+
+add_executable(test_remote_tensor_fork test_remote_tensor_fork.c)
+target_link_libraries(test_remote_tensor_fork PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
+target_include_directories(test_remote_tensor_fork PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME test_remote_tensor_fork COMMAND test_remote_tensor_fork)
+set_tests_properties(test_remote_tensor_fork PROPERTIES
+    TIMEOUT 60
+    SKIP_RETURN_CODE 77
+)
+
 # Split-binary remote distributed test. Launch manually with
 # --rank/--world/--url against another machine.
 add_executable(test_dist_remote test_dist_remote.c)

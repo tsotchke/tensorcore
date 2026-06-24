@@ -1,0 +1,38 @@
+;;
+;; phase_attention.esk — Eshkol bindings for the qLLM scoring + output ops.
+;;
+;; Two ops, both fp32, both fused elementwise reductions:
+;;
+;;   phase-attention-combine:
+;;     scores[p] = Σ_m w_m · ip[p,m] · cos(Δφ[p,m] + γ_m) · exp(−λ_m · d[p,m])
+;;
+;;   born-rule-output:
+;;     P[n,w] = (h_amp[n,w] + s_amp[n,w] + e_amp[n,w])² / Z[n]
+;;     Z[n]   = Σ_w (h_amp[n,w] + s_amp[n,w] + e_amp[n,w])²
+;;
+;; Both dispatch into the C primitives in lib/ops/phase_attention_cpu.cpp
+;; through the flat-ABI tc_eshkol_* helpers.
+;;
+
+(provide tc-phase-attention-combine
+         tc-born-rule-output)
+
+(extern i32 __tc-phase-attention-combine
+        ptr ptr ptr ptr ptr ptr ptr ptr i32 i32
+        :real tc_eshkol_phase_attention_combine)
+
+(extern i32 __tc-born-rule-output
+        ptr ptr ptr ptr ptr i32 i32
+        :real tc_eshkol_born_rule_output)
+
+(define (tc-phase-attention-combine ctx inner-products phase-diffs distances
+                                     weights gammas lambdas scores-out
+                                     N-pairs M)
+  (__tc-phase-attention-combine ctx inner-products phase-diffs distances
+                                 weights gammas lambdas scores-out
+                                 N-pairs M))
+
+;; Pass 0 for s-amp/e-amp pointer to omit (callers controlling which
+;; manifolds contribute during ablations).
+(define (tc-born-rule-output ctx h-amp s-amp e-amp probs-out N V)
+  (__tc-born-rule-output ctx h-amp s-amp e-amp probs-out N V))

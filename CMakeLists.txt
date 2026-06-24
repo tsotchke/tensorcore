@@ -384,9 +384,30 @@ set(TC_COMMON_SOURCES
     lib/c_api/eshkol_bridge.c
     lib/core/memory_tier_stub.cpp
     lib/core/checkpoint_stub.cpp
+    lib/ops/poincare_cpu.cpp
+    lib/ops/lorentz_cpu.cpp
+    lib/ops/phase_attention_cpu.cpp
+    lib/ops/riemannian_adam_cpu.cpp
+    lib/ops/sparse_gemm_cpu.cpp
 )
 if(TC_ENABLE_CUDA)
     list(APPEND TC_COMMON_SOURCES lib/cuda/training.cu)
+    # cuSPARSELt: probe for the header; if found, enable the 2:4 sparse
+    # tensor-core GEMM path. Otherwise the weak-symbol dense fallback in
+    # lib/ops/sparse_gemm_cpu.cpp keeps tc_sparse_24_gemm correct (just
+    # without the 2× speedup).
+    find_path(CUSPARSELT_INCLUDE_DIR cusparseLt.h
+              HINTS ${CUDAToolkit_INCLUDE_DIRS} /usr/include /usr/local/include)
+    find_library(CUSPARSELT_LIBRARY cusparseLt
+                 HINTS ${CUDAToolkit_LIBRARY_DIR} /usr/lib /usr/local/lib
+                       /usr/lib/x86_64-linux-gnu)
+    if(CUSPARSELT_INCLUDE_DIR AND CUSPARSELT_LIBRARY)
+        message(STATUS "tensorcore: cuSPARSELt found → 2:4 sparse tensor-core GEMM enabled")
+        list(APPEND TC_COMMON_SOURCES lib/cuda/sparse_gemm.cpp)
+        list(APPEND TC_CUDA_LINK_LIBS ${CUSPARSELT_LIBRARY})
+        add_compile_definitions(TC_ENABLE_CUSPARSELT=1)
+        include_directories(${CUSPARSELT_INCLUDE_DIR})
+    endif()
 endif()
 
 if(TC_ENABLE_METAL)

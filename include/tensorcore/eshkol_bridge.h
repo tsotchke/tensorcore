@@ -20,11 +20,17 @@ extern "C" {
 void*       tc_eshkol_init(void);
 int32_t     tc_eshkol_shutdown(void* ctx);
 
+/* Return the active backend device name for an Eshkol tensorcore context. */
 const char* tc_eshkol_device_name(void* ctx);
+/* Return the tensorcore device-family code for an Eshkol context. */
 int32_t     tc_eshkol_device_family(void* ctx);
+/* Return nonzero when the selected device uses unified CPU/GPU memory. */
 int32_t     tc_eshkol_device_unified_memory(void* ctx);
+/* Return nonzero when the selected device supports bf16 tensor operations. */
 int32_t     tc_eshkol_device_supports_bf16(void* ctx);
+/* Return nonzero when the selected device supports int8 tensor operations. */
 int32_t     tc_eshkol_device_supports_i8(void* ctx);
+/* Return nonzero when the selected device exposes M5 TensorOps support. */
 int32_t     tc_eshkol_device_supports_tensorops_m5(void* ctx);
 
 void*       tc_eshkol_buffer_alloc(void* ctx, int64_t bytes);
