@@ -128,6 +128,22 @@ struct OnlineSoftmaxState {
 
 }  // namespace
 
+#if defined(TC_ENABLE_CUDA)
+extern "C" int tc_cuda_is_active(void);
+extern "C" int tc_cuda_attention_forward(
+        const void* Q, const void* K, const void* V, void* O, void* LSE,
+        int B, int Hq, int Hkv, int Sq, int Sk, int D,
+        float scale, int causal, int window_size,
+        const float* alibi_slopes);
+extern "C" int tc_cuda_attention_backward(
+        const void* Q, const void* K, const void* V, const void* O,
+        const void* dO, const void* LSE,
+        void* dQ, void* dK, void* dV,
+        int B, int Hq, int Hkv, int Sq, int Sk, int D,
+        float scale, int causal, int window_size,
+        const float* alibi_slopes);
+#endif
+
 extern "C" tc_status_t tc_attention_forward(tc_context* ctx,
                                              const tc_attention_desc* desc,
                                              const tc_buffer* Q,
@@ -175,6 +191,20 @@ extern "C" tc_status_t tc_attention_forward(tc_context* ctx,
      * O index: ((b * Hq + h) * Sq + s) * D + d
      * LSE index (optional): (b * Hq + h) * Sq + s
      */
+
+#if defined(TC_ENABLE_CUDA)
+    if (tc_cuda_is_active() && D <= 128 && !desc->alibi_slopes) {
+        const int rc = tc_cuda_attention_forward(
+            Qp, Kp, Vp, Op, Lp,
+            B, Hq, Hkv, Sq, Sk, D,
+            scale, causal ? 1 : 0, swin,
+            nullptr);
+        if (rc == 0) {
+            return tc_record_dispatch("tc_attention_forward", TC_BACKEND_CUDA, TC_OK);
+        }
+        if (rc < 0) return TC_ERR_INTERNAL;
+    }
+#endif
 
     const long total = (long)B * Hq;
 #if defined(_OPENMP)
@@ -366,6 +396,21 @@ extern "C" tc_status_t tc_attention_backward(tc_context* ctx,
     std::memset(dQd, 0, (size_t)B * Hq * Sq * D * sizeof(uint16_t));
     std::memset(dKd, 0, (size_t)B * Hkv * Sk * D * sizeof(uint16_t));
     std::memset(dVd, 0, (size_t)B * Hkv * Sk * D * sizeof(uint16_t));
+
+#if defined(TC_ENABLE_CUDA)
+    if (tc_cuda_is_active() && D <= 128 && !desc->alibi_slopes) {
+        const int rc = tc_cuda_attention_backward(
+            Qp, Kp, Vp, Op, dOp, Lp,
+            dQp, dKp, dVp,
+            B, Hq, Hkv, Sq, Sk, D,
+            scale, causal ? 1 : 0, swin,
+            nullptr);
+        if (rc == 0) {
+            return tc_record_dispatch("tc_attention_backward", TC_BACKEND_CUDA, TC_OK);
+        }
+        if (rc < 0) return TC_ERR_INTERNAL;
+    }
+#endif
 
     /* Per-thread fp32 partials for dK and dV (avoids fp16 atomics). */
 #if defined(_OPENMP)

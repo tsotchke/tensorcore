@@ -96,10 +96,16 @@ set(TC_ENABLE_HIPBLAS OFF)
 if(TC_ENABLE_CUDA)
     find_package(CUDAToolkit QUIET)
     if(CUDAToolkit_FOUND AND TARGET CUDA::cudart AND TARGET CUDA::cublas)
+        # Target sm_70+ so cuda_fp16.h half2 intrinsics (__hfma2/__hmul2) and
+        # tensor-core mma.sync are available. Covers Volta/Turing/Ampere/
+        # Ada/Hopper. Honor user override via -DCMAKE_CUDA_ARCHITECTURES=...
+        # MUST be set before enable_language(CUDA), otherwise CMake initializes
+        # it to the auto-detected lowest (often sm_52 = pre-tensor-core era).
+        set(CMAKE_CUDA_ARCHITECTURES "70;75;80;86;89;90" CACHE STRING "")
         enable_language(CUDA)
         set(CMAKE_CUDA_STANDARD 17)
         set(CMAKE_CUDA_STANDARD_REQUIRED ON)
-        message(STATUS "tensorcore: CUDA backend enabled (CUDA ${CUDAToolkit_VERSION})")
+        message(STATUS "tensorcore: CUDA backend enabled (CUDA ${CUDAToolkit_VERSION}, archs=${CMAKE_CUDA_ARCHITECTURES})")
         list(APPEND TC_CUDA_LINK_LIBS CUDA::cudart CUDA::cublas)
         add_compile_definitions(TC_ENABLE_CUDA=1)
     else()
