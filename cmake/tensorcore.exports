@@ -179,6 +179,8 @@ _tc_qstate_apply_2q_unitary
 _tc_qstate_apply_gate
 _tc_qstate_prob_one
 _tc_qstate_norm_sq
+_tc_gate_matrix_3q
+_tc_qstate_apply_3q_unitary
 _tc_mesh_group_init
 _tc_mesh_group_shutdown
 _tc_mesh_allreduce

@@ -177,6 +177,22 @@ def main() -> int:
         probes["crz_pi_on_plusplus"] = {"error": str(exc), "passed": False,
                                           "traceback": traceback.format_exc()}
 
+    # === Toffoli (CCX) on |111⟩ → |110⟩ — exercises the 3-qubit dispatch ===
+    try:
+        state = (ctypes.c_float * 16)(); q_zero(state, 3)
+        state[0] = 0.0
+        state[14] = 1.0  # amp idx 7 (q2=1,q1=1,q0=1)
+        qs = (ctypes.c_int * 3)(2, 1, 0)
+        q_apply_g(state, 3, 18, qs, None)  # TC_GATE_CCX = 18
+        ok = (abs(state[14]) < 1e-6 and abs(state[12] - 1.0) < 1e-6
+              and abs(state[13]) < 1e-6)
+        n2 = float(q_norm(state, 3))
+        ok = ok and abs(n2 - 1.0) < 1e-5
+        probes["toffoli_ccx"] = {"state_re_im": list(state), "norm_sq": n2, "passed": ok}
+    except Exception as exc:
+        probes["toffoli_ccx"] = {"error": str(exc), "passed": False,
+                                   "traceback": traceback.format_exc()}
+
     # === 4-qubit circuit norm preservation ===
     try:
         state = (ctypes.c_float * 32)(); q_zero(state, 4)

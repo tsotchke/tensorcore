@@ -174,6 +174,54 @@ int main(void) {
               APPROX(state[6], 0.5f, 1e-5f));
     }
 
+    /* ===== Toffoli (CCX) on |110⟩ (amp idx 3 with q0=1,q1=1,q2=0) =====
+     * qubits = (q0, q1, q2). Unitary basis order |q_a q_b q_c⟩ where
+     * q_c is LSB of the triple → we pass {q2, q1, q0} so that the
+     * "target" qubit (LSB of unitary basis) is q0.
+     * For |q0=1,q1=1,q2=0⟩ (state amp idx 3, offset 6), Toffoli flips
+     * q0 (since q1=1 and q2=1... wait q2 is the upper control here.
+     * Concretely: passing qubits=[q2,q1,q0] makes q_a=q2, q_b=q1, q_c=q0.
+     * Unitary checks q_a=1 AND q_b=1, flips q_c.
+     * For amp idx 3 (q2=0, q1=1, q0=1): q_a=0 → no flip → idx stays 3.
+     * For amp idx 7 (q2=1, q1=1, q0=1): q_a=1 AND q_b=1 → flip q_c → amp idx 6.
+     * So we prepare |111⟩ (amp idx 7, offset 14) and expect it to land
+     * in amp idx 6 (offset 12). */
+    {
+        float state[16];   /* 3 qubits = 8 amps = 16 floats */
+        tc_qstate_zero(state, 3);
+        state[0] = 0.0f;
+        state[14] = 1.0f;   /* prepare amp idx 7 = |q2=1,q1=1,q0=1⟩ */
+        /* Pass qubits in unitary-basis order: q_a, q_b, q_c. q_c is the
+         * target (gets flipped if both controls are 1). Use q_c = q0 (LSB),
+         * q_b = q1, q_a = q2. */
+        int qs[3] = {2, 1, 0};
+        tc_qstate_apply_gate(state, 3, TC_GATE_CCX, qs, NULL);
+        /* CCX flips q_c iff q_a AND q_b → state idx 7 → idx 6 (offset 12). */
+        CHECK("Toffoli: amp idx 7 → 0", APPROX(state[14], 0.0f, 1e-6f));
+        CHECK("Toffoli: amp idx 6 = 1",
+              APPROX(state[12], 1.0f, 1e-6f) && APPROX(state[13], 0.0f, 1e-6f));
+    }
+
+    /* ===== Fredkin (CSWAP) on |101⟩ (q_a=1 → swap q_b ↔ q_c) =====
+     * qubits passed as (q_a, q_b, q_c). For amp idx 5 (q_a=1, q_b=0, q_c=1):
+     * q_a=1 triggers swap of q_b and q_c → result is |1,1,0⟩ = amp idx 6.
+     * For amp idx 3 (q_a=0, q_b=1, q_c=1): q_a=0 → no swap → stays idx 3. */
+    {
+        float state[16];
+        tc_qstate_zero(state, 3);
+        state[0] = 0.0f;
+        state[10] = 1.0f;  /* prepare amp idx 5 (q_a=1, q_b=0, q_c=1) */
+        int qs[3] = {2, 1, 0};
+        tc_qstate_apply_gate(state, 3, TC_GATE_CSWAP, qs, NULL);
+        /* Fredkin swaps amp idx 5 ↔ idx 6 (offset 12). */
+        CHECK("Fredkin: amp idx 5 → 0", APPROX(state[10], 0.0f, 1e-6f));
+        CHECK("Fredkin: amp idx 6 = 1",
+              APPROX(state[12], 1.0f, 1e-6f) && APPROX(state[13], 0.0f, 1e-6f));
+        /* Norm preserved (unitary). */
+        float n2 = tc_qstate_norm_sq(state, 3);
+        CHECK("Fredkin preserves ||state||²", APPROX(n2, 1.0f, 1e-6f));
+    }
+
     /* ===== 4-qubit circuit norm-preservation ===== */
     {
         float state[32];  /* 4 qubits = 16 amps = 32 floats */

@@ -320,6 +320,15 @@ oracles:
         label: Controlled rotation CRZ(π) on |++⟩ matches the QGTL phase pattern
         action: fix_controlled_rotation
 
+      - id: toffoli_ccx_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.quantum_gates.probes.toffoli_ccx.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Toffoli (CCX) — 3-qubit apply path engages with permutation correctness
+        action: fix_toffoli_dispatch
+
   - name: mesh-collective-runtime-evidence
     target: mesh-collective-runtime-evidence
     aliases:

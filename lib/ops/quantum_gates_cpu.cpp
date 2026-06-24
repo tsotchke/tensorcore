@@ -285,11 +285,25 @@ static int is_2q_gate(tc_gate_type_t t) {
     }
 }
 
+static int is_3q_gate(tc_gate_type_t t) {
+    switch (t) {
+        case TC_GATE_CCX: case TC_GATE_CSWAP:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
 extern "C" void tc_qstate_apply_gate(float* state, int n_qubits,
                                       tc_gate_type_t type,
                                       const int* qubits,
                                       const float* params) {
-    if (is_2q_gate(type)) {
+    if (is_3q_gate(type)) {
+        float U[128];
+        tc_gate_matrix_3q(type, params, U);
+        tc_qstate_apply_3q_unitary(state, n_qubits,
+                                    qubits[0], qubits[1], qubits[2], U);
+    } else if (is_2q_gate(type)) {
         float U[32];
         tc_gate_matrix_2q(type, params, U);
         tc_qstate_apply_2q_unitary(state, n_qubits, qubits[0], qubits[1], U);
@@ -323,4 +337,94 @@ extern "C" float tc_qstate_norm_sq(const float* state, int n_qubits) {
         s += re * re + im * im;
     }
     return s;
+}
+
+/* ---- 3-qubit gates ---- *
+ *
+ * For Toffoli/Fredkin (the only 3-qubit gates QGTL exposes), the unitary
+ * is a permutation matrix — most entries are 0/1. The generic 8x8 mma
+ * path handles arbitrary unitaries; we factor the matrix builders so
+ * future parameterized 3-qubit gates (CCRZ, etc.) drop in cleanly. */
+
+extern "C" void tc_gate_matrix_3q(tc_gate_type_t type, const float* params,
+                                   float* U) {
+    /* Zero the 8x8 matrix (128 floats). */
+    std::memset(U, 0, 128 * sizeof(float));
+    /* Element (i, j) starts at U + 16*i + 2*j (row-major, complex). */
+    #define SET3(i, j, re, im) do { U[16*(i) + 2*(j)] = (re); \
+                                      U[16*(i) + 2*(j) + 1] = (im); } while (0)
+    switch (type) {
+        case TC_GATE_CCX:
+            /* Toffoli: identity except swap of |110⟩ ↔ |111⟩ (idx 6 ↔ 7).
+             * Acts on the LSB qubit when both upper qubits are 1. */
+            SET3(0,0, 1,0); SET3(1,1, 1,0); SET3(2,2, 1,0); SET3(3,3, 1,0);
+            SET3(4,4, 1,0); SET3(5,5, 1,0);
+            SET3(6,7, 1,0); SET3(7,6, 1,0);
+            break;
+        case TC_GATE_CSWAP:
+            /* Fredkin: identity except swap of |101⟩ ↔ |110⟩ (idx 5 ↔ 6).
+             * Swaps the two lower qubits when the top qubit (control) is 1. */
+            SET3(0,0, 1,0); SET3(1,1, 1,0); SET3(2,2, 1,0); SET3(3,3, 1,0);
+            SET3(4,4, 1,0); SET3(7,7, 1,0);
+            SET3(5,6, 1,0); SET3(6,5, 1,0);
+            break;
+        default:
+            /* Unknown 3q gate: identity. */
+            for (int k = 0; k < 8; ++k) SET3(k, k, 1, 0);
+            break;
+    }
+    (void)params;
+    #undef SET3
+}
+
+extern "C" void tc_qstate_apply_3q_unitary(float* state, int n_qubits,
+                                            int q_a, int q_b, int q_c,
+                                            const float* U) {
+    if (q_a == q_b || q_a == q_c || q_b == q_c) return;  /* invalid */
+    const size_t step_a = (size_t)1 << q_a;
+    const size_t step_b = (size_t)1 << q_b;
+    const size_t step_c = (size_t)1 << q_c;
+    const size_t mask_abc = step_a | step_b | step_c;
+    const size_t N = (size_t)1 << n_qubits;
+
+    /* Iterate every amp index with bits q_a/q_b/q_c cleared.
+     * For each, build the 8 sub-amp indices in unitary basis order
+     *   |q_a q_b q_c⟩ = |000⟩, |001⟩, ..., |111⟩
+     * and apply the 8x8 unitary. */
+    for (size_t i = 0; i < N; ++i) {
+        if (i & mask_abc) continue;
+        size_t ids[8];
+        for (int k = 0; k < 8; ++k) {
+            const int qa_bit = (k >> 2) & 1;
+            const int qb_bit = (k >> 1) & 1;
+            const int qc_bit = (k     ) & 1;
+            ids[k] = i
+                   | ((size_t)qa_bit << q_a)
+                   | ((size_t)qb_bit << q_b)
+                   | ((size_t)qc_bit << q_c);
+        }
+        /* Pull amplitudes into a local 8-complex vector. */
+        float v[16];
+        for (int k = 0; k < 8; ++k) {
+            v[2*k]     = state[2 * ids[k]];
+            v[2*k + 1] = state[2 * ids[k] + 1];
+        }
+        /* w = U @ v (complex 8x8 on 8-complex vector). */
+        float w[16] = {0};
+        for (int r = 0; r < 8; ++r) {
+            for (int c = 0; c < 8; ++c) {
+                const float ur_re = U[16*r + 2*c];
+                const float ur_im = U[16*r + 2*c + 1];
+                const float vc_re = v[2*c];
+                const float vc_im = v[2*c + 1];
+                w[2*r]     += ur_re * vc_re - ur_im * vc_im;
+                w[2*r + 1] += ur_re * vc_im + ur_im * vc_re;
+            }
+        }
+        /* Write back. */
+        for (int k = 0; k < 8; ++k) {
+            state[2 * ids[k]]     = w[2*k];
+            state[2 * ids[k] + 1] = w[2*k + 1];
+        }
+    }
 }

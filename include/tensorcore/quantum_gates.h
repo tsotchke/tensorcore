@@ -46,6 +46,9 @@ typedef enum {
     TC_GATE_CY   = 11, /* controlled-Y */
     TC_GATE_CZ   = 12, /* controlled-Z */
     TC_GATE_SWAP = 13, /* SWAP */
+    /* 3-qubit gates (numeric values match QGTL gate_type_t). */
+    TC_GATE_CCX   = 18, /* Toffoli (controlled-controlled-X) */
+    TC_GATE_CSWAP = 20, /* Fredkin (controlled SWAP) */
     /* Controlled rotations (numeric values match QGTL gate_type_t). */
     TC_GATE_CRX  = 22, /* controlled Rx(θ) */
     TC_GATE_CRY  = 23, /* controlled Ry(θ) */
@@ -63,6 +66,8 @@ typedef enum {
 
 void tc_gate_matrix_1q(tc_gate_type_t type, const float* params, float* out);
 void tc_gate_matrix_2q(tc_gate_type_t type, const float* params, float* out);
+/* 3-qubit gate matrix: out[128] (8x8 complex, row-major interleaved). */
+void tc_gate_matrix_3q(tc_gate_type_t type, const float* params, float* out);
 
 /* ---- State vector ---- */
 
@@ -84,6 +89,14 @@ void tc_qstate_apply_1q_unitary(float* state, int n_qubits, int qubit,
  * — i.e. q_targ is the LSB within the pair. */
 void tc_qstate_apply_2q_unitary(float* state, int n_qubits,
                                  int q_ctrl, int q_targ,
+                                 const float* U);
+
+/* Apply an 8x8 unitary to a (q_a, q_b, q_c) qubit triple (in-place).
+ * The 8 basis vectors of the 3-qubit subspace are ordered
+ *   |q_a q_b q_c⟩ = |000⟩, |001⟩, ..., |111⟩
+ * with q_c the LSB of the triple (analogous to the 2q convention). */
+void tc_qstate_apply_3q_unitary(float* state, int n_qubits,
+                                 int q_a, int q_b, int q_c,
                                  const float* U);
 
 /* High-level dispatch: build the matrix from (type, params), then apply.
