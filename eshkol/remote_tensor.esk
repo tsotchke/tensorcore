@@ -1,0 +1,56 @@
+;;
+;; remote_tensor.esk — Eshkol bindings for the inference weight-paging
+;; transport (tc_remote_*).
+;;
+;; Sister to tensorcore.esk's training collectives. Use this for serving
+;; large mixture-of-experts models where the weight store lives on one
+;; node (high-RAM) and the compute lives on another (high-VRAM, small RAM).
+;;
+;; Reference: NOTE-kimi-distributed-inference-2026-06-24.md.
+;;
+
+(provide tc-remote-init
+         tc-remote-shutdown
+         tc-remote-register-tensor
+         tc-remote-connect
+         tc-remote-tensor-fetch
+         TC-REMOTE-ROLE-WEIGHT-SERVER
+         TC-REMOTE-ROLE-COMPUTE-CLIENT)
+
+(define TC-REMOTE-ROLE-WEIGHT-SERVER 0)
+(define TC-REMOTE-ROLE-COMPUTE-CLIENT 1)
+
+(extern ptr __tc-remote-init
+        ptr i32 ptr
+        :real tc_eshkol_remote_init)
+
+(extern i32 __tc-remote-shutdown
+        ptr
+        :real tc_eshkol_remote_shutdown)
+
+(extern i32 __tc-remote-register-tensor
+        ptr ptr ptr i64
+        :real tc_eshkol_remote_register_tensor)
+
+(extern i32 __tc-remote-connect
+        ptr ptr
+        :real tc_eshkol_remote_connect)
+
+(extern i32 __tc-remote-tensor-fetch
+        ptr i32 ptr ptr i64
+        :real tc_eshkol_remote_tensor_fetch)
+
+(define (tc-remote-init ctx role bind-url)
+  (__tc-remote-init ctx role bind-url))
+
+(define (tc-remote-shutdown h)
+  (__tc-remote-shutdown h))
+
+(define (tc-remote-register-tensor h name ptr bytes)
+  (__tc-remote-register-tensor h name ptr bytes))
+
+(define (tc-remote-connect h peer-url)
+  (__tc-remote-connect h peer-url))
+
+(define (tc-remote-tensor-fetch h peer-id name dst bytes)
+  (__tc-remote-tensor-fetch h peer-id name dst bytes))

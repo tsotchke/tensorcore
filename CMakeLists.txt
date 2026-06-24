@@ -376,6 +376,7 @@ set(TC_COMMON_SOURCES
     lib/tensorops/tensorops_select.c
     lib/distributed/diloco.cpp
     lib/distributed/sparse_compress.cpp
+    lib/distributed/remote_tensor.cpp
     lib/hip/device.cpp
     lib/hip/gemm.cpp
     lib/cuda/device.cpp

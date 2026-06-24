@@ -153,3 +153,13 @@ _tc_lorentz_project
 _tc_lorentz_scale
 _tc_lorentz_tangent_project
 _tc_lorentz_to_poincare
+_tc_remote_init
+_tc_remote_shutdown
+_tc_remote_register_tensor
+_tc_remote_unregister_tensor
+_tc_remote_registered_count
+_tc_remote_connect
+_tc_remote_tensor_fetch
+_tc_remote_total_bytes_served
+_tc_remote_total_bytes_fetched
+_tc_remote_fetch_count

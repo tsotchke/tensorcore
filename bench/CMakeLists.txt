@@ -2,6 +2,7 @@ set(TC_BENCH
     bench_gemm
     bench_attention
     bench_inference_7b
+    bench_remote_tensor
 )
 foreach(b IN LISTS TC_BENCH)
     add_executable(${b} ${b}.c)

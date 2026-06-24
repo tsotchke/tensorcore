@@ -251,6 +251,37 @@ int32_t tc_eshkol_poincare_parallel_transport(void* ctx, void* V, void* X,
         (const tc_buffer*)Y, (tc_buffer*)out, (float)c, N, D));
 }
 
+/* ---- Remote tensor-fetch transport (Kimi inference weight paging) ---- */
+
+void* tc_eshkol_remote_init(void* ctx, int32_t role, const char* bind_url) {
+    tc_remote_ctx* out = NULL;
+    if (tc_remote_init((tc_context*)ctx, (tc_remote_role_t)role, bind_url, &out) != TC_OK)
+        return NULL;
+    return out;
+}
+
+int32_t tc_eshkol_remote_shutdown(void* h) {
+    return normalize_status(tc_remote_shutdown((tc_remote_ctx*)h));
+}
+
+int32_t tc_eshkol_remote_register_tensor(void* h, const char* name,
+                                          void* ptr, int64_t bytes) {
+    return normalize_status(tc_remote_register_tensor((tc_remote_ctx*)h, name,
+                                                        ptr, (size_t)bytes));
+}
+
+int32_t tc_eshkol_remote_connect(void* h, const char* peer_url) {
+    return tc_remote_connect((tc_remote_ctx*)h, peer_url);
+}
+
+int32_t tc_eshkol_remote_tensor_fetch(void* h, int32_t peer_id,
+                                        const char* name,
+                                        void* dst, int64_t bytes) {
+    return normalize_status(tc_remote_tensor_fetch((tc_remote_ctx*)h, peer_id,
+                                                     name, dst, (size_t)bytes));
+}
+
+/* ---- 2:4 structured-sparse tensor-core GEMM ---- */
 
 int32_t tc_eshkol_sparse_24_prune(void* ctx, void* W, int32_t dtype,
                                     int32_t rows, int32_t cols) {

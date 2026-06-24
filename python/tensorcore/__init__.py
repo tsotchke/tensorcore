@@ -658,6 +658,28 @@ if _lib is not None:
     _lib.tc_sparse_24_gemm.restype = c_int
     _lib.tc_sparse_24_available.argtypes = []
     _lib.tc_gguf_open.argtypes = [c_char_p, POINTER(c_void_p)]
+    # Remote tensor-fetch transport (Kimi inference weight paging,
+    # see include/tensorcore/remote_tensor.h).
+    _lib.tc_remote_init.argtypes = [c_void_p, c_int, c_char_p, POINTER(c_void_p)]
+    _lib.tc_remote_init.restype = c_int
+    _lib.tc_remote_shutdown.argtypes = [c_void_p]
+    _lib.tc_remote_shutdown.restype = c_int
+    _lib.tc_remote_register_tensor.argtypes = [c_void_p, c_char_p, c_void_p, c_size_t]
+    _lib.tc_remote_register_tensor.restype = c_int
+    _lib.tc_remote_unregister_tensor.argtypes = [c_void_p, c_char_p]
+    _lib.tc_remote_unregister_tensor.restype = c_int
+    _lib.tc_remote_registered_count.argtypes = [c_void_p]
+    _lib.tc_remote_registered_count.restype = c_size_t
+    _lib.tc_remote_connect.argtypes = [c_void_p, c_char_p]
+    _lib.tc_remote_connect.restype = c_int
+    _lib.tc_remote_tensor_fetch.argtypes = [c_void_p, c_int, c_char_p, c_void_p, c_size_t]
+    _lib.tc_remote_tensor_fetch.restype = c_int
+    _lib.tc_remote_total_bytes_served.argtypes = [c_void_p]
+    _lib.tc_remote_total_bytes_served.restype = c_uint64
+    _lib.tc_remote_total_bytes_fetched.argtypes = [c_void_p]
+    _lib.tc_remote_total_bytes_fetched.restype = c_uint64
+    _lib.tc_remote_fetch_count.argtypes = [c_void_p]
+    _lib.tc_remote_fetch_count.restype = c_uint64
     _lib.tc_gguf_open.restype = c_int
     _lib.tc_gguf_close.argtypes = [c_void_p]
     _lib.tc_gguf_close.restype = None
@@ -1722,6 +1744,64 @@ def sparse_24_gemm(ctx, A, B, C, M, N, K, a_dtype, b_dtype, c_dtype,
 def sparse_24_available():
     """Return True if the host has cusparseLt + Ampere+ hardware (real 2× speedup)."""
     return bool(_lib.tc_sparse_24_available())
+TC_REMOTE_ROLE_WEIGHT_SERVER  = 0
+TC_REMOTE_ROLE_COMPUTE_CLIENT = 1
+
+
+def remote_init(ctx, role, bind_url):
+    """Initialize a tensorcore remote-tensor endpoint.
+       role = TC_REMOTE_ROLE_WEIGHT_SERVER or TC_REMOTE_ROLE_COMPUTE_CLIENT.
+       bind_url = "tcp://0.0.0.0:port" for server, None for client.
+       Returns an opaque handle (c_void_p)."""
+    h = c_void_p()
+    bu = None if bind_url is None else bind_url.encode('utf-8')
+    _check(_lib.tc_remote_init(_as_handle(ctx), int(role), bu, byref(h)))
+    return h
+
+
+def remote_shutdown(handle):
+    _check(_lib.tc_remote_shutdown(handle))
+
+
+def remote_register_tensor(handle, name, ptr, nbytes):
+    _check(_lib.tc_remote_register_tensor(
+        handle, name.encode('utf-8'), c_void_p(ptr), int(nbytes)))
+
+
+def remote_unregister_tensor(handle, name):
+    _check(_lib.tc_remote_unregister_tensor(handle, name.encode('utf-8')))
+
+
+def remote_registered_count(handle):
+    return int(_lib.tc_remote_registered_count(handle))
+
+
+def remote_connect(handle, peer_url):
+    """Connect a client to a server. Returns peer_id (int)."""
+    pid = _lib.tc_remote_connect(handle, peer_url.encode('utf-8'))
+    if pid < 0:
+        raise TensorcoreError(-1)
+    return int(pid)
+
+
+def remote_tensor_fetch(handle, peer_id, name, dst_ptr, nbytes):
+    """Synchronous fetch of bytes for `name` from `peer_id` into dst_ptr.
+       dst_ptr is a raw host pointer (use ctypes to get .data_ptr() of
+       a numpy/torch array). nbytes must match the server-registered size."""
+    _check(_lib.tc_remote_tensor_fetch(
+        handle, int(peer_id), name.encode('utf-8'),
+        c_void_p(dst_ptr), int(nbytes)))
+
+
+def remote_total_bytes_served(handle):
+    return int(_lib.tc_remote_total_bytes_served(handle))
+
+def remote_total_bytes_fetched(handle):
+    return int(_lib.tc_remote_total_bytes_fetched(handle))
+
+def remote_fetch_count(handle):
+    return int(_lib.tc_remote_fetch_count(handle))
+
 
 
 def riemannian_adam_step_poincare(ctx, params, grads, m, v, N, D, c,
