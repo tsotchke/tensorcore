@@ -393,6 +393,8 @@ set(TC_COMMON_SOURCES
     lib/core/checkpoint_stub.cpp
     lib/ops/poincare_cpu.cpp
     lib/ops/lorentz_cpu.cpp
+    lib/ops/sphere_cpu.cpp
+    lib/ops/product_manifold_cpu.cpp
     lib/ops/phase_attention_cpu.cpp
     lib/ops/riemannian_adam_cpu.cpp
     lib/ops/sparse_gemm_cpu.cpp

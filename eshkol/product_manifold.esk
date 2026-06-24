@@ -1,0 +1,78 @@
+;;
+;; product_manifold.esk — Eshkol bindings for tensorcore's product
+;; manifold ops (mixed curvature; replaces qLLM mixed_curvature.c).
+;;
+;; A point on M = M_1 × M_2 × ... × M_K is the concatenation of
+;; points on each factor. Geodesic structure factorises:
+;;   exp_p(v) = (exp_{p_1}(v_1), ..., exp_{p_K}(v_K))
+;;   log_p(q) = (log_{p_1}(q_1), ..., log_{p_K}(q_K))
+;;   d²(p, q) = Σ_k d_k²(p_k, q_k)
+;;
+;; Factor descriptor is a 12-byte C struct (kind:i32, intrinsic_dim:i32,
+;; curvature:f32). Caller builds an array of factors and passes the
+;; pointer + count to the product ops; the C side computes ambient
+;; offsets internally.
+;;
+;; Factor kinds:
+;;   0 = Euclidean       (curvature ignored)
+;;   1 = Poincaré ball   (curvature c > 0)
+;;   2 = Sphere          (curvature = radius)
+;;   3 = Lorentz/hyper.  (curvature |κ|)
+;;
+
+(provide tc-factor-ambient-dim
+         tc-product-ambient-dim
+         tc-product-project
+         tc-product-exp
+         tc-product-log
+         tc-product-distance
+         tc-product-parallel-transport
+         TC-FACTOR-EUCLIDEAN
+         TC-FACTOR-POINCARE
+         TC-FACTOR-SPHERE
+         TC-FACTOR-LORENTZ)
+
+(define TC-FACTOR-EUCLIDEAN 0)
+(define TC-FACTOR-POINCARE  1)
+(define TC-FACTOR-SPHERE    2)
+(define TC-FACTOR-LORENTZ   3)
+
+(extern i32 __tc-factor-ambient-dim
+        ptr
+        :real tc_factor_ambient_dim)
+
+(extern i32 __tc-product-ambient-dim
+        ptr i32
+        :real tc_product_ambient_dim)
+
+(extern void __tc-product-project
+        ptr i32 ptr
+        :real tc_product_project)
+
+(extern void __tc-product-exp
+        ptr i32 ptr ptr ptr
+        :real tc_product_exp)
+
+(extern void __tc-product-log
+        ptr i32 ptr ptr ptr
+        :real tc_product_log)
+
+(extern f32 __tc-product-distance
+        ptr i32 ptr ptr
+        :real tc_product_distance)
+
+(extern void __tc-product-parallel-transport
+        ptr i32 ptr ptr ptr ptr
+        :real tc_product_parallel_transport)
+
+(define (tc-factor-ambient-dim factor) (__tc-factor-ambient-dim factor))
+(define (tc-product-ambient-dim factors n) (__tc-product-ambient-dim factors n))
+(define (tc-product-project factors n x) (__tc-product-project factors n x))
+(define (tc-product-exp factors n base tangent point)
+  (__tc-product-exp factors n base tangent point))
+(define (tc-product-log factors n base point tangent)
+  (__tc-product-log factors n base point tangent))
+(define (tc-product-distance factors n p q)
+  (__tc-product-distance factors n p q))
+(define (tc-product-parallel-transport factors n from to tangent out)
+  (__tc-product-parallel-transport factors n from to tangent out))

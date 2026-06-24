@@ -637,6 +637,51 @@ if _lib is not None:
     _lib.tc_lorentz_to_poincare.restype = None
     _lib.tc_poincare_to_lorentz.argtypes = [_f32p, _f32p, c_size_t, c_float]
     _lib.tc_poincare_to_lorentz.restype = None
+    # Sphere ops (see include/tensorcore/sphere.h). Raw-vector ABI;
+    # serves as one-off math + the inner kernel for product manifolds.
+    _lib.tc_sphere_inner.argtypes = [_f32p, _f32p, c_size_t]
+    _lib.tc_sphere_inner.restype = c_float
+    _lib.tc_sphere_project.argtypes = [_f32p, c_size_t, c_float]
+    _lib.tc_sphere_project.restype = None
+    _lib.tc_sphere_tangent_project.argtypes = [_f32p, _f32p, c_size_t]
+    _lib.tc_sphere_tangent_project.restype = None
+    _lib.tc_sphere_inner_product.argtypes = [_f32p, _f32p, _f32p, c_size_t]
+    _lib.tc_sphere_inner_product.restype = c_float
+    _lib.tc_sphere_add.argtypes = [_f32p, _f32p, _f32p, _f32p, c_size_t]
+    _lib.tc_sphere_add.restype = None
+    _lib.tc_sphere_scale.argtypes = [_f32p, c_float, _f32p, c_size_t]
+    _lib.tc_sphere_scale.restype = None
+    _lib.tc_sphere_exp.argtypes = [_f32p, _f32p, _f32p, c_size_t, c_float]
+    _lib.tc_sphere_exp.restype = None
+    _lib.tc_sphere_log.argtypes = [_f32p, _f32p, _f32p, c_size_t, c_float]
+    _lib.tc_sphere_log.restype = None
+    _lib.tc_sphere_distance.argtypes = [_f32p, _f32p, c_size_t, c_float]
+    _lib.tc_sphere_distance.restype = c_float
+    _lib.tc_sphere_parallel_transport.argtypes = [_f32p, _f32p, _f32p, _f32p, c_size_t, c_float]
+    _lib.tc_sphere_parallel_transport.restype = None
+    _lib.tc_sphere_slerp.argtypes = [_f32p, _f32p, c_float, _f32p, c_size_t, c_float]
+    _lib.tc_sphere_slerp.restype = None
+    # Product manifold (see include/tensorcore/product_manifold.h).
+    # Factor struct mirrors tc_factor_t in C: { kind, intrinsic_dim, curvature }.
+    class _TCFactor(Structure):
+        _fields_ = [("kind", c_int32),
+                    ("intrinsic_dim", c_int32),
+                    ("curvature", c_float)]
+    _lib._tc_factor_struct = _TCFactor
+    _lib.tc_factor_ambient_dim.argtypes = [POINTER(_TCFactor)]
+    _lib.tc_factor_ambient_dim.restype = c_int32
+    _lib.tc_product_ambient_dim.argtypes = [POINTER(_TCFactor), c_int32]
+    _lib.tc_product_ambient_dim.restype = c_int32
+    _lib.tc_product_project.argtypes = [POINTER(_TCFactor), c_int32, _f32p]
+    _lib.tc_product_project.restype = None
+    _lib.tc_product_exp.argtypes = [POINTER(_TCFactor), c_int32, _f32p, _f32p, _f32p]
+    _lib.tc_product_exp.restype = None
+    _lib.tc_product_log.argtypes = [POINTER(_TCFactor), c_int32, _f32p, _f32p, _f32p]
+    _lib.tc_product_log.restype = None
+    _lib.tc_product_distance.argtypes = [POINTER(_TCFactor), c_int32, _f32p, _f32p]
+    _lib.tc_product_distance.restype = c_float
+    _lib.tc_product_parallel_transport.argtypes = [POINTER(_TCFactor), c_int32, _f32p, _f32p, _f32p, _f32p]
+    _lib.tc_product_parallel_transport.restype = None
     # Phase attention + Born-rule (see include/tensorcore/phase_attention.h).
     _lib.tc_phase_attention_combine.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int]
     _lib.tc_phase_attention_combine.restype = c_int

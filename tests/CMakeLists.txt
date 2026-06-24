@@ -240,6 +240,18 @@ target_include_directories(test_poincare PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME test_poincare COMMAND test_poincare)
 set_tests_properties(test_poincare PROPERTIES TIMEOUT 30)
 
+add_executable(test_sphere test_sphere.c)
+target_link_libraries(test_sphere PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
+target_include_directories(test_sphere PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME test_sphere COMMAND test_sphere)
+set_tests_properties(test_sphere PROPERTIES TIMEOUT 30)
+
+add_executable(test_product_manifold test_product_manifold.c)
+target_link_libraries(test_product_manifold PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
+target_include_directories(test_product_manifold PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME test_product_manifold COMMAND test_product_manifold)
+set_tests_properties(test_product_manifold PROPERTIES TIMEOUT 30)
+
 add_executable(test_phase_attention test_phase_attention.c)
 target_link_libraries(test_phase_attention PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
 target_include_directories(test_phase_attention PRIVATE ${CMAKE_SOURCE_DIR}/include)
