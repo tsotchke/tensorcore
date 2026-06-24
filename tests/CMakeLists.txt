@@ -258,6 +258,14 @@ target_include_directories(test_quantum_gates PRIVATE ${CMAKE_SOURCE_DIR}/includ
 add_test(NAME test_quantum_gates COMMAND test_quantum_gates)
 set_tests_properties(test_quantum_gates PROPERTIES TIMEOUT 30)
 
+# Fork-based 2-peer mesh collective: AllReduce/Broadcast/AllGather over
+# the production tc_remote_tensor_fetch transport. Bound to localhost.
+add_executable(test_mesh_collective test_mesh_collective.c)
+target_link_libraries(test_mesh_collective PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
+target_include_directories(test_mesh_collective PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME test_mesh_collective COMMAND test_mesh_collective)
+set_tests_properties(test_mesh_collective PROPERTIES TIMEOUT 30)
+
 add_executable(test_phase_attention test_phase_attention.c)
 target_link_libraries(test_phase_attention PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
 target_include_directories(test_phase_attention PRIVATE ${CMAKE_SOURCE_DIR}/include)

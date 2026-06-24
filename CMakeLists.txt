@@ -383,6 +383,7 @@ set(TC_COMMON_SOURCES
     lib/distributed/diloco.cpp
     lib/distributed/sparse_compress.cpp
     lib/distributed/remote_tensor.cpp
+    lib/distributed/mesh_collective.cpp
     lib/hip/device.cpp
     lib/hip/gemm.cpp
     lib/cuda/device.cpp
