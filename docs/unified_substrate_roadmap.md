@@ -11,10 +11,10 @@ Tensorcore's mandate: be the **single C/Eshkol math substrate** that every sibli
 | op | tensorcore | qLLM has | QGTL has | priority |
 |---|:---:|:---:|:---:|:---:|
 | Poincaré ball (mobius_add, exp/log, distance, parallel_transport, conformal_factor) | ✓ | ✓ | — | shipped |
-| Sphere (exp/log, geodesic distance, parallel transport) | ~ Python | ✓ | — | **HIGH** — port to C |
-| Lorentz / hyperboloid (Minkowski inner product, exp/log on hyperboloid) | ✗ | ✓ (`lorentz_fast.c`) | — | **HIGH** |
+| Sphere (exp/log, geodesic distance, parallel transport, slerp) | ✓ | ✓ | — | shipped (`sphere.h`/`sphere_cpu.cpp`, qLLM `spherical_fast.c` portable replacement) |
+| Lorentz / hyperboloid (Minkowski inner product, exp/log on hyperboloid) | ✓ | ✓ (`lorentz_fast.c`) | — | shipped (`lorentz.h`/`lorentz_cpu.cpp`) |
 | Torus (periodic manifold) | ✗ | ✓ (`torus_fast.c`) | — | MED |
-| Product manifold (H × S × R, mixed curvature) | ~ Python | ✓ (`mixed_curvature.c`) | — | **HIGH** — port to C |
+| Product manifold (H × S × R, mixed curvature) | ✓ | ✓ (`mixed_curvature.c`) | — | shipped (`product_manifold.h`/`product_manifold_cpu.cpp`, factor-wise dispatch over Euclidean/Poincaré/Sphere/Lorentz) |
 | Lie groups (matrix exp, log, group action) | ✗ | ✓ (`lie_groups.c`) | ✓ (`holonomic_gates.h`) | MED |
 | Riemannian metric tensor (general manifold) | ✗ | ✓ (`metric_tensor.c`, `riemannian_metrics.c`) | ✓ (`quantum_geometric_metric.h`) | MED |
 | Geodesic ODE solver (RK45 on manifolds) | ✗ | ✓ (`geodesic_solver.c`, `fast_geodesic.c`) | ✗ | MED |
