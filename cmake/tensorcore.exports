@@ -171,6 +171,14 @@ _tc_product_exp
 _tc_product_log
 _tc_product_distance
 _tc_product_parallel_transport
+_tc_gate_matrix_1q
+_tc_gate_matrix_2q
+_tc_qstate_zero
+_tc_qstate_apply_1q_unitary
+_tc_qstate_apply_2q_unitary
+_tc_qstate_apply_gate
+_tc_qstate_prob_one
+_tc_qstate_norm_sq
 _tc_remote_init
 _tc_remote_shutdown
 _tc_remote_register_tensor

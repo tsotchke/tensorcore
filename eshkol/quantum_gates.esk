@@ -1,0 +1,97 @@
+;;
+;; quantum_gates.esk — Eshkol bindings for tensorcore's quantum gate ops.
+;;
+;; State vector convention: fp32 array of 2*2^n floats (interleaved complex).
+;; Qubit 0 is least significant. Gate matrices: 8 floats (1q) or 32 floats
+;; (2q) in row-major interleaved-complex layout.
+;;
+;; Gate type values match QGTL's gate_type_t so callers can pass their
+;; enum straight through (see include/tensorcore/quantum_gates.h).
+;;
+
+(provide tc-gate-matrix-1q
+         tc-gate-matrix-2q
+         tc-qstate-zero
+         tc-qstate-apply-1q-unitary
+         tc-qstate-apply-2q-unitary
+         tc-qstate-apply-gate
+         tc-qstate-prob-one
+         tc-qstate-norm-sq
+         TC-GATE-I  TC-GATE-X  TC-GATE-Y  TC-GATE-Z
+         TC-GATE-H  TC-GATE-S  TC-GATE-T
+         TC-GATE-RX TC-GATE-RY TC-GATE-RZ
+         TC-GATE-CNOT TC-GATE-CY TC-GATE-CZ TC-GATE-SWAP
+         TC-GATE-SDG TC-GATE-TDG)
+
+(define TC-GATE-I    0)
+(define TC-GATE-X    1)
+(define TC-GATE-Y    2)
+(define TC-GATE-Z    3)
+(define TC-GATE-H    4)
+(define TC-GATE-S    5)
+(define TC-GATE-T    6)
+(define TC-GATE-RX   7)
+(define TC-GATE-RY   8)
+(define TC-GATE-RZ   9)
+(define TC-GATE-CNOT 10)
+(define TC-GATE-CY   11)
+(define TC-GATE-CZ   12)
+(define TC-GATE-SWAP 13)
+(define TC-GATE-SDG  26)
+(define TC-GATE-TDG  27)
+
+(extern void __tc-gate-matrix-1q
+        i32 ptr ptr
+        :real tc_gate_matrix_1q)
+
+(extern void __tc-gate-matrix-2q
+        i32 ptr ptr
+        :real tc_gate_matrix_2q)
+
+(extern void __tc-qstate-zero
+        ptr i32
+        :real tc_qstate_zero)
+
+(extern void __tc-qstate-apply-1q-unitary
+        ptr i32 i32 ptr
+        :real tc_qstate_apply_1q_unitary)
+
+(extern void __tc-qstate-apply-2q-unitary
+        ptr i32 i32 i32 ptr
+        :real tc_qstate_apply_2q_unitary)
+
+(extern void __tc-qstate-apply-gate
+        ptr i32 i32 ptr ptr
+        :real tc_qstate_apply_gate)
+
+(extern f32 __tc-qstate-prob-one
+        ptr i32 i32
+        :real tc_qstate_prob_one)
+
+(extern f32 __tc-qstate-norm-sq
+        ptr i32
+        :real tc_qstate_norm_sq)
+
+(define (tc-gate-matrix-1q type params out)
+  (__tc-gate-matrix-1q type params out))
+
+(define (tc-gate-matrix-2q type params out)
+  (__tc-gate-matrix-2q type params out))
+
+(define (tc-qstate-zero state n-qubits)
+  (__tc-qstate-zero state n-qubits))
+
+(define (tc-qstate-apply-1q-unitary state n-qubits qubit U)
+  (__tc-qstate-apply-1q-unitary state n-qubits qubit U))
+
+(define (tc-qstate-apply-2q-unitary state n-qubits q-ctrl q-targ U)
+  (__tc-qstate-apply-2q-unitary state n-qubits q-ctrl q-targ U))
+
+(define (tc-qstate-apply-gate state n-qubits type qubits params)
+  (__tc-qstate-apply-gate state n-qubits type qubits params))
+
+(define (tc-qstate-prob-one state n-qubits qubit)
+  (__tc-qstate-prob-one state n-qubits qubit))
+
+(define (tc-qstate-norm-sq state n-qubits)
+  (__tc-qstate-norm-sq state n-qubits))

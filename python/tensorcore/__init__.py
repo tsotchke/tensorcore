@@ -682,6 +682,25 @@ if _lib is not None:
     _lib.tc_product_distance.restype = c_float
     _lib.tc_product_parallel_transport.argtypes = [POINTER(_TCFactor), c_int32, _f32p, _f32p, _f32p, _f32p]
     _lib.tc_product_parallel_transport.restype = None
+    # Quantum gates + state-vector apply (see include/tensorcore/quantum_gates.h).
+    # State is a fp32 array of 2*2^n_qubits floats (interleaved complex).
+    # Gate type values match QGTL's gate_type_t for interop.
+    _lib.tc_gate_matrix_1q.argtypes = [c_int, _f32p, _f32p]
+    _lib.tc_gate_matrix_1q.restype = None
+    _lib.tc_gate_matrix_2q.argtypes = [c_int, _f32p, _f32p]
+    _lib.tc_gate_matrix_2q.restype = None
+    _lib.tc_qstate_zero.argtypes = [_f32p, c_int]
+    _lib.tc_qstate_zero.restype = None
+    _lib.tc_qstate_apply_1q_unitary.argtypes = [_f32p, c_int, c_int, _f32p]
+    _lib.tc_qstate_apply_1q_unitary.restype = None
+    _lib.tc_qstate_apply_2q_unitary.argtypes = [_f32p, c_int, c_int, c_int, _f32p]
+    _lib.tc_qstate_apply_2q_unitary.restype = None
+    _lib.tc_qstate_apply_gate.argtypes = [_f32p, c_int, c_int, POINTER(c_int), _f32p]
+    _lib.tc_qstate_apply_gate.restype = None
+    _lib.tc_qstate_prob_one.argtypes = [_f32p, c_int, c_int]
+    _lib.tc_qstate_prob_one.restype = c_float
+    _lib.tc_qstate_norm_sq.argtypes = [_f32p, c_int]
+    _lib.tc_qstate_norm_sq.restype = c_float
     # Phase attention + Born-rule (see include/tensorcore/phase_attention.h).
     _lib.tc_phase_attention_combine.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int]
     _lib.tc_phase_attention_combine.restype = c_int

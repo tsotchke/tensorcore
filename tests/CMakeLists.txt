@@ -252,6 +252,12 @@ target_include_directories(test_product_manifold PRIVATE ${CMAKE_SOURCE_DIR}/inc
 add_test(NAME test_product_manifold COMMAND test_product_manifold)
 set_tests_properties(test_product_manifold PROPERTIES TIMEOUT 30)
 
+add_executable(test_quantum_gates test_quantum_gates.c)
+target_link_libraries(test_quantum_gates PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
+target_include_directories(test_quantum_gates PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME test_quantum_gates COMMAND test_quantum_gates)
+set_tests_properties(test_quantum_gates PROPERTIES TIMEOUT 30)
+
 add_executable(test_phase_attention test_phase_attention.c)
 target_link_libraries(test_phase_attention PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
 target_include_directories(test_phase_attention PRIVATE ${CMAKE_SOURCE_DIR}/include)
