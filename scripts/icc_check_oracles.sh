@@ -60,3 +60,18 @@ else
     print_oracle cuda-for-apple-public-integration \
         --trace-file "$RS_TRACE"
 fi
+
+# 4. Geometric ops substrate (Poincaré / Lorentz / Sphere / Product manifold).
+GEO_TRACE="$REPO_ROOT/build/geometric_ops_runtime_evidence.json"
+trace_or_skip "$GEO_TRACE" || true
+print_oracle geometric-ops-runtime-evidence --trace-file "$GEO_TRACE"
+
+# 5. Quantum gates substrate (Pauli / RX-RY-RZ / CNOT / SWAP / state-vector apply).
+QG_TRACE="$REPO_ROOT/build/quantum_gates_runtime_evidence.json"
+trace_or_skip "$QG_TRACE" || true
+print_oracle quantum-ops-runtime-evidence --trace-file "$QG_TRACE"
+
+# 6. Mesh collectives (AllReduce / Broadcast / AllGather over tc_remote).
+MC_TRACE="$REPO_ROOT/build/mesh_collective_runtime_evidence.json"
+trace_or_skip "$MC_TRACE" || true
+print_oracle mesh-collective-runtime-evidence --trace-file "$MC_TRACE"

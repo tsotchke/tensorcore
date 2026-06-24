@@ -211,3 +211,156 @@ oracles:
         severity: high
         label: tensorcore_bridge_smoke.esk runs the broader bridge surface
         action: fix_tensorcore_bridge_runtime
+
+  - name: geometric-ops-runtime-evidence
+    target: geometric-ops-runtime-evidence
+    aliases:
+      - geometric-ops
+      - tensorcore-geometric-substrate
+    criteria:
+      - id: geometric_ops_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: Geometric ops runtime evidence is present
+        action: run_check_geometric_ops_runtime
+
+      - id: geometric_ops_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: Geometric ops runtime is failure-free
+        action: fix_geometric_ops_runtime_failure
+
+      - id: geometric_ops_runtime_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.geometric_ops.runtime_status]
+          event_values: [passed, skipped_no_lib]
+        severity: high
+        label: Geometric ops runtime smoke is covered (or explicitly skipped)
+        action: run_geometric_ops_smoke
+
+      - id: lorentz_round_trip_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.geometric_ops.probes.lorentz_round_trip.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Lorentz hyperboloid log(exp(v)) round-trip passes
+        action: fix_lorentz_round_trip
+
+      - id: sphere_round_trip_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.geometric_ops.probes.sphere_round_trip.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Sphere log(exp(v)) round-trip + slerp midpoint pass
+        action: fix_sphere_round_trip
+
+      - id: product_manifold_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.geometric_ops.probes.product_manifold_HxSxR.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: H x S x R product manifold per-factor round-trip passes
+        action: fix_product_manifold
+
+  - name: quantum-ops-runtime-evidence
+    target: quantum-ops-runtime-evidence
+    aliases:
+      - quantum-ops
+      - tensorcore-quantum-substrate
+    criteria:
+      - id: quantum_ops_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: Quantum gates runtime evidence is present
+        action: run_check_quantum_gates_runtime
+
+      - id: quantum_ops_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: Quantum gates runtime is failure-free
+        action: fix_quantum_gates_runtime_failure
+
+      - id: quantum_ops_runtime_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.quantum_gates.runtime_status]
+          event_values: [passed, skipped_no_lib]
+        severity: high
+        label: Quantum gates runtime smoke is covered (or skipped)
+        action: run_quantum_gates_smoke
+
+      - id: bell_state_prep_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.quantum_gates.probes.bell_state_prep.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: H_0 then CNOT_{0,1} prepares the Bell state correctly
+        action: fix_bell_state_prep
+
+      - id: four_qubit_unitarity_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.quantum_gates.probes.four_qubit_unitarity.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: 4-qubit H+CNOT+RZ circuit preserves ||state||^2 = 1
+        action: fix_quantum_unitarity
+
+  - name: mesh-collective-runtime-evidence
+    target: mesh-collective-runtime-evidence
+    aliases:
+      - mesh-collective
+      - tensorcore-mesh-substrate
+    criteria:
+      - id: mesh_collective_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: Mesh collective runtime evidence is present
+        action: run_check_mesh_collective_runtime
+
+      - id: mesh_collective_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: Mesh collective runtime is failure-free
+        action: fix_mesh_collective_runtime_failure
+
+      - id: mesh_collective_runtime_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.mesh_collective.runtime_status]
+          event_values: [passed, skipped_no_binary]
+        severity: high
+        label: Mesh collective fork-based 2-peer smoke passes (or is skipped)
+        action: run_mesh_collective_smoke
+
+      - id: mesh_allreduce_sum_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.mesh_collective.probes.allreduce_sum.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: AllReduce SUM produces byte-identical reduced output
+        action: fix_mesh_allreduce_sum
+
+      - id: mesh_broadcast_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.mesh_collective.probes.broadcast.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Broadcast from rank 0 delivers byte-identical payload
+        action: fix_mesh_broadcast
+
+      - id: mesh_allgather_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.mesh_collective.probes.allgather.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: AllGather assembles all peers' slices into recv buffer
+        action: fix_mesh_allgather
