@@ -193,6 +193,49 @@ def main() -> int:
         probes["toffoli_ccx"] = {"error": str(exc), "passed": False,
                                    "traceback": traceback.format_exc()}
 
+    # === ISWAP |10⟩ → i|01⟩ — exercises the entangling 2-qubit dispatch ===
+    try:
+        state = (ctypes.c_float * 8)(); q_zero(state, 2)
+        state[0] = 0.0; state[4] = 1.0  # |10⟩ at amp idx 2 = offset 4
+        q01 = (ctypes.c_int * 2)(0, 1)
+        q_apply_g(state, 2, 21, q01, None)   # TC_GATE_ISWAP = 21
+        ok = (abs(state[4]) < 1e-6 and abs(state[5]) < 1e-6
+              and abs(state[2]) < 1e-6 and abs(state[3] - 1.0) < 1e-6)
+        probes["iswap_10_to_i01"] = {"state_re_im": list(state), "passed": ok}
+    except Exception as exc:
+        probes["iswap_10_to_i01"] = {"error": str(exc), "passed": False,
+                                        "traceback": traceback.format_exc()}
+
+    # === U3(π, 0, 0) on |0⟩ ≈ |1⟩ — exercises 3-parameter dispatch ===
+    try:
+        state = (ctypes.c_float * 4)(); q_zero(state, 1)
+        q0 = (ctypes.c_int * 1)(0)
+        params = (ctypes.c_float * 3)(math.pi, 0.0, 0.0)
+        q_apply_g(state, 1, 17, q0, params)  # TC_GATE_U3 = 17
+        ok = abs(state[0]) < 1e-5 and abs(state[2] - 1.0) < 1e-5
+        probes["u3_pi_0_0_on_zero"] = {"state_re_im": list(state), "passed": ok}
+    except Exception as exc:
+        probes["u3_pi_0_0_on_zero"] = {"error": str(exc), "passed": False,
+                                          "traceback": traceback.format_exc()}
+
+    # === ZZ(π) on |++⟩ — exercises Ising rotation ===
+    try:
+        state = (ctypes.c_float * 8)(); q_zero(state, 2)
+        q0 = (ctypes.c_int * 1)(0); q1 = (ctypes.c_int * 1)(1); q01 = (ctypes.c_int * 2)(0, 1)
+        q_apply_g(state, 2, 4, q0, None)         # H_0
+        q_apply_g(state, 2, 4, q1, None)         # H_1
+        params = (ctypes.c_float * 1)(math.pi)
+        q_apply_g(state, 2, 35, q01, params)     # TC_GATE_ZZ = 35
+        # amp[0]=-0.5i, amp[1]=+0.5i, amp[2]=+0.5i, amp[3]=-0.5i
+        ok = (abs(state[0]) < 1e-5 and abs(state[1] + 0.5) < 1e-5
+              and abs(state[2]) < 1e-5 and abs(state[3] - 0.5) < 1e-5
+              and abs(state[4]) < 1e-5 and abs(state[5] - 0.5) < 1e-5
+              and abs(state[6]) < 1e-5 and abs(state[7] + 0.5) < 1e-5)
+        probes["zz_pi_on_plusplus"] = {"state_re_im": list(state), "passed": ok}
+    except Exception as exc:
+        probes["zz_pi_on_plusplus"] = {"error": str(exc), "passed": False,
+                                          "traceback": traceback.format_exc()}
+
     # === 4-qubit circuit norm preservation ===
     try:
         state = (ctypes.c_float * 32)(); q_zero(state, 4)

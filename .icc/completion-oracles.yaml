@@ -329,6 +329,33 @@ oracles:
         label: Toffoli (CCX) — 3-qubit apply path engages with permutation correctness
         action: fix_toffoli_dispatch
 
+      - id: iswap_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.quantum_gates.probes.iswap_10_to_i01.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: ISWAP entangling 2-qubit gate routes correctly
+        action: fix_iswap_dispatch
+
+      - id: u3_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.quantum_gates.probes.u3_pi_0_0_on_zero.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: U3(θ, φ, λ) general single-qubit dispatch with 3-parameter unpack
+        action: fix_u3_dispatch
+
+      - id: zz_ising_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.quantum_gates.probes.zz_pi_on_plusplus.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: ZZ(θ) Ising rotation diagonal matches the exp(-iθ/2 Z⊗Z) spec
+        action: fix_zz_dispatch
+
   - name: mesh-collective-runtime-evidence
     target: mesh-collective-runtime-evidence
     aliases:

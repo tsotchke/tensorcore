@@ -222,6 +222,75 @@ int main(void) {
         CHECK("Fredkin preserves ||state||²", APPROX(n2, 1.0f, 1e-6f));
     }
 
+    /* ===== ISWAP |10⟩ → i|01⟩ (and |01⟩ → i|10⟩) =====
+     * |10⟩ has amp idx 2 (offset 4). ISWAP gives i|01⟩ → amp idx 1
+     * (offset 2) with value (0, 1). */
+    {
+        float state[8];
+        tc_qstate_zero(state, 2);
+        state[0] = 0.0f; state[4] = 1.0f;  /* |10⟩ */
+        int q01[2] = {0, 1};
+        tc_qstate_apply_gate(state, 2, TC_GATE_ISWAP, q01, NULL);
+        /* ISWAP swaps the (|01⟩, |10⟩) subspace with phase i.
+         * |10⟩ → i|01⟩: amp idx 1 = (re=0, im=1). */
+        CHECK("ISWAP |10⟩ → i|01⟩: amp idx 2 = 0",
+              APPROX(state[4], 0.0f, 1e-6f) && APPROX(state[5], 0.0f, 1e-6f));
+        CHECK("ISWAP |10⟩ → i|01⟩: amp idx 1 = i",
+              APPROX(state[2], 0.0f, 1e-6f) && APPROX(state[3], 1.0f, 1e-6f));
+    }
+
+    /* ===== U1(π) on |+⟩ = (|0⟩+|1⟩)/√2: phase on |1⟩ only =====
+     * U1(π) = diag(1, e^{iπ}) = diag(1, -1). So |+⟩ → (|0⟩-|1⟩)/√2 = |-⟩. */
+    {
+        float state[4];
+        tc_qstate_zero(state, 1);
+        int q0[1] = {0};
+        tc_qstate_apply_gate(state, 1, TC_GATE_H, q0, NULL);
+        float params[1] = {(float)M_PI};
+        tc_qstate_apply_gate(state, 1, TC_GATE_U1, q0, params);
+        const float inv_sqrt2 = 0.70710678f;
+        /* |-⟩ = (1/√2)|0⟩ - (1/√2)|1⟩ — amp[0] = +1/√2, amp[1] = -1/√2. */
+        CHECK("U1(π) on |+⟩: amp[0] = 1/√2",
+              APPROX(state[0], inv_sqrt2, 1e-5f));
+        CHECK("U1(π) on |+⟩: amp[1] = -1/√2",
+              APPROX(state[2], -inv_sqrt2, 1e-5f));
+    }
+
+    /* ===== U3(π, 0, 0) on |0⟩ ≈ |1⟩ (up to global phase) =====
+     * U3(θ=π, φ=0, λ=0) = [[cos(π/2), -sin(π/2)], [sin(π/2), cos(π/2)]]
+     * = [[0, -1], [1, 0]] — applied to |0⟩=(1,0) gives (0, 1) = |1⟩. */
+    {
+        float state[4];
+        tc_qstate_zero(state, 1);
+        int q0[1] = {0};
+        float params[3] = {(float)M_PI, 0.0f, 0.0f};
+        tc_qstate_apply_gate(state, 1, TC_GATE_U3, q0, params);
+        CHECK("U3(π,0,0) on |0⟩ ≈ |1⟩",
+              APPROX(state[0], 0.0f, 1e-5f) && APPROX(state[2], 1.0f, 1e-5f));
+    }
+
+    /* ===== ZZ(π) on H_0 H_1 |00⟩ — Ising rotation =====
+     * Equal superposition (0.5, 0.5, 0.5, 0.5). ZZ(π) applies the diagonal
+     * diag(e^{-iπ/2}, e^{iπ/2}, e^{iπ/2}, e^{-iπ/2}) = diag(-i, +i, +i, -i).
+     * So amp[0] = 0.5·(-i), amp[1] = 0.5·(+i), amp[2] = 0.5·(+i), amp[3] = 0.5·(-i). */
+    {
+        float state[8];
+        tc_qstate_zero(state, 2);
+        int q0[1] = {0}, q1[1] = {1}, q01[2] = {0, 1};
+        tc_qstate_apply_gate(state, 2, TC_GATE_H, q0, NULL);
+        tc_qstate_apply_gate(state, 2, TC_GATE_H, q1, NULL);
+        float params[1] = {(float)M_PI};
+        tc_qstate_apply_gate(state, 2, TC_GATE_ZZ, q01, params);
+        CHECK("ZZ(π) on |++⟩: amp[0] = -0.5i",
+              APPROX(state[0], 0.0f, 1e-5f) && APPROX(state[1], -0.5f, 1e-5f));
+        CHECK("ZZ(π) on |++⟩: amp[1] = +0.5i",
+              APPROX(state[2], 0.0f, 1e-5f) && APPROX(state[3], 0.5f, 1e-5f));
+        CHECK("ZZ(π) on |++⟩: amp[2] = +0.5i",
+              APPROX(state[4], 0.0f, 1e-5f) && APPROX(state[5], 0.5f, 1e-5f));
+        CHECK("ZZ(π) on |++⟩: amp[3] = -0.5i",
+              APPROX(state[6], 0.0f, 1e-5f) && APPROX(state[7], -0.5f, 1e-5f));
+    }
+
     /* ===== 4-qubit circuit norm-preservation ===== */
     {
         float state[32];  /* 4 qubits = 16 amps = 32 floats */

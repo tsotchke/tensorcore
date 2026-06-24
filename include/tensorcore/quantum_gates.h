@@ -46,9 +46,15 @@ typedef enum {
     TC_GATE_CY   = 11, /* controlled-Y */
     TC_GATE_CZ   = 12, /* controlled-Z */
     TC_GATE_SWAP = 13, /* SWAP */
+    /* Parameterised 1-qubit (IBM ABI; numeric values match QGTL). */
+    TC_GATE_U1    = 15, /* U1(λ) = diag(1, e^{iλ}) — same as PHASE */
+    TC_GATE_U2    = 16, /* U2(φ, λ) */
+    TC_GATE_U3    = 17, /* U3(θ, φ, λ) — general single-qubit */
     /* 3-qubit gates (numeric values match QGTL gate_type_t). */
     TC_GATE_CCX   = 18, /* Toffoli (controlled-controlled-X) */
+    TC_GATE_PHASE = 19, /* General phase gate (alias of U1) */
     TC_GATE_CSWAP = 20, /* Fredkin (controlled SWAP) */
+    TC_GATE_ISWAP = 21, /* iSWAP — entangling 2-qubit gate */
     /* Controlled rotations (numeric values match QGTL gate_type_t). */
     TC_GATE_CRX  = 22, /* controlled Rx(θ) */
     TC_GATE_CRY  = 23, /* controlled Ry(θ) */
@@ -56,6 +62,10 @@ typedef enum {
     TC_GATE_CH   = 25, /* controlled Hadamard */
     TC_GATE_SDG  = 26, /* S† */
     TC_GATE_TDG  = 27, /* T† */
+    /* 2-qubit Ising-style rotations (numeric values match QGTL). */
+    TC_GATE_XX   = 33, /* exp(-iθ/2 X⊗X) */
+    TC_GATE_YY   = 34, /* exp(-iθ/2 Y⊗Y) */
+    TC_GATE_ZZ   = 35, /* exp(-iθ/2 Z⊗Z) */
 } tc_gate_type_t;
 
 /* ---- Gate matrices ---- *

@@ -109,6 +109,44 @@ extern "C" void tc_gate_matrix_1q(tc_gate_type_t type, const float* params,
                        0,0,  c,s);
             break;
         }
+        case TC_GATE_U1:
+        case TC_GATE_PHASE: {
+            /* U1(λ) = PHASE(λ) = diag(1, e^{iλ}) */
+            const float lam = params[0];
+            const float c = std::cos(lam), s = std::sin(lam);
+            set_1q(U, 1,0, 0,0,
+                       0,0, c,s);
+            break;
+        }
+        case TC_GATE_U2: {
+            /* U2(φ, λ) = (1/√2) [[1, -e^{iλ}],
+             *                     [e^{iφ}, e^{i(φ+λ)}]] */
+            const float phi = params[0], lam = params[1];
+            const float cl = std::cos(lam), sl = std::sin(lam);
+            const float cp = std::cos(phi), sp = std::sin(phi);
+            const float cpl = std::cos(phi + lam), spl = std::sin(phi + lam);
+            const float k = kInvSqrt2;
+            set_1q(U,
+                   k,0,             -k*cl, -k*sl,
+                   k*cp,  k*sp,     k*cpl,  k*spl);
+            break;
+        }
+        case TC_GATE_U3: {
+            /* U3(θ, φ, λ) =
+             *   [[cos(θ/2),               -e^{iλ} sin(θ/2)],
+             *    [e^{iφ} sin(θ/2),  e^{i(φ+λ)} cos(θ/2)]] */
+            const float t   = params[0] * 0.5f;
+            const float phi = params[1];
+            const float lam = params[2];
+            const float ct = std::cos(t), st = std::sin(t);
+            const float cl = std::cos(lam), sl = std::sin(lam);
+            const float cp = std::cos(phi), sp = std::sin(phi);
+            const float cpl = std::cos(phi + lam), spl = std::sin(phi + lam);
+            set_1q(U,
+                   ct, 0.0f,            -cl*st, -sl*st,
+                   cp*st, sp*st,         cpl*ct,  spl*ct);
+            break;
+        }
         default:
             /* Unknown 1q gate: fill identity. */
             set_1q(U, 1,0, 0,0,  0,0, 1,0);
@@ -183,6 +221,55 @@ extern "C" void tc_gate_matrix_2q(tc_gate_type_t type, const float* params,
             SET(1,1, 1,0);
             SET(2,2, kInvSqrt2,0); SET(2,3,  kInvSqrt2,0);
             SET(3,2, kInvSqrt2,0); SET(3,3, -kInvSqrt2,0);
+            break;
+        }
+        case TC_GATE_ISWAP:
+            /* iSWAP: swap |01⟩↔|10⟩ with phase i:
+             *   [1, 0, 0, 0]
+             *   [0, 0, i, 0]
+             *   [0, i, 0, 0]
+             *   [0, 0, 0, 1] */
+            SET(0,0, 1,0);
+            SET(1,2, 0,1);
+            SET(2,1, 0,1);
+            SET(3,3, 1,0);
+            break;
+        case TC_GATE_ZZ: {
+            /* exp(-iθ/2 Z⊗Z) = diag(e^{-iθ/2}, e^{iθ/2}, e^{iθ/2}, e^{-iθ/2}). */
+            const float t = params[0] * 0.5f;
+            const float c = std::cos(t), s = std::sin(t);
+            SET(0,0, c,-s);
+            SET(1,1, c, s);
+            SET(2,2, c, s);
+            SET(3,3, c,-s);
+            break;
+        }
+        case TC_GATE_XX: {
+            /* exp(-iθ/2 X⊗X). c = cos(θ/2), s = sin(θ/2).
+             *   [c, 0, 0, -is]
+             *   [0, c, -is, 0]
+             *   [0, -is, c, 0]
+             *   [-is, 0, 0, c] */
+            const float t = params[0] * 0.5f;
+            const float c = std::cos(t), s = std::sin(t);
+            SET(0,0, c,0);   SET(0,3, 0,-s);
+            SET(1,1, c,0);   SET(1,2, 0,-s);
+            SET(2,1, 0,-s);  SET(2,2, c,0);
+            SET(3,0, 0,-s);  SET(3,3, c,0);
+            break;
+        }
+        case TC_GATE_YY: {
+            /* exp(-iθ/2 Y⊗Y).
+             *   [c, 0, 0, +is]
+             *   [0, c, -is, 0]
+             *   [0, -is, c, 0]
+             *   [+is, 0, 0, c] */
+            const float t = params[0] * 0.5f;
+            const float c = std::cos(t), s = std::sin(t);
+            SET(0,0, c,0);   SET(0,3, 0, s);
+            SET(1,1, c,0);   SET(1,2, 0,-s);
+            SET(2,1, 0,-s);  SET(2,2, c,0);
+            SET(3,0, 0, s);  SET(3,3, c,0);
             break;
         }
         default:
@@ -279,6 +366,8 @@ static int is_2q_gate(tc_gate_type_t t) {
     switch (t) {
         case TC_GATE_CNOT: case TC_GATE_CY:  case TC_GATE_CZ: case TC_GATE_SWAP:
         case TC_GATE_CRX:  case TC_GATE_CRY: case TC_GATE_CRZ: case TC_GATE_CH:
+        case TC_GATE_ISWAP:
+        case TC_GATE_XX:   case TC_GATE_YY:  case TC_GATE_ZZ:
             return 1;
         default:
             return 0;
