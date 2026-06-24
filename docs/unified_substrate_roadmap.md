@@ -28,9 +28,9 @@ Tensorcore's mandate: be the **single C/Eshkol math substrate** that every sibli
 
 | op | tensorcore | QGTL has | moonlab has | priority |
 |---|:---:|:---:|:---:|:---:|
-| Pauli gates (X, Y, Z, H, S, T, RX, RY, RZ) | ✗ | ✓ (`quantum_gate_operations.h`) | ✓ | **HIGH** |
-| CNOT, CZ, SWAP (2-qubit gates) | ✗ | ✓ | ✓ | **HIGH** |
-| State-vector apply_gate (bit-twiddling on amplitudes) | ✗ | ✓ (`quantum_circuit_operations.h`) | ✓ | **HIGH** |
+| Pauli gates (X, Y, Z, H, S, T, RX, RY, RZ) | ✓ | ✓ (`quantum_gate_operations.h`) | ✓ | shipped (`quantum_gates.h`/`quantum_gates_cpu.cpp`; tc_gate_type_t enum values match QGTL's gate_type_t) |
+| CNOT, CZ, SWAP (2-qubit gates) | ✓ | ✓ | ✓ | shipped (same file; row-major interleaved-complex 4x4) |
+| State-vector apply_gate (bit-twiddling on amplitudes) | ✓ | ✓ (`quantum_circuit_operations.h`) | ✓ | shipped (`tc_qstate_apply_1q_unitary` / `tc_qstate_apply_2q_unitary`; bit-pair sweep, fp32 interleaved complex) |
 | Density matrix evolve (Lindblad / open systems) | ✗ | ✓ | ✓ | MED |
 | Trotter step (e^{-iHt} via Suzuki decomp) | ✗ | ✓ (`quantum_circuit_creation.h`) | ✓ | MED |
 | Quantum geometric tensor (QGT, Fubini-Study) | ✗ | ✓ (`quantum_geometric_metric.h`) | ✗ | **HIGH** |
@@ -56,7 +56,7 @@ Tensorcore's mandate: be the **single C/Eshkol math substrate** that every sibli
 | op | tensorcore | priority |
 |---|:---:|:---:|
 | tc_remote_tensor_fetch (TCP, fp16/raw bytes) | ✓ | shipped |
-| tc_remote_collective (AllReduce, AllGather, Broadcast across N peers) | ✗ | **HIGH** |
+| tc_remote_collective (AllReduce, AllGather, Broadcast across N peers) | ✓ | shipped (`mesh_collective.h`/`.cpp`; centralised rank-0 reduce with per-collective snapshot cache + rendezvous retry; fork-based 2-peer test ALL PASS) |
 | tc_remote_shard (split tensor across N peers, owner-based routing) | ✗ | **HIGH** |
 | DiLoCo gradient sync (every K local steps → cross-machine sync) | ~ documented | MED |
 | Mesh resource scheduler integration (`scripts/mesh_resource_scheduler.py` → C-callable) | ~ Python | MED |
