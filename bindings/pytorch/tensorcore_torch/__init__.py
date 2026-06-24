@@ -31,23 +31,51 @@ def _privateuse1_backend_name() -> Optional[str]:
     return str(getter())
 
 
+_PRIVATEUSE1_FAILURE_REASON: Optional[str] = None
+
+
+def _record_privateuse1_failure(reason: str) -> None:
+    global _PRIVATEUSE1_FAILURE_REASON
+    _PRIVATEUSE1_FAILURE_REASON = reason
+
+
 def _ensure_privateuse1_name() -> bool:
     current = _privateuse1_backend_name()
     if current == _BACKEND_NAME:
         return True
     if current not in (None, _DEFAULT_PRIVATEUSE1_NAME):
+        _record_privateuse1_failure(
+            f"PrivateUse1 backend name is already claimed as {current!r} by another "
+            f"package; cannot rename to {_BACKEND_NAME!r}. The tensorcore PyTorch "
+            "bridge will fall back to CPU/CUDA dispatch only."
+        )
         return False
 
     rename = getattr(torch.utils, "rename_privateuse1_backend", None)
     if rename is None:
+        _record_privateuse1_failure(
+            f"torch.utils.rename_privateuse1_backend is not available in this PyTorch "
+            f"build (torch=={getattr(torch, '__version__', '?')}). The tensorcore "
+            "bridge requires PyTorch 2.0+; PrivateUse1 features disabled."
+        )
         return False
 
     try:
         rename(_BACKEND_NAME)
-    except RuntimeError:
+    except RuntimeError as exc:
         if _privateuse1_backend_name() != _BACKEND_NAME:
+            _record_privateuse1_failure(
+                f"rename_privateuse1_backend({_BACKEND_NAME!r}) raised {exc!r} and the "
+                "backend name did not change; PrivateUse1 dispatch will be unavailable."
+            )
             raise
-    return _privateuse1_backend_name() == _BACKEND_NAME
+    if _privateuse1_backend_name() == _BACKEND_NAME:
+        return True
+    _record_privateuse1_failure(
+        f"rename_privateuse1_backend did not error but the backend name resolved to "
+        f"{_privateuse1_backend_name()!r}, not {_BACKEND_NAME!r}. PrivateUse1 features disabled."
+    )
+    return False
 
 
 def _device_index(device: Any = None) -> int:
@@ -192,7 +220,19 @@ def _ensure_torch_backend_module() -> bool:
 
 _PYTORCH_BACKEND_REGISTERED = _ensure_torch_backend_module()
 
+if not _PYTORCH_BACKEND_REGISTERED and _PRIVATEUSE1_FAILURE_REASON:
+    import warnings
+    warnings.warn(
+        f"tensorcore_torch: PrivateUse1 backend registration failed: "
+        f"{_PRIVATEUSE1_FAILURE_REASON} "
+        f"matmul on CPU/CUDA via tc_gemm still works; "
+        f"to_tensorcore() / to_cpu() and PrivateUse1 tensors will not.",
+        RuntimeWarning,
+        stacklevel=2,
+    )
+
 from ._C import (  # noqa: E402
+    cuda_bridge_available,
     default_matmul_enabled,
     is_matmul_eligible,
     last_backend_name,
@@ -206,6 +246,7 @@ from ._C import (  # noqa: E402
 )
 
 __all__ = [
+    "cuda_bridge_available",
     "default_matmul_enabled",
     "is_matmul_eligible",
     "last_backend_name",
@@ -214,6 +255,7 @@ __all__ = [
     "matmul_eligibility",
     "privateuse1_backend_name",
     "pytorch_backend_report",
+    "privateuse1_registration_failure",
     "pytorch_backend_registered",
     "pytorch_backend_state",
     "set_default_matmul",
@@ -225,6 +267,17 @@ __all__ = [
 def pytorch_backend_registered() -> bool:
     """Return whether import registered ``torch.tensorcore`` in this process."""
     return _PYTORCH_BACKEND_REGISTERED
+
+
+def privateuse1_registration_failure() -> Optional[str]:
+    """Return the explicit reason PrivateUse1 registration failed, or None.
+
+    None means registration either succeeded or was not attempted. Callers
+    that need PrivateUse1 (host-memory tensors, ``to_tensorcore``) can use
+    this to give end users an actionable error instead of a confusing
+    silent fallback.
+    """
+    return _PRIVATEUSE1_FAILURE_REASON
 
 
 def pytorch_backend_state() -> Dict[str, Any]:

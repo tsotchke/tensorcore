@@ -74,6 +74,109 @@ oracles:
         label: Metal 4 TensorOps runtime path is covered on M5
         action: run_m5_tensorops_runtime_smoke
 
+  - name: pytorch-bridge-runtime-evidence
+    target: pytorch-bridge-runtime-evidence
+    aliases:
+      - pytorch-bridge
+      - tensorcore-pytorch-bridge
+    criteria:
+      - id: pytorch_bridge_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: PyTorch bridge runtime evidence is present
+        action: run_check_pytorch_bridge_runtime
+
+      - id: pytorch_bridge_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: PyTorch bridge runtime is failure-free
+        action: fix_pytorch_bridge_runtime_failure
+
+      - id: pytorch_bridge_cuda_runtime_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.pytorch_bridge_cuda.runtime_status]
+          event_values: [passed, skipped_no_gpu]
+        severity: high
+        label: PyTorch bridge CUDA runtime is covered (or explicitly skipped)
+        action: run_pytorch_bridge_smoke
+
+      - id: pytorch_bridge_matmul_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.pytorch_bridge_cuda.probes.matmul_2d.last_backend]
+          # Accept any GEMM backend tensorcore actually dispatches to:
+          #   cuda            — NVIDIA path (cosbox/GCP)
+          #   hip             — AMD path
+          #   accelerate_cpu  — Apple Accelerate framework (Mac fp32 BLAS)
+          #   cpu_blas        — Generic BLAS link (Linux OpenBLAS, etc.)
+          #   cpu_cblas       — Generic CBLAS link
+          #   portable_cpu    — Always-available fallback C++ loop (correct,
+          #                     just unaccelerated)
+          # The set covers every host where tensorcore is expected to run,
+          # while excluding "none" (which means the bridge didn't engage at all).
+          event_values: [cuda, hip, accelerate_cpu, cpu_blas, cpu_cblas, portable_cpu]
+        severity: high
+        label: aten::matmul routes through tc_gemm
+        action: rebuild_bridge_against_tc_enable_cuda
+
+      - id: pytorch_bridge_matmul_3d_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.pytorch_bridge_cuda.probes.matmul_3d_x_2d_with_grad.last_backend]
+          # Accept any GEMM backend tensorcore actually dispatches to:
+          #   cuda            — NVIDIA path (cosbox/GCP)
+          #   hip             — AMD path
+          #   accelerate_cpu  — Apple Accelerate framework (Mac fp32 BLAS)
+          #   cpu_blas        — Generic BLAS link (Linux OpenBLAS, etc.)
+          #   cpu_cblas       — Generic CBLAS link
+          #   portable_cpu    — Always-available fallback C++ loop (correct,
+          #                     just unaccelerated)
+          # The set covers every host where tensorcore is expected to run,
+          # while excluding "none" (which means the bridge didn't engage at all).
+          event_values: [cuda, hip, accelerate_cpu, cpu_blas, cpu_cblas, portable_cpu]
+        severity: high
+        label: 3-D x 2-D matmul (nn.Linear shape) routes through bridge with autograd
+        action: fix_tc_matmul_autograd_extended
+
+      - id: pytorch_bridge_bmm_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.pytorch_bridge_cuda.probes.bmm_3d_with_grad.last_backend]
+          # Accept any GEMM backend tensorcore actually dispatches to:
+          #   cuda            — NVIDIA path (cosbox/GCP)
+          #   hip             — AMD path
+          #   accelerate_cpu  — Apple Accelerate framework (Mac fp32 BLAS)
+          #   cpu_blas        — Generic BLAS link (Linux OpenBLAS, etc.)
+          #   cpu_cblas       — Generic CBLAS link
+          #   portable_cpu    — Always-available fallback C++ loop (correct,
+          #                     just unaccelerated)
+          # The set covers every host where tensorcore is expected to run,
+          # while excluding "none" (which means the bridge didn't engage at all).
+          event_values: [cuda, hip, accelerate_cpu, cpu_blas, cpu_cblas, portable_cpu]
+        severity: high
+        label: aten::bmm routes through tc_gemm (attention QK^T / attn @ V)
+        action: fix_tc_bmm_dispatch
+
+      - id: pytorch_bridge_einsum_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.pytorch_bridge_cuda.probes.einsum_attention_qkt.last_backend]
+          # Accept any GEMM backend tensorcore actually dispatches to:
+          #   cuda            — NVIDIA path (cosbox/GCP)
+          #   hip             — AMD path
+          #   accelerate_cpu  — Apple Accelerate framework (Mac fp32 BLAS)
+          #   cpu_blas        — Generic BLAS link (Linux OpenBLAS, etc.)
+          #   cpu_cblas       — Generic CBLAS link
+          #   portable_cpu    — Always-available fallback C++ loop (correct,
+          #                     just unaccelerated)
+          # The set covers every host where tensorcore is expected to run,
+          # while excluding "none" (which means the bridge didn't engage at all).
+          event_values: [cuda, hip, accelerate_cpu, cpu_blas, cpu_cblas, portable_cpu]
+        severity: high
+        label: torch.einsum 'bhid,bhjd->bhij' attention pattern routes through bridge
+        action: verify_einsum_to_bmm_decomposition
+
   - name: eshkol-bridge-runtime-evidence
     target: eshkol-bridge-runtime-evidence
     aliases:

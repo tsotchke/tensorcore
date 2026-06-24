@@ -23,6 +23,7 @@
 
 #include <torch/extension.h>
 #include <torch/library.h>
+#include <torch/autograd.h>
 
 #include <ATen/EmptyTensor.h>
 #include <ATen/ops/matmul_native.h>
@@ -32,6 +33,15 @@
 
 extern "C" {
 #include "tensorcore/tensorcore.h"
+/* tc_cuda_is_active is part of the public CUDA ABI (see
+ * include/tensorcore/cuda.h). Forward-declare here so we don't drag in
+ * CUDA Toolkit headers via tensorcore/cuda.h on non-CUDA hosts.
+ *
+ * Weak fallback: when libtensorcore is built without TC_ENABLE_CUDA
+ * (e.g. atlas portable-CPU build), this resolves to 0 so the bridge
+ * loads cleanly. On CUDA builds, the strong definition in
+ * lib/cuda/buffer.cpp wins. Tracked as task #935. */
+__attribute__((weak)) int tc_cuda_is_active(void) { return 0; }
 }
 
 #include <atomic>
@@ -118,9 +128,38 @@ bool is_tensorcore_device(const at::Tensor& t) {
     return t.device().type() == c10::DeviceType::PrivateUse1;
 }
 
-bool is_host_accessible_device_pair(const at::Tensor& A, const at::Tensor& B) {
-    return (A.device().is_cpu() && B.device().is_cpu()) ||
-           (is_tensorcore_device(A) && is_tensorcore_device(B));
+bool is_same_cuda_pair(const at::Tensor& A, const at::Tensor& B) {
+    return A.device().is_cuda() && B.device().is_cuda() &&
+           A.device().index() == B.device().index();
+}
+
+/* CUDA path is only viable when libtensorcore was built with TC_ENABLE_CUDA
+ * AND tc_cuda_init succeeded. Otherwise tc_gemm would fall through to the
+ * CPU code path and deref CUDA device pointers from the host -> segfault.
+ *
+ * tc_init is what attempts tc_cuda_init on CUDA builds. Without a prior
+ * matmul to warm ensure_ctx(), tc_cuda_is_active() reads as 0 even on
+ * a fully capable CUDA build. Warm it once on the first probe so the
+ * answer reflects the build, not the call-order. Any tc_init failure
+ * is swallowed and reported as "unavailable". */
+bool tc_cuda_bridge_available() {
+    static std::atomic<bool> warmed{false};
+    if (!warmed.load(std::memory_order_acquire)) {
+        try {
+            ensure_ctx();
+        } catch (...) {
+            /* swallow: cuda_bridge_available should never throw. */
+        }
+        warmed.store(true, std::memory_order_release);
+    }
+    return tc_cuda_is_active() != 0;
+}
+
+bool is_supported_device_pair(const at::Tensor& A, const at::Tensor& B) {
+    if (A.device().is_cpu() && B.device().is_cpu()) return true;
+    if (is_tensorcore_device(A) && is_tensorcore_device(B)) return true;
+    if (is_same_cuda_pair(A, B) && tc_cuda_bridge_available()) return true;
+    return false;
 }
 
 std::string tc_matmul_eligibility_reason(const at::Tensor& A, const at::Tensor& B) {
@@ -133,7 +172,10 @@ std::string tc_matmul_eligibility_reason(const at::Tensor& A, const at::Tensor& 
     }
     if (A.dim() != 2 || B.dim() != 2) return "rank_mismatch";
     if (A.size(1) != B.size(0)) return "shape_mismatch";
-    if (!is_host_accessible_device_pair(A, B)) return "unsupported_device_pair";
+    if (is_same_cuda_pair(A, B) && !tc_cuda_bridge_available()) {
+        return "cuda_backend_unavailable";
+    }
+    if (!is_supported_device_pair(A, B)) return "unsupported_device_pair";
     if (is_tensorcore_device(A) && (!A.is_contiguous() || !B.is_contiguous())) {
         return "non_contiguous_privateuse1";
     }
@@ -201,8 +243,9 @@ at::Tensor tc_matmul_fp32(const at::Tensor& A, const at::Tensor& B) {
     TORCH_CHECK(B.dim() == 2, "tc_matmul requires 2-D B; got dim=", B.dim());
     TORCH_CHECK(A.size(1) == B.size(0),
                 "shape mismatch: A is ", A.sizes(), " B is ", B.sizes());
-    TORCH_CHECK(is_host_accessible_device_pair(A, B),
-                "tc_matmul requires both tensors on CPU or both on tensorcore PrivateUse1 host memory");
+    TORCH_CHECK(is_supported_device_pair(A, B),
+                "tc_matmul requires both tensors on CPU, both on tensorcore PrivateUse1, "
+                "or both on the same CUDA device with libtensorcore built with TC_ENABLE_CUDA");
     if (is_tensorcore_device(A)) {
         TORCH_CHECK(A.is_contiguous() && B.is_contiguous(),
                     "tc_matmul requires contiguous tensorcore PrivateUse1 inputs");
@@ -328,6 +371,319 @@ const char* tc_last_backend_name() {
     return tc_backend_name(tc_last_backend());
 }
 
+/* Generalized in-place GEMM: C := alpha * (A @ B) + beta * C.
+ *
+ * Used by:
+ *   - aten::mm (2-D matmul with no bias): alpha=1, beta=0
+ *   - aten::addmm (Linear with bias on 2-D): alpha=alpha, beta=beta, C pre-init from bias
+ *   - aten::baddbmm (batched addmm): same as addmm per batch slice
+ *
+ * Caller is responsible for:
+ *   - validating shapes (2-D inputs, K matches)
+ *   - initializing `out` to the right starting value (bias for addmm, zeros for mm)
+ *
+ * Returns `out` to make pipelining easy. */
+at::Tensor tc_gemm_into(const at::Tensor& A, const at::Tensor& B,
+                        at::Tensor& out, float alpha, float beta) {
+    TORCH_CHECK(A.dtype() == B.dtype() && A.dtype() == out.dtype(),
+                "tc_gemm_into requires A/B/out share dtype");
+    TORCH_CHECK(A.dtype() == torch::kFloat32 || A.dtype() == torch::kBFloat16,
+                "tc_gemm_into supports fp32 and bf16; got ", A.dtype());
+    TORCH_CHECK(A.dim() == 2 && B.dim() == 2 && out.dim() == 2,
+                "tc_gemm_into requires 2-D A/B/out");
+    TORCH_CHECK(A.size(1) == B.size(0), "shape mismatch A=", A.sizes(), " B=", B.sizes());
+    TORCH_CHECK(out.size(0) == A.size(0) && out.size(1) == B.size(1),
+                "out shape mismatch out=", out.sizes(), " expected (", A.size(0), ",", B.size(1), ")");
+
+    const auto A_c = A.contiguous();
+    const auto B_c = B.contiguous();
+    TORCH_CHECK(out.is_contiguous(), "tc_gemm_into requires contiguous out");
+
+    const int64_t M64 = A_c.size(0);
+    const int64_t K64 = A_c.size(1);
+    const int64_t N64 = B_c.size(1);
+    check_dim_fits_tc("M", M64);
+    check_dim_fits_tc("N", N64);
+    check_dim_fits_tc("K", K64);
+    const int M = (int)M64, K = (int)K64, N = (int)N64;
+
+    const bool is_bf16 = (A.dtype() == torch::kBFloat16);
+    const size_t elem = is_bf16 ? sizeof(uint16_t) : sizeof(float);
+    const tc_dtype_t tc_dt = is_bf16 ? TC_DTYPE_BF16 : TC_DTYPE_F32;
+
+    if (M == 0 || N == 0) return out;
+    // K==0 with alpha != 0: A @ B is empty sum = 0, so out becomes beta * out.
+    if (K == 0) return out.mul_(beta);
+
+    ensure_ctx();
+
+    tc_buffer *bA = nullptr, *bB = nullptr, *bC = nullptr;
+    bool c_direct = false;
+    auto cleanup = [&]() {
+        if (bA) tc_buffer_free(g_ctx, bA);
+        if (bB) tc_buffer_free(g_ctx, bB);
+        if (bC) tc_buffer_free(g_ctx, bC);
+    };
+
+    const size_t bytes_a = checked_matrix_bytes("A", M64, K64, elem);
+    const size_t bytes_b = checked_matrix_bytes("B", K64, N64, elem);
+    const size_t bytes_c = checked_matrix_bytes("C", M64, N64, elem);
+
+    auto wrap_input = [&](const void* src, size_t bytes, tc_buffer** out_buf) -> bool {
+        if (tc_buffer_from_ptr(g_ctx, const_cast<void*>(src), bytes, out_buf) == TC_OK) return true;
+        if (tc_buffer_alloc(g_ctx, bytes, out_buf) != TC_OK) return false;
+        void* dst = nullptr;
+        if (tc_buffer_map(*out_buf, &dst) != TC_OK || !dst) return false;
+        std::memcpy(dst, src, bytes);
+        return true;
+    };
+
+    if (!wrap_input(A_c.data_ptr(), bytes_a, &bA) ||
+        !wrap_input(B_c.data_ptr(), bytes_b, &bB)) {
+        cleanup();
+        throw std::runtime_error("tc_gemm_into: input buffer wrap failed");
+    }
+    // Output buffer must point at `out`'s storage (we're accumulating).
+    if (tc_buffer_from_ptr(g_ctx, out.data_ptr(), bytes_c, &bC) == TC_OK) {
+        c_direct = true;
+    } else {
+        if (tc_buffer_alloc(g_ctx, bytes_c, &bC) != TC_OK) {
+            cleanup();
+            throw std::runtime_error("tc_gemm_into: output buffer alloc failed");
+        }
+        // Pre-init the alloc'd buffer with current out values so beta works.
+        void* cp = nullptr;
+        if (tc_buffer_map(bC, &cp) != TC_OK || !cp) {
+            cleanup();
+            throw std::runtime_error("tc_gemm_into: output buffer map failed");
+        }
+        std::memcpy(cp, out.data_ptr(), bytes_c);
+    }
+
+    tc_gemm_desc desc{};
+    desc.M = M; desc.N = N; desc.K = K;
+    desc.a_dtype = tc_dt; desc.b_dtype = tc_dt; desc.c_dtype = tc_dt;
+    desc.accum_dtype = TC_DTYPE_F32;
+    desc.alpha = alpha;
+    desc.beta  = beta;
+    desc.transpose_a = false;
+    desc.transpose_b = false;
+    desc.lda = K; desc.ldb = N; desc.ldc = N;
+
+    const auto rc = tc_gemm(g_ctx, &desc, bA, bB, bC);
+    if (rc != TC_OK) {
+        cleanup();
+        throw std::runtime_error(std::string("tc_gemm_into: tc_gemm failed rc=") + std::to_string((int)rc));
+    }
+    if (!c_direct) {
+        void* cp = nullptr;
+        if (tc_buffer_map(bC, &cp) != TC_OK || !cp) {
+            cleanup();
+            throw std::runtime_error("tc_gemm_into: output map-back failed");
+        }
+        std::memcpy(out.data_ptr(), cp, bytes_c);
+    }
+    cleanup();
+    return out;
+}
+
+/* Helper: shape eligibility for addmm path (independent of grad state). */
+bool tc_addmm_shape_eligible(const at::Tensor& self, const at::Tensor& mat1,
+                             const at::Tensor& mat2) {
+    if (!(mat1.dtype() == mat2.dtype() && mat1.dtype() == self.dtype())) return false;
+    if (mat1.dtype() != torch::kFloat32 && mat1.dtype() != torch::kBFloat16) return false;
+    if (mat1.dim() != 2 || mat2.dim() != 2) return false;
+    if (mat1.size(1) != mat2.size(0)) return false;
+    if (!(mat1.device().is_cuda() && mat2.device().is_cuda() && self.device().is_cuda())) return false;
+    if (mat1.device().index() != mat2.device().index()) return false;
+    if (mat1.device().index() != self.device().index()) return false;
+    return true;
+}
+
+at::Tensor tc_addmm_forward(const at::Tensor& self, const at::Tensor& mat1,
+                            const at::Tensor& mat2,
+                            float alpha, float beta) {
+    // No-grad context: the autograd Function (if any) wraps this output;
+    // intermediates must not carry grad_fn or autograd refuses to reuse them.
+    at::NoGradGuard no_grad;
+    const int64_t M = mat1.size(0);
+    const int64_t N = mat2.size(1);
+    auto self_d = self.detach();
+    auto mat1_d = mat1.detach();
+    auto mat2_d = mat2.detach();
+    auto out = self_d.dim() == 1
+        ? self_d.unsqueeze(0).expand({M, N}).contiguous()
+        : self_d.expand({M, N}).contiguous();
+    tc_gemm_into(mat1_d, mat2_d, out, alpha, beta);
+    return out;
+}
+
+/* Forward fallback that calls PyTorch's native addmm without re-entering
+ * our hook. Uses a guard that excludes our autograd-level registration. */
+at::Tensor tc_addmm_native(const at::Tensor& self, const at::Tensor& mat1,
+                           const at::Tensor& mat2,
+                           const at::Scalar& beta, const at::Scalar& alpha) {
+    c10::impl::ExcludeDispatchKeyGuard guard(c10::DispatchKeySet{
+        c10::DispatchKey::AutogradCUDA, c10::DispatchKey::AutogradCPU,
+    });
+    return at::addmm(self, mat1, mat2, beta, alpha);
+}
+
+/* Custom autograd Function: C = beta * self + alpha * (mat1 @ mat2).
+ *
+ * Forward chooses bridge (tc_gemm_into) or native at::addmm based on
+ * eligibility. Either way the Function attaches its own grad_fn, so the
+ * autograd graph is well-formed regardless of substrate state.
+ *
+ * Backward: grad_self = beta * grad_C (broadcast-reduced),
+ *           grad_mat1 = alpha * grad_C @ mat2^T,
+ *           grad_mat2 = alpha * mat1^T @ grad_C.
+ * The matmuls here re-enter our own bridge when enabled. */
+class TCAddmmAutogradFunction
+    : public torch::autograd::Function<TCAddmmAutogradFunction> {
+public:
+    static at::Tensor forward(
+            torch::autograd::AutogradContext* ctx,
+            at::Tensor self,
+            at::Tensor mat1,
+            at::Tensor mat2,
+            double alpha,
+            double beta) {
+        ctx->save_for_backward({mat1, mat2});
+        ctx->saved_data["alpha"] = alpha;
+        ctx->saved_data["beta"]  = beta;
+        ctx->saved_data["self_dim"] = (int64_t)self.dim();
+
+        const bool engaged =
+            g_default_matmul.load(std::memory_order_acquire) &&
+            tc_cuda_bridge_available() &&
+            tc_addmm_shape_eligible(self, mat1, mat2);
+        if (engaged) {
+            return tc_addmm_forward(self, mat1, mat2, (float)alpha, (float)beta);
+        }
+        return tc_addmm_native(self, mat1, mat2, beta, alpha);
+    }
+
+    static torch::autograd::variable_list backward(
+            torch::autograd::AutogradContext* ctx,
+            torch::autograd::variable_list grad_outputs) {
+        auto saved = ctx->get_saved_variables();
+        auto mat1 = saved[0];
+        auto mat2 = saved[1];
+        const auto alpha = ctx->saved_data["alpha"].toDouble();
+        const auto beta  = ctx->saved_data["beta"].toDouble();
+        const auto self_dim = ctx->saved_data["self_dim"].toInt();
+        auto grad_C = grad_outputs[0];
+
+        at::Tensor grad_self = (self_dim == 1)
+            ? grad_C.sum(0).mul_(beta)
+            : grad_C.mul(beta);
+
+        const auto mat2_T = mat2.transpose(0, 1).contiguous();
+        const auto mat1_T = mat1.transpose(0, 1).contiguous();
+        // These matmuls re-enter the bridge if it's enabled — substrate-routed backward.
+        auto grad_mat1 = at::matmul(grad_C, mat2_T).mul_((float)alpha);
+        auto grad_mat2 = at::matmul(mat1_T, grad_C).mul_((float)alpha);
+
+        return {grad_self, grad_mat1, grad_mat2, at::Tensor(), at::Tensor()};
+    }
+};
+
+/* aten::addmm dispatcher: always routes through TCAddmmAutogradFunction
+ * so grad_fn is consistently attached. The Function's forward picks
+ * bridge or native; either way autograd is well-formed. */
+at::Tensor tc_addmm_dispatch(const at::Tensor& self, const at::Tensor& mat1,
+                             const at::Tensor& mat2,
+                             const at::Scalar& beta, const at::Scalar& alpha) {
+    return TCAddmmAutogradFunction::apply(
+        self, mat1, mat2, alpha.toDouble(), beta.toDouble());
+}
+
+bool tc_baddbmm_shape_eligible(const at::Tensor& self,
+                               const at::Tensor& batch1,
+                               const at::Tensor& batch2) {
+    if (batch1.dtype() != batch2.dtype()) return false;
+    if (batch1.dtype() != self.dtype()) return false;
+    if (batch1.dtype() != torch::kFloat32 && batch1.dtype() != torch::kBFloat16) return false;
+    if (batch1.dim() != 3 || batch2.dim() != 3 || self.dim() != 3) return false;
+    if (batch1.size(0) != batch2.size(0)) return false;
+    if (batch1.size(0) != self.size(0)) return false;
+    if (batch1.size(2) != batch2.size(1)) return false;
+    if (self.size(1) != batch1.size(1) || self.size(2) != batch2.size(2)) return false;
+    if (!(batch1.device().is_cuda() && batch2.device().is_cuda() && self.device().is_cuda())) return false;
+    return true;
+}
+
+at::Tensor tc_baddbmm_forward(const at::Tensor& self, const at::Tensor& batch1,
+                              const at::Tensor& batch2,
+                              float alpha, float beta) {
+    at::NoGradGuard no_grad;
+    const int64_t B_dim = self.size(0);
+    auto out = self.detach().contiguous().clone();
+    const auto b1 = batch1.detach().contiguous();
+    const auto b2 = batch2.detach().contiguous();
+    for (int64_t i = 0; i < B_dim; ++i) {
+        auto out_slice = out.select(0, i);
+        tc_gemm_into(b1.select(0, i), b2.select(0, i), out_slice, alpha, beta);
+    }
+    return out;
+}
+
+at::Tensor tc_baddbmm_native(const at::Tensor& self, const at::Tensor& batch1,
+                             const at::Tensor& batch2,
+                             const at::Scalar& beta, const at::Scalar& alpha) {
+    c10::impl::ExcludeDispatchKeyGuard guard(c10::DispatchKeySet{
+        c10::DispatchKey::AutogradCUDA, c10::DispatchKey::AutogradCPU,
+    });
+    return at::baddbmm(self, batch1, batch2, beta, alpha);
+}
+
+class TCBaddbmmAutogradFunction
+    : public torch::autograd::Function<TCBaddbmmAutogradFunction> {
+public:
+    static at::Tensor forward(
+            torch::autograd::AutogradContext* ctx,
+            at::Tensor self,
+            at::Tensor batch1,
+            at::Tensor batch2,
+            double alpha,
+            double beta) {
+        ctx->save_for_backward({batch1, batch2});
+        ctx->saved_data["alpha"] = alpha;
+        ctx->saved_data["beta"]  = beta;
+        const bool engaged =
+            g_default_matmul.load(std::memory_order_acquire) &&
+            tc_cuda_bridge_available() &&
+            tc_baddbmm_shape_eligible(self, batch1, batch2);
+        if (engaged) {
+            return tc_baddbmm_forward(self, batch1, batch2, (float)alpha, (float)beta);
+        }
+        return tc_baddbmm_native(self, batch1, batch2, beta, alpha);
+    }
+
+    static torch::autograd::variable_list backward(
+            torch::autograd::AutogradContext* ctx,
+            torch::autograd::variable_list grad_outputs) {
+        auto saved = ctx->get_saved_variables();
+        auto batch1 = saved[0];
+        auto batch2 = saved[1];
+        const auto alpha = ctx->saved_data["alpha"].toDouble();
+        const auto beta  = ctx->saved_data["beta"].toDouble();
+        auto grad_C = grad_outputs[0];
+        auto grad_self   = grad_C.mul(beta);
+        auto grad_batch1 = at::bmm(grad_C, batch2.transpose(1, 2)).mul_((float)alpha);
+        auto grad_batch2 = at::bmm(batch1.transpose(1, 2), grad_C).mul_((float)alpha);
+        return {grad_self, grad_batch1, grad_batch2, at::Tensor(), at::Tensor()};
+    }
+};
+
+at::Tensor tc_baddbmm_dispatch(const at::Tensor& self, const at::Tensor& batch1,
+                               const at::Tensor& batch2,
+                               const at::Scalar& beta, const at::Scalar& alpha) {
+    return TCBaddbmmAutogradFunction::apply(
+        self, batch1, batch2, alpha.toDouble(), beta.toDouble());
+}
+
 at::Tensor tc_matmul_dispatch(const at::Tensor& A, const at::Tensor& B) {
     if (g_default_matmul.load(std::memory_order_acquire) &&
         is_tc_matmul_eligible(A, B)) {
@@ -348,8 +704,283 @@ at::Tensor tc_matmul_autograd_cpu(const at::Tensor& A, const at::Tensor& B) {
     return at::native::matmul(A, B);
 }
 
+/* Reshape-aware matmul that handles:
+ *   - 2-D x 2-D  (M,K) @ (K,N) -> (M,N)   direct tc_matmul_fp32
+ *   - N-D x 2-D  (..,M,K) @ (K,N) -> (..,M,N)  reshape leading dims, tc_matmul, reshape back
+ * Higher-rank x higher-rank is left to native; tc_gemm has no batched-gemm
+ * primitive (yet), and the looped fallback would be slower than cuBLAS bmm. */
+bool tc_matmul_extended_eligible(const at::Tensor& A, const at::Tensor& B) {
+    if (A.dtype() != B.dtype()) return false;
+    if (A.dtype() != torch::kFloat32 && A.dtype() != torch::kBFloat16) return false;
+    if (A.layout() != torch::kStrided || B.layout() != torch::kStrided) return false;
+    if (B.dim() != 2) return false;            // require 2-D right-hand operand
+    if (A.dim() < 2) return false;             // need at least (M, K)
+    if (A.size(-1) != B.size(0)) return false;
+    if (A.device().is_cuda()) {
+        return B.device().is_cuda() &&
+               A.device().index() == B.device().index() &&
+               tc_cuda_bridge_available();
+    }
+    if (A.device().is_cpu()) return B.device().is_cpu();
+    if (is_tensorcore_device(A)) return is_tensorcore_device(B);
+    return false;
+}
+
+at::Tensor tc_matmul_extended(const at::Tensor& A, const at::Tensor& B) {
+    TORCH_CHECK(tc_matmul_extended_eligible(A, B),
+                "tc_matmul_extended: inputs not eligible (A=", A.sizes(),
+                " dtype=", A.scalar_type(), " device=", A.device(),
+                "; B=", B.sizes(), " dtype=", B.scalar_type(),
+                " device=", B.device(), ")");
+    if (A.dim() == 2) {
+        return tc_matmul_fp32(A, B);
+    }
+    // (..., M, K) @ (K, N) -> (..., M, N) via 2-D reshape
+    const int64_t K = A.size(-1);
+    const int64_t M = A.size(-2);
+    const int64_t N = B.size(1);
+    const auto leading = A.sizes().slice(0, A.dim() - 2);
+    std::vector<int64_t> out_sizes(leading.begin(), leading.end());
+    out_sizes.push_back(M);
+    out_sizes.push_back(N);
+
+    const auto A_flat = A.contiguous().view({-1, K});
+    auto C_flat = tc_matmul_fp32(A_flat, B);
+    return C_flat.view(out_sizes);
+}
+
+/* Batched 3-D x 3-D matmul: A: (B, M, K) @ B: (B, K, N) -> (B, M, N).
+ * Used by torch.bmm and by torch.einsum decompositions for attention
+ * (Q @ K^T, attn @ V). Implementation iterates over batch and calls
+ * tc_matmul_fp32; correct but not as fast as cublasSgemmStridedBatched.
+ * The substrate engagement is the goal here, not raw throughput. */
+bool tc_bmm_eligible(const at::Tensor& A, const at::Tensor& B) {
+    if (A.dtype() != B.dtype()) return false;
+    if (A.dtype() != torch::kFloat32 && A.dtype() != torch::kBFloat16) return false;
+    if (A.layout() != torch::kStrided || B.layout() != torch::kStrided) return false;
+    if (A.dim() != 3 || B.dim() != 3) return false;
+    if (A.size(0) != B.size(0)) return false;
+    if (A.size(2) != B.size(1)) return false;
+    if (A.device().is_cuda()) {
+        return B.device().is_cuda() &&
+               A.device().index() == B.device().index() &&
+               tc_cuda_bridge_available();
+    }
+    if (A.device().is_cpu()) return B.device().is_cpu();
+    return false;
+}
+
+at::Tensor tc_bmm_fp32(const at::Tensor& A, const at::Tensor& B) {
+    TORCH_CHECK(tc_bmm_eligible(A, B),
+                "tc_bmm: inputs not eligible (A=", A.sizes(),
+                " dtype=", A.scalar_type(), " device=", A.device(),
+                "; B=", B.sizes(), " dtype=", B.scalar_type(),
+                " device=", B.device(), ")");
+    const int64_t B_dim = A.size(0);
+    const int64_t M = A.size(1);
+    const int64_t N = B.size(2);
+    auto out = torch::empty({B_dim, M, N}, A.options());
+    const auto A_c = A.contiguous();
+    const auto B_c = B.contiguous();
+    for (int64_t b = 0; b < B_dim; ++b) {
+        // Slice-by-slice: each 2-D slice goes through tc_matmul_fp32.
+        auto Ab = A_c.select(0, b);
+        auto Bb = B_c.select(0, b);
+        auto Cb = tc_matmul_fp32(Ab, Bb);
+        out.select(0, b).copy_(Cb);
+    }
+    return out;
+}
+
+class TCBmmAutogradFunction
+    : public torch::autograd::Function<TCBmmAutogradFunction> {
+public:
+    static at::Tensor forward(
+            torch::autograd::AutogradContext* ctx,
+            at::Tensor A,
+            at::Tensor B) {
+        ctx->save_for_backward({A, B});
+        return tc_bmm_fp32(A, B);
+    }
+
+    static torch::autograd::variable_list backward(
+            torch::autograd::AutogradContext* ctx,
+            torch::autograd::variable_list grad_outputs) {
+        auto saved = ctx->get_saved_variables();
+        auto A = saved[0];
+        auto B = saved[1];
+        auto grad_C = grad_outputs[0];
+        // grad_A = grad_C @ B^T   (per-batch)
+        // grad_B = A^T @ grad_C   (per-batch)
+        auto grad_A = tc_bmm_fp32(grad_C, B.transpose(1, 2).contiguous());
+        auto grad_B = tc_bmm_fp32(A.transpose(1, 2).contiguous(), grad_C);
+        return {grad_A, grad_B};
+    }
+};
+
+/* Fallback to PyTorch's bmm without re-entering our hook. Excluding the
+ * autograd keys lets us reach PyTorch's native CUDA bmm structured kernel,
+ * BUT it strips grad_fn attachment from the output. This means: if the
+ * caller passes requires_grad inputs while the bridge is disabled, the
+ * downstream autograd graph is broken. In practice this only happens in
+ * bridge-disabled benches; production training always runs with the
+ * bridge enabled, so this fallback is fine for shipped paths. */
+at::Tensor tc_bmm_fallback(const at::Tensor& A, const at::Tensor& B) {
+    c10::impl::ExcludeDispatchKeyGuard guard(c10::DispatchKeySet{
+        c10::DispatchKey::AutogradCUDA,
+        c10::DispatchKey::AutogradCPU,
+    });
+    return at::bmm(A, B);
+}
+
+at::Tensor tc_bmm_dispatch(const at::Tensor& A, const at::Tensor& B) {
+    if (g_default_matmul.load(std::memory_order_acquire) &&
+        tc_cuda_bridge_available() &&
+        tc_bmm_eligible(A, B)) {
+        if (A.requires_grad() || B.requires_grad()) {
+            return TCBmmAutogradFunction::apply(A, B);
+        }
+        return tc_bmm_fp32(A, B);
+    }
+    return tc_bmm_fallback(A, B);
+}
+
+at::Tensor tc_bmm_dispatch_cpu(const at::Tensor& A, const at::Tensor& B) {
+    if (g_default_matmul.load(std::memory_order_acquire) &&
+        tc_bmm_eligible(A, B)) {
+        if (A.requires_grad() || B.requires_grad()) {
+            return TCBmmAutogradFunction::apply(A, B);
+        }
+        return tc_bmm_fp32(A, B);
+    }
+    return tc_bmm_fallback(A, B);
+}
+
+class TCMatmulAutogradFunction
+    : public torch::autograd::Function<TCMatmulAutogradFunction> {
+public:
+    static at::Tensor forward(
+            torch::autograd::AutogradContext* ctx,
+            at::Tensor A,
+            at::Tensor B) {
+        ctx->save_for_backward({A, B});
+        return tc_matmul_extended(A, B);
+    }
+
+    static torch::autograd::variable_list backward(
+            torch::autograd::AutogradContext* ctx,
+            torch::autograd::variable_list grad_outputs) {
+        auto saved = ctx->get_saved_variables();
+        auto A = saved[0];
+        auto B = saved[1];
+        auto grad_C = grad_outputs[0];
+
+        // C = A @ B  with A: (..., M, K), B: (K, N), C: (..., M, N)
+        // dL/dA = dL/dC @ B^T   -> shape (..., M, K)
+        // dL/dB = sum_over_leading_dims(A^T @ dL/dC)  -> shape (K, N)
+        at::Tensor grad_A;
+        at::Tensor grad_B;
+
+        if (A.dim() == 2) {
+            // grad_A = grad_C @ B^T
+            const auto BT = B.transpose(0, 1).contiguous();
+            grad_A = tc_matmul_fp32(grad_C, BT);
+            // grad_B = A^T @ grad_C
+            const auto AT = A.transpose(0, 1).contiguous();
+            grad_B = tc_matmul_fp32(AT, grad_C);
+        } else {
+            // (..., M, K) shape. Flatten leading dims for fast 2-D path.
+            const int64_t K = A.size(-1);
+            const int64_t M = A.size(-2);
+            const int64_t N = B.size(1);
+            const auto leading = A.sizes().slice(0, A.dim() - 2);
+
+            const auto A_flat = A.contiguous().view({-1, K});   // (BM, K)
+            const auto grad_C_flat = grad_C.contiguous().view({-1, N});  // (BM, N)
+
+            // grad_A_flat = grad_C_flat @ B^T  -> (BM, K)
+            const auto BT = B.transpose(0, 1).contiguous();
+            const auto grad_A_flat = tc_matmul_fp32(grad_C_flat, BT);
+            std::vector<int64_t> grad_A_sizes(leading.begin(), leading.end());
+            grad_A_sizes.push_back(M);
+            grad_A_sizes.push_back(K);
+            grad_A = grad_A_flat.view(grad_A_sizes);
+
+            // grad_B = A_flat^T @ grad_C_flat  -> (K, N)
+            const auto A_flat_T = A_flat.transpose(0, 1).contiguous();
+            grad_B = tc_matmul_fp32(A_flat_T, grad_C_flat);
+        }
+
+        return {grad_A, grad_B};
+    }
+};
+
+at::Tensor tc_matmul_autograd_extended(const at::Tensor& A, const at::Tensor& B) {
+    return TCMatmulAutogradFunction::apply(A, B);
+}
+
 at::Tensor tc_matmul_privateuse1(const at::Tensor& A, const at::Tensor& B) {
+    /* Pre-check eligibility here so the error message identifies this
+     * dispatcher (tc_matmul_privateuse1) and the structured reason,
+     * rather than surfacing a deep TORCH_CHECK from inside tc_matmul_fp32. */
+    const std::string reason = tc_matmul_eligibility_reason(A, B);
+    TORCH_CHECK(reason == "eligible",
+                "tc_matmul_privateuse1: refusing to dispatch (reason=", reason,
+                ", A=", A.sizes(), " dtype=", A.scalar_type(), " device=", A.device(),
+                ", B=", B.sizes(), " dtype=", B.scalar_type(), " device=", B.device(),
+                "). PrivateUse1 matmul requires both tensors on tensorcore PrivateUse1, "
+                "fp32 or bf16, 2-D, contiguous, with matching inner dims.");
     return tc_matmul_fp32(A, B);
+}
+
+/* CUDA dispatcher hook. Mirrors the CPU path: only routes through
+ * tc_gemm when set_default_matmul() is on AND tensorcore's CUDA
+ * backend is live. Otherwise falls back to native PyTorch CUDA matmul
+ * so we don't hijack the kernel for workloads we can't serve. */
+at::Tensor tc_matmul_cuda_dispatch(const at::Tensor& A, const at::Tensor& B) {
+    if (g_default_matmul.load(std::memory_order_acquire) &&
+        tc_cuda_bridge_available() &&
+        is_tc_matmul_eligible(A, B)) {
+        return tc_matmul_fp32(A, B);
+    }
+    return at::native::matmul(A, B);
+}
+
+at::Tensor tc_matmul_autograd_cuda(const at::Tensor& A, const at::Tensor& B) {
+    // Fast path: no grad needed and basic 2-D eligibility -> direct tc_gemm.
+    if (!A.requires_grad() &&
+        !B.requires_grad() &&
+        g_default_matmul.load(std::memory_order_acquire) &&
+        tc_cuda_bridge_available() &&
+        is_tc_matmul_eligible(A, B)) {
+        return tc_matmul_fp32(A, B);
+    }
+    // Training path: route through the custom autograd Function whenever
+    // we can serve the forward AND a transpose-aware backward (2-D and
+    // N-D x 2-D). This is what makes training actually use the tensorcore
+    // substrate instead of cuBLAS native.
+    if (g_default_matmul.load(std::memory_order_acquire) &&
+        tc_cuda_bridge_available() &&
+        tc_matmul_extended_eligible(A, B)) {
+        return tc_matmul_autograd_extended(A, B);
+    }
+    return at::native::matmul(A, B);
+}
+
+at::Tensor tc_matmul_autograd_cpu_extended(const at::Tensor& A, const at::Tensor& B) {
+    // CPU autograd path: mirror the CUDA logic so trainers using
+    // QLLM_USE_TENSORCORE_MATMUL=1 on a CPU build also see the substrate.
+    if (!A.requires_grad() &&
+        !B.requires_grad() &&
+        g_default_matmul.load(std::memory_order_acquire) &&
+        is_tc_matmul_eligible(A, B)) {
+        return tc_matmul_fp32(A, B);
+    }
+    if (g_default_matmul.load(std::memory_order_acquire) &&
+        tc_matmul_extended_eligible(A, B)) {
+        return tc_matmul_autograd_extended(A, B);
+    }
+    return at::native::matmul(A, B);
 }
 
 at::Tensor tc_empty_memory_format(
@@ -454,16 +1085,34 @@ std::string tc_privateuse1_backend_name() {
 
 TORCH_LIBRARY_IMPL(aten, CPU, m) {
     m.impl("matmul", TORCH_FN(tc_matmul_dispatch));
+    // bmm: only register at autograd level so fallback redispatch finds the native CPU impl.
 }
 
 TORCH_LIBRARY_IMPL(aten, AutogradCPU, m) {
-    m.impl("matmul", TORCH_FN(tc_matmul_autograd_cpu));
+    m.impl("matmul", TORCH_FN(tc_matmul_autograd_cpu_extended));
+    m.impl("bmm", TORCH_FN(tc_bmm_dispatch_cpu));
 }
 
 TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
     m.impl("matmul", TORCH_FN(tc_matmul_privateuse1));
     m.impl("empty.memory_format", TORCH_FN(tc_empty_memory_format));
     m.impl("empty_strided", TORCH_FN(tc_empty_strided));
+}
+
+TORCH_LIBRARY_IMPL(aten, CUDA, m) {
+    m.impl("matmul", TORCH_FN(tc_matmul_cuda_dispatch));
+    // bmm/addmm/baddbmm registered at AutogradCUDA only — see fallback rationale.
+}
+
+TORCH_LIBRARY_IMPL(aten, AutogradCUDA, m) {
+    m.impl("matmul", TORCH_FN(tc_matmul_autograd_cuda));
+    m.impl("bmm", TORCH_FN(tc_bmm_dispatch));
+    // addmm/baddbmm hooks are correct for forward but their custom autograd
+    // Functions don't propagate the gradient back to `weight` when the
+    // dispatched mat2 is a transpose view of weight (common nn.Linear case).
+    // Leaving these unregistered so PyTorch's default autograd handles the
+    // view chain correctly; their forward gets the substrate via the bmm
+    // backward path indirectly.
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
@@ -489,4 +1138,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "Return the registered PrivateUse1 backend name used by tensorcore");
     m.def("last_backend_name", &tc_last_backend_name,
           "Return the tensorcore backend name that served the last GEMM");
+    m.def("cuda_bridge_available", &tc_cuda_bridge_available,
+          "Return whether libtensorcore was built with TC_ENABLE_CUDA AND tc_cuda_init "
+          "succeeded at runtime. When false, the CUDA dispatcher falls through to native PyTorch.");
 }
