@@ -73,8 +73,12 @@ bool cuda_policy_disabled(void) {
 /* CUDA-enabled builds auto-activate managed allocations once tc_cuda_init()
  * succeeds (tc_init attempts it on CUDA builds). TC_USE_CUDA_GEMM=1 remains
  * accepted for older scripts; TC_CUDA_GEMM=0 or TC_DISABLE_CUDA_GEMM=1 force
- * the host/CPU policy for debugging and A/B comparisons. */
-extern "C" TC_CUDA_INTERNAL int tc_cuda_is_active(void) {
+ * the host/CPU policy for debugging and A/B comparisons.
+ *
+ * Public ABI: declared in include/tensorcore/cuda.h. Used by the PyTorch
+ * bridge to decide whether the CUDA dispatcher can actually serve a
+ * matmul (otherwise we'd hijack the kernel and never reach cuBLAS). */
+extern "C" int tc_cuda_is_active(void) {
 #if defined(TC_ENABLE_CUDA)
     if (cuda_policy_disabled()) return 0;
     return tc_cuda_runtime_initialized() ? 1 : 0;

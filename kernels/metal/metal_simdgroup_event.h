@@ -27,10 +27,10 @@
 #include <metal_stdlib>
 using namespace metal;
 
-/* Opaque event type — the AIR runtime keeps the completion handle here. */
+/// Opaque completion handle returned by the AIR simdgroup async copy intrinsics.
 struct _simdgroup_event_t;
 
-/* AIR intrinsics. The mangled symbol names mirror MFA's GEMMHeaders.cpp. */
+/// Launch a one-dimensional device-to-threadgroup async copy for one simdgroup.
 thread _simdgroup_event_t* __metal_simdgroup_async_copy_1d(
     ulong size, ulong align,
     threadgroup void *dst,
@@ -38,6 +38,7 @@ thread _simdgroup_event_t* __metal_simdgroup_async_copy_1d(
     ulong n_elements)
     __asm("air.simdgroup_async_copy_1d.p3i8.p1i8");
 
+/// Launch a two-dimensional device-to-threadgroup async copy for one simdgroup.
 thread _simdgroup_event_t* __metal_simdgroup_async_copy_2d(
     ulong size, ulong align,
     threadgroup void *dst,
@@ -52,6 +53,7 @@ thread _simdgroup_event_t* __metal_simdgroup_async_copy_2d(
     int clamp_mode)
     __asm("air.simdgroup_async_copy_2d.p3i8.p1i8");
 
+/// Launch a two-dimensional threadgroup-to-device async copy for one simdgroup.
 thread _simdgroup_event_t* __metal_simdgroup_async_copy_2d_to_device(
     ulong size, ulong align,
     device void *dst,
@@ -65,6 +67,7 @@ thread _simdgroup_event_t* __metal_simdgroup_async_copy_2d_to_device(
     long2 offset_clip)
     __asm("air.simdgroup_async_copy_2d.p1i8.p3i8");
 
+/// Wait for one or more AIR simdgroup async copy completion handles.
 void __metal_wait_simdgroup_events(
     int count,
     thread _simdgroup_event_t **events)

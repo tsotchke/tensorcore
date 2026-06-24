@@ -69,6 +69,13 @@ typedef struct {
  * CUDA context, cuBLAS handle, and cuDNN handle (if linked) to ctx. */
 tc_status_t tc_cuda_init(tc_context* ctx);
 
+/* Return 1 if the CUDA backend is active and tc_gemm calls will route
+ * through cublas. Returns 0 on non-CUDA builds, when tc_cuda_init has
+ * not yet been called, or when the runtime policy disables CUDA via
+ * TC_DISABLE_CUDA_GEMM=1 / TC_CUDA_GEMM=0 / TC_USE_CUDA_GEMM=0. Safe to
+ * call from any thread without prior tc_init. */
+int tc_cuda_is_active(void);
+
 /* Number of CUDA devices visible to the process. 0 on non-CUDA hosts. */
 int tc_cuda_device_count(void);
 

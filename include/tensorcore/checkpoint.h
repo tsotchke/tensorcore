@@ -55,9 +55,10 @@ extern "C" {
 
 typedef uint64_t tc_checkpoint_id;
 
-/* User-supplied recompute function. Returns TC_OK on success; the runtime
- * propagates the error from tc_checkpoint_realize. user_data is owned
- * by the caller — tensorcore neither copies nor frees it. */
+/* User-supplied recompute function. checkpoint_recompute_status_t is the
+ * callback status type returned from recomputation: TC_OK on success, or an
+ * error propagated from tc_checkpoint_realize. user_data is owned by the caller
+ * -- tensorcore neither copies nor frees it. */
 typedef tc_status_t checkpoint_recompute_status_t;
 typedef checkpoint_recompute_status_t (*tc_checkpoint_recompute_fn)(void* user_data);
 
