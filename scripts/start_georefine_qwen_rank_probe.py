@@ -194,7 +194,7 @@ fi
 if [ -z "$authority_owner" ]; then
   authority_owner=georefine:qwen-rank-probe
 fi
-if [ ! -r "$cal_text" ]; then
+if [ -n "$cal_text" ] && [ ! -r "$cal_text" ]; then
   emit false calibration_text_missing 0 "$head"
   exit 1
 fi
@@ -373,11 +373,9 @@ set -- "$@" -- "$python_bin" -m experiments.georefine.m2_compress \\
   --output-dir "$run_dir" \\
   --device "$device" \\
   --dtype "$dtype" \\
-  --cal-text-file "$cal_text" \\
   --cal-tokens "$cal_tokens" \\
   --eval-text-file "$eval_text" \\
   --eval-tokens "$eval_tokens" \\
-  --cal-preset "$cal_preset" \\
   --compression-ratio "$compression_ratio" \\
   --min-rank "$min_rank" \\
   --streaming-asvd \\
@@ -408,6 +406,11 @@ set -- "$@" -- "$python_bin" -m experiments.georefine.m2_compress \\
   --require-held-out-quality \\
   --fail-on-verdict LOSSY \\
   --verbose
+if [ -n "$cal_text" ]; then
+  set -- "$@" --cal-text-file "$cal_text"
+elif [ -n "$cal_preset" ]; then
+  set -- "$@" --cal-preset "$cal_preset"
+fi
 if [ -n "$cal_images_dir" ]; then
   set -- "$@" --cal-images-dir "$cal_images_dir"
 fi
@@ -426,51 +429,131 @@ if [ "$trust_remote_code" = "1" ]; then
   set -- "$@" --trust-remote-code
 fi
 metadata_json=$(printf '{{"surface":"tensorcore_scheduler","service":"georefine-qwen-rank-probe","run_dir":"%s"}}' "$(json_escape "$run_dir")")
-set -- "$python_bin" "$lease_wrapper"
 if [ -n "$lease_helper" ]; then
   if [ ! -r "$lease_helper" ]; then
     emit false qllm_lease_helper_missing 0 "$head"
     exit 1
   fi
-  set -- "$@" --helper "$lease_helper"
 fi
-set -- "$@" \\
-  --resource "$worker_resource" \\
-  --owner "$authority_owner" \\
-  --ttl-sec "$lease_ttl_sec" \\
-  --heartbeat-failure-policy terminate \\
-  --worker-lease-mode mirror \\
-  --verify-gpu-identity \\
-  --exclusive-cuda 1 \\
-  --metadata-json "$metadata_json" \\
-  --run-intent-json "$run_intent_json" \\
-  --artifact-dir "$run_dir" \\
-  --controller-mode observe \\
-  --allowed-mutator tensorcore-georefine-reconciler \\
-  --run-target "$run_target" \\
-  --authority-resource "$resource" \\
-  --authority-lease-id "$authority_lease_id" \\
-  --authority-owner "$authority_owner" \\
-  --authority-source tensorcore-scheduler \\
-  --require-substrate-contract \\
-  --finalizer-script "$finalizer_script" \\
-  --finalizer-python "$python_bin" \\
-  --final-manifest-evidence-root "$evidence_root" \\
-  --final-manifest-output "$final_manifest_output" \\
-  --finalizer-max-size-ratio "$max_size_ratio" \\
-  --finalizer-max-ppl-delta "$quality_floor" \\
-  --finalizer-max-target-kl "$target_kl" \\
-  --finalizer-failure-policy fail \\
-  --reconciler-script "$reconciler_script" \\
-  --reconciler-python "$python_bin" \\
-  --reconciler-actor tensorcore-georefine-reconciler \\
-  --reconciler-require-active-lease \\
-  --reconciler-failure-policy terminate \\
-  -- \\
-  "$@"
 
-cd "$repo_dir"
-nohup "$@" >>"$start_log" 2>&1 &
+launch_with_lease() {{
+  if [ -n "$lease_helper" ]; then
+    "$python_bin" "$lease_wrapper" \\
+      --helper "$lease_helper" \\
+      --resource "$worker_resource" \\
+      --owner "$authority_owner" \\
+      --ttl-sec "$lease_ttl_sec" \\
+      --heartbeat-failure-policy terminate \\
+      --worker-lease-mode mirror \\
+      --verify-gpu-identity \\
+      --exclusive-cuda 1 \\
+      --metadata-json "$metadata_json" \\
+      --run-intent-json "$run_intent_json" \\
+      --artifact-dir "$run_dir" \\
+      --controller-mode observe \\
+      --allowed-mutator tensorcore-georefine-reconciler \\
+      --run-target "$run_target" \\
+      --authority-resource "$resource" \\
+      --authority-lease-id "$authority_lease_id" \\
+      --authority-owner "$authority_owner" \\
+      --authority-source tensorcore-scheduler \\
+      --require-substrate-contract \\
+      --finalizer-script "$finalizer_script" \\
+      --finalizer-python "$python_bin" \\
+      --final-manifest-evidence-root "$evidence_root" \\
+      --final-manifest-output "$final_manifest_output" \\
+      --finalizer-max-size-ratio "$max_size_ratio" \\
+      --finalizer-max-ppl-delta "$quality_floor" \\
+      --finalizer-max-target-kl "$target_kl" \\
+      --finalizer-failure-policy fail \\
+      --reconciler-script "$reconciler_script" \\
+      --reconciler-python "$python_bin" \\
+      --reconciler-actor tensorcore-georefine-reconciler \\
+      --reconciler-require-active-lease \\
+      --reconciler-failure-policy terminate \\
+      -- \\
+      "$@"
+  else
+    "$python_bin" "$lease_wrapper" \\
+      --resource "$worker_resource" \\
+      --owner "$authority_owner" \\
+      --ttl-sec "$lease_ttl_sec" \\
+      --heartbeat-failure-policy terminate \\
+      --worker-lease-mode mirror \\
+      --verify-gpu-identity \\
+      --exclusive-cuda 1 \\
+      --metadata-json "$metadata_json" \\
+      --run-intent-json "$run_intent_json" \\
+      --artifact-dir "$run_dir" \\
+      --controller-mode observe \\
+      --allowed-mutator tensorcore-georefine-reconciler \\
+      --run-target "$run_target" \\
+      --authority-resource "$resource" \\
+      --authority-lease-id "$authority_lease_id" \\
+      --authority-owner "$authority_owner" \\
+      --authority-source tensorcore-scheduler \\
+      --require-substrate-contract \\
+      --finalizer-script "$finalizer_script" \\
+      --finalizer-python "$python_bin" \\
+      --final-manifest-evidence-root "$evidence_root" \\
+      --final-manifest-output "$final_manifest_output" \\
+      --finalizer-max-size-ratio "$max_size_ratio" \\
+      --finalizer-max-ppl-delta "$quality_floor" \\
+      --finalizer-max-target-kl "$target_kl" \\
+      --finalizer-failure-policy fail \\
+      --reconciler-script "$reconciler_script" \\
+      --reconciler-python "$python_bin" \\
+      --reconciler-actor tensorcore-georefine-reconciler \\
+      --reconciler-require-active-lease \\
+      --reconciler-failure-policy terminate \\
+      -- \\
+      "$@"
+  fi
+}}
+
+run_worker_foreground() {{
+  cd "$repo_dir"
+  trap '' HUP
+  launch_with_lease "$@"
+}}
+
+if [ "${{TC_GEOREFINE_WORKER_CHILD:-0}}" = "1" ]; then
+  run_worker_foreground "$@"
+  exit $?
+fi
+
+if command -v systemd-run >/dev/null 2>&1 && [ "${{TC_GEOREFINE_DISABLE_SYSTEMD_RUN:-0}}" != "1" ]; then
+  systemd_unit="tensorcore-georefine-${{authority_lease_id:-manual}}"
+  if systemd-run --user --unit "$systemd_unit" --collect \\
+      --property=KillMode=mixed \\
+      --property=TimeoutStopSec=30 \\
+      --setenv=TC_GEOREFINE_WORKER_CHILD=1 \\
+      /bin/sh -c 'exec sh "$1" >>"$2" 2>&1' sh "$0" "$start_log" \\
+      >>"$start_log" 2>&1; then
+    sleep 2
+    systemd_state=$(systemctl --user is-active "$systemd_unit" 2>/dev/null || true)
+    systemd_pid=$(systemctl --user show "$systemd_unit" -p MainPID --value 2>/dev/null || true)
+    if [ "$systemd_state" = "active" ]; then
+      emit true started_systemd "${{systemd_pid:-0}}" "$head"
+      exit 0
+    fi
+    if [ -n "$systemd_pid" ] && [ "$systemd_pid" != "0" ]; then
+      emit true started_systemd "${{systemd_pid:-0}}" "$head"
+      exit 0
+    fi
+    printf '%s\\n' "[tensorcore-georefine] systemd unit $systemd_unit state=$systemd_state pid=${{systemd_pid:-0}}" >>"$start_log"
+  else
+    printf '%s\\n' "[tensorcore-georefine] systemd-run launch failed; falling back to setsid/background" >>"$start_log"
+  fi
+fi
+
+if command -v setsid >/dev/null 2>&1 && [ "${{TC_GEOREFINE_DISABLE_SETSID:-0}}" != "1" ]; then
+  TC_GEOREFINE_WORKER_CHILD=1 setsid sh "$0" </dev/null >>"$start_log" 2>&1 &
+else
+  (
+    run_worker_foreground "$@"
+  ) </dev/null >>"$start_log" 2>&1 &
+fi
 pid=$!
 sleep 2
 if kill -0 "$pid" >/dev/null 2>&1; then
@@ -572,7 +655,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--qllm-repo-dir": args.qllm_repo_dir,
         "--ref": args.ref,
         "--evidence-root": args.evidence_root,
-        "--cal-text": args.cal_text,
         "--eval-text": args.eval_text,
         "--model": args.model,
         "--device": args.device,
@@ -583,6 +665,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         required_strings["--repo-url"] = args.repo_url
     if not args.run_dir:
         required_strings["--output-root"] = args.output_root
+    if not (args.cal_text or args.cal_preset or args.cal_images_dir):
+        parser.error("one of --cal-text, --cal-preset, or --cal-images-dir is required")
     for flag, value in required_strings.items():
         if not str(value or "").strip():
             parser.error(f"{flag} is required; pass it explicitly or set the matching TC_GEOREFINE_* environment variable")
