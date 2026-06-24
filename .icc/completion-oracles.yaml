@@ -266,6 +266,15 @@ oracles:
         label: H x S x R product manifold per-factor round-trip passes
         action: fix_product_manifold
 
+      - id: torus_round_trip_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.geometric_ops.probes.torus_round_trip.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Flat torus log/exp round-trip with shortest-displacement convention
+        action: fix_torus_round_trip
+
   - name: quantum-ops-runtime-evidence
     target: quantum-ops-runtime-evidence
     aliases:
@@ -373,6 +382,15 @@ oracles:
         severity: high
         label: tc_quantum_geometric_tensor reproduces the Fubini-Study metric
         action: fix_qgt
+
+      - id: density_matrix_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.quantum_gates.probes.dmstate_pure_to_mixed.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Density matrix |0⟩⟨0| → H |0⟩⟨0| H → depolarising channel pipeline
+        action: fix_dmstate_dispatch
 
   - name: mesh-collective-runtime-evidence
     target: mesh-collective-runtime-evidence

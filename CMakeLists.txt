@@ -396,7 +396,9 @@ set(TC_COMMON_SOURCES
     lib/ops/lorentz_cpu.cpp
     lib/ops/sphere_cpu.cpp
     lib/ops/product_manifold_cpu.cpp
+    lib/ops/torus_cpu.cpp
     lib/ops/quantum_gates_cpu.cpp
+    lib/ops/density_matrix_cpu.cpp
     lib/ops/phase_attention_cpu.cpp
     lib/ops/riemannian_adam_cpu.cpp
     lib/ops/sparse_gemm_cpu.cpp

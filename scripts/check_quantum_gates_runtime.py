@@ -290,6 +290,60 @@ def main() -> int:
         probes["qgt_rz_on_plus"] = {"error": str(exc), "passed": False,
                                         "traceback": traceback.format_exc()}
 
+    # === Density matrix: |0⟩⟨0|, H applied, depolarising channel ===
+    try:
+        dm_zero    = bind("tc_dmstate_zero", None, [f32p, ctypes.c_int])
+        dm_apply_u = bind("tc_dmstate_apply_1q_unitary", None,
+                            [f32p, ctypes.c_int, ctypes.c_int, f32p])
+        dm_apply_k = bind("tc_dmstate_apply_kraus_1q", None,
+                            [f32p, ctypes.c_int, ctypes.c_int, f32p, ctypes.c_int])
+        dm_trace   = bind("tc_dmstate_trace", None,
+                            [f32p, ctypes.c_int, f32p, f32p])
+        dm_purity  = bind("tc_dmstate_purity", ctypes.c_float, [f32p, ctypes.c_int])
+        if any(fn is None for fn in (dm_zero, dm_apply_u, dm_apply_k, dm_trace, dm_purity)):
+            raise RuntimeError("density-matrix symbols missing")
+
+        rho = (ctypes.c_float * 8)()  # 1-qubit dm = 2x2 complex = 8 floats
+        dm_zero(rho, 1)
+        # |0⟩⟨0|: purity=1, trace=1
+        pu0 = float(dm_purity(rho, 1))
+        tr_re = ctypes.c_float(); tr_im = ctypes.c_float()
+        dm_trace(rho, 1, ctypes.byref(tr_re), ctypes.byref(tr_im))
+        zero_ok = abs(pu0 - 1.0) < 1e-5 and abs(tr_re.value - 1.0) < 1e-5
+
+        # H |0⟩⟨0| H = |+⟩⟨+| — purity stays 1, ρ becomes [[0.5, 0.5], [0.5, 0.5]]
+        inv_sqrt2 = 0.70710678
+        H = (ctypes.c_float * 8)(inv_sqrt2, 0, inv_sqrt2, 0,
+                                  inv_sqrt2, 0, -inv_sqrt2, 0)
+        dm_apply_u(rho, 1, 0, H)
+        pu_plus = float(dm_purity(rho, 1))
+        plus_ok = (abs(pu_plus - 1.0) < 1e-4
+                   and abs(rho[0] - 0.5) < 1e-5 and abs(rho[6] - 0.5) < 1e-5)
+
+        # Depolarising channel: K_k = (1/2) {I, X, Y, Z} → maximally mixed.
+        dm_zero(rho, 1)  # back to |0⟩⟨0|
+        k = 0.5
+        kraus = (ctypes.c_float * 32)(
+            k,0, 0,0,  0,0, k,0,
+            0,0, k,0,  k,0, 0,0,
+            0,0, 0,-k, 0,k, 0,0,
+            k,0, 0,0,  0,0, -k,0,
+        )
+        dm_apply_k(rho, 1, 0, kraus, 4)
+        pu_mix = float(dm_purity(rho, 1))
+        dm_trace(rho, 1, ctypes.byref(tr_re), ctypes.byref(tr_im))
+        mix_ok = (abs(pu_mix - 0.5) < 1e-4 and abs(tr_re.value - 1.0) < 1e-5)
+
+        probes["dmstate_pure_to_mixed"] = {
+            "zero_purity": pu0, "zero_ok": zero_ok,
+            "plus_purity": pu_plus, "plus_ok": plus_ok,
+            "mixed_purity": pu_mix, "mixed_trace_re": tr_re.value, "mix_ok": mix_ok,
+            "passed": (zero_ok and plus_ok and mix_ok),
+        }
+    except Exception as exc:
+        probes["dmstate_pure_to_mixed"] = {"error": str(exc), "passed": False,
+                                              "traceback": traceback.format_exc()}
+
     # === 4-qubit circuit norm preservation ===
     try:
         state = (ctypes.c_float * 32)(); q_zero(state, 4)

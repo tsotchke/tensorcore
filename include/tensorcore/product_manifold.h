@@ -38,6 +38,7 @@ typedef enum {
     TC_FACTOR_POINCARE  = 1,
     TC_FACTOR_SPHERE    = 2,
     TC_FACTOR_LORENTZ   = 3,
+    TC_FACTOR_TORUS     = 4,
 } tc_factor_kind_t;
 
 typedef struct {

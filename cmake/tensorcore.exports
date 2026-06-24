@@ -184,6 +184,17 @@ _tc_qstate_apply_3q_unitary
 _tc_qstate_inner
 _tc_qstate_trotter_step
 _tc_quantum_geometric_tensor
+_tc_torus_project
+_tc_torus_exp
+_tc_torus_log
+_tc_torus_distance
+_tc_torus_parallel_transport
+_tc_dmstate_zero
+_tc_dmstate_from_pure
+_tc_dmstate_apply_1q_unitary
+_tc_dmstate_apply_kraus_1q
+_tc_dmstate_trace
+_tc_dmstate_purity
 _tc_mesh_group_init
 _tc_mesh_group_shutdown
 _tc_mesh_allreduce

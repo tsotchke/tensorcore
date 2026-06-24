@@ -166,6 +166,41 @@ def main() -> int:
         probes["sphere_round_trip"] = {"error": f"{type(exc).__name__}: {exc}", "passed": False,
                                          "traceback": traceback.format_exc()}
 
+    # === Torus T^3 (qLLM periodic embeddings) ===
+    try:
+        torus_distance = bind("tc_torus_distance", ctypes.c_float,
+                                [f32p, f32p, ctypes.c_size_t, ctypes.c_float])
+        torus_log = bind("tc_torus_log", None,
+                          [f32p, f32p, f32p, ctypes.c_size_t, ctypes.c_float])
+        torus_exp = bind("tc_torus_exp", None,
+                          [f32p, f32p, f32p, ctypes.c_size_t, ctypes.c_float])
+        if any(fn is None for fn in (torus_distance, torus_log, torus_exp)):
+            raise RuntimeError("torus symbols missing")
+        rng2 = np.random.default_rng(11)
+        n = 3; r = 1.0
+        base = (rng2.uniform(0, 2*math.pi, n)).astype(np.float32)
+        bp, bptr = buf(base)
+        tangent = (rng2.standard_normal(n) * 0.4).astype(np.float32)
+        tp, tptr = buf(tangent)
+        q, qptr = buf(np.zeros(n))
+        torus_exp(bptr, tptr, qptr, n, r)
+        v2, v2ptr = buf(np.zeros(n))
+        torus_log(bptr, qptr, v2ptr, n, r)
+        err = float(np.abs(tp - v2).max())
+        d_self = float(torus_distance(bptr, bptr, n, r))
+        d_pq = float(torus_distance(bptr, qptr, n, r))
+        probes["torus_round_trip"] = {
+            "n": n, "radius": r,
+            "log_exp_max_err": err,
+            "d_self": d_self, "d_pq": d_pq,
+            "passed": (err < 1e-4 and abs(d_self) < 1e-5
+                       and d_pq > 0.0 and math.isfinite(d_pq)),
+        }
+    except Exception as exc:
+        probes["torus_round_trip"] = {"error": f"{type(exc).__name__}: {exc}",
+                                        "passed": False,
+                                        "traceback": traceback.format_exc()}
+
     # === Product manifold H × S × R ===
     try:
         factors = (_Factor * 3)(

@@ -16,6 +16,7 @@
 #include "tensorcore/product_manifold.h"
 #include "tensorcore/sphere.h"
 #include "tensorcore/lorentz.h"
+#include "tensorcore/torus.h"
 #include <cmath>
 #include <cstring>
 
@@ -102,6 +103,7 @@ extern "C" int32_t tc_factor_ambient_dim(const tc_factor_t* factor) {
             return factor->intrinsic_dim + 1;
         case TC_FACTOR_EUCLIDEAN:
         case TC_FACTOR_POINCARE:
+        case TC_FACTOR_TORUS:
         default:
             return factor->intrinsic_dim;
     }
@@ -129,6 +131,9 @@ extern "C" void tc_product_project(const tc_factor_t* factors, int32_t n_factors
                 break;
             case TC_FACTOR_LORENTZ:
                 tc_lorentz_project(x + off, (size_t)adim, f->curvature);
+                break;
+            case TC_FACTOR_TORUS:
+                tc_torus_project(x + off, (size_t)adim, f->curvature);
                 break;
         }
         off += adim;
@@ -166,6 +171,10 @@ extern "C" void tc_product_exp(const tc_factor_t* factors, int32_t n_factors,
                 tc_lorentz_exp(base + off, tangent + off, point + off,
                                (size_t)adim, f->curvature);
                 break;
+            case TC_FACTOR_TORUS:
+                tc_torus_exp(base + off, tangent + off, point + off,
+                              (size_t)adim, f->curvature);
+                break;
         }
         off += adim;
     }
@@ -194,6 +203,10 @@ extern "C" void tc_product_log(const tc_factor_t* factors, int32_t n_factors,
             case TC_FACTOR_LORENTZ:
                 tc_lorentz_log(base + off, point + off, tangent + off,
                                (size_t)adim, f->curvature);
+                break;
+            case TC_FACTOR_TORUS:
+                tc_torus_log(base + off, point + off, tangent + off,
+                              (size_t)adim, f->curvature);
                 break;
         }
         off += adim;
@@ -229,6 +242,10 @@ extern "C" float tc_product_distance(const tc_factor_t* factors, int32_t n_facto
                 d_k = tc_lorentz_distance(p + off, q + off,
                                            (size_t)adim, f->curvature);
                 break;
+            case TC_FACTOR_TORUS:
+                d_k = tc_torus_distance(p + off, q + off,
+                                         (size_t)adim, f->curvature);
+                break;
         }
         d2 += d_k * d_k;
         off += adim;
@@ -259,6 +276,10 @@ extern "C" void tc_product_parallel_transport(const tc_factor_t* factors,
             case TC_FACTOR_LORENTZ:
                 tc_lorentz_parallel_transport(from + off, to + off, tangent + off,
                                                out + off, (size_t)adim, f->curvature);
+                break;
+            case TC_FACTOR_TORUS:
+                tc_torus_parallel_transport(from + off, to + off, tangent + off,
+                                             out + off, (size_t)adim, f->curvature);
                 break;
         }
         off += adim;
