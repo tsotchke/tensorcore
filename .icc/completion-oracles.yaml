@@ -311,6 +311,15 @@ oracles:
         label: 4-qubit H+CNOT+RZ circuit preserves ||state||^2 = 1
         action: fix_quantum_unitarity
 
+      - id: controlled_rotation_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.quantum_gates.probes.crz_pi_on_plusplus.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Controlled rotation CRZ(π) on |++⟩ matches the QGTL phase pattern
+        action: fix_controlled_rotation
+
   - name: mesh-collective-runtime-evidence
     target: mesh-collective-runtime-evidence
     aliases:

@@ -154,6 +154,29 @@ def main() -> int:
         probes["swap_10_to_01"] = {"error": str(exc), "passed": False,
                                      "traceback": traceback.format_exc()}
 
+    # === CRZ(π) on H_0 H_1 |00⟩ — controlled phase rotation ===
+    # Specifically exercises the new controlled-rotation dispatch path
+    # (QGTL uses CRX/CRY/CRZ/CH 80+ times across its src/ tree).
+    try:
+        state = (ctypes.c_float * 8)(); q_zero(state, 2)
+        q0 = (ctypes.c_int * 1)(0); q1 = (ctypes.c_int * 1)(1); q01 = (ctypes.c_int * 2)(0, 1)
+        q_apply_g(state, 2, 4, q0, None)         # H_0
+        q_apply_g(state, 2, 4, q1, None)         # H_1
+        params = (ctypes.c_float * 1)(math.pi)
+        q_apply_g(state, 2, 24, q01, params)     # CRZ(π) — TC_GATE_CRZ = 24
+        # Expected: idx 0 = 0.5+0i, idx 1 (ctrl=1,targ=0) = -0.5i,
+        #           idx 2 = 0.5+0i (unchanged), idx 3 (ctrl=1,targ=1) = +0.5i.
+        ok = (abs(state[0] - 0.5) < 1e-5 and abs(state[1]) < 1e-5
+              and abs(state[2]) < 1e-5 and abs(state[3] + 0.5) < 1e-5
+              and abs(state[4] - 0.5) < 1e-5 and abs(state[5]) < 1e-5
+              and abs(state[6]) < 1e-5 and abs(state[7] - 0.5) < 1e-5)
+        n2 = float(q_norm(state, 2))
+        ok = ok and abs(n2 - 1.0) < 1e-5
+        probes["crz_pi_on_plusplus"] = {"state_re_im": list(state), "norm_sq": n2, "passed": ok}
+    except Exception as exc:
+        probes["crz_pi_on_plusplus"] = {"error": str(exc), "passed": False,
+                                          "traceback": traceback.format_exc()}
+
     # === 4-qubit circuit norm preservation ===
     try:
         state = (ctypes.c_float * 32)(); q_zero(state, 4)

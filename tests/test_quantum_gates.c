@@ -106,6 +106,74 @@ int main(void) {
               APPROX(state[4], 0.0f, 1e-6f));
     }
 
+    /* ===== CRZ(θ) on H ⊗ H |00⟩: controlled phase =====
+     * After H_0 H_1 we have equal superposition (0.5, 0.5, 0.5, 0.5).
+     * CRZ(π) with q_ctrl=0, q_targ=1 acts on amp indices where bit 0 = 1
+     * (the control qubit). For those amps (idx 1 = q0=1,q1=0  and
+     * idx 3 = q0=1,q1=1), the unitary's bottom-right 2x2 = diag(-i, +i)
+     * applies: idx 1 (targ=0) → ×(-i), idx 3 (targ=1) → ×(+i).
+     * Unchanged: idx 0 (q0=0,q1=0), idx 2 (q0=0,q1=1). */
+    {
+        float state[8];
+        tc_qstate_zero(state, 2);
+        int q0[1] = {0}, q1[1] = {1}, q01[2] = {0, 1};
+        tc_qstate_apply_gate(state, 2, TC_GATE_H, q0, NULL);
+        tc_qstate_apply_gate(state, 2, TC_GATE_H, q1, NULL);
+        float params[1] = {(float)M_PI};
+        tc_qstate_apply_gate(state, 2, TC_GATE_CRZ, q01, params);
+        CHECK("CRZ(π): amp idx 0 = 0.5+0i",
+              APPROX(state[0], 0.5f, 1e-5f) && APPROX(state[1], 0.0f, 1e-5f));
+        CHECK("CRZ(π): amp idx 1 (ctrl=1,targ=0) = -0.5i",
+              APPROX(state[2], 0.0f, 1e-5f) && APPROX(state[3], -0.5f, 1e-5f));
+        CHECK("CRZ(π): amp idx 2 = 0.5+0i (unchanged)",
+              APPROX(state[4], 0.5f, 1e-5f) && APPROX(state[5], 0.0f, 1e-5f));
+        CHECK("CRZ(π): amp idx 3 (ctrl=1,targ=1) = +0.5i",
+              APPROX(state[6], 0.0f, 1e-5f) && APPROX(state[7], 0.5f, 1e-5f));
+    }
+
+    /* ===== CRX(π) on amp index 1 (ctrl=1, targ=0):
+     * The control bit (q_ctrl=0 = LSB) is set, so CRX rotates the
+     * (|ctrl=1,targ=0⟩, |ctrl=1,targ=1⟩) = (amp idx 1, amp idx 3)
+     * subspace as Rx(π) = -i X:
+     *   new amp[1] = c·amp[1] - i s·amp[3] = 0·1 - i·1·0 = 0
+     *   new amp[3] = -i s·amp[1] + c·amp[3] = -i·1·1 + 0 = -i  */
+    {
+        float state[8];
+        tc_qstate_zero(state, 2);
+        /* Prepare amp index 1: state[2]=1, all else 0. */
+        state[0] = 0.0f;
+        state[2] = 1.0f;
+        int q01[2] = {0, 1};
+        float params[1] = {(float)M_PI};
+        tc_qstate_apply_gate(state, 2, TC_GATE_CRX, q01, params);
+        CHECK("CRX(π) ctrl=1: amp idx 1 ≈ 0",
+              APPROX(state[2], 0.0f, 1e-5f) && APPROX(state[3], 0.0f, 1e-5f));
+        CHECK("CRX(π) ctrl=1: amp idx 3 ≈ -i",
+              APPROX(state[6], 0.0f, 1e-5f) && APPROX(state[7], -1.0f, 1e-5f));
+    }
+
+    /* ===== CH on H_0|00⟩ = (1/√2)(|q0=0⟩ + |q0=1⟩) ⊗ |q1=0⟩:
+     * CH with q_ctrl=0, q_targ=1 applies H to q1 only when q0=1.
+     *   |q0=0,q1=0⟩ (amp idx 0): ctrl=0, unchanged → 1/√2
+     *   |q0=1,q1=0⟩ (amp idx 1): ctrl=1, H on q1 splits into
+     *                              (|q0=1,q1=0⟩ + |q0=1,q1=1⟩)/√2
+     *     so (1/√2)·(1/√2) = 0.5 goes to amp idx 1 AND amp idx 3.
+     * Final: amp idx 0 = 1/√2, amp idx 1 = 0.5, amp idx 3 = 0.5. */
+    {
+        float state[8];
+        tc_qstate_zero(state, 2);
+        int q0[1] = {0}, q01[2] = {0, 1};
+        tc_qstate_apply_gate(state, 2, TC_GATE_H, q0, NULL);
+        tc_qstate_apply_gate(state, 2, TC_GATE_CH, q01, NULL);
+        const float inv_sqrt2 = 0.70710678f;
+        CHECK("CH: amp idx 0 = 1/√2",
+              APPROX(state[0], inv_sqrt2, 1e-5f));
+        CHECK("CH: amp idx 1 = 0.5",
+              APPROX(state[2], 0.5f, 1e-5f));
+        CHECK("CH: amp idx 3 = 0.5",
+              APPROX(state[6], 0.5f, 1e-5f));
+    }
+
     /* ===== 4-qubit circuit norm-preservation ===== */
     {
         float state[32];  /* 4 qubits = 16 amps = 32 floats */

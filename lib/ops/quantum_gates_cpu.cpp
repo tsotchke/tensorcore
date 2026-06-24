@@ -149,12 +149,47 @@ extern "C" void tc_gate_matrix_2q(tc_gate_type_t type, const float* params,
             SET(2,1, 1,0);
             SET(3,3, 1,0);
             break;
+        case TC_GATE_CRX: {
+            /* Controlled Rx(θ): identity on |00⟩,|01⟩; Rx(θ) on the
+             * (|10⟩, |11⟩) target-flip subspace. */
+            const float t = params[0] * 0.5f;
+            const float c = std::cos(t), s = std::sin(t);
+            SET(0,0, 1,0);
+            SET(1,1, 1,0);
+            SET(2,2, c,0); SET(2,3, 0,-s);
+            SET(3,2, 0,-s); SET(3,3, c,0);
+            break;
+        }
+        case TC_GATE_CRY: {
+            const float t = params[0] * 0.5f;
+            const float c = std::cos(t), s = std::sin(t);
+            SET(0,0, 1,0);
+            SET(1,1, 1,0);
+            SET(2,2, c,0); SET(2,3, -s,0);
+            SET(3,2, s,0); SET(3,3, c,0);
+            break;
+        }
+        case TC_GATE_CRZ: {
+            const float t = params[0] * 0.5f;
+            const float c = std::cos(t), s = std::sin(t);
+            SET(0,0, 1,0);
+            SET(1,1, 1,0);
+            SET(2,2, c,-s);
+            SET(3,3, c, s);
+            break;
+        }
+        case TC_GATE_CH: {
+            SET(0,0, 1,0);
+            SET(1,1, 1,0);
+            SET(2,2, kInvSqrt2,0); SET(2,3,  kInvSqrt2,0);
+            SET(3,2, kInvSqrt2,0); SET(3,3, -kInvSqrt2,0);
+            break;
+        }
         default:
             /* Unknown 2q gate: fill identity. */
             SET(0,0, 1,0); SET(1,1, 1,0); SET(2,2, 1,0); SET(3,3, 1,0);
             break;
     }
-    (void)params;  /* No parameterized 2q gates yet. */
     #undef SET
 }
 
@@ -237,11 +272,24 @@ extern "C" void tc_qstate_apply_2q_unitary(float* state, int n_qubits,
     }
 }
 
+/* Returns 1 if `type` is a 2-qubit gate, 0 otherwise. Updated whenever
+ * a new 2-qubit gate enum value is added — this table is the dispatch
+ * truth-source for tc_qstate_apply_gate. */
+static int is_2q_gate(tc_gate_type_t t) {
+    switch (t) {
+        case TC_GATE_CNOT: case TC_GATE_CY:  case TC_GATE_CZ: case TC_GATE_SWAP:
+        case TC_GATE_CRX:  case TC_GATE_CRY: case TC_GATE_CRZ: case TC_GATE_CH:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
 extern "C" void tc_qstate_apply_gate(float* state, int n_qubits,
                                       tc_gate_type_t type,
                                       const int* qubits,
                                       const float* params) {
-    if (type >= TC_GATE_CNOT && type <= TC_GATE_SWAP) {
+    if (is_2q_gate(type)) {
         float U[32];
         tc_gate_matrix_2q(type, params, U);
         tc_qstate_apply_2q_unitary(state, n_qubits, qubits[0], qubits[1], U);

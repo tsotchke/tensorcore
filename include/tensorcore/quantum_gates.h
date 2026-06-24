@@ -25,7 +25,6 @@
  */
 
 #include <stddef.h>
-#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -47,6 +46,11 @@ typedef enum {
     TC_GATE_CY   = 11, /* controlled-Y */
     TC_GATE_CZ   = 12, /* controlled-Z */
     TC_GATE_SWAP = 13, /* SWAP */
+    /* Controlled rotations (numeric values match QGTL gate_type_t). */
+    TC_GATE_CRX  = 22, /* controlled Rx(θ) */
+    TC_GATE_CRY  = 23, /* controlled Ry(θ) */
+    TC_GATE_CRZ  = 24, /* controlled Rz(θ) */
+    TC_GATE_CH   = 25, /* controlled Hadamard */
     TC_GATE_SDG  = 26, /* S† */
     TC_GATE_TDG  = 27, /* T† */
 } tc_gate_type_t;
