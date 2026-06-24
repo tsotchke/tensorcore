@@ -25,6 +25,7 @@
  */
 
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -62,8 +63,10 @@ typedef enum {
     TC_GATE_CH   = 25, /* controlled Hadamard */
     TC_GATE_SDG  = 26, /* S† */
     TC_GATE_TDG  = 27, /* T† */
+    TC_GATE_ECR  = 28, /* Echoed Cross-Resonance (IBM native) */
+    TC_GATE_SX   = 29, /* √X gate */
     /* 2-qubit Ising-style rotations (numeric values match QGTL). */
-    TC_GATE_XX   = 33, /* exp(-iθ/2 X⊗X) */
+    TC_GATE_XX   = 33, /* exp(-iθ/2 X⊗X), aliased by IonQ-native MS */
     TC_GATE_YY   = 34, /* exp(-iθ/2 Y⊗Y) */
     TC_GATE_ZZ   = 35, /* exp(-iθ/2 Z⊗Z) */
 } tc_gate_type_t;
@@ -124,6 +127,65 @@ float tc_qstate_prob_one(const float* state, int n_qubits, int qubit);
 /* ||state||² = Σ |state[i]|² over all amplitudes. Unitary evolution
  * preserves this at 1.0 modulo FP32 round-off. */
 float tc_qstate_norm_sq(const float* state, int n_qubits);
+
+/* Complex inner product <a|b> = Σ a*_i b_i over n-qubit state vectors.
+ * Returns the (real, imag) parts of the resulting scalar.
+ * Used by tc_quantum_geometric_tensor and any Hilbert-space norm/angle
+ * computation. */
+void tc_qstate_inner(const float* a, const float* b, int n_qubits,
+                      float* out_re, float* out_im);
+
+/* ---- Trotter step ---- *
+ *
+ * Approximate evolution under H = Σ_k coef[k] · (tensor product of Paulis)
+ * for total time `t` using `n_trotter_steps` first-order Trotter steps:
+ *   exp(-iHt) ≈ (∏_k exp(-i coef[k] (t/n) P_k))^n
+ *
+ * Each Pauli term is described by:
+ *   axes[i]   ∈ {I, X, Y, Z} encoded as 0/1/2/3 (matches tc_gate_type_t
+ *               TC_GATE_I/X/Y/Z values),
+ *   qubits[i] qubit index the axis acts on.
+ *
+ * For a single Pauli string P with eigenvalues ±1, exp(-iα P) = cos(α) I
+ * - i sin(α) P, applied as: U |ψ⟩ where U is a 2^n_string sub-unitary on
+ * the involved qubits. Implementation:
+ *   1. Diagonalise the Pauli string (single-qubit basis changes to map
+ *      X→Z via H, Y→Z via S†H, etc.).
+ *   2. Apply CNOT staircase to collect parity into the last qubit.
+ *   3. Apply Rz(2α) on the parity qubit.
+ *   4. Reverse the CNOT staircase and the basis changes.
+ * This is the standard "Pauli string evolution" decomposition.
+ *
+ * For a single-term Hamiltonian, this is exact. For multiple terms,
+ * first-order Trotter has O(t²/n) error. Callers wanting higher-order
+ * Suzuki decompositions can compose multiple step calls. */
+typedef struct {
+    int32_t       n_paulis;     /* number of Pauli factors in this term */
+    const int32_t* axes;        /* len n_paulis; values: TC_GATE_I/X/Y/Z */
+    const int32_t* qubits;      /* len n_paulis; target qubit per factor */
+    float         coef;         /* Hamiltonian coefficient for this term */
+} tc_pauli_term_t;
+
+/* Apply one first-order Trotter step of exp(-iHt) to `state` in-place. */
+void tc_qstate_trotter_step(float* state, int n_qubits,
+                             const tc_pauli_term_t* terms, int n_terms,
+                             float t, int n_trotter_steps);
+
+/* ---- Quantum geometric tensor (Fubini–Study metric) ---- *
+ *
+ * The QGT on a parameter manifold is
+ *   G_{ij} = <∂_i ψ | ∂_j ψ> - <∂_i ψ | ψ><ψ | ∂_j ψ>
+ *
+ * Real part: the Fubini–Study metric on the projective Hilbert space.
+ * Imaginary part: ½ · Berry curvature 2-form.
+ *
+ * Caller supplies |ψ⟩ and an array of n_params |∂_i ψ⟩ vectors. Output
+ * is a row-major n_params × n_params complex matrix (interleaved
+ * re/im pairs, so 2·n_params² floats total). */
+void tc_quantum_geometric_tensor(const float* psi,
+                                  const float* const* dpsi,
+                                  int n_qubits, int n_params,
+                                  float* out_G);
 
 #ifdef __cplusplus
 }

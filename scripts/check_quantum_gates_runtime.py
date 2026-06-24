@@ -236,6 +236,60 @@ def main() -> int:
         probes["zz_pi_on_plusplus"] = {"error": str(exc), "passed": False,
                                           "traceback": traceback.format_exc()}
 
+    # === Trotter step: Z evolution matches Rz closed-form ===
+    try:
+        # Bind trotter symbols
+        class _PauliTerm(ctypes.Structure):
+            _fields_ = [("n_paulis", ctypes.c_int32),
+                        ("axes",     ctypes.POINTER(ctypes.c_int32)),
+                        ("qubits",   ctypes.POINTER(ctypes.c_int32)),
+                        ("coef",     ctypes.c_float)]
+        q_trotter = bind("tc_qstate_trotter_step", None,
+                          [f32p, ctypes.c_int, ctypes.POINTER(_PauliTerm),
+                           ctypes.c_int, ctypes.c_float, ctypes.c_int])
+        if q_trotter is None:
+            raise RuntimeError("tc_qstate_trotter_step symbol missing")
+        state = (ctypes.c_float * 4)(); q_zero(state, 1)
+        q0 = (ctypes.c_int * 1)(0)
+        q_apply_g(state, 1, 4, q0, None)   # H_0 → |+⟩
+        axes = (ctypes.c_int32 * 1)(3)     # TC_GATE_Z = 3
+        qubits = (ctypes.c_int32 * 1)(0)
+        term = _PauliTerm(1, axes, qubits, 1.0)
+        terms = (_PauliTerm * 1)(term)
+        q_trotter(state, 1, terms, 1, math.pi / 2.0, 1)
+        # Expected: -i|-⟩ = (0, -1/√2, 0, +1/√2).
+        inv_sqrt2 = 0.70710678
+        ok = (abs(state[0]) < 1e-5 and abs(state[1] + inv_sqrt2) < 1e-5
+              and abs(state[2]) < 1e-5 and abs(state[3] - inv_sqrt2) < 1e-5)
+        n2 = float(q_norm(state, 1))
+        ok = ok and abs(n2 - 1.0) < 1e-5
+        probes["trotter_z_on_plus"] = {"state_re_im": list(state), "norm_sq": n2, "passed": ok}
+    except Exception as exc:
+        probes["trotter_z_on_plus"] = {"error": str(exc), "passed": False,
+                                          "traceback": traceback.format_exc()}
+
+    # === Quantum Geometric Tensor: Rz parameter on |+⟩ should give G_{00} = 0.25 ===
+    try:
+        q_qgt = bind("tc_quantum_geometric_tensor", None,
+                      [f32p, ctypes.POINTER(f32p), ctypes.c_int, ctypes.c_int, f32p])
+        if q_qgt is None:
+            raise RuntimeError("tc_quantum_geometric_tensor symbol missing")
+        psi = (ctypes.c_float * 4)(); q_zero(psi, 1)
+        q0 = (ctypes.c_int * 1)(0)
+        q_apply_g(psi, 1, 4, q0, None)     # H_0 → |+⟩
+        # dpsi = -i/2 · Z · psi = (0, -1/(2√2), 0, +1/(2√2))
+        half_inv_sqrt2 = 0.70710678 * 0.5
+        dpsi = (ctypes.c_float * 4)(0.0, -half_inv_sqrt2, 0.0, half_inv_sqrt2)
+        dpsi_arr = (f32p * 1)(ctypes.cast(dpsi, f32p))
+        G = (ctypes.c_float * 2)()  # 1×1 complex
+        q_qgt(psi, dpsi_arr, 1, 1, G)
+        ok = abs(G[0] - 0.25) < 1e-5 and abs(G[1]) < 1e-5
+        probes["qgt_rz_on_plus"] = {"G_re_im": [G[0], G[1]],
+                                       "expected_re": 0.25, "passed": ok}
+    except Exception as exc:
+        probes["qgt_rz_on_plus"] = {"error": str(exc), "passed": False,
+                                        "traceback": traceback.format_exc()}
+
     # === 4-qubit circuit norm preservation ===
     try:
         state = (ctypes.c_float * 32)(); q_zero(state, 4)

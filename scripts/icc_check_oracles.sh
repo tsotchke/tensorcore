@@ -31,7 +31,7 @@ print_oracle() {
     local target="$1"; shift
     echo "=== $target ==="
     "$ICC" readiness --repo tensorcore --target "$target" "$@" --format markdown \
-        | sed -n '5,20p'
+        | sed -n '5,40p'
     echo
 }
 

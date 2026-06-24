@@ -23,6 +23,7 @@
 #include "tensorcore/quantum_gates.h"
 #include <cmath>
 #include <cstring>
+#include <vector>
 
 namespace {
 
@@ -84,6 +85,11 @@ extern "C" void tc_gate_matrix_1q(tc_gate_type_t type, const float* params,
             break;
         case TC_GATE_TDG:
             set_1q(U, 1,0, 0,0,  0,0, kInvSqrt2,-kInvSqrt2);
+            break;
+        case TC_GATE_SX:
+            /* √X = (1/2) [[1+i, 1-i], [1-i, 1+i]] */
+            set_1q(U, 0.5f, 0.5f,  0.5f,-0.5f,
+                       0.5f,-0.5f, 0.5f, 0.5f);
             break;
         case TC_GATE_RX: {
             /* Rx(θ) = [[cos θ/2, -i sin θ/2], [-i sin θ/2, cos θ/2]] */
@@ -258,6 +264,20 @@ extern "C" void tc_gate_matrix_2q(tc_gate_type_t type, const float* params,
             SET(3,0, 0,-s);  SET(3,3, c,0);
             break;
         }
+        case TC_GATE_ECR: {
+            /* Echoed Cross-Resonance (IBM native): up to phases equal to
+             *   (1/√2) [[0, 1, 0, i],
+             *           [1, 0, -i, 0],
+             *           [0, i, 0, 1],
+             *           [-i, 0, 1, 0]]
+             * Built from RZX(π/2) + X⊗I + RZX(-π/2). */
+            const float k = kInvSqrt2;
+            SET(0,0, 0,0);   SET(0,1, k,0);   SET(0,2, 0,0);   SET(0,3, 0,k);
+            SET(1,0, k,0);   SET(1,1, 0,0);   SET(1,2, 0,-k);  SET(1,3, 0,0);
+            SET(2,0, 0,0);   SET(2,1, 0,k);   SET(2,2, 0,0);   SET(2,3, k,0);
+            SET(3,0, 0,-k);  SET(3,1, 0,0);   SET(3,2, k,0);   SET(3,3, 0,0);
+            break;
+        }
         case TC_GATE_YY: {
             /* exp(-iθ/2 Y⊗Y).
              *   [c, 0, 0, +is]
@@ -366,7 +386,7 @@ static int is_2q_gate(tc_gate_type_t t) {
     switch (t) {
         case TC_GATE_CNOT: case TC_GATE_CY:  case TC_GATE_CZ: case TC_GATE_SWAP:
         case TC_GATE_CRX:  case TC_GATE_CRY: case TC_GATE_CRZ: case TC_GATE_CH:
-        case TC_GATE_ISWAP:
+        case TC_GATE_ISWAP: case TC_GATE_ECR:
         case TC_GATE_XX:   case TC_GATE_YY:  case TC_GATE_ZZ:
             return 1;
         default:
@@ -464,6 +484,155 @@ extern "C" void tc_gate_matrix_3q(tc_gate_type_t type, const float* params,
     }
     (void)params;
     #undef SET3
+}
+
+extern "C" void tc_qstate_inner(const float* a, const float* b, int n_qubits,
+                                 float* out_re, float* out_im) {
+    /* <a|b> = Σ conj(a_i) · b_i */
+    const size_t N = (size_t)1 << n_qubits;
+    double re = 0.0, im = 0.0;
+    for (size_t i = 0; i < N; ++i) {
+        const float ar = a[2 * i], ai = a[2 * i + 1];
+        const float br = b[2 * i], bi = b[2 * i + 1];
+        /* conj(a) · b = (ar - i ai)(br + i bi) = ar·br + ai·bi + i(ar·bi - ai·br) */
+        re += (double)ar * br + (double)ai * bi;
+        im += (double)ar * bi - (double)ai * br;
+    }
+    *out_re = (float)re;
+    *out_im = (float)im;
+}
+
+/* Apply exp(-i α P) for a single Pauli string P given by `axes`/`qubits`.
+ * Standard decomposition:
+ *   1. Basis change: H on every X qubit, S† H on every Y qubit (mapping
+ *      X→Z, Y→Z so the parity is collected on a Z basis).
+ *   2. CNOT staircase from each active qubit into the "parity" qubit
+ *      (chosen as the LAST entry in qubits[]).
+ *   3. Rz(2α) on the parity qubit.
+ *   4. Reverse CNOT staircase + reverse basis change.
+ *
+ * For identity-only terms (no X/Y/Z), evolution is a global phase
+ * exp(-iα) — we just rescale every amplitude (real-rotate) and return. */
+static void apply_pauli_evolution(float* state, int n_qubits,
+                                   const int32_t* axes,
+                                   const int32_t* qubits,
+                                   int n_paulis, float alpha) {
+    /* Filter out identity factors (TC_GATE_I = 0). */
+    int active[32]; int n_active = 0;
+    for (int i = 0; i < n_paulis; ++i) {
+        if (axes[i] == TC_GATE_I) continue;
+        active[n_active++] = i;
+    }
+    if (n_active == 0) {
+        /* Pure global phase exp(-iα): multiply every amp by (cos α - i sin α). */
+        const float c = std::cos(alpha), s = std::sin(alpha);
+        const size_t N = (size_t)1 << n_qubits;
+        for (size_t k = 0; k < N; ++k) {
+            const float ar = state[2 * k], ai = state[2 * k + 1];
+            state[2 * k]     = c * ar + s * ai;
+            state[2 * k + 1] = c * ai - s * ar;
+        }
+        return;
+    }
+
+    /* Step 1: basis change so every active qubit is in Z basis. */
+    float U_basis[8];
+    for (int j = 0; j < n_active; ++j) {
+        const int q = qubits[active[j]];
+        if (axes[active[j]] == TC_GATE_X) {
+            tc_gate_matrix_1q(TC_GATE_H, nullptr, U_basis);
+            tc_qstate_apply_1q_unitary(state, n_qubits, q, U_basis);
+        } else if (axes[active[j]] == TC_GATE_Y) {
+            /* Y = H · S → mapping Y → Z is achieved by S† then H.
+             * Apply order is reverse for unitary on RIGHT (state acts on
+             * |ψ⟩ left-to-right): we want the *new* basis to be Y's
+             * eigenbasis, which is (S†)·H applied to the state. */
+            tc_gate_matrix_1q(TC_GATE_SDG, nullptr, U_basis);
+            tc_qstate_apply_1q_unitary(state, n_qubits, q, U_basis);
+            tc_gate_matrix_1q(TC_GATE_H, nullptr, U_basis);
+            tc_qstate_apply_1q_unitary(state, n_qubits, q, U_basis);
+        }
+        /* Z is already in Z basis — no change. */
+    }
+
+    /* Step 2: CNOT staircase from each active qubit into the parity qubit
+     * (the last active qubit). */
+    const int parity_qubit = qubits[active[n_active - 1]];
+    float U_cnot[32];
+    tc_gate_matrix_2q(TC_GATE_CNOT, nullptr, U_cnot);
+    for (int j = 0; j < n_active - 1; ++j) {
+        tc_qstate_apply_2q_unitary(state, n_qubits,
+                                    qubits[active[j]], parity_qubit, U_cnot);
+    }
+
+    /* Step 3: Rz(2α) on the parity qubit. exp(-iα Z) = Rz(2α). */
+    const float two_alpha = 2.0f * alpha;
+    tc_gate_matrix_1q(TC_GATE_RZ, &two_alpha, U_basis);
+    tc_qstate_apply_1q_unitary(state, n_qubits, parity_qubit, U_basis);
+
+    /* Step 4: reverse CNOT staircase. */
+    for (int j = n_active - 2; j >= 0; --j) {
+        tc_qstate_apply_2q_unitary(state, n_qubits,
+                                    qubits[active[j]], parity_qubit, U_cnot);
+    }
+
+    /* Step 5: reverse basis change. */
+    for (int j = n_active - 1; j >= 0; --j) {
+        const int q = qubits[active[j]];
+        if (axes[active[j]] == TC_GATE_X) {
+            tc_gate_matrix_1q(TC_GATE_H, nullptr, U_basis);
+            tc_qstate_apply_1q_unitary(state, n_qubits, q, U_basis);
+        } else if (axes[active[j]] == TC_GATE_Y) {
+            /* Reverse of (S† H) is (H† S) = (H · S). */
+            tc_gate_matrix_1q(TC_GATE_H, nullptr, U_basis);
+            tc_qstate_apply_1q_unitary(state, n_qubits, q, U_basis);
+            tc_gate_matrix_1q(TC_GATE_S, nullptr, U_basis);
+            tc_qstate_apply_1q_unitary(state, n_qubits, q, U_basis);
+        }
+    }
+}
+
+extern "C" void tc_qstate_trotter_step(float* state, int n_qubits,
+                                        const tc_pauli_term_t* terms,
+                                        int n_terms,
+                                        float t, int n_trotter_steps) {
+    if (n_trotter_steps <= 0 || n_terms <= 0) return;
+    const float dt = t / (float)n_trotter_steps;
+    for (int step = 0; step < n_trotter_steps; ++step) {
+        for (int k = 0; k < n_terms; ++k) {
+            const tc_pauli_term_t* tk = &terms[k];
+            const float alpha = tk->coef * dt;
+            apply_pauli_evolution(state, n_qubits,
+                                   tk->axes, tk->qubits,
+                                   tk->n_paulis, alpha);
+        }
+    }
+}
+
+extern "C" void tc_quantum_geometric_tensor(const float* psi,
+                                             const float* const* dpsi,
+                                             int n_qubits, int n_params,
+                                             float* out_G) {
+    /* G_{ij} = <∂_i ψ | ∂_j ψ> - <∂_i ψ | ψ><ψ | ∂_j ψ> */
+    /* Compute the n_params overlap scalars c_i = <ψ | ∂_i ψ> first;
+     * <∂_i ψ | ψ> = conj(c_i). */
+    std::vector<float> c_re(n_params), c_im(n_params);
+    for (int i = 0; i < n_params; ++i) {
+        tc_qstate_inner(psi, dpsi[i], n_qubits, &c_re[i], &c_im[i]);
+    }
+    /* Now fill G_{ij} = <∂_i ψ | ∂_j ψ> - conj(c_i) * c_j. */
+    for (int i = 0; i < n_params; ++i) {
+        for (int j = 0; j < n_params; ++j) {
+            float inner_re, inner_im;
+            tc_qstate_inner(dpsi[i], dpsi[j], n_qubits, &inner_re, &inner_im);
+            /* conj(c_i) · c_j = (cr_i - i ci_i)(cr_j + i ci_j) */
+            const float ci_cj_re = c_re[i] * c_re[j] + c_im[i] * c_im[j];
+            const float ci_cj_im = c_re[i] * c_im[j] - c_im[i] * c_re[j];
+            const size_t idx = (size_t)2 * ((size_t)i * n_params + j);
+            out_G[idx]     = inner_re - ci_cj_re;
+            out_G[idx + 1] = inner_im - ci_cj_im;
+        }
+    }
 }
 
 extern "C" void tc_qstate_apply_3q_unitary(float* state, int n_qubits,

@@ -356,6 +356,24 @@ oracles:
         label: ZZ(θ) Ising rotation diagonal matches the exp(-iθ/2 Z⊗Z) spec
         action: fix_zz_dispatch
 
+      - id: trotter_evolution_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.quantum_gates.probes.trotter_z_on_plus.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: tc_qstate_trotter_step matches the closed-form Rz evolution
+        action: fix_trotter_dispatch
+
+      - id: quantum_geometric_tensor_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.quantum_gates.probes.qgt_rz_on_plus.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: tc_quantum_geometric_tensor reproduces the Fubini-Study metric
+        action: fix_qgt
+
   - name: mesh-collective-runtime-evidence
     target: mesh-collective-runtime-evidence
     aliases:

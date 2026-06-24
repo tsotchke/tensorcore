@@ -291,6 +291,114 @@ int main(void) {
               APPROX(state[6], 0.0f, 1e-5f) && APPROX(state[7], -0.5f, 1e-5f));
     }
 
+    /* ===== SX (√X) on |0⟩: applying SX twice should give X|0⟩ = |1⟩ =====
+     * SX² = X. Apply twice and verify we land at |1⟩ up to global phase. */
+    {
+        float state[4];
+        tc_qstate_zero(state, 1);
+        int q0[1] = {0};
+        tc_qstate_apply_gate(state, 1, TC_GATE_SX, q0, NULL);
+        tc_qstate_apply_gate(state, 1, TC_GATE_SX, q0, NULL);
+        /* SX² = X up to global phase i. So result is i|1⟩, which means
+         * state[0..1] ≈ 0 and state[2..3] ≈ (0, 1). */
+        float prob_one = state[2]*state[2] + state[3]*state[3];
+        CHECK("SX²|0⟩ probability on |1⟩ ≈ 1.0", APPROX(prob_one, 1.0f, 1e-5f));
+        float prob_zero = state[0]*state[0] + state[1]*state[1];
+        CHECK("SX²|0⟩ probability on |0⟩ ≈ 0", APPROX(prob_zero, 0.0f, 1e-5f));
+    }
+
+    /* ===== ECR: unitary check via ECR · ECR† ≈ I =====
+     * ECR is its own inverse up to a global phase (ECR² is a phase
+     * times identity), so just verify norm preservation on a random
+     * 2-qubit input. */
+    {
+        float state[8];
+        tc_qstate_zero(state, 2);
+        /* Mix: H on q0 then ECR. */
+        int q0[1] = {0}, q01[2] = {0, 1};
+        tc_qstate_apply_gate(state, 2, TC_GATE_H, q0, NULL);
+        tc_qstate_apply_gate(state, 2, TC_GATE_ECR, q01, NULL);
+        float n2 = tc_qstate_norm_sq(state, 2);
+        CHECK("ECR preserves ||state||² = 1", APPROX(n2, 1.0f, 1e-5f));
+    }
+
+    /* ===== Trotter step: exp(-i (π/2) Z) on |+⟩ → -i|-⟩ =====
+     * H_0 |0⟩ = |+⟩. Then apply Trotter evolution of H = Z with t = π/2,
+     * 1 Trotter step. exp(-i (π/2) Z) = Rz(π) = diag(e^{-iπ/2}, e^{iπ/2})
+     *                                         = diag(-i, +i).
+     * On |+⟩ = (|0⟩+|1⟩)/√2 → (-i|0⟩ + i|1⟩)/√2 = -i · (|0⟩ - |1⟩)/√2
+     *   = -i|-⟩. So state[0]=0, state[1]=-1/√2, state[2]=0, state[3]=+1/√2. */
+    {
+        float state[4];
+        tc_qstate_zero(state, 1);
+        int q0[1] = {0};
+        tc_qstate_apply_gate(state, 1, TC_GATE_H, q0, NULL);
+        /* Single Pauli term: Z on qubit 0, coefficient 1. */
+        int32_t axes[1] = { TC_GATE_Z };
+        int32_t qubits[1] = { 0 };
+        tc_pauli_term_t term = {1, axes, qubits, 1.0f};
+        tc_qstate_trotter_step(state, 1, &term, 1, (float)M_PI/2.0f, 1);
+        const float inv_sqrt2 = 0.70710678f;
+        CHECK("Trotter Z on |+⟩: amp[0] = 0-i/√2",
+              APPROX(state[0], 0.0f, 1e-5f) && APPROX(state[1], -inv_sqrt2, 1e-5f));
+        CHECK("Trotter Z on |+⟩: amp[1] = 0+i/√2",
+              APPROX(state[2], 0.0f, 1e-5f) && APPROX(state[3], inv_sqrt2, 1e-5f));
+        float n2 = tc_qstate_norm_sq(state, 1);
+        CHECK("Trotter preserves ||state||²", APPROX(n2, 1.0f, 1e-5f));
+    }
+
+    /* ===== Trotter on a 2-qubit ZZ term: should match the closed-form ZZ gate =====
+     * exp(-i α Z⊗Z) for α = π/2: Trotter step of one ZZ term should give
+     * the same diag(-i, +i, +i, -i) phases on |++⟩ that the ZZ gate does. */
+    {
+        float ts[8], gs[8];
+        /* Trotter path. */
+        tc_qstate_zero(ts, 2);
+        int q0[1] = {0}, q1[1] = {1};
+        tc_qstate_apply_gate(ts, 2, TC_GATE_H, q0, NULL);
+        tc_qstate_apply_gate(ts, 2, TC_GATE_H, q1, NULL);
+        int32_t axes[2] = { TC_GATE_Z, TC_GATE_Z };
+        int32_t qubits[2] = { 0, 1 };
+        tc_pauli_term_t zzterm = {2, axes, qubits, 1.0f};
+        tc_qstate_trotter_step(ts, 2, &zzterm, 1, (float)M_PI/2.0f, 1);
+        /* Gate path. */
+        tc_qstate_zero(gs, 2);
+        tc_qstate_apply_gate(gs, 2, TC_GATE_H, q0, NULL);
+        tc_qstate_apply_gate(gs, 2, TC_GATE_H, q1, NULL);
+        float zzp[1] = {(float)M_PI};
+        int q01[2] = {0, 1};
+        tc_qstate_apply_gate(gs, 2, TC_GATE_ZZ, q01, zzp);
+        float max_err = 0.0f;
+        for (int i = 0; i < 8; ++i) {
+            float d = fabsf(ts[i] - gs[i]);
+            if (d > max_err) max_err = d;
+        }
+        CHECK("Trotter Z⊗Z matches closed-form ZZ gate", max_err < 1e-4f);
+    }
+
+    /* ===== Quantum Geometric Tensor: parameter-shift on Rz(θ)|+⟩ =====
+     * |ψ(θ)⟩ = Rz(θ)|+⟩. ∂_θ |ψ⟩ = -i(Z/2)|ψ⟩ ⇒ <∂ψ|∂ψ> = 1/4, <ψ|∂ψ> = 0
+     * (since <+|Z|+⟩ = 0). So QGT_{00} = 1/4 - 0 = 0.25. */
+    {
+        float psi[4], dpsi[4];
+        tc_qstate_zero(psi, 1);
+        int q0[1] = {0};
+        tc_qstate_apply_gate(psi, 1, TC_GATE_H, q0, NULL);
+        /* dpsi = -i/2 · Z · psi. psi = (1/√2, 0, 1/√2, 0).
+         * Z · psi = (1/√2, 0, -1/√2, 0).
+         * -i/2 · Z · psi = (0, -1/(2√2), 0,  1/(2√2)). */
+        const float inv_sqrt2 = 0.70710678f;
+        const float half_inv_sqrt2 = inv_sqrt2 * 0.5f;
+        dpsi[0] = 0.0f;          dpsi[1] = -half_inv_sqrt2;
+        dpsi[2] = 0.0f;          dpsi[3] =  half_inv_sqrt2;
+        const float* d_arr[1] = { dpsi };
+        float G[2];  /* 1×1 complex */
+        tc_quantum_geometric_tensor(psi, d_arr, 1, 1, G);
+        CHECK("QGT_{00} = 0.25 (Fubini-Study metric on Rz parameter)",
+              APPROX(G[0], 0.25f, 1e-5f));
+        CHECK("QGT_{00} imag = 0", APPROX(G[1], 0.0f, 1e-5f));
+    }
+
     /* ===== 4-qubit circuit norm-preservation ===== */
     {
         float state[32];  /* 4 qubits = 16 amps = 32 floats */
