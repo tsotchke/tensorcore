@@ -248,12 +248,14 @@ void tc_cblas_sgemm(CBLAS_TRANSPOSE ta, CBLAS_TRANSPOSE tb,
 
 /* Dequantize an fp16 [rows x cols] matrix into an fp32 buffer.
  * Respects the leading dimension; the dst is packed (ld = cols).
- * OpenMP-parallelized; saturates all available cores on the dequant pass. */
+ *
+ * Serial on purpose: matches the bf16 path below. A `#pragma omp` here
+ * would trip OMP Error #15 ("multiple OMP runtimes linked") inside the
+ * PyTorch bridge, where libomp is already loaded by PyTorch and a
+ * second init from tensorcore's link of OpenMP::OpenMP_CXX is fatal.
+ * KMP_DUPLICATE_LIB_OK=TRUE just delays the crash to first deref. */
 void dequant_fp16_to_fp32(const uint16_t* src, int32_t rows, int32_t cols,
                           int32_t ld, float* dst) {
-#if defined(_OPENMP)
-    #pragma omp parallel for schedule(static)
-#endif
     for (int32_t r = 0; r < rows; ++r) {
         const uint16_t* row = src + (size_t)r * ld;
         float* dst_row = dst + (size_t)r * cols;
@@ -262,12 +264,9 @@ void dequant_fp16_to_fp32(const uint16_t* src, int32_t rows, int32_t cols,
 }
 
 /* Quantize an fp32 [rows x cols] packed buffer back into an fp16 matrix with
- * the given leading dimension. OpenMP-parallel. */
+ * the given leading dimension. Serial; see dequant_fp16_to_fp32 above. */
 void quantize_fp32_to_fp16(const float* src, int32_t rows, int32_t cols,
                            int32_t ld, uint16_t* dst) {
-#if defined(_OPENMP)
-    #pragma omp parallel for schedule(static)
-#endif
     for (int32_t r = 0; r < rows; ++r) {
         uint16_t* dst_row = dst + (size_t)r * ld;
         const float* src_row = src + (size_t)r * cols;
