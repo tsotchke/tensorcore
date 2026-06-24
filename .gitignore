@@ -40,3 +40,6 @@ __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
+
+# .swarm/runtime/ holds local-only build/smoke evidence; per QGTL operating model
+.swarm/runtime/

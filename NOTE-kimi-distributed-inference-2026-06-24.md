@@ -1,7 +1,27 @@
 # NOTE for the tensorcore agent — distributed Kimi inference transport (od ⇄ cosbox)
 
 **From:** Claude Code (Atlas) · 2026-06-24 · driving the Kimi K2.6 6GB-serving effort.
-**Ask:** tensorcore needs a **remote expert-weight paging transport** for INFERENCE. Today tensorcore's `distributed.h` has training collectives (allreduce/broadcast/allgather/barrier, DiLoCo param-sync) — but **nothing for inference weight-streaming / remote tensor fetch**. That's the gap blocking a fast Kimi.
+
+## UPDATE: the transport ALREADY EXISTS — this is VERIFY + BENCHMARK, not build.
+`include/tensorcore/remote_tensor.h` + `lib/distributed/remote_tensor.cpp` (compiled
+into libtensorcore) already implement EXACTLY this: roles `TC_REMOTE_ROLE_WEIGHT_SERVER`
+(registers tensors by name, zero-copy `writev` serve) / `TC_REMOTE_ROLE_COMPUTE_CLIENT`
+(`tc_remote_connect` + `tc_remote_tensor_fetch(h, peer_id, name, dst, bytes)`), one TCP
+listener per server, one worker thread per client. Its OWN header comment references the
+"240 MB/s spinning disk" Kimi scenario, and `bench/bench_remote_tensor.c` defaults to a
+**23.6 MiB Q4 expert bank** (DEFAULT_EXPERT_BYTES=24731648) measuring per-fetch overhead
++ sustained MB/s. This is purpose-built for the od+cosbox Kimi split.
+
+**So the remaining tensorcore-side work is just:** (1) run `bench_remote_tensor`
+**od(server)↔cosbox(client)** to get the REAL fetch bandwidth + per-fetch latency (the
+decisive number); (2) confirm the GPU dst path (fetch directly into a CUDA buffer / or
+host-staged then H2D); (3) any async/prefetch + double-buffer wrapper the kimi engine
+needs to hide fetch latency behind GEMM. The original "build it" framing below is
+superseded — keep it only as the integration contract.
+
+---
+(original ask, now mostly DONE — kept for the integration contract:)
+tensorcore needs a **remote expert-weight paging transport** for INFERENCE.
 
 ## Why (the measured architecture problem)
 Kimi K2.6 = 543GB Q4 MoE, per-token active set **11.3 GiB** (8 experts × 61 layers × 23.6 MiB).
