@@ -423,6 +423,47 @@ def main() -> int:
         probes["lie_su2_so3_round_trip"] = {"error": str(exc), "passed": False,
                                                 "traceback": traceback.format_exc()}
 
+    # === Lindblad amplitude-damping vs analytic exp(-γt) ===
+    try:
+        class _PT(ctypes.Structure):
+            _fields_ = [("n_paulis", ctypes.c_int32),
+                        ("axes",     ctypes.POINTER(ctypes.c_int32)),
+                        ("qubits",   ctypes.POINTER(ctypes.c_int32)),
+                        ("coef",     ctypes.c_float)]
+        dm_lindblad = bind("tc_dmstate_lindblad_step", None,
+                            [f32p, ctypes.c_int,
+                             ctypes.POINTER(_PT), ctypes.c_int,
+                             f32p, ctypes.POINTER(ctypes.c_int), ctypes.c_int,
+                             ctypes.c_float, ctypes.c_int])
+        dm_zero    = bind("tc_dmstate_zero", None, [f32p, ctypes.c_int])
+        dm_apply_u = bind("tc_dmstate_apply_1q_unitary", None,
+                            [f32p, ctypes.c_int, ctypes.c_int, f32p])
+        if any(fn is None for fn in (dm_lindblad, dm_zero, dm_apply_u)):
+            raise RuntimeError("Lindblad symbols missing")
+        rho = (ctypes.c_float * 8)()
+        dm_zero(rho, 1)
+        X = (ctypes.c_float * 8)(0,0, 1,0, 1,0, 0,0)
+        dm_apply_u(rho, 1, 0, X)  # ρ = |1⟩⟨1|
+        # γ = 0.5, L = √γ σ_-
+        g = 0.5 ** 0.5
+        L = (ctypes.c_float * 8)(0,0, g,0, 0,0, 0,0)
+        jq = (ctypes.c_int * 1)(0)
+        dm_lindblad(rho, 1, None, 0, L, jq, 1, 2.0, 200)
+        # |1⟩ population should equal exp(-γ·t) = exp(-1) ≈ 0.3679
+        import math as _math
+        target = _math.exp(-1.0)
+        diff = abs(rho[6] - target)
+        ok = diff < 0.005  # within 0.5% of analytic (Trotter dt=0.01 error)
+        probes["lindblad_amplitude_damping"] = {
+            "pop_one_final": rho[6],
+            "expected_exp_neg_one": target,
+            "abs_error": diff,
+            "passed": ok,
+        }
+    except Exception as exc:
+        probes["lindblad_amplitude_damping"] = {"error": str(exc), "passed": False,
+                                                   "traceback": traceback.format_exc()}
+
     # === 4-qubit circuit norm preservation ===
     try:
         state = (ctypes.c_float * 32)(); q_zero(state, 4)

@@ -81,6 +81,43 @@ void tc_dmstate_trace(const float* rho, int n_qubits,
  * maximally mixed state = 1/2^n. */
 float tc_dmstate_purity(const float* rho, int n_qubits);
 
+/* ---- Lindblad evolution (open quantum systems) ---- *
+ *
+ * Master equation:
+ *   dρ/dt = -i [H, ρ]
+ *          + Σ_k (L_k ρ L_k† - ½ {L_k† L_k, ρ})
+ *
+ * Hamiltonian H is described by Pauli terms (same struct as
+ * tc_qstate_trotter_step). Each first-order substep:
+ *   1. Hamiltonian evolution: ρ → U(dt) ρ U(dt)† where U(dt) is a
+ *      first-order Trotter approximation of exp(-iH dt). Implemented
+ *      by walking the same Pauli-string decomposition the state-vector
+ *      Trotter uses (basis change + CNOT staircase + Rz + reverse) and
+ *      applying every gate to ρ via the density-matrix conjugation
+ *      kernels — preserves Hermiticity and trace.
+ *   2. Dissipator: for each jump operator L_k (single-qubit, 2×2
+ *      complex, 8 floats), compute
+ *        ρ ← ρ + dt (L_k ρ L_k† - ½ (L_k† L_k ρ + ρ L_k† L_k)).
+ *      Single-qubit jumps cover the standard noise models
+ *      (depolarising, dephasing, amplitude damping, etc.) — multi-
+ *      qubit jump operators can be added later.
+ *
+ * First-order error is O(dt²); composable across substeps. Trace
+ * preservation holds to O(dt²) (small deviation accumulates over
+ * many substeps — caller can rescale by 1/tr(ρ) if needed). */
+
+/* tc_pauli_term_t is defined in tensorcore/quantum_gates.h; include
+ * here so callers don't need a separate include. */
+#include "tensorcore/quantum_gates.h"
+
+void tc_dmstate_lindblad_step(float* rho, int n_qubits,
+                               const tc_pauli_term_t* H_terms,
+                               int n_H_terms,
+                               const float* jump_ops,
+                               const int*   jump_qubits,
+                               int n_jumps,
+                               float t, int n_substeps);
+
 #ifdef __cplusplus
 }
 #endif

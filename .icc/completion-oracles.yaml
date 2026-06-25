@@ -410,6 +410,15 @@ oracles:
         label: SU(2)/SO(3) exp/log + bridge round-trip (half-angle double cover)
         action: fix_lie_groups
 
+      - id: lindblad_evolution_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.quantum_gates.probes.lindblad_amplitude_damping.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Lindblad amplitude-damping decays |1⟩⟨1| to exp(-γt) (open-systems)
+        action: fix_lindblad
+
   - name: mesh-collective-runtime-evidence
     target: mesh-collective-runtime-evidence
     aliases:

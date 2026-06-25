@@ -197,6 +197,7 @@ _tc_dmstate_trace
 _tc_dmstate_purity
 _tc_dmstate_apply_2q_unitary
 _tc_dmstate_partial_trace
+_tc_dmstate_lindblad_step
 _tc_su2_exp
 _tc_su2_log
 _tc_su2_mul

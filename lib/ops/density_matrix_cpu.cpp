@@ -285,6 +285,228 @@ extern "C" void tc_dmstate_trace(const float* rho, int n_qubits,
     *out_im = (float)im;
 }
 
+/* ---- Lindblad evolution helpers ----
+ *
+ * Hamiltonian Trotter on ρ: walk the standard Pauli-string evolution
+ * decomposition (basis change + CNOT staircase + Rz + reverse) but
+ * applying every gate to ρ via tc_dmstate_apply_*_unitary so the
+ * transformation is the conjugation ρ → U ρ U†. This preserves
+ * Hermiticity and trace.
+ *
+ * Dissipator: for each single-qubit jump L, compute
+ *   ρ ← ρ + dt · (L ρ L† - ½ (L†L ρ + ρ L†L)).
+ * Single-qubit L acts on one qubit; the L ρ L† term is exactly what
+ * tc_dmstate_apply_1q_unitary computes (the kernel doesn't require L
+ * to be unitary). For the anticommutator we hand-roll the
+ * row-only and column-only multiplications. */
+
+namespace {
+
+void unitary_2x2_from_gate(tc_gate_type_t type, const float* params, float* U) {
+    tc_gate_matrix_1q(type, params, U);
+}
+
+void rho_apply_1q_left(float* rho, int n_qubits, int qubit, const float* M) {
+    /* ρ ← M ρ.  Row sweep with M (no right-multiply by M†). */
+    const size_t dim = (size_t)1 << n_qubits;
+    const size_t step = (size_t)1 << qubit;
+    const size_t stride2 = step << 1;
+    std::vector<float> tmp(2 * dim * dim);
+    std::memcpy(tmp.data(), rho, 2 * dim * dim * sizeof(float));
+    for (size_t j = 0; j < dim; ++j) {
+        for (size_t base = 0; base < dim; base += stride2) {
+            for (size_t off = 0; off < step; ++off) {
+                const size_t i0 = base + off;
+                const size_t i1 = i0 + step;
+                const float a_re = tmp[2 * (i0 * dim + j)];
+                const float a_im = tmp[2 * (i0 * dim + j) + 1];
+                const float b_re = tmp[2 * (i1 * dim + j)];
+                const float b_im = tmp[2 * (i1 * dim + j) + 1];
+                rho[2 * (i0 * dim + j)]     = M[0]*a_re - M[1]*a_im + M[2]*b_re - M[3]*b_im;
+                rho[2 * (i0 * dim + j) + 1] = M[0]*a_im + M[1]*a_re + M[2]*b_im + M[3]*b_re;
+                rho[2 * (i1 * dim + j)]     = M[4]*a_re - M[5]*a_im + M[6]*b_re - M[7]*b_im;
+                rho[2 * (i1 * dim + j) + 1] = M[4]*a_im + M[5]*a_re + M[6]*b_im + M[7]*b_re;
+            }
+        }
+    }
+}
+
+void rho_apply_1q_right(float* rho, int n_qubits, int qubit, const float* M) {
+    /* ρ ← ρ M.  Column sweep with M. */
+    const size_t dim = (size_t)1 << n_qubits;
+    const size_t step = (size_t)1 << qubit;
+    const size_t stride2 = step << 1;
+    std::vector<float> tmp(2 * dim * dim);
+    std::memcpy(tmp.data(), rho, 2 * dim * dim * sizeof(float));
+    for (size_t i = 0; i < dim; ++i) {
+        for (size_t base = 0; base < dim; base += stride2) {
+            for (size_t off = 0; off < step; ++off) {
+                const size_t j0 = base + off;
+                const size_t j1 = j0 + step;
+                const float a_re = tmp[2 * (i * dim + j0)];
+                const float a_im = tmp[2 * (i * dim + j0) + 1];
+                const float b_re = tmp[2 * (i * dim + j1)];
+                const float b_im = tmp[2 * (i * dim + j1) + 1];
+                /* (v · M)[j0] = v[j0]·M[0,0] + v[j1]·M[1,0]
+                 * (v · M)[j1] = v[j0]·M[0,1] + v[j1]·M[1,1]
+                 * Using M[r,c] at M[4r + 2c], M[4r + 2c + 1]. */
+                const float m00r = M[0], m00i = M[1];
+                const float m01r = M[2], m01i = M[3];
+                const float m10r = M[4], m10i = M[5];
+                const float m11r = M[6], m11i = M[7];
+                rho[2 * (i * dim + j0)]     = a_re*m00r - a_im*m00i + b_re*m10r - b_im*m10i;
+                rho[2 * (i * dim + j0) + 1] = a_re*m00i + a_im*m00r + b_re*m10i + b_im*m10r;
+                rho[2 * (i * dim + j1)]     = a_re*m01r - a_im*m01i + b_re*m11r - b_im*m11i;
+                rho[2 * (i * dim + j1) + 1] = a_re*m01i + a_im*m01r + b_re*m11i + b_im*m11r;
+            }
+        }
+    }
+}
+
+/* Compute L† L for a 2x2 complex L. Result is 2x2 Hermitian. */
+void mat2x2_conj_dot(const float* L, float* M) {
+    /* M = L† L. */
+    float Ld[8];
+    for (int r = 0; r < 2; ++r) {
+        for (int c = 0; c < 2; ++c) {
+            Ld[4*r + 2*c]     =  L[4*c + 2*r];
+            Ld[4*r + 2*c + 1] = -L[4*c + 2*r + 1];
+        }
+    }
+    for (int r = 0; r < 2; ++r) {
+        for (int c = 0; c < 2; ++c) {
+            float re = 0.0f, im = 0.0f;
+            for (int k = 0; k < 2; ++k) {
+                const float a_re = Ld[4*r + 2*k];
+                const float a_im = Ld[4*r + 2*k + 1];
+                const float b_re = L [4*k + 2*c];
+                const float b_im = L [4*k + 2*c + 1];
+                re += a_re*b_re - a_im*b_im;
+                im += a_re*b_im + a_im*b_re;
+            }
+            M[4*r + 2*c]     = re;
+            M[4*r + 2*c + 1] = im;
+        }
+    }
+}
+
+/* Apply a single Pauli-string evolution to ρ (via density-matrix
+ * conjugation kernels). This is the open-system analog of the
+ * apply_pauli_evolution helper in quantum_gates_cpu.cpp. */
+void rho_apply_pauli_evolution(float* rho, int n_qubits,
+                                const int32_t* axes,
+                                const int32_t* qubits,
+                                int n_paulis, float alpha) {
+    int active[32]; int n_active = 0;
+    for (int i = 0; i < n_paulis; ++i) {
+        if (axes[i] == TC_GATE_I) continue;
+        active[n_active++] = i;
+    }
+    if (n_active == 0) {
+        /* Global phase: U = e^{-iα} I → U ρ U† = ρ. No-op on ρ. */
+        return;
+    }
+    float U[8];
+    /* Step 1: basis change to Z. */
+    for (int j = 0; j < n_active; ++j) {
+        const int q = qubits[active[j]];
+        if (axes[active[j]] == TC_GATE_X) {
+            unitary_2x2_from_gate(TC_GATE_H, nullptr, U);
+            tc_dmstate_apply_1q_unitary(rho, n_qubits, q, U);
+        } else if (axes[active[j]] == TC_GATE_Y) {
+            unitary_2x2_from_gate(TC_GATE_SDG, nullptr, U);
+            tc_dmstate_apply_1q_unitary(rho, n_qubits, q, U);
+            unitary_2x2_from_gate(TC_GATE_H, nullptr, U);
+            tc_dmstate_apply_1q_unitary(rho, n_qubits, q, U);
+        }
+    }
+    /* Step 2: CNOT staircase. */
+    const int parity_qubit = qubits[active[n_active - 1]];
+    float U_cnot[32];
+    tc_gate_matrix_2q(TC_GATE_CNOT, nullptr, U_cnot);
+    for (int j = 0; j < n_active - 1; ++j) {
+        tc_dmstate_apply_2q_unitary(rho, n_qubits,
+                                     qubits[active[j]], parity_qubit, U_cnot);
+    }
+    /* Step 3: Rz(2α) on parity qubit. */
+    const float two_alpha = 2.0f * alpha;
+    unitary_2x2_from_gate(TC_GATE_RZ, &two_alpha, U);
+    tc_dmstate_apply_1q_unitary(rho, n_qubits, parity_qubit, U);
+    /* Step 4: reverse staircase. */
+    for (int j = n_active - 2; j >= 0; --j) {
+        tc_dmstate_apply_2q_unitary(rho, n_qubits,
+                                     qubits[active[j]], parity_qubit, U_cnot);
+    }
+    /* Step 5: reverse basis change. */
+    for (int j = n_active - 1; j >= 0; --j) {
+        const int q = qubits[active[j]];
+        if (axes[active[j]] == TC_GATE_X) {
+            unitary_2x2_from_gate(TC_GATE_H, nullptr, U);
+            tc_dmstate_apply_1q_unitary(rho, n_qubits, q, U);
+        } else if (axes[active[j]] == TC_GATE_Y) {
+            unitary_2x2_from_gate(TC_GATE_H, nullptr, U);
+            tc_dmstate_apply_1q_unitary(rho, n_qubits, q, U);
+            unitary_2x2_from_gate(TC_GATE_S, nullptr, U);
+            tc_dmstate_apply_1q_unitary(rho, n_qubits, q, U);
+        }
+    }
+}
+
+}  // namespace
+
+extern "C" void tc_dmstate_lindblad_step(float* rho, int n_qubits,
+                                          const tc_pauli_term_t* H_terms,
+                                          int n_H_terms,
+                                          const float* jump_ops,
+                                          const int* jump_qubits,
+                                          int n_jumps,
+                                          float t, int n_substeps) {
+    if (n_substeps <= 0) return;
+    const float dt = t / (float)n_substeps;
+    const size_t N = tc_dmstate_size(n_qubits);
+    std::vector<float> tmp_rho(N), L_rho_Ld(N), Ldd_rho(N), rho_Ldd(N);
+
+    for (int step = 0; step < n_substeps; ++step) {
+        /* Hamiltonian Trotter (one round through each Pauli term). */
+        for (int k = 0; k < n_H_terms; ++k) {
+            const tc_pauli_term_t* tk = &H_terms[k];
+            const float alpha = tk->coef * dt;
+            rho_apply_pauli_evolution(rho, n_qubits,
+                                       tk->axes, tk->qubits, tk->n_paulis,
+                                       alpha);
+        }
+        /* Dissipator. */
+        for (int k = 0; k < n_jumps; ++k) {
+            const float* Lk = jump_ops + 8 * k;
+            const int q = jump_qubits[k];
+
+            /* L ρ L† via the existing 1q apply (works for non-unitary L). */
+            std::memcpy(L_rho_Ld.data(), rho, N * sizeof(float));
+            tc_dmstate_apply_1q_unitary(L_rho_Ld.data(), n_qubits, q, Lk);
+
+            /* L†L as a 2x2 matrix M. */
+            float M_LdL[8];
+            mat2x2_conj_dot(Lk, M_LdL);
+
+            /* L†L · ρ (left-apply). */
+            std::memcpy(Ldd_rho.data(), rho, N * sizeof(float));
+            rho_apply_1q_left(Ldd_rho.data(), n_qubits, q, M_LdL);
+
+            /* ρ · L†L (right-apply). */
+            std::memcpy(rho_Ldd.data(), rho, N * sizeof(float));
+            rho_apply_1q_right(rho_Ldd.data(), n_qubits, q, M_LdL);
+
+            /* ρ += dt · (L ρ L† - ½ (L†L ρ + ρ L†L)). */
+            const float half_dt = 0.5f * dt;
+            for (size_t i = 0; i < N; ++i) {
+                rho[i] += dt * L_rho_Ld[i]
+                        - half_dt * (Ldd_rho[i] + rho_Ldd[i]);
+            }
+        }
+    }
+    (void)tmp_rho;
+}
+
 extern "C" float tc_dmstate_purity(const float* rho, int n_qubits) {
     /* tr(ρ²) for Hermitian ρ equals Σ_{i,j} |ρ_{i,j}|². */
     const size_t dim = (size_t)1 << n_qubits;
