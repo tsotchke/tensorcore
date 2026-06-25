@@ -27,8 +27,11 @@
 
 #include <ATen/EmptyTensor.h>
 #include <ATen/ops/matmul_native.h>
+#include <ATen/detail/PrivateUse1HooksInterface.h>
 #include <c10/core/Allocator.h>
 #include <c10/core/DeviceType.h>
+#include <c10/core/Storage.h>
+#include <c10/core/impl/DeviceGuardImplInterface.h>
 #include <pybind11/stl.h>
 
 extern "C" {
@@ -42,6 +45,13 @@ extern "C" {
  * loads cleanly. On CUDA builds, the strong definition in
  * lib/cuda/buffer.cpp wins. Tracked as task #935. */
 __attribute__((weak)) int tc_cuda_is_active(void) { return 0; }
+
+/* MPS engagement: the public tc_gemm dispatcher (lib/ops/gemm.mm) routes
+ * to tc_mps_gemm (MPSMatrixMultiplication / simdgroup_matrix kernels)
+ * when the tensorcore device is a Metal MTLDevice. The bridge therefore
+ * doesn't need a direct tc_mps_gemm symbol — it asks the library which
+ * backend served the last GEMM (tc_last_backend()) to confirm that the
+ * MPS path actually engaged. Task #936. */
 }
 
 #include <atomic>
@@ -93,6 +103,166 @@ public:
 
 TensorcoreHostAllocator g_tensorcore_allocator;
 std::atomic<bool> g_allocator_registered{false};
+
+/* Pinned-memory allocator for the PrivateUse1 hooks. PyTorch's pin_memory
+ * thread takes the DataPtr returned here and "moves" the underlying
+ * storage onto a CPU tensor (see torch/utils/data/_utils/pin_memory.py
+ * -> Tensor.pin_memory -> aten::_pin_memory). The destination tensor is
+ * device("cpu"), so the DataPtr it gets *must also* be device("cpu") or
+ * PyTorch raises "Attempted to set the storage of a tensor on device
+ * cpu to a storage on different device".
+ *
+ * On the tensorcore portable-CPU backend "pinned" is a no-op — plain
+ * host malloc is what we'd return either way, the page-lock would only
+ * matter to a real CUDA host->device DMA. Returning CPU-typed DataPtrs
+ * keeps the DataLoader pipeline correct without falsely advertising
+ * actual page-locked behavior. */
+class TensorcorePinnedAllocator final : public c10::Allocator {
+public:
+    c10::DataPtr allocate(size_t n) override {
+        void* ptr = nullptr;
+        if (n > 0) {
+            ptr = std::malloc(n);
+            TORCH_CHECK(ptr != nullptr,
+                        "tensorcore pinned-memory allocation failed for ", n, " bytes");
+        }
+        return c10::DataPtr(
+            ptr,
+            ptr,
+            &tensorcore_host_delete,
+            c10::Device(c10::DeviceType::CPU));
+    }
+
+    c10::DeleterFnPtr raw_deleter() const override {
+        return &tensorcore_host_delete;
+    }
+
+    void copy_data(void* dest, const void* src, std::size_t count) const override {
+        std::memcpy(dest, src, count);
+    }
+};
+
+TensorcorePinnedAllocator g_tensorcore_pinned_allocator;
+
+/* PrivateUse1HooksInterface implementation. Required by PyTorch as soon
+ * as anything outside the bridge probes the PrivateUse1 device — most
+ * notably DataLoader with pin_memory=True / num_workers > 0, which
+ * touches the global PrivateUse1 hooks even when the user-side tensors
+ * are CPU/CUDA. Task #938.
+ *
+ * Surface: enough to satisfy DataLoader and `torch.tensor.is_pinned()`
+ * probes without inventing semantics that don't apply to a host-memory
+ * backend.
+ *
+ *   - isBuilt/isAvailable : true (bridge is loaded)
+ *   - deviceCount         : 1 (tensorcore exposes one logical device)
+ *   - hasPrimaryContext   : true (ensure_ctx is idempotent + lazy)
+ *   - getDeviceFromPtr    : tensorcore:0 (single device)
+ *   - isPinnedPtr         : false (our allocator returns plain malloc)
+ *   - getPinnedMemoryAllocator : the host allocator (PrivateUse1 IS host
+ *                                memory on the portable-CPU backend; on
+ *                                Metal builds tc_buffer_alloc returns
+ *                                unified memory, but the wire format
+ *                                between DataLoader and the bridge is
+ *                                still plain CPU buffers)
+ *   - getCurrentDevice / setCurrentDevice / exchangeDevice : 0
+ *   - resizePrivateUse1Bytes : NOT IMPLEMENTED (no resize-in-place yet) */
+class TensorcoreHooks final : public at::PrivateUse1HooksInterface {
+public:
+    ~TensorcoreHooks() override = default;
+
+    bool isBuilt() const override { return true; }
+    bool isAvailable() const override { return true; }
+    void init() const override { /* lazy via ensure_ctx in matmul path */ }
+
+    bool hasPrimaryContext(c10::DeviceIndex /*device_index*/) const override {
+        return true;
+    }
+
+    c10::DeviceIndex deviceCount() const override { return 1; }
+    c10::DeviceIndex getCurrentDevice() const override { return 0; }
+    void setCurrentDevice(c10::DeviceIndex device) const override {
+        TORCH_CHECK(device == 0,
+                    "tensorcore exposes a single logical device: tensorcore:0; "
+                    "got device index ", static_cast<int>(device));
+    }
+    c10::DeviceIndex exchangeDevice(c10::DeviceIndex device) const override {
+        TORCH_CHECK(device == 0,
+                    "tensorcore exchangeDevice: only device 0 is valid; got ",
+                    static_cast<int>(device));
+        return 0;
+    }
+    c10::DeviceIndex maybeExchangeDevice(c10::DeviceIndex device) const override {
+        if (device != 0) return -1;
+        return 0;
+    }
+
+    bool isPinnedPtr(const void* /*data*/) const override {
+        /* The tensorcore host allocator returns plain malloc'd memory.
+         * DataLoader's pin_memory step is harmless (it asks each backend
+         * if it owns the pointer; we honestly answer no), so the actual
+         * pinning is done by the CUDA hooks when CUDA is available, or
+         * skipped on CPU-only systems. */
+        return false;
+    }
+
+    c10::Allocator* getPinnedMemoryAllocator() const override {
+        /* DataLoader uses this allocator to allocate pin-able staging
+         * buffers. The destination tensor is CPU-typed, so the DataPtrs
+         * we return must also be CPU-typed. See TensorcorePinnedAllocator
+         * comment above. */
+        return &g_tensorcore_pinned_allocator;
+    }
+
+    c10::Device getDeviceFromPtr(void* /*data*/) const override {
+        /* Single logical device; the pointer doesn't carry device-index
+         * provenance with our allocator, so always return tensorcore:0. */
+        return c10::Device(c10::DeviceType::PrivateUse1, 0);
+    }
+};
+
+TensorcoreHooks g_tensorcore_hooks;
+std::atomic<bool> g_hooks_registered{false};
+
+/* DeviceGuardImpl for PrivateUse1. PyTorch's torch.accelerator.* APIs
+ * (and consequently DataLoader's pin_memory thread) look up the device
+ * guard for the registered PrivateUse1 device via getDeviceGuardImpl,
+ * which TORCH_CHECK's that an implementation is present and otherwise
+ * raises "PyTorch is not linked with support for <name> devices". The
+ * NoOp guard returns a single-device backend with no streams/events —
+ * which matches tensorcore's host-memory + lazy-context model. Task #938
+ * companion fix; without this the hooks registration alone trips the
+ * DataLoader path. */
+class TensorcorePrivateUse1GuardImpl final
+    : public c10::impl::NoOpDeviceGuardImpl<c10::DeviceType::PrivateUse1> {};
+
+TensorcorePrivateUse1GuardImpl g_tensorcore_guard_impl;
+std::atomic<bool> g_guard_impl_registered{false};
+
+void register_tensorcore_guard_impl() {
+    bool expected = false;
+    if (g_guard_impl_registered.compare_exchange_strong(expected, true)) {
+        /* The registry slot is std::atomic; only the first writer wins.
+         * If another extension has already populated it, this Registrar
+         * call is benign — it warns once and keeps the existing impl. */
+        static c10::impl::DeviceGuardImplRegistrar reg(
+            c10::DeviceType::PrivateUse1, &g_tensorcore_guard_impl);
+        (void)reg;
+    }
+}
+
+void register_tensorcore_hooks() {
+    bool expected = false;
+    if (g_hooks_registered.compare_exchange_strong(expected, true)) {
+        /* RegisterPrivateUse1HooksInterface is one-shot in PyTorch; if
+         * another extension already registered, the second call is a
+         * runtime check inside torch that fires TORCH_WARN. Our atomic
+         * guard makes that benign within this process. */
+        if (!at::isPrivateUse1HooksRegistered()) {
+            at::RegisterPrivateUse1HooksInterface(&g_tensorcore_hooks);
+        }
+    }
+}
 
 void ensure_ctx() {
     static std::atomic<bool> initialized{false};
@@ -195,6 +365,8 @@ void register_privateuse1_name() {
         c10::register_privateuse1_backend("tensorcore");
     }
     register_tensorcore_allocator();
+    register_tensorcore_guard_impl();
+    register_tensorcore_hooks();
 }
 
 void check_dim_fits_tc(const char* name, int64_t value) {
@@ -933,6 +1105,186 @@ at::Tensor tc_matmul_privateuse1(const at::Tensor& A, const at::Tensor& B) {
     return tc_matmul_fp32(A, B);
 }
 
+/* MPS dispatch path. Task #936.
+ *
+ * The tensorcore GEMM dispatcher (lib/ops/gemm.mm) routes to the MPS
+ * backend (MPSMatrixMultiplication / simdgroup_matrix kernels) for any
+ * supported dtype on a Metal-enabled libtensorcore build. PyTorch MPS
+ * tensors live on a different MTLDevice managed by torch's own MPS
+ * allocator, so we can't zero-copy across the device boundary without a
+ * deeper API. For correctness + engagement v1 we copy the tensor data
+ * to host, run tc_gemm against tensorcore-owned buffers (which still
+ * execute on GPU under MPS/simdgroup_matrix kernels on Metal builds),
+ * and copy the result back to MPS. The hot-path zero-copy variant is
+ * tracked as future work; this lands the dispatch wiring so downstream
+ * code that sets QLLM_USE_TENSORCORE_MATMUL=1 on Apple GPU actually
+ * exercises the substrate. */
+bool tc_mps_backend_available() {
+    /* The MPS backend is available when libtensorcore was built with
+     * TC_ENABLE_METAL — tc_init then probes the system MTLDevice and
+     * tc_gemm routes to the MPS path. Probe by checking the backend
+     * name table for a known Metal-only value: TC_BACKEND_MPS is only
+     * exposed when the Metal build is linked. We detect at runtime by
+     * issuing a 1x1x1 GEMM and checking tc_last_backend(); cached. */
+    static std::atomic<int> cached{-1};   /* -1 unknown, 0 no, 1 yes */
+    int v = cached.load(std::memory_order_acquire);
+    if (v != -1) return v == 1;
+    try {
+        ensure_ctx();
+    } catch (...) {
+        cached.store(0, std::memory_order_release);
+        return false;
+    }
+    tc_buffer *bA = nullptr, *bB = nullptr, *bC = nullptr;
+    const size_t bytes = sizeof(float);
+    bool engaged = false;
+    if (tc_buffer_alloc(g_ctx, bytes, &bA) == TC_OK &&
+        tc_buffer_alloc(g_ctx, bytes, &bB) == TC_OK &&
+        tc_buffer_alloc(g_ctx, bytes, &bC) == TC_OK) {
+        void *pa = nullptr, *pb = nullptr;
+        tc_buffer_map(bA, &pa);
+        tc_buffer_map(bB, &pb);
+        if (pa) *((float*)pa) = 1.0f;
+        if (pb) *((float*)pb) = 1.0f;
+        tc_gemm_desc d{};
+        d.M = 1; d.N = 1; d.K = 1;
+        d.a_dtype = TC_DTYPE_F32; d.b_dtype = TC_DTYPE_F32;
+        d.c_dtype = TC_DTYPE_F32; d.accum_dtype = TC_DTYPE_F32;
+        d.alpha = 1.0f; d.beta = 0.0f;
+        d.lda = 1; d.ldb = 1; d.ldc = 1;
+        if (tc_gemm(g_ctx, &d, bA, bB, bC) == TC_OK) {
+            const tc_backend_t b = tc_last_backend();
+            engaged = (b == TC_BACKEND_MPS ||
+                       b == TC_BACKEND_SIMDGROUP_MATRIX ||
+                       b == TC_BACKEND_TENSOROPS_M5 ||
+                       b == TC_BACKEND_METAL_COMPUTE);
+        }
+    }
+    if (bA) tc_buffer_free(g_ctx, bA);
+    if (bB) tc_buffer_free(g_ctx, bB);
+    if (bC) tc_buffer_free(g_ctx, bC);
+    cached.store(engaged ? 1 : 0, std::memory_order_release);
+    return engaged;
+}
+
+bool tc_mps_matmul_eligible(const at::Tensor& A, const at::Tensor& B) {
+    if (A.dtype() != B.dtype()) return false;
+    /* MPS path supports fp32 + bf16; fp16 is left to native MPS for now. */
+    if (A.dtype() != torch::kFloat32 && A.dtype() != torch::kBFloat16) return false;
+    if (A.layout() != torch::kStrided || B.layout() != torch::kStrided) return false;
+    if (A.dim() != 2 || B.dim() != 2) return false;
+    if (A.size(1) != B.size(0)) return false;
+    if (!A.device().is_mps() || !B.device().is_mps()) return false;
+    if (A.device().index() != B.device().index()) return false;
+    return tc_mps_backend_available();
+}
+
+std::atomic<uint64_t> g_mps_dispatch_count{0};
+
+at::Tensor tc_mps_matmul_fp32(const at::Tensor& A, const at::Tensor& B) {
+    TORCH_CHECK(tc_mps_matmul_eligible(A, B),
+                "tc_mps_matmul_fp32: inputs not eligible (A=", A.sizes(),
+                " dtype=", A.scalar_type(), " device=", A.device(),
+                ", B=", B.sizes(), " dtype=", B.scalar_type(),
+                " device=", B.device(),
+                "). Requires both fp32 or bf16 tensors on the same MPS device, "
+                "2-D, with libtensorcore built TC_ENABLE_METAL=ON.");
+
+    const int64_t M64 = A.size(0);
+    const int64_t K64 = A.size(1);
+    const int64_t N64 = B.size(1);
+    check_dim_fits_tc("M", M64);
+    check_dim_fits_tc("N", N64);
+    check_dim_fits_tc("K", K64);
+    const int M = (int)M64, K = (int)K64, N = (int)N64;
+
+    const bool is_bf16 = (A.dtype() == torch::kBFloat16);
+    const size_t elem = is_bf16 ? sizeof(uint16_t) : sizeof(float);
+    const tc_dtype_t tc_dt = is_bf16 ? TC_DTYPE_BF16 : TC_DTYPE_F32;
+
+    auto out = torch::empty({M64, N64}, A.options());
+    if (M == 0 || N == 0) return out;
+    if (K == 0) return out.zero_();
+
+    /* Stage data through CPU; PyTorch's MPS .to('cpu') copies via MTL
+     * blit. For matmul-shaped GEMMs (>= 256^3) the kernel time amortizes
+     * the round trip; production zero-copy is future work that needs a
+     * way to extract the MTLBuffer from a PyTorch MPS tensor. */
+    const auto A_cpu = A.contiguous().to(at::kCPU);
+    const auto B_cpu = B.contiguous().to(at::kCPU);
+    auto out_cpu = at::empty({M64, N64}, A_cpu.options());
+
+    ensure_ctx();
+
+    tc_buffer *bA = nullptr, *bB = nullptr, *bC = nullptr;
+    auto cleanup = [&]() {
+        if (bA) tc_buffer_free(g_ctx, bA);
+        if (bB) tc_buffer_free(g_ctx, bB);
+        if (bC) tc_buffer_free(g_ctx, bC);
+    };
+
+    const size_t bytes_a = checked_matrix_bytes("A", M64, K64, elem);
+    const size_t bytes_b = checked_matrix_bytes("B", K64, N64, elem);
+    const size_t bytes_c = checked_matrix_bytes("C", M64, N64, elem);
+
+    auto load = [&](const void* src, size_t bytes, tc_buffer** dst) -> bool {
+        if (tc_buffer_alloc(g_ctx, bytes, dst) != TC_OK) return false;
+        void* p = nullptr;
+        if (tc_buffer_map(*dst, &p) != TC_OK || !p) return false;
+        std::memcpy(p, src, bytes);
+        return true;
+    };
+
+    if (!load(A_cpu.data_ptr(), bytes_a, &bA) ||
+        !load(B_cpu.data_ptr(), bytes_b, &bB) ||
+        tc_buffer_alloc(g_ctx, bytes_c, &bC) != TC_OK) {
+        cleanup();
+        throw std::runtime_error("tc_mps_matmul: buffer setup failed");
+    }
+
+    tc_gemm_desc desc{};
+    desc.M = M; desc.N = N; desc.K = K;
+    desc.a_dtype = tc_dt; desc.b_dtype = tc_dt; desc.c_dtype = tc_dt;
+    desc.accum_dtype = TC_DTYPE_F32;
+    desc.alpha = 1.0f; desc.beta = 0.0f;
+    desc.transpose_a = false; desc.transpose_b = false;
+    desc.lda = K; desc.ldb = N; desc.ldc = N;
+
+    /* tc_gemm chooses MPS / simdgroup_matrix / tensorops on Metal builds;
+     * portable-CPU builds fall to AMX/NEON/CBLAS. The eligibility check
+     * above gated this path on a confirmed Metal backend. */
+    const auto rc = tc_gemm(g_ctx, &desc, bA, bB, bC);
+    if (rc != TC_OK) {
+        cleanup();
+        throw std::runtime_error(
+            std::string("tc_gemm (MPS path) failed: ") +
+            std::to_string(static_cast<int>(rc)));
+    }
+
+    void* cp = nullptr;
+    if (tc_buffer_map(bC, &cp) != TC_OK || !cp) {
+        cleanup();
+        throw std::runtime_error("tc_mps_matmul: output map failed");
+    }
+    std::memcpy(out_cpu.data_ptr(), cp, bytes_c);
+    cleanup();
+
+    g_mps_dispatch_count.fetch_add(1, std::memory_order_relaxed);
+    return out_cpu.to(A.device());
+}
+
+at::Tensor tc_matmul_mps_dispatch(const at::Tensor& A, const at::Tensor& B) {
+    if (g_default_matmul.load(std::memory_order_acquire) &&
+        tc_mps_matmul_eligible(A, B)) {
+        return tc_mps_matmul_fp32(A, B);
+    }
+    return at::native::matmul(A, B);
+}
+
+uint64_t tc_mps_dispatch_count() {
+    return g_mps_dispatch_count.load(std::memory_order_relaxed);
+}
+
 /* CUDA dispatcher hook. Mirrors the CPU path: only routes through
  * tc_gemm when set_default_matmul() is on AND tensorcore's CUDA
  * backend is live. Otherwise falls back to native PyTorch CUDA matmul
@@ -1104,6 +1456,10 @@ TORCH_LIBRARY_IMPL(aten, CUDA, m) {
     // bmm/addmm/baddbmm registered at AutogradCUDA only — see fallback rationale.
 }
 
+TORCH_LIBRARY_IMPL(aten, MPS, m) {
+    m.impl("matmul", TORCH_FN(tc_matmul_mps_dispatch));
+}
+
 TORCH_LIBRARY_IMPL(aten, AutogradCUDA, m) {
     m.impl("matmul", TORCH_FN(tc_matmul_autograd_cuda));
     m.impl("bmm", TORCH_FN(tc_bmm_dispatch));
@@ -1141,4 +1497,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("cuda_bridge_available", &tc_cuda_bridge_available,
           "Return whether libtensorcore was built with TC_ENABLE_CUDA AND tc_cuda_init "
           "succeeded at runtime. When false, the CUDA dispatcher falls through to native PyTorch.");
+    m.def("mps_bridge_available", &tc_mps_backend_available,
+          "Return whether libtensorcore was built with TC_ENABLE_METAL "
+          "(tc_mps_gemm weakly linked). When false, the MPS dispatcher falls through to native PyTorch.");
+    m.def("mps_dispatch_count", &tc_mps_dispatch_count,
+          "Return the number of times the MPS GEMM dispatcher actually engaged tc_mps_gemm in this process.");
+    m.def("privateuse1_hooks_registered", &at::isPrivateUse1HooksRegistered,
+          "Return whether the bridge's PrivateUse1HooksInterface has been registered with PyTorch.");
 }
