@@ -195,6 +195,15 @@ _tc_dmstate_apply_1q_unitary
 _tc_dmstate_apply_kraus_1q
 _tc_dmstate_trace
 _tc_dmstate_purity
+_tc_dmstate_apply_2q_unitary
+_tc_dmstate_partial_trace
+_tc_su2_exp
+_tc_su2_log
+_tc_su2_mul
+_tc_so3_exp
+_tc_so3_log
+_tc_so3_mul
+_tc_su2_to_so3
 _tc_mesh_group_init
 _tc_mesh_group_shutdown
 _tc_mesh_allreduce

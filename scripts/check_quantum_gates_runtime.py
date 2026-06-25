@@ -344,6 +344,85 @@ def main() -> int:
         probes["dmstate_pure_to_mixed"] = {"error": str(exc), "passed": False,
                                               "traceback": traceback.format_exc()}
 
+    # === Density matrix 2q apply + partial trace: Bell ρ → I/2 reduced ===
+    try:
+        dm_zero    = bind("tc_dmstate_zero",    None, [f32p, ctypes.c_int])
+        dm_from    = bind("tc_dmstate_from_pure", None, [f32p, f32p, ctypes.c_int])
+        dm_pt      = bind("tc_dmstate_partial_trace", None,
+                            [f32p, ctypes.c_int, ctypes.c_int, f32p])
+        dm_purity  = bind("tc_dmstate_purity",  ctypes.c_float, [f32p, ctypes.c_int])
+        if any(fn is None for fn in (dm_zero, dm_from, dm_pt, dm_purity)):
+            raise RuntimeError("dmstate 2q symbols missing")
+        # Build Bell |ψ⟩
+        psi = (ctypes.c_float * 8)()
+        q_zero(psi, 2)
+        q0 = (ctypes.c_int * 1)(0); q01 = (ctypes.c_int * 2)(0, 1)
+        q_apply_g(psi, 2, 4, q0, None)        # H_0
+        q_apply_g(psi, 2, 10, q01, None)      # CNOT
+        # ρ_Bell = |ψ⟩⟨ψ|
+        rho = (ctypes.c_float * 32)()
+        dm_from(rho, psi, 2)
+        bell_purity = float(dm_purity(rho, 2))
+        # Partial trace over q1 → reduced ρ on q0 should be I/2
+        rho_red = (ctypes.c_float * 8)()
+        dm_pt(rho, 2, 1, rho_red)
+        red_purity = float(dm_purity(rho_red, 1))
+        # Expected: rho_red = [[0.5, 0], [0, 0.5]] → purity 0.5, off-diag 0
+        ok = (abs(bell_purity - 1.0) < 1e-5
+              and abs(red_purity - 0.5) < 1e-5
+              and abs(rho_red[0] - 0.5) < 1e-5
+              and abs(rho_red[6] - 0.5) < 1e-5)
+        probes["dmstate_partial_trace_bell"] = {
+            "bell_purity": bell_purity,
+            "reduced_purity": red_purity,
+            "rho_reduced_re_im": list(rho_red),
+            "passed": ok,
+        }
+    except Exception as exc:
+        probes["dmstate_partial_trace_bell"] = {"error": str(exc), "passed": False,
+                                                   "traceback": traceback.format_exc()}
+
+    # === Lie group SU(2): exp + log round-trip ===
+    try:
+        su2_exp = bind("tc_su2_exp", None,
+                        [ctypes.c_float, ctypes.c_float, ctypes.c_float, f32p])
+        su2_log = bind("tc_su2_log", None, [f32p, f32p, f32p, f32p])
+        so3_exp = bind("tc_so3_exp", None,
+                        [ctypes.c_float, ctypes.c_float, ctypes.c_float, f32p])
+        su2_to_so3 = bind("tc_su2_to_so3", None, [f32p, f32p])
+        if any(fn is None for fn in (su2_exp, su2_log, so3_exp, su2_to_so3)):
+            raise RuntimeError("Lie group symbols missing")
+        # exp(i π/2 σ_z) = diag(i, -i): U[0]=0, U[1]=1, U[6]=0, U[7]=-1
+        U = (ctypes.c_float * 8)()
+        su2_exp(0.0, 0.0, math.pi / 2.0, U)
+        ok_exp = (abs(U[0]) < 1e-5 and abs(U[1] - 1.0) < 1e-5
+                  and abs(U[6]) < 1e-5 and abs(U[7] + 1.0) < 1e-5)
+        # log round-trip
+        a = ctypes.c_float(); b = ctypes.c_float(); c = ctypes.c_float()
+        su2_log(U, ctypes.byref(a), ctypes.byref(b), ctypes.byref(c))
+        ok_log = (abs(a.value) < 1e-5 and abs(b.value) < 1e-5
+                  and abs(c.value - math.pi/2) < 1e-5)
+        # SO(3) Rodrigues: π/2 rot about z = [[0,-1,0],[1,0,0],[0,0,1]]
+        R = (ctypes.c_float * 9)()
+        so3_exp(0.0, 0.0, math.pi / 2.0, R)
+        ok_so3 = (abs(R[0]) < 1e-5 and abs(R[1] + 1.0) < 1e-5
+                  and abs(R[3] - 1.0) < 1e-5 and abs(R[8] - 1.0) < 1e-5)
+        # SU(2) → SO(3) bridge: U = exp(i π/2 σ_z) is half-angle of π rot about z
+        # → R = diag(-1, -1, 1)
+        R2 = (ctypes.c_float * 9)()
+        su2_to_so3(U, R2)
+        ok_bridge = (abs(R2[0] + 1.0) < 1e-5 and abs(R2[4] + 1.0) < 1e-5
+                     and abs(R2[8] - 1.0) < 1e-5)
+        probes["lie_su2_so3_round_trip"] = {
+            "exp_ok": ok_exp, "log_ok": ok_log,
+            "so3_ok": ok_so3, "bridge_ok": ok_bridge,
+            "log_recovered_c": c.value,
+            "passed": ok_exp and ok_log and ok_so3 and ok_bridge,
+        }
+    except Exception as exc:
+        probes["lie_su2_so3_round_trip"] = {"error": str(exc), "passed": False,
+                                                "traceback": traceback.format_exc()}
+
     # === 4-qubit circuit norm preservation ===
     try:
         state = (ctypes.c_float * 32)(); q_zero(state, 4)

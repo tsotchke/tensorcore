@@ -392,6 +392,24 @@ oracles:
         label: Density matrix |0⟩⟨0| → H |0⟩⟨0| H → depolarising channel pipeline
         action: fix_dmstate_dispatch
 
+      - id: density_matrix_partial_trace_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.quantum_gates.probes.dmstate_partial_trace_bell.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Partial trace of Bell ρ over one qubit yields I/2 (maximally mixed reduction)
+        action: fix_partial_trace
+
+      - id: lie_groups_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.quantum_gates.probes.lie_su2_so3_round_trip.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: SU(2)/SO(3) exp/log + bridge round-trip (half-angle double cover)
+        action: fix_lie_groups
+
   - name: mesh-collective-runtime-evidence
     target: mesh-collective-runtime-evidence
     aliases:

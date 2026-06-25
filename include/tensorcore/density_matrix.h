@@ -44,6 +44,27 @@ void tc_dmstate_from_pure(float* rho, const float* psi, int n_qubits);
 void tc_dmstate_apply_1q_unitary(float* rho, int n_qubits, int qubit,
                                   const float* U);
 
+/* Apply a 4×4 unitary U to (q_ctrl, q_targ): ρ → U ρ U†.
+ * U layout matches tc_qstate_apply_2q_unitary (4×4 row-major
+ * interleaved complex, 32 floats). Basis order |q_ctrl q_targ⟩
+ * = |00⟩,|01⟩,|10⟩,|11⟩ — same as the pure-state 2q convention. */
+void tc_dmstate_apply_2q_unitary(float* rho, int n_qubits,
+                                  int q_ctrl, int q_targ, const float* U);
+
+/* Partial trace: trace out one qubit, returning the reduced ρ on
+ * the remaining n_qubits-1 qubits. `rho_out` must be allocated with
+ * tc_dmstate_size(n_qubits - 1) floats.
+ *
+ * Formula: tr_q(ρ)_{i, j} = Σ_{k∈{0,1}} ρ_{i ⊕ kq, j ⊕ kq}
+ * where ⊕ kq sets bit `q` to k in the index.
+ *
+ * Qubit-index convention: bit 0 is LSB. The qubit being traced is
+ * removed from the index; remaining qubits compact downward
+ * (so a 3-qubit ρ tracing out qubit 1 yields a 2-qubit ρ with
+ *  what were qubits {0, 2} now as qubits {0, 1}). */
+void tc_dmstate_partial_trace(const float* rho_in, int n_qubits,
+                               int trace_qubit, float* rho_out);
+
 /* Apply a Kraus channel on a single qubit: ρ → Σ_k K_k ρ K_k†.
  * `kraus_ops` is a flat array of `n_kraus` 2×2 complex matrices
  * (each 8 floats, same layout as the unitary path). The caller is

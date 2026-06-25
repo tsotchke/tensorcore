@@ -129,6 +129,130 @@ extern "C" void tc_dmstate_apply_1q_unitary(float* rho, int n_qubits,
     }
 }
 
+extern "C" void tc_dmstate_apply_2q_unitary(float* rho, int n_qubits,
+                                             int q_ctrl, int q_targ,
+                                             const float* U) {
+    /* ρ → U · ρ · U† where U is 4×4 acting on (q_ctrl, q_targ).
+     * Sweep 4×4 sub-blocks of ρ: for each (i_other, j_other) pair
+     * over the remaining n-2 qubits, gather the 16 sub-amps into a
+     * 4×4 complex matrix B, compute U·B·U†, and write back. */
+    if (q_ctrl == q_targ) return;
+    const size_t dim = (size_t)1 << n_qubits;
+    const size_t mask_ct = ((size_t)1 << q_ctrl) | ((size_t)1 << q_targ);
+
+    /* Build U† once. */
+    float Ud[32];
+    for (int r = 0; r < 4; ++r) {
+        for (int c = 0; c < 4; ++c) {
+            Ud[8*r + 2*c]     =  U[8*c + 2*r];
+            Ud[8*r + 2*c + 1] = -U[8*c + 2*r + 1];
+        }
+    }
+
+    auto sub_idx = [q_ctrl, q_targ](size_t other, int basis_k) {
+        const int b_ctrl = (basis_k >> 1) & 1;
+        const int b_targ = basis_k & 1;
+        return other | ((size_t)b_ctrl << q_ctrl) | ((size_t)b_targ << q_targ);
+    };
+
+    /* Iterate over all (i_other, j_other) pairs of indices with bits
+     * q_ctrl/q_targ cleared. */
+    std::vector<size_t> others;
+    others.reserve(dim >> 2);
+    for (size_t i = 0; i < dim; ++i) {
+        if ((i & mask_ct) == 0) others.push_back(i);
+    }
+
+    for (size_t i_other : others) {
+        for (size_t j_other : others) {
+            /* Gather the 4×4 complex sub-block B[4][4] from ρ. */
+            float B[32];
+            for (int r = 0; r < 4; ++r) {
+                const size_t ri = sub_idx(i_other, r);
+                for (int c = 0; c < 4; ++c) {
+                    const size_t cj = sub_idx(j_other, c);
+                    B[8*r + 2*c]     = rho[2 * (ri * dim + cj)];
+                    B[8*r + 2*c + 1] = rho[2 * (ri * dim + cj) + 1];
+                }
+            }
+            /* T = U · B (4×4 complex matmul). */
+            float T[32] = {0};
+            for (int r = 0; r < 4; ++r) {
+                for (int k = 0; k < 4; ++k) {
+                    const float ur_re = U[8*r + 2*k];
+                    const float ur_im = U[8*r + 2*k + 1];
+                    for (int c = 0; c < 4; ++c) {
+                        const float br_re = B[8*k + 2*c];
+                        const float br_im = B[8*k + 2*c + 1];
+                        T[8*r + 2*c]     += ur_re*br_re - ur_im*br_im;
+                        T[8*r + 2*c + 1] += ur_re*br_im + ur_im*br_re;
+                    }
+                }
+            }
+            /* W = T · U† (4×4). */
+            float W[32] = {0};
+            for (int r = 0; r < 4; ++r) {
+                for (int k = 0; k < 4; ++k) {
+                    const float tr_re = T[8*r + 2*k];
+                    const float tr_im = T[8*r + 2*k + 1];
+                    for (int c = 0; c < 4; ++c) {
+                        const float ud_re = Ud[8*k + 2*c];
+                        const float ud_im = Ud[8*k + 2*c + 1];
+                        W[8*r + 2*c]     += tr_re*ud_re - tr_im*ud_im;
+                        W[8*r + 2*c + 1] += tr_re*ud_im + tr_im*ud_re;
+                    }
+                }
+            }
+            /* Scatter W back into ρ. */
+            for (int r = 0; r < 4; ++r) {
+                const size_t ri = sub_idx(i_other, r);
+                for (int c = 0; c < 4; ++c) {
+                    const size_t cj = sub_idx(j_other, c);
+                    rho[2 * (ri * dim + cj)]     = W[8*r + 2*c];
+                    rho[2 * (ri * dim + cj) + 1] = W[8*r + 2*c + 1];
+                }
+            }
+        }
+    }
+}
+
+extern "C" void tc_dmstate_partial_trace(const float* rho_in, int n_qubits,
+                                          int trace_qubit, float* rho_out) {
+    /* tr_q(ρ)_{i, j} = Σ_{k∈{0,1}} ρ_{i⊕kq, j⊕kq}.
+     * Output ρ has n_qubits - 1 qubits. The remaining qubits compact:
+     * bit `q` is removed from the index, higher bits shift down by 1. */
+    const int n_out = n_qubits - 1;
+    if (n_out < 0) return;
+    const size_t dim_in  = (size_t)1 << n_qubits;
+    const size_t dim_out = (size_t)1 << n_out;
+    const size_t mask_q  = (size_t)1 << trace_qubit;
+    const size_t low_mask  = mask_q - 1;        /* bits below trace_qubit */
+    const size_t high_mask = ~(2 * mask_q - 1); /* bits above trace_qubit */
+
+    auto expand = [low_mask, trace_qubit](size_t i_out, int k) {
+        /* Insert bit `k` at position trace_qubit. */
+        const size_t lo = i_out & low_mask;
+        const size_t hi = (i_out & ~low_mask) << 1;
+        return lo | hi | ((size_t)k << trace_qubit);
+    };
+    (void)high_mask; (void)mask_q;
+
+    std::memset(rho_out, 0, 2 * dim_out * dim_out * sizeof(float));
+    for (size_t i = 0; i < dim_out; ++i) {
+        for (size_t j = 0; j < dim_out; ++j) {
+            double re = 0.0, im = 0.0;
+            for (int k = 0; k < 2; ++k) {
+                const size_t i_in = expand(i, k);
+                const size_t j_in = expand(j, k);
+                re += rho_in[2 * (i_in * dim_in + j_in)];
+                im += rho_in[2 * (i_in * dim_in + j_in) + 1];
+            }
+            rho_out[2 * (i * dim_out + j)]     = (float)re;
+            rho_out[2 * (i * dim_out + j) + 1] = (float)im;
+        }
+    }
+}
+
 extern "C" void tc_dmstate_apply_kraus_1q(float* rho, int n_qubits, int qubit,
                                            const float* kraus_ops, int n_kraus) {
     /* ρ' = Σ_k K_k ρ K_k†. Allocate a zero accumulator, then for each
