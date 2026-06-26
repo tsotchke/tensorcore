@@ -90,3 +90,9 @@ print_oracle python-substrate-runtime-evidence --trace-file "$PY_SUB_TRACE"
 RUST_TRACE="$REPO_ROOT/build/rust_crate_runtime_evidence.json"
 trace_or_skip "$RUST_TRACE" || true
 print_oracle rust-crate-runtime-evidence --trace-file "$RUST_TRACE"
+
+# 10. Adversarial evals suite (6 scenarios: dirty-worktree, stale-artifact,
+#     qwen-unavailable, disk-pressure, failed-gates, new-development).
+AE_TRACE="$REPO_ROOT/build/adversarial_evals_evidence.json"
+trace_or_skip "$AE_TRACE" || true
+print_oracle adversarial-evals-runtime-evidence --trace-file "$AE_TRACE"
