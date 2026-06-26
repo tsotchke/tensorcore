@@ -161,6 +161,28 @@ def command_flag_value(value: Any, flag: str) -> str | None:
     return None
 
 
+def command_flag_values(value: Any, flag: str) -> list[str]:
+    parts = command_parts(value)
+    return [parts[index + 1] for index, part in enumerate(parts[:-1]) if part == flag]
+
+
+def render_policy_command(value: Any, job: dict[str, Any]) -> Any:
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    replacement = (
+        job.get("gpu_reconciliation_admission_args")
+        or metadata.get("gpu_reconciliation_admission_args")
+        or ""
+    )
+    if isinstance(value, list):
+        return [
+            str(part).replace("{gpu_reconciliation_admission_args}", str(replacement))
+            for part in value
+        ]
+    if isinstance(value, str):
+        return value.replace("{gpu_reconciliation_admission_args}", str(replacement))
+    return value
+
+
 def scalar_strings(value: Any) -> list[str]:
     if isinstance(value, dict):
         out: list[str] = []
@@ -227,6 +249,12 @@ def validate_checked_in_command(
 def validate_job_policy(errors: list[str], job: dict[str, Any]) -> None:
     job_id = job["id"]
     metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    if job.get("enabled") is False:
+        if not str(metadata.get("cancel_reason") or "").strip():
+            errors.append(f"disabled job {job_id!r} requires metadata.cancel_reason")
+        if not isinstance(metadata.get("cancelled_at_unix"), (int, float)):
+            errors.append(f"disabled job {job_id!r} requires numeric metadata.cancelled_at_unix")
+        return
     if job.get("preflight_cmd") and "--json" not in command_parts(job.get("preflight_cmd")):
         errors.append(f"job {job_id!r} preflight_cmd must emit JSON with --json")
     if command_has_part(job.get("preflight_cmd"), "scripts/check_mesh_git_access.py"):
@@ -421,6 +449,42 @@ def validate_gpu_reconciliation_policy(
             f"CUDA resource {resource_id!r} "
             "gpu_reconciliation.allowed_process_max_memory_mib must be >= 0"
         )
+
+
+def validate_admission_matches_gpu_reconciliation(
+    errors: list[str],
+    job: dict[str, Any],
+    inventory: dict[str, dict[str, Any]],
+) -> None:
+    if job.get("resource_class") != "cuda_exclusive":
+        return
+    row = inventory.get(str(job.get("resource") or ""))
+    if not isinstance(row, dict) or str(row.get("backend") or "").lower() != "cuda":
+        return
+    cfg = row.get("gpu_reconciliation")
+    if not isinstance(cfg, dict) or cfg.get("enabled", True) is not True:
+        return
+    allow = cfg.get("allow_process_regex", [])
+    if not allow:
+        return
+    if not isinstance(allow, list) or not all(isinstance(item, str) for item in allow):
+        return
+    admission_cmd = render_policy_command(job.get("admission_cmd"), job)
+    values = command_flag_values(admission_cmd, "--allow-process-regex")
+    missing = [pattern for pattern in allow if pattern not in values]
+    if missing:
+        errors.append(
+            f"job {job['id']!r} admission_cmd must mirror "
+            f"{job['resource']!r} gpu_reconciliation.allow_process_regex: missing {missing!r}"
+        )
+    memory_cap = cfg.get("allowed_process_max_memory_mib", 64)
+    if isinstance(memory_cap, int):
+        cap_values = command_flag_values(admission_cmd, "--allowed-process-max-memory-mib")
+        if str(memory_cap) not in cap_values:
+            errors.append(
+                f"job {job['id']!r} admission_cmd must mirror "
+                f"{job['resource']!r} gpu_reconciliation.allowed_process_max_memory_mib={memory_cap}"
+            )
 
 
 def validate_georefine_template_policy(errors: list[str], template: dict[str, Any], *, owner: str) -> None:
@@ -620,6 +684,7 @@ def validate_jobs(
                     job.get("metadata") if isinstance(job.get("metadata"), dict) else None,
                 )
         validate_job_policy(errors, job)
+        validate_admission_matches_gpu_reconciliation(errors, job, inventory)
         if job["desired_state"] == "running" and job["resource_class"] == "cuda_exclusive":
             for field in ("admission_cmd", "post_start_probe_cmd", "worker_identity_cmd"):
                 if not job.get(field):

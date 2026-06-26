@@ -100,6 +100,42 @@ def test_paused_jobs_require_pause_reason() -> None:
     assert any("scheduler_pause_reason" in error for error in errors)
 
 
+def test_cancelled_disabled_jobs_do_not_require_preflight() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_job_policy(
+        errors,
+        {
+            "id": "cancelled-georefine",
+            "enabled": False,
+            "desired_state": "paused",
+            "start_cmd": ["python3", "scripts/start_georefine_qwen_rank_probe.py", "--json"],
+            "metadata": {
+                "cancel_reason": "operator_cancelled",
+                "cancelled_at_unix": 1779870797.0,
+                "scheduler_contract": "tensorcore_job_v1_cuda_exclusive_trusted_artifact",
+            },
+        },
+    )
+    assert errors == []
+
+
+def test_disabled_jobs_require_cancel_metadata() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_job_policy(
+        errors,
+        {
+            "id": "disabled-without-audit",
+            "enabled": False,
+            "desired_state": "paused",
+            "metadata": {},
+        },
+    )
+    assert any("metadata.cancel_reason" in error for error in errors)
+    assert any("metadata.cancelled_at_unix" in error for error in errors)
+
+
 def test_running_jobs_reject_host_local_systemd_starts() -> None:
     jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
     errors: list[str] = []
@@ -464,6 +500,78 @@ def test_cuda_inventory_disabled_gpu_reconciliation_requires_reason() -> None:
     assert any("requires reason" in error for error in errors)
 
 
+def cuda_reconciliation_inventory() -> dict[str, dict]:
+    return {
+        "cosbox:cuda3090": {
+            "id": "cosbox:cuda3090",
+            "backend": "cuda",
+            "status": "active",
+            "control_plane": "tensorcore_scheduler",
+            "gpu_reconciliation": {
+                "enabled": True,
+                "poll_host": "cosbox",
+                "allow_process_regex": ["steamwebhelper$", "/opt/google/chrome/chrome"],
+                "allowed_process_max_memory_mib": 256,
+            },
+        },
+    }
+
+
+def test_cuda_job_admission_must_mirror_reconciliation_allowlist() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_admission_matches_gpu_reconciliation(
+        errors,
+        {
+            "id": "qllm-phase1",
+            "resource": "cosbox:cuda3090",
+            "resource_class": "cuda_exclusive",
+            "admission_cmd": [
+                "ssh",
+                "cosbox",
+                (
+                    "cd ~/src/tensorcore && python3 scripts/check_cuda_resource_admission.py "
+                    "--resource cosbox:cuda3090 --allow-process-regex steamwebhelper$ "
+                    "--allowed-process-max-memory-mib 16 --json"
+                ),
+            ],
+        },
+        cuda_reconciliation_inventory(),
+    )
+    assert any("gpu_reconciliation.allow_process_regex" in error for error in errors)
+    assert any("gpu_reconciliation.allowed_process_max_memory_mib=256" in error for error in errors)
+
+
+def test_cuda_job_admission_placeholder_matching_reconciliation_passes() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_admission_matches_gpu_reconciliation(
+        errors,
+        {
+            "id": "qllm-phase1",
+            "resource": "cosbox:cuda3090",
+            "resource_class": "cuda_exclusive",
+            "admission_cmd": [
+                "ssh",
+                "cosbox",
+                (
+                    "cd ~/src/tensorcore && python3 scripts/check_cuda_resource_admission.py "
+                    "--resource cosbox:cuda3090 {gpu_reconciliation_admission_args} --json"
+                ),
+            ],
+            "metadata": {
+                "gpu_reconciliation_admission_args": (
+                    "--allow-process-regex 'steamwebhelper$' "
+                    "--allow-process-regex /opt/google/chrome/chrome "
+                    "--allowed-process-max-memory-mib 256"
+                ),
+            },
+        },
+        cuda_reconciliation_inventory(),
+    )
+    assert errors == []
+
+
 def test_preflight_commands_must_emit_json() -> None:
     jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
     errors: list[str] = []
@@ -677,6 +785,8 @@ def main() -> int:
     test_jobs_allow_repo_local_helpers()
     test_paused_launchable_jobs_require_preflight()
     test_paused_jobs_require_pause_reason()
+    test_cancelled_disabled_jobs_do_not_require_preflight()
+    test_disabled_jobs_require_cancel_metadata()
     test_running_jobs_reject_host_local_systemd_starts()
     test_running_jobs_reject_legacy_georefine_direct_starter()
     test_tensorcore_job_v1_georefine_contract_requires_rank_probe_starter()
@@ -693,6 +803,8 @@ def main() -> int:
     test_cuda_inventory_requires_gpu_reconciliation_policy()
     test_cuda_inventory_accepts_enabled_gpu_reconciliation_policy()
     test_cuda_inventory_disabled_gpu_reconciliation_requires_reason()
+    test_cuda_job_admission_must_mirror_reconciliation_allowlist()
+    test_cuda_job_admission_placeholder_matching_reconciliation_passes()
     test_preflight_commands_must_emit_json()
     test_git_access_preflight_requires_resource()
     test_paused_launchable_job_with_preflight_passes_policy()

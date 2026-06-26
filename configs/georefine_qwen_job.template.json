@@ -107,7 +107,7 @@
   "worker_identity": [
     "ssh",
     "{node}",
-    "cd ~/src/tensorcore && python3 scripts/mesh_worker_identity.py --resource {resource} --artifact-dir {run_dir} --match-regex 'run-georefine-qwen|experiments\\.georefine\\.m2_compress' --require-matching-process --require-matched-cuda --json"
+    "cd ~/src/tensorcore && python3 scripts/mesh_worker_identity.py --resource {resource} --unit tensorcore-georefine-{lease_id}.service --artifact-dir {run_dir} --match-regex 'run-georefine-qwen|experiments\\.georefine\\.m2_compress' --require-active-unit --require-matching-process --require-matched-cuda --json"
   ],
   "artifact": {
     "root": "REPLACE_WITH_TRUSTED_EVIDENCE_ROOT",

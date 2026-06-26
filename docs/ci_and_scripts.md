@@ -980,11 +980,43 @@ qLLM resource-lease controller, and emits scheduler JSON. The checked-in
 `configs/georefine_qwen_job.template.json` stays generic: resource, node,
 worker alias, and run directory are scheduler placeholders, while host-local
 GeoRefine paths are supplied through `TC_GEOREFINE_*` environment entries.
+The launcher prefers a transient user-systemd service named from the lease id,
+so agents interact with the scheduler job while worker detach, lease mirroring,
+reconciler health, and CUDA identity remain implementation details.
 
 Fixture coverage:
 
 ```sh
 python3 scripts/start_georefine_qwen_rank_probe_selftest.py
+```
+
+### `georefine_qwen_control.py`
+
+Agent-facing status and adjustment surface for scheduler-owned GeoRefine Qwen
+runs. `status` reports one Tensorcore-level health object: run state,
+lease/unit/CUDA ownership, latest KD progress, completion summary, current
+live-control values, and the adjustable knob schema. `set` writes live-control
+proposals through the lease-bound GeoRefine reconciler; it does not edit
+`m2_live_control.json` directly. When `--run-dir` is omitted, the command
+discovers the active run directory and worker host from Tensorcore scheduler
+state (`artifacts/mesh/georefine_chat_surgery_scheduler_state.json` by
+default), so agents do not need to know substrate paths.
+
+```sh
+python3 scripts/georefine_qwen_control.py status --json
+
+python3 scripts/georefine_qwen_control.py set \
+  --reason "extend KD recovery" \
+  --set m2_target_kl_kd_steps=8192
+
+python3 scripts/georefine_qwen_control.py --target cosbox status \
+  --run-dir /path/to/georefine/run --json
+```
+
+Fixture coverage:
+
+```sh
+python3 scripts/georefine_qwen_control_selftest.py
 ```
 
 ### `tensorcore_cuda_smoke_job.template.json`

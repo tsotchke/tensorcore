@@ -1583,7 +1583,10 @@ def handle_live_holders(
 
     if current:
         action = "would_heartbeat_live_holder" if dry_run else "heartbeated_live_holder"
-        identity = collect_worker_identity(job, timeout=worker_identity_timeout)
+        identity_job = dict(job)
+        if current.get("id") is not None:
+            identity_job["lease_id"] = str(current["id"])
+        identity = collect_worker_identity(identity_job, timeout=worker_identity_timeout)
         result = {
             "resource": job["resource"],
             "job": job["id"],
@@ -1609,7 +1612,7 @@ def handle_live_holders(
                 )
                 payload = heartbeat_lease(
                     current,
-                    job,
+                    identity_job,
                     arbiter_cmd=arbiter_cmd,
                     timeout=timeout,
                     worker_identity=heartbeat_identity,
@@ -1647,7 +1650,10 @@ def handle_live_holders(
             if dry_run
             else "adopted_unknown_lease_live_holder"
         )
-        identity = collect_worker_identity(job, timeout=worker_identity_timeout)
+        identity_job = dict(job)
+        if current.get("id") is not None:
+            identity_job["lease_id"] = str(current["id"])
+        identity = collect_worker_identity(identity_job, timeout=worker_identity_timeout)
         result = {
             "resource": job["resource"],
             "job": job["id"],
@@ -1667,7 +1673,7 @@ def handle_live_holders(
                 )
                 payload = heartbeat_lease(
                     current,
-                    job,
+                    identity_job,
                     arbiter_cmd=arbiter_cmd,
                     timeout=timeout,
                     worker_identity=identity,

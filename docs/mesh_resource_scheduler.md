@@ -47,10 +47,10 @@ queue file, named like `.mesh_resource_jobs.json.lock`, before the
 load-modify-write cycle and before appending the queue event. Scheduler-VM
 clients should call the submit/cancel CLI instead of editing the queue file
 directly. On the scheduler VM, set `TC_SCHEDULER_EVENT_LOG_JSONL` so submit and
-cancel clients inherit the canonical queue event log path. Add
-`--require-queue-event-log-integrity` to the loop, `status`, or `audit` when
-the scheduler should reject queue rows whose current hashes do not match the
-append-only submit/cancel log.
+cancel clients inherit the canonical queue event log path. Production scheduler
+loops should pass `--event-log-jsonl` and
+`--require-queue-event-log-integrity`; the gate rejects queue rows whose current
+hashes do not match the append-only submit/cancel log.
 
 Example scheduler loop:
 
@@ -72,6 +72,8 @@ Example operator status with the same CUDA placement gate the loop enforces:
 python3 scripts/mesh_resource_scheduler.py status \
   --jobs-json /var/lib/tensorcore/mesh_resource_jobs.json \
   --inventory-json configs/mesh_resources.json \
+  --event-log-jsonl /var/lib/tensorcore/mesh_resource_queue_events.jsonl \
+  --require-queue-event-log-integrity \
   --gpu-reconciliation-audit-json /var/lib/tensorcore/gpu-reconciliation-audit.json \
   --gpu-reconciliation-max-age-sec 120 \
   --json
@@ -92,6 +94,10 @@ emergency bypasses and their artifacts are not trusted unless promoted through
 the scheduler/finalizer path; `scripts/start_georefine_qwen_cr025.py` refuses
 non-preflight launches unless the explicit legacy override flag or environment
 variable is present.
+The starter hides worker lifecycle mechanics from submitters: scheduler-owned
+GeoRefine jobs run under a transient user-systemd unit named from the lease id,
+and the worker identity probe verifies that unit, the matching compressor PID,
+and CUDA ownership as one scheduler status.
 `scripts/check_mesh_resource_jobs.py` keeps the checked-in GeoRefine and CUDA
 smoke submission templates generic: they must use inventory selectors and
 placement placeholders instead of concrete hosts, worker aliases, private
