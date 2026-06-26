@@ -102,14 +102,27 @@ def _to_tc(ctx, t: torch.Tensor):
 
 def _from_tc(buf, like: torch.Tensor) -> torch.Tensor:
     """Read a tc_buffer back into a fresh torch tensor matching `like`'s
-    shape + dtype."""
+    shape + dtype.
+
+    Supported dtypes: fp16, fp32, bfloat16. bf16 has no native numpy
+    dtype, so we fetch the bytes as int16 and reinterpret through
+    torch's bf16 view — round-trip safe and avoids a fp32→bf16 cast
+    that would lose the original tensorcore-side bits."""
     import numpy as np
-    np_dtype = {torch.float16: np.float16, torch.float32: np.float32,
-                torch.bfloat16: None}[like.dtype]
-    if np_dtype is None:
-        raise NotImplementedError(f"_from_tc dtype {like.dtype} not yet supported")
-    arr = buf.to_numpy(tuple(like.shape), np_dtype)
-    return torch.from_numpy(arr).clone()
+    if like.dtype == torch.float16:
+        arr = buf.to_numpy(tuple(like.shape), np.float16)
+        return torch.from_numpy(arr).clone()
+    if like.dtype == torch.float32:
+        arr = buf.to_numpy(tuple(like.shape), np.float32)
+        return torch.from_numpy(arr).clone()
+    if like.dtype == torch.bfloat16:
+        # Fetch raw 16-bit words; reinterpret as bf16 via torch's view.
+        raw = buf.to_numpy(tuple(like.shape), np.int16)
+        return torch.from_numpy(raw).clone().view(torch.bfloat16)
+    raise ValueError(
+        f"_from_tc: unsupported dtype {like.dtype}; "
+        f"supported = {{torch.float16, torch.float32, torch.bfloat16}}"
+    )
 
 
 def _alloc_tc(ctx, nbytes: int):
