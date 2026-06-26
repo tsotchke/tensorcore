@@ -8,7 +8,10 @@
 ;;   2. Link Eshkol programs with -ltensorcore.
 ;;   3. (require tensorcore) from any Eshkol source.
 ;;
-
+;; Module: eshkol.tensorcore — top-level Eshkol surface for
+;; tensorcore (init/shutdown, device info, GEMM, attention forward,
+;; buffer lifecycle). Every other eshkol/*.esk module is callable in
+;; tandem; this one is the foundation.
 (provide tc-init tc-shutdown tc-device-info
          tc-device-name
          tc-buffer-alloc tc-buffer-free tc-buffer-map

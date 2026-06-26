@@ -22,7 +22,9 @@
 ;;   (tc-poincare-mobius-add ctx X Y OUT 1.0 N D)
 ;;   (tc-poincare-distance   ctx X Y DIST 1.0 N D)
 ;;
-
+;; Module: eshkol.poincare — Eshkol-native bindings for tensorcore's
+;; Poincaré ball ops (möbius add, exp/log, distance, conformal factor,
+;; parallel transport). Curvature contract in file header.
 (provide tc-poincare-mobius-add
          tc-poincare-distance
          tc-poincare-conformal-factor

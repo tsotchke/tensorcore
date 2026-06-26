@@ -13,7 +13,8 @@
 ;; Both dispatch into the C primitives in lib/ops/phase_attention_cpu.cpp
 ;; through the flat-ABI tc_eshkol_* helpers.
 ;;
-
+;; Module: eshkol.phase_attention — phase attention + Born-rule output
+;; bindings. Dispatches into lib/ops/phase_attention_cpu.cpp.
 (provide tc-phase-attention-combine
          tc-born-rule-output)
 

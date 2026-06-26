@@ -6,7 +6,9 @@
 ;; Use this for one-off math (slerp interpolation, single geodesic),
 ;; or as the inner kernel for batched / product-manifold wrappers.
 ;;
-
+;; Module: eshkol.sphere — Eshkol-native bindings for tensorcore's
+;; round n-sphere ops (inner, project, exp/log/distance, parallel
+;; transport, slerp).
 (provide tc-sphere-inner
          tc-sphere-project
          tc-sphere-tangent-project

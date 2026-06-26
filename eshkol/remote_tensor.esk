@@ -8,7 +8,9 @@
 ;;
 ;; Reference: NOTE-kimi-distributed-inference-2026-06-24.md.
 ;;
-
+;; Module: eshkol.remote_tensor — Eshkol bindings for tensorcore's
+;; remote tensor-fetch transport (TCP byte transport for inference
+;; weight paging, peer-to-peer addressable by name).
 (provide tc-remote-init
          tc-remote-shutdown
          tc-remote-register-tensor

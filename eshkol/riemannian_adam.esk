@@ -17,7 +17,9 @@
 ;; Inputs are fp32 [N, D] buffers; bc1, bc2 are caller-computed
 ;; (1 − βᵗ) bias corrections, matching tc-adamw-step.
 ;;
-
+;; Module: eshkol.riemannian_adam — RiemannianAdam optimizer steps
+;; per manifold (Poincaré ball, sphere, Euclidean). Dispatches into
+;; lib/ops/riemannian_adam_cpu.cpp.
 (provide tc-riemannian-adam-step-poincare
          tc-riemannian-adam-step-sphere
          tc-riemannian-adam-step-euclidean)

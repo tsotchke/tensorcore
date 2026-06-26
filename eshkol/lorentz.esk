@@ -23,7 +23,10 @@
 ;;   (tc-lorentz-exp p v out n c)
 ;;   (define d (tc-lorentz-distance p q n c))
 ;;
-
+;; Module: eshkol.lorentz — Eshkol-native bindings for tensorcore's
+;; Lorentz hyperboloid ops (Minkowski inner product, exp/log/distance,
+;; parallel transport, Poincaré↔Lorentz conversions). See file header
+;; above for the curvature contract and call-shape examples.
 (provide tc-lorentz-minkowski
          tc-lorentz-project
          tc-lorentz-tangent-project

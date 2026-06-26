@@ -8,7 +8,8 @@
 ;; Gate type values match QGTL's gate_type_t so callers can pass their
 ;; enum straight through (see include/tensorcore/quantum_gates.h).
 ;;
-
+;; Module: eshkol.quantum_gates — Eshkol bindings for tensorcore's
+;; quantum gate matrix dispatch + state-vector apply (1q/2q/3q).
 (provide tc-gate-matrix-1q
          tc-gate-matrix-2q
          tc-qstate-zero

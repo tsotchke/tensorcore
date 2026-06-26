@@ -258,6 +258,37 @@ silicon-bound vs software-bound axes are all in
 - **[bench/README.md](bench/README.md)** — what each bench measures
   (GEMM TFLOPS sweep, FlashAttention TFLOPS, 7B Q4_0 decode latency).
 
+### Cross-project substrate
+
+- **[docs/unified_substrate_roadmap.md](docs/unified_substrate_roadmap.md)** —
+  the coverage matrix showing which geometric / quantum / mesh ops
+  tensorcore exposes to the sibling projects (qLLM, Noesis,
+  tsotchke-chan, QGTL, moonlab) and what's still on the runway.
+- **[docs/cross_device_perf.md](docs/cross_device_perf.md)** —
+  measured GEMM / RMSnorm / SwiGLU / FlashAttention numbers on
+  M2 Ultra vs RTX 3090, plus remote-fetch transport ceilings.
+- **[bindings/rust/tensorcore-rs/README.md](bindings/rust/tensorcore-rs/README.md)**
+  — safe Rust wrapper around `libtensorcore.{dylib,so}` for
+  Rust-side consumers (12 cargo integration tests, all PASS).
+
+### ICC-grounded audits
+
+- **[docs/icc_audit_2026-06-26.md](docs/icc_audit_2026-06-26.md)** —
+  **current** ICC audit, post-Phase-5 (NumPy wrappers, Rust crate,
+  Phase 4 bench harness). 91/92 oracle criteria PASS across 9
+  oracles; full next-step queue.
+- **[docs/icc_audit_2026-06-25.md](docs/icc_audit_2026-06-25.md)** —
+  prior audit (Phase 4 baseline), kept for trail / diff comparison.
+
+### Distributed inference notes
+
+- **[NOTE-kimi-distributed-inference-2026-06-24.md](NOTE-kimi-distributed-inference-2026-06-24.md)**
+  — measurements + path planning for paging Kimi K2.6 MoE expert
+  banks across the Tailscale + 10 GbE mesh.
+- **[docs/kimi_10gbe_procurement.md](docs/kimi_10gbe_procurement.md)**
+  — 10 GbE NIC / cable procurement plan that lifts the per-link
+  ceiling above the 240 MB/s local-disk floor.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

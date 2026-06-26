@@ -12,7 +12,9 @@
 ;; prune the low-importance weights, run inference at 2× speed on the
 ;; production NVIDIA cards.
 ;;
-
+;; Module: eshkol.sparse_gemm — 2:4 structured-sparse GEMM bindings
+;; (prune, check, gemm) targeting cuSPARSELt with the dense-fallback
+;; weak-symbol path in lib/ops/sparse_gemm_cpu.cpp.
 (provide tc-sparse-24-prune
          tc-sparse-24-check
          tc-sparse-24-gemm

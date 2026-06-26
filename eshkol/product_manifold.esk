@@ -19,7 +19,10 @@
 ;;   2 = Sphere          (curvature = radius)
 ;;   3 = Lorentz/hyper.  (curvature |κ|)
 ;;
-
+;; Module: eshkol.product_manifold — Eshkol bindings for tensorcore's
+;; mixed-curvature product manifolds (factor-wise dispatch over
+;; Euclidean/Poincaré/Sphere/Lorentz/Torus). See file header for the
+;; factor-struct layout + ambient-dim contract.
 (provide tc-factor-ambient-dim
          tc-product-ambient-dim
          tc-product-project
