@@ -1,0 +1,5 @@
+module CTensorCore [system] {
+    header "shim.h"
+    link "tensorcore"
+    export *
+}

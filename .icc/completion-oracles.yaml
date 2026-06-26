@@ -889,3 +889,103 @@ oracles:
         severity: high
         label: Recommendation surface is artifact-grounded + non-fabricated
         action: fix_new_development_suggestions
+
+  - name: swift-package-runtime-evidence
+    target: swift-package-runtime-evidence
+    aliases:
+      - swift-package
+      - tensorcore-swift
+    criteria:
+      - id: swift_package_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: TensorCore Swift package runtime evidence is present
+        action: run_check_swift_package_runtime
+
+      - id: swift_package_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: Swift XCTest run is failure-free
+        action: fix_swift_package_failure
+
+      - id: swift_package_runtime_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.swift_package.runtime_status]
+          event_values: [passed, skipped]
+        severity: high
+        label: TensorCore Swift package XCTest suite passes (or is skipped without swift)
+        action: run_swift_package_smoke
+
+      - id: swift_lorentz_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.swift_package.probes.testLorentzRoundtrip.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Swift Lorentz exp/log round-trip passes against libtensorcore
+        action: fix_swift_lorentz
+
+      - id: swift_sphere_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.swift_package.probes.testSphereSlerpHalvesGeodesic.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Swift Sphere exp/log/slerp midpoint passes
+        action: fix_swift_sphere
+
+      - id: swift_torus_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.swift_package.probes.testTorusRoundtrip.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Swift Torus exp/log round-trip passes
+        action: fix_swift_torus
+
+      - id: swift_lie_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.swift_package.probes.testSU2ExpLog.runtime_status,
+                          checks.swift_package.probes.testSO3QuarterTurn.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Swift Lie-group wrappers (SU(2) + SO(3)) pass
+        action: fix_swift_lie
+
+      - id: swift_quantum_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.swift_package.probes.testHadamardProb.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Swift quantum state-vector apply (H on |0⟩) passes
+        action: fix_swift_quantum
+
+      - id: swift_entanglement_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.swift_package.probes.testBellEntanglementEntropy.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Swift entanglement entropy = 1 bit on Bell state
+        action: fix_swift_entanglement
+
+      - id: swift_holonomic_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.swift_package.probes.testHolonomicSingleSegmentPhase.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Swift holonomic gate composition + Berry phase passes
+        action: fix_swift_holonomic
+
+      - id: swift_context_lifecycle_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.swift_package.probes.testContextLifecycle.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Swift Context (tc_init/shutdown) lifecycle passes with RAII deinit
+        action: fix_swift_context_lifecycle

@@ -92,7 +92,12 @@ trace_or_skip "$RUST_TRACE" || true
 print_oracle rust-crate-runtime-evidence --trace-file "$RUST_TRACE"
 
 # 10. Adversarial evals suite (6 scenarios: dirty-worktree, stale-artifact,
-#     qwen-unavailable, disk-pressure, failed-gates, new-development).
+#     qwen-unavailable, disk-pressure, fail-gate-surface, new-development).
 AE_TRACE="$REPO_ROOT/build/adversarial_evals_evidence.json"
 trace_or_skip "$AE_TRACE" || true
 print_oracle adversarial-evals-runtime-evidence --trace-file "$AE_TRACE"
+
+# 11. Swift package (XCTest against libtensorcore on Apple toolchain).
+SW_TRACE="$REPO_ROOT/build/swift_package_runtime_evidence.json"
+trace_or_skip "$SW_TRACE" || true
+print_oracle swift-package-runtime-evidence --trace-file "$SW_TRACE"
