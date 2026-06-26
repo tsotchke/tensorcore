@@ -1,0 +1,31 @@
+[package]
+name = "tensorcore"
+version = "0.1.0"
+edition = "2021"
+description = "Safe Rust bindings to the tensorcore unified math substrate (geometric / quantum / mesh / shard ops, fp32, cross-device via libtensorcore.{dylib,so})"
+license = "Apache-2.0"
+repository = "https://github.com/tsotchke/tensorcore"
+readme = "README.md"
+keywords = ["tensorcore", "geometric", "quantum", "manifold", "ffi"]
+categories = ["science", "external-ffi-bindings", "mathematics"]
+links = "tensorcore"
+
+[lib]
+name = "tensorcore"
+crate-type = ["rlib"]
+
+[features]
+default = []
+# Build against the system-installed libtensorcore.{dylib,so}. The crate
+# always uses dynamic linking; this feature is reserved for a future
+# bundled-build path that downloads + compiles libtensorcore from source.
+system = []
+
+[dependencies]
+libc = "0.2"
+
+[build-dependencies]
+# Intentionally none: build.rs uses only std + std::env to emit the
+# right -L / -l flags, no proc-macro / cc dependency.
+
+[dev-dependencies]

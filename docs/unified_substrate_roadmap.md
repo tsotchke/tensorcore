@@ -69,7 +69,7 @@ Tensorcore's mandate: be the **single C/Eshkol math substrate** that every sibli
 | Python ctypes (`python/tensorcore`) | ✓ | shipped (NumPy-friendly wrappers for Lorentz/Sphere/Torus/SU(2)/SO(3)/quantum gates/metric/geodesic/holonomic/shard/mesh — Phase 5) |
 | PyTorch autograd (matmul/bmm/einsum auto-engage) | ✓ | shipped |
 | Eshkol native (`eshkol/*.esk` flat-ABI bindings) | ✓ | shipped |
-| Rust crate | ✗ | MED |
+| Rust crate (`bindings/rust/tensorcore-rs`) | ✓ | shipped (safe Rust wrapper for Lorentz/Sphere/Torus/SU(2)/SO(3)/quantum gates/metric/geodesic/holonomic + Context RAII; 12 cargo integration tests + 1 doctest all pass) |
 | Swift package (for Noesis/iOS) | ✗ | LOW |
 | JavaScript / WASM (for moonlab demo gallery) | ✗ | LOW |
 
@@ -114,7 +114,11 @@ Current oracles cover: cuda-for-apple-public-integration, pytorch-bridge-runtime
   gate matrices / metric tensor / geodesic ODE / holonomic gates /
   shard plan + register/get / mesh group lifecycle). New oracle
   `python-substrate-runtime-evidence` with 12 criteria — all PASS.
-- Rust crate (small surface, big consumer story) — TODO
+- ✓ Rust crate `tensorcore-rs` (bindings/rust/tensorcore-rs) — safe
+  Rust surface for Lorentz/Sphere/Torus/SU(2)/SO(3)/quantum gates/
+  metric/geodesic/holonomic + Context RAII. build.rs auto-finds the
+  dylib via $TENSORCORE_LIB_DIR or `<repo>/build/`. New oracle
+  `rust-crate-runtime-evidence` with 12 criteria — all PASS.
 - Swift package (Noesis / iOS) — TODO
 - WASM bindings (moonlab demo gallery) — TODO
 

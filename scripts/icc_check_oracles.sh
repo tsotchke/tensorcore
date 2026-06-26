@@ -85,3 +85,8 @@ print_oracle remote-shard-runtime-evidence --trace-file "$RS_SHARD_TRACE"
 PY_SUB_TRACE="$REPO_ROOT/build/python_substrate_runtime_evidence.json"
 trace_or_skip "$PY_SUB_TRACE" || true
 print_oracle python-substrate-runtime-evidence --trace-file "$PY_SUB_TRACE"
+
+# 9. Rust crate (tensorcore-rs cargo test against libtensorcore).
+RUST_TRACE="$REPO_ROOT/build/rust_crate_runtime_evidence.json"
+trace_or_skip "$RUST_TRACE" || true
+print_oracle rust-crate-runtime-evidence --trace-file "$RUST_TRACE"
