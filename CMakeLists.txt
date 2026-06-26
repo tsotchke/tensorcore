@@ -404,6 +404,7 @@ set(TC_COMMON_SOURCES
     lib/ops/geodesic_cpu.cpp
     lib/ops/holonomic_cpu.cpp
     lib/ops/quantum_gates_cpu.cpp
+    lib/ops/quantum_attention_cpu.cpp
     lib/ops/density_matrix_cpu.cpp
     lib/ops/phase_attention_cpu.cpp
     lib/ops/riemannian_adam_cpu.cpp

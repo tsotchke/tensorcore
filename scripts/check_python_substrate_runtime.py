@@ -196,6 +196,42 @@ def main() -> int:
                 "passed": covered == 10
                           and all(0 <= o < 4 for o in owners)}
 
+    def quantum_attention_probe():
+        # Born-rule overlap: same state = 1, orthogonal = 0.
+        state0 = tc.qstate_zero(2)
+        state1 = state0.copy(); state1[0] = 0.0; state1[2] = 1.0  # |10⟩
+        s_self = tc.quantum_attention_score(state0, state0, 2)
+        s_orth = tc.quantum_attention_score(state0, state1, 2)
+        # Softmax sums to 1 per row.
+        scores = np.array([[1.0, 2.0, 3.0]], dtype=np.float32)
+        attn = tc.quantum_attention_softmax(scores, 1, 3, temperature=1.0)
+        row_sum = float(attn.sum())
+        # Apply with identity → values unchanged.
+        I = np.eye(2, dtype=np.float32)
+        V = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+        out = tc.quantum_attention_apply(I, V, 2, 2, 2)
+        out_err = float(np.abs(out - V).max())
+        return {"score_self": s_self, "score_orth": s_orth,
+                "softmax_row_sum": row_sum, "apply_id_err": out_err,
+                "passed": (abs(s_self - 1.0) < 1e-5 and abs(s_orth) < 1e-5
+                           and abs(row_sum - 1.0) < 1e-5 and out_err < 1e-6)}
+
+    def quantum_entanglement_probe():
+        # Bell state |Φ+⟩ = (|00⟩ + |11⟩)/√2 → S = 1 bit on either qubit.
+        bell = np.zeros(8, dtype=np.float32)
+        bell[0] = 1 / math.sqrt(2)  # |00⟩.re
+        bell[6] = 1 / math.sqrt(2)  # |11⟩.re
+        s_q0 = tc.quantum_entanglement_entropy(bell, 2, 0)
+        s_q1 = tc.quantum_entanglement_entropy(bell, 2, 1)
+        # Product state → S = 0 on every qubit.
+        prod = tc.qstate_zero(2)
+        s_prod = tc.quantum_entanglement_entropy(prod, 2, 0)
+        return {"bell_entropy_q0_bits": s_q0,
+                "bell_entropy_q1_bits": s_q1,
+                "product_entropy_bits": s_prod,
+                "passed": (abs(s_q0 - 1.0) < 1e-4 and abs(s_q1 - 1.0) < 1e-4
+                           and abs(s_prod) < 1e-4)}
+
     # Helper for the metric probe — ctypes.byref address as an int.
     import ctypes
     def ctypes_addr(c_obj):
@@ -211,6 +247,8 @@ def main() -> int:
     probe("geodesic_wrapper",     geodesic_probe)
     probe("holonomic_wrapper",    holonomic_probe)
     probe("shard_plan_wrapper",   shard_plan_probe)
+    probe("quantum_attention_wrapper", quantum_attention_probe)
+    probe("quantum_entanglement_wrapper", quantum_entanglement_probe)
 
     all_passed = all(p.get("passed", False) for p in probes.values())
     payload = {

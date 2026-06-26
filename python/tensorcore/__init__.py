@@ -897,6 +897,16 @@ if _lib is not None:
     _lib.tc_holonomic_berry_phase.argtypes = [_f32p, _f32p]
     _lib.tc_holonomic_berry_phase.restype = None
 
+    # Quantum attention (B3): Born-rule overlap + softmax + apply + entanglement.
+    _lib.tc_quantum_attention_score.argtypes = [_f32p, _f32p, c_int]
+    _lib.tc_quantum_attention_score.restype = c_float
+    _lib.tc_quantum_attention_softmax.argtypes = [_f32p, _f32p, c_int, c_int, c_float]
+    _lib.tc_quantum_attention_softmax.restype = None
+    _lib.tc_quantum_attention_apply.argtypes = [_f32p, _f32p, _f32p, c_int, c_int, c_int]
+    _lib.tc_quantum_attention_apply.restype = None
+    _lib.tc_quantum_entanglement_entropy.argtypes = [_f32p, c_int, c_int]
+    _lib.tc_quantum_entanglement_entropy.restype = c_float
+
     # Remote shard (owner-routed tensor sharding over the mesh transport).
     class _TCShardPlan(Structure):
         _fields_ = [("n_peers",        c_int32),
@@ -3276,6 +3286,49 @@ def holonomic_berry_phase(U):
     out = c_float(0.0)
     _lib.tc_holonomic_berry_phase(U_p, ctypes.byref(out))
     return float(out.value)
+
+
+# ---- Tier B3: Quantum attention + entanglement ----
+
+def quantum_attention_score(state_q, state_k, n_qubits):
+    """Born-rule overlap |⟨ψ_Q|ψ_K⟩|² between two n-qubit pure states.
+    Both states MUST already be normalised."""
+    q_a, q_p = _f32_buf(state_q)
+    k_a, k_p = _f32_buf(state_k)
+    return float(_lib.tc_quantum_attention_score(q_p, k_p, c_int(int(n_qubits))))
+
+
+def quantum_attention_softmax(scores, n_q, n_k, temperature=1.0):
+    """Per-row softmax over an [N_q, N_k] score matrix. Returns attn
+    weights summing to 1 per row."""
+    s_a, s_p = _f32_buf(scores)
+    out = _f32_out((n_q, n_k))
+    _lib.tc_quantum_attention_softmax(s_p,
+                                        out.ctypes.data_as(POINTER(c_float)),
+                                        c_int(int(n_q)), c_int(int(n_k)),
+                                        c_float(float(temperature)))
+    return out
+
+
+def quantum_attention_apply(attn, values, n_q, n_k, d_v):
+    """Weighted sum out[q, :] = Σ_k attn[q, k] · values[k, :]."""
+    a_a, a_p = _f32_buf(attn)
+    v_a, v_p = _f32_buf(values)
+    out = _f32_out((n_q, d_v))
+    _lib.tc_quantum_attention_apply(a_p, v_p,
+                                      out.ctypes.data_as(POINTER(c_float)),
+                                      c_int(int(n_q)), c_int(int(n_k)),
+                                      c_int(int(d_v)))
+    return out
+
+
+def quantum_entanglement_entropy(state, n_qubits, qubit_keep):
+    """Single-qubit von Neumann entropy S(ρ_q) for an n-qubit pure
+    state, in bits. 0 for product, 1 for maximally entangled."""
+    s_a, s_p = _f32_buf(state)
+    return float(_lib.tc_quantum_entanglement_entropy(s_p,
+                                                       c_int(int(n_qubits)),
+                                                       c_int(int(qubit_keep))))
 
 
 # ---- Phase 4: Remote shard ----

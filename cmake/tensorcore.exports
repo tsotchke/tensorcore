@@ -238,3 +238,7 @@ _tc_remote_shard_register
 _tc_remote_shard_get
 _tc_remote_shard_publish_put
 _tc_remote_shard_drain_puts
+_tc_quantum_attention_score
+_tc_quantum_attention_softmax
+_tc_quantum_attention_apply
+_tc_quantum_entanglement_entropy

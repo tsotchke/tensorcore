@@ -681,6 +681,24 @@ oracles:
         label: Shard plan wrapper covers all rows with the balanced block-row partition
         action: fix_python_shard_plan_wrapper
 
+      - id: python_quantum_attention_wrapper_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.python_substrate.probes.quantum_attention_wrapper.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Quantum attention wrapper (score + softmax + apply) passes
+        action: fix_python_quantum_attention_wrapper
+
+      - id: python_quantum_entanglement_wrapper_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.python_substrate.probes.quantum_entanglement_wrapper.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Entanglement entropy wrapper computes 1 bit for Bell state, 0 for product
+        action: fix_python_quantum_entanglement_wrapper
+
   - name: rust-crate-runtime-evidence
     target: rust-crate-runtime-evidence
     aliases:
