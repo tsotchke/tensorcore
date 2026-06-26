@@ -275,6 +275,33 @@ oracles:
         label: Flat torus log/exp round-trip with shortest-displacement convention
         action: fix_torus_round_trip
 
+      - id: metric_tensor_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.geometric_ops.probes.metric_tensor_runtime.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Riemannian metric tensor (apply/inverse/Christoffel) round-trip passes
+        action: fix_metric_tensor_runtime
+
+      - id: geodesic_solver_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.geometric_ops.probes.geodesic_runtime.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Geodesic RK4 integrator reproduces Euclidean straight-line geodesic
+        action: fix_geodesic_runtime
+
+      - id: holonomic_gate_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.geometric_ops.probes.holonomic_runtime.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: SU(2) holonomic gate composition + Berry-phase extraction passes
+        action: fix_holonomic_runtime
+
   - name: quantum-ops-runtime-evidence
     target: quantum-ops-runtime-evidence
     aliases:
@@ -472,3 +499,66 @@ oracles:
         severity: high
         label: AllGather assembles all peers' slices into recv buffer
         action: fix_mesh_allgather
+
+  - name: remote-shard-runtime-evidence
+    target: remote-shard-runtime-evidence
+    aliases:
+      - remote-shard
+      - tensorcore-shard-substrate
+    criteria:
+      - id: remote_shard_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: Remote shard runtime evidence is present
+        action: run_check_remote_shard_runtime
+
+      - id: remote_shard_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: Remote shard runtime is failure-free
+        action: fix_remote_shard_runtime_failure
+
+      - id: remote_shard_runtime_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.remote_shard.runtime_status]
+          event_values: [passed, skipped_no_binary]
+        severity: high
+        label: Remote-shard fork-based 2-peer smoke passes (or is skipped)
+        action: run_remote_shard_smoke
+
+      - id: shard_owner_balanced_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.remote_shard.probes.shard_owner_balanced.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Owner assignment is balanced block-row over N peers
+        action: fix_shard_owner_routing
+
+      - id: shard_get_full_range_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.remote_shard.probes.shard_get_full_range.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: shard_get reconstructs the full logical tensor across owners
+        action: fix_shard_get_full
+
+      - id: shard_get_cross_owner_range_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.remote_shard.probes.shard_get_cross_owner_range.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: shard_get handles a row range that crosses an owner boundary
+        action: fix_shard_get_cross_owner
+
+      - id: shard_fork_2peer_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.remote_shard.probes.fork_2peer_both_ranks_ok.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Fork-based 2-peer shard smoke has both ranks at zero fails
+        action: fix_shard_fork_2peer

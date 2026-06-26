@@ -212,6 +212,31 @@ extern "C" uint64_t tc_mesh_total_bytes(const tc_mesh_group_t* g) {
     return g ? g->bytes_shipped : 0;
 }
 
+/* ---- Internal accessors for sibling .cpp files in this directory.
+ *      Declared in mesh_internal.h, NOT exported via public headers. */
+
+extern "C" tc_remote_ctx* tc_mesh_internal_server(tc_mesh_group_t* g) {
+    return g ? g->server : nullptr;
+}
+extern "C" tc_remote_ctx* tc_mesh_internal_client(tc_mesh_group_t* g) {
+    return g ? g->client : nullptr;
+}
+extern "C" int tc_mesh_internal_peer_id(tc_mesh_group_t* g, int32_t rank) {
+    if (!g) return -1;
+    if (rank < 0 || rank >= g->n_peers) return -1;
+    if (rank == g->my_rank) return -1;
+    return g->peer_ids[(size_t)rank];
+}
+extern "C" int32_t tc_mesh_internal_my_rank(tc_mesh_group_t* g) {
+    return g ? g->my_rank : -1;
+}
+extern "C" int32_t tc_mesh_internal_n_peers(tc_mesh_group_t* g) {
+    return g ? g->n_peers : 0;
+}
+extern "C" void tc_mesh_internal_add_bytes(tc_mesh_group_t* g, uint64_t bytes) {
+    if (g) g->bytes_shipped += bytes;
+}
+
 extern "C" tc_status_t tc_mesh_allreduce(tc_mesh_group_t* g,
                                           void* buf, size_t count,
                                           tc_coll_dtype_t dtype,

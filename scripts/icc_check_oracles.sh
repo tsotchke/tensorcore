@@ -75,3 +75,8 @@ print_oracle quantum-ops-runtime-evidence --trace-file "$QG_TRACE"
 MC_TRACE="$REPO_ROOT/build/mesh_collective_runtime_evidence.json"
 trace_or_skip "$MC_TRACE" || true
 print_oracle mesh-collective-runtime-evidence --trace-file "$MC_TRACE"
+
+# 7. Remote shard (owner-routed register + get over tc_remote).
+RS_SHARD_TRACE="$REPO_ROOT/build/remote_shard_runtime_evidence.json"
+trace_or_skip "$RS_SHARD_TRACE" || true
+print_oracle remote-shard-runtime-evidence --trace-file "$RS_SHARD_TRACE"

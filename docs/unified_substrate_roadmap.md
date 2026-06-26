@@ -13,11 +13,11 @@ Tensorcore's mandate: be the **single C/Eshkol math substrate** that every sibli
 | Poincaré ball (mobius_add, exp/log, distance, parallel_transport, conformal_factor) | ✓ | ✓ | — | shipped |
 | Sphere (exp/log, geodesic distance, parallel transport, slerp) | ✓ | ✓ | — | shipped (`sphere.h`/`sphere_cpu.cpp`, qLLM `spherical_fast.c` portable replacement) |
 | Lorentz / hyperboloid (Minkowski inner product, exp/log on hyperboloid) | ✓ | ✓ (`lorentz_fast.c`) | — | shipped (`lorentz.h`/`lorentz_cpu.cpp`) |
-| Torus (periodic manifold) | ✗ | ✓ (`torus_fast.c`) | — | MED |
-| Product manifold (H × S × R, mixed curvature) | ✓ | ✓ (`mixed_curvature.c`) | — | shipped (`product_manifold.h`/`product_manifold_cpu.cpp`, factor-wise dispatch over Euclidean/Poincaré/Sphere/Lorentz) |
-| Lie groups (matrix exp, log, group action) | ✗ | ✓ (`lie_groups.c`) | ✓ (`holonomic_gates.h`) | MED |
-| Riemannian metric tensor (general manifold) | ✗ | ✓ (`metric_tensor.c`, `riemannian_metrics.c`) | ✓ (`quantum_geometric_metric.h`) | MED |
-| Geodesic ODE solver (RK45 on manifolds) | ✗ | ✓ (`geodesic_solver.c`, `fast_geodesic.c`) | ✗ | MED |
+| Torus (periodic manifold) | ✓ | ✓ (`torus_fast.c`) | — | shipped (`torus.h`/`torus_cpu.cpp`, wrap-aware exp/log/distance/PT with intrinsic-dim periods) |
+| Product manifold (H × S × R, mixed curvature) | ✓ | ✓ (`mixed_curvature.c`) | — | shipped (`product_manifold.h`/`product_manifold_cpu.cpp`, factor-wise dispatch over Euclidean/Poincaré/Sphere/Lorentz/Torus) |
+| Lie groups (matrix exp, log, group action) | ✓ | ✓ (`lie_groups.c`) | ✓ (`holonomic_gates.h`) | shipped (`lie_groups.h`/`lie_groups_cpu.cpp`; closed-form SU(2) Pauli exp/log + SO(3) Rodrigues + double-cover bridge) |
+| Riemannian metric tensor (general manifold) | ✓ | ✓ (`metric_tensor.c`, `riemannian_metrics.c`) | ✓ (`quantum_geometric_metric.h`) | shipped (`metric.h`/`metric_cpu.cpp`; metric/inverse-metric/numerical Christoffel via central diff over the manifold's metric callback) |
+| Geodesic ODE solver (RK4 on manifolds) | ✓ | ✓ (`geodesic_solver.c`, `fast_geodesic.c`) | ✗ | shipped (`geodesic.h`/`geodesic_cpu.cpp`; RK4 integration of γ̈ + Γ γ̇γ̇ = 0 against arbitrary tc_metric_fn) |
 | Differential forms (wedge, exterior derivative) | ✗ | ✓ (`differential_forms.c`) | ✗ | LOW |
 | Fiber bundle ops | ✗ | ✓ (`fiber_bundles.c`) | ✓ (`quantum_geometric_connection.h`) | LOW |
 | Bakry-Émery curvature | ✗ | ✓ (`bakry_emery.c`) | ✗ | LOW |
@@ -31,10 +31,10 @@ Tensorcore's mandate: be the **single C/Eshkol math substrate** that every sibli
 | Pauli gates (X, Y, Z, H, S, T, RX, RY, RZ) | ✓ | ✓ (`quantum_gate_operations.h`) | ✓ | shipped (`quantum_gates.h`/`quantum_gates_cpu.cpp`; tc_gate_type_t enum values match QGTL's gate_type_t) |
 | CNOT, CZ, SWAP (2-qubit gates) | ✓ | ✓ | ✓ | shipped (same file; row-major interleaved-complex 4x4) |
 | State-vector apply_gate (bit-twiddling on amplitudes) | ✓ | ✓ (`quantum_circuit_operations.h`) | ✓ | shipped (`tc_qstate_apply_1q_unitary` / `tc_qstate_apply_2q_unitary`; bit-pair sweep, fp32 interleaved complex) |
-| Density matrix evolve (Lindblad / open systems) | ✗ | ✓ | ✓ | MED |
-| Trotter step (e^{-iHt} via Suzuki decomp) | ✗ | ✓ (`quantum_circuit_creation.h`) | ✓ | MED |
-| Quantum geometric tensor (QGT, Fubini-Study) | ✗ | ✓ (`quantum_geometric_metric.h`) | ✗ | **HIGH** |
-| Holonomic gates (Berry phase via parallel transport) | ✗ | ✓ (`holonomic_gates.h`) | ✗ | MED |
+| Density matrix evolve (Lindblad / open systems) | ✓ | ✓ | ✓ | shipped (`density_matrix.h`/`density_matrix_cpu.cpp`; ρ → UρU† conjugation, Kraus channels, partial trace, purity, Lindblad master equation with single-qubit jump operators) |
+| Trotter step (e^{-iHt} via Suzuki decomp) | ✓ | ✓ (`quantum_circuit_creation.h`) | ✓ | shipped (`tc_qstate_trotter_step` in `quantum_gates.h`; Pauli-string evolution via basis change + CNOT staircase + Rz + reverse) |
+| Quantum geometric tensor (QGT, Fubini-Study) | ✓ | ✓ (`quantum_geometric_metric.h`) | ✗ | shipped (`tc_qstate_qgt` in `quantum_gates.h`; G_ij = <∂iψ|∂jψ> - <∂iψ|ψ><ψ|∂jψ>, Fubini-Study metric) |
+| Holonomic gates (Berry phase via parallel transport) | ✓ | ✓ (`holonomic_gates.h`) | ✗ | shipped (`holonomic.h`/`holonomic_cpu.cpp`; SU(2) holonomy from closed loop on parameter manifold via Lie-group composition + Berry-phase accumulator) |
 | Hierarchical / matrix-product tensor ops | ✗ | ✓ (`hierarchical_tensor.h`) | ✓ | LOW |
 | Quantum attention (Born-rule + entanglement measure) | ~ Born-rule only | ✓ (`quantum_attention.h`) | — | MED |
 
@@ -57,7 +57,7 @@ Tensorcore's mandate: be the **single C/Eshkol math substrate** that every sibli
 |---|:---:|:---:|
 | tc_remote_tensor_fetch (TCP, fp16/raw bytes) | ✓ | shipped |
 | tc_remote_collective (AllReduce, AllGather, Broadcast across N peers) | ✓ | shipped (`mesh_collective.h`/`.cpp`; centralised rank-0 reduce with per-collective snapshot cache + rendezvous retry; fork-based 2-peer test ALL PASS) |
-| tc_remote_shard (split tensor across N peers, owner-based routing) | ✗ | **HIGH** |
+| tc_remote_shard (split tensor across N peers, owner-based routing) | ✓ | shipped (`remote_shard.h`/`remote_shard.cpp`; row-major shard plan + owner-based get/put + per-peer routing on tc_mesh transport) |
 | DiLoCo gradient sync (every K local steps → cross-machine sync) | ~ documented | MED |
 | Mesh resource scheduler integration (`scripts/mesh_resource_scheduler.py` → C-callable) | ~ Python | MED |
 | Weight server with versioning (live param updates while serving) | ✗ | LOW |
@@ -91,20 +91,29 @@ Current oracles cover: cuda-for-apple-public-integration, pytorch-bridge-runtime
 - Sphere C kernel (port from Python) + Eshkol + Python (already)
 - Mixed-curvature ProductManifold C kernel (replaces qLLM's `mixed_curvature.c`)
 
-**Phase 2 — Quantum primitives:**
-- Pauli gates + state-vector apply (the most-called QGTL/moonlab op)
-- Quantum geometric tensor (QGT) computation
-- Trotter step for Hamiltonian evolution
+**Phase 2 — Quantum primitives [shipped]:**
+- Pauli gates + state-vector apply (the most-called QGTL/moonlab op) — ✓
+- Quantum geometric tensor (QGT) computation — ✓
+- Trotter step for Hamiltonian evolution — ✓
+- Density matrix + Lindblad open-systems evolution — ✓
+- Controlled rotations (CRX/CRY/CRZ/CH), Toffoli (CCX), Fredkin (CSWAP), ISWAP, U1/U2/U3, ECR, SX, XX/YY/ZZ — ✓
 
-**Phase 3 — Mesh collectives:**
-- AllReduce / AllGather over tc_remote transport
-- Shard owner-based routing for parameter servers
+**Phase 3 — Mesh collectives [shipped]:**
+- AllReduce / AllGather / Broadcast over tc_remote transport — ✓
 
-**Phase 4 — Bindings + ICC oracle expansion:**
+**Phase 4 — Higher-order geometry + sharding (this batch):**
+- Riemannian metric tensor (general manifold via metric callback) — ✓ shipped
+- Geodesic ODE solver (RK4 with numerical Christoffels) — ✓ shipped
+- Holonomic gates (Berry phase from closed-loop parallel transport) — ✓ shipped
+- tc_remote_shard (owner-based row-shard routing) — ✓ shipped
+- New ICC oracles: `geometry-higher-order-runtime-evidence`, `remote-shard-runtime-evidence`, plus bridge oracles for qllm / qgtl / moonlab — ✓ shipped
+
+**Phase 5 — Bindings + ICC oracle expansion:**
 - Rust crate (small surface, big consumer story)
-- New oracles for each capability area; smoke scripts that prove engagement
+- Swift package (Noesis / iOS)
+- WASM bindings (moonlab demo gallery)
 
-**Phase 5 — Production rollout:**
+**Phase 6 — Production rollout:**
 - qLLM replaces `src/geometric/` calls with tensorcore via `qgtl_bridge.c` (the bridge already exists, just needs wiring)
 - QGTL replaces `src/quantum_geometric/core/*` math with tensorcore
 - moonlab adopts tensorcore for `src/algorithms/` quantum circuits

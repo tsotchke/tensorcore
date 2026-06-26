@@ -244,6 +244,146 @@ def main() -> int:
         probes["product_manifold_HxSxR"] = {"error": f"{type(exc).__name__}: {exc}", "passed": False,
                                               "traceback": traceback.format_exc()}
 
+    # === Riemannian metric tensor (Euclidean inverse + sphere stereographic) ===
+    try:
+        c_float_p = ctypes.POINTER(ctypes.c_float)
+        metric_fn_t = ctypes.CFUNCTYPE(None, c_float_p, ctypes.c_int,
+                                        c_float_p, ctypes.c_void_p)
+        m_apply = bind("tc_metric_apply", ctypes.c_float,
+                       [metric_fn_t, ctypes.c_void_p, c_float_p, ctypes.c_int,
+                        c_float_p, c_float_p])
+        m_inv = bind("tc_metric_inverse", ctypes.c_int,
+                     [c_float_p, ctypes.c_int, c_float_p])
+        m_chris = bind("tc_metric_christoffel", ctypes.c_int,
+                       [metric_fn_t, ctypes.c_void_p, c_float_p, ctypes.c_int,
+                        ctypes.c_float, c_float_p])
+        m_euc_addr = getattr(lib, "tc_metric_euclidean", None)
+        m_sph_addr = getattr(lib, "tc_metric_sphere_stereographic", None)
+        if any(fn is None for fn in (m_apply, m_inv, m_chris,
+                                       m_euc_addr, m_sph_addr)):
+            raise RuntimeError("metric symbols missing")
+        # Cast the C callbacks to metric_fn_t via their address so we can
+        # pass them straight back into m_apply / m_chris.
+        m_euc = ctypes.cast(m_euc_addr, metric_fn_t)
+        m_sph = ctypes.cast(m_sph_addr, metric_fn_t)
+        d = 3
+        p = np.zeros(d, dtype=np.float32)
+        pp = p.ctypes.data_as(c_float_p)
+        v = np.array([1, 0, 0], dtype=np.float32)
+        w = np.array([1, 0, 0], dtype=np.float32)
+        vp = v.ctypes.data_as(c_float_p); wp = w.ctypes.data_as(c_float_p)
+        g_vw = float(m_apply(m_euc, None, pp, d, vp, wp))
+        # Inverse of identity is identity
+        g_eye = (np.eye(d, dtype=np.float32)).flatten()
+        g_inv = np.zeros(d*d, dtype=np.float32)
+        rc = int(m_inv(g_eye.ctypes.data_as(c_float_p), d,
+                       g_inv.ctypes.data_as(c_float_p)))
+        inv_err = float(np.abs(g_inv.reshape(d, d) - np.eye(d)).max())
+        # Christoffels of Euclidean are identically zero
+        chris = np.zeros(d*d*d, dtype=np.float32)
+        rc2 = int(m_chris(m_euc, None, pp, d, 1e-3,
+                          chris.ctypes.data_as(c_float_p)))
+        chris_max = float(np.abs(chris).max())
+        # Sphere stereographic at origin → g = (2r²/r²)² I = 4 I when r=1
+        rval = ctypes.c_float(1.0)
+        g_sph = float(m_apply(m_sph, ctypes.byref(rval), pp, d, vp, wp))
+        probes["metric_tensor_runtime"] = {
+            "euclidean_inner_xx": g_vw,
+            "expected_inner_xx": 1.0,
+            "inverse_id_return_code": rc,
+            "inverse_id_max_err": inv_err,
+            "christoffel_euclidean_return_code": rc2,
+            "christoffel_euclidean_max": chris_max,
+            "sphere_stereographic_g_xx": g_sph,
+            "expected_sphere_g_xx_at_origin": 4.0,
+            "passed": (abs(g_vw - 1.0) < 1e-5
+                       and rc == 0 and inv_err < 1e-5
+                       and rc2 == 0 and chris_max < 1e-3
+                       and abs(g_sph - 4.0) < 1e-3),
+        }
+    except Exception as exc:
+        probes["metric_tensor_runtime"] = {"error": f"{type(exc).__name__}: {exc}",
+                                            "passed": False,
+                                            "traceback": traceback.format_exc()}
+
+    # === Geodesic ODE (RK4 on Euclidean = straight lines) ===
+    try:
+        c_float_p = ctypes.POINTER(ctypes.c_float)
+        metric_fn_t = ctypes.CFUNCTYPE(None, c_float_p, ctypes.c_int,
+                                        c_float_p, ctypes.c_void_p)
+        g_int = bind("tc_geodesic_integrate", ctypes.c_int,
+                     [metric_fn_t, ctypes.c_void_p, ctypes.c_int,
+                      ctypes.c_float, ctypes.c_int, ctypes.c_float,
+                      c_float_p, c_float_p, c_float_p, c_float_p])
+        m_euc_addr = getattr(lib, "tc_metric_euclidean", None)
+        if g_int is None or m_euc_addr is None:
+            raise RuntimeError("geodesic symbols missing")
+        m_euc = ctypes.cast(m_euc_addr, metric_fn_t)
+        d = 3
+        p0 = np.array([0, 0, 0], dtype=np.float32)
+        v0 = np.array([1, 0, 0], dtype=np.float32)
+        p_out = np.zeros(d, dtype=np.float32)
+        v_out = np.zeros(d, dtype=np.float32)
+        dt = 0.01; n_steps = 100  # T = 1.0
+        rc = int(g_int(m_euc, None, d, ctypes.c_float(dt), n_steps,
+                       ctypes.c_float(1e-3),
+                       p0.ctypes.data_as(c_float_p),
+                       v0.ctypes.data_as(c_float_p),
+                       p_out.ctypes.data_as(c_float_p),
+                       v_out.ctypes.data_as(c_float_p)))
+        # Straight-line geodesic: γ(T) = p0 + T v0 = (1, 0, 0); γ̇ unchanged
+        pos_err = float(np.abs(p_out - np.array([1, 0, 0])).max())
+        vel_err = float(np.abs(v_out - v0).max())
+        probes["geodesic_runtime"] = {
+            "return_code": rc,
+            "final_pos": p_out.tolist(),
+            "expected_pos": [1.0, 0.0, 0.0],
+            "pos_err": pos_err,
+            "final_vel": v_out.tolist(),
+            "vel_err": vel_err,
+            "passed": rc == 0 and pos_err < 1e-3 and vel_err < 1e-3,
+        }
+    except Exception as exc:
+        probes["geodesic_runtime"] = {"error": f"{type(exc).__name__}: {exc}",
+                                       "passed": False,
+                                       "traceback": traceback.format_exc()}
+
+    # === Holonomic gate (SU(2) z-axis loop → Berry phase) ===
+    try:
+        h_compose = bind("tc_holonomic_compose_su2", ctypes.c_int,
+                         [c_float_p, ctypes.c_int32, c_float_p])
+        h_phase = bind("tc_holonomic_berry_phase", None,
+                       [c_float_p, c_float_p])
+        if h_compose is None or h_phase is None:
+            raise RuntimeError("holonomic symbols missing")
+        # Single segment exp(i (π/4) σ_z) → trace = 2 cos(π/4) → phase = π/4
+        gens = np.array([0.0, 0.0, math.pi / 4.0], dtype=np.float32)
+        U = np.zeros(8, dtype=np.float32)
+        rc = int(h_compose(gens.ctypes.data_as(c_float_p), 1,
+                           U.ctypes.data_as(c_float_p)))
+        phase = ctypes.c_float(0.0)
+        h_phase(U.ctypes.data_as(c_float_p), ctypes.byref(phase))
+        # Two-segment loop: exp(i (π/4) σz) then exp(-i (π/4) σz) → identity → phase 0
+        gens2 = np.array([0.0, 0.0,  math.pi / 4.0,
+                          0.0, 0.0, -math.pi / 4.0], dtype=np.float32)
+        U2 = np.zeros(8, dtype=np.float32)
+        h_compose(gens2.ctypes.data_as(c_float_p), 2,
+                  U2.ctypes.data_as(c_float_p))
+        phase2 = ctypes.c_float(0.0)
+        h_phase(U2.ctypes.data_as(c_float_p), ctypes.byref(phase2))
+        probes["holonomic_runtime"] = {
+            "single_segment_return_code": rc,
+            "berry_phase_pi_over_4": phase.value,
+            "expected_phase_pi_over_4": math.pi / 4.0,
+            "two_segment_phase_closed_loop": phase2.value,
+            "passed": (rc == 0 and abs(phase.value - math.pi / 4.0) < 1e-4
+                       and abs(phase2.value) < 1e-3),  # fp32 SU(2) compose noise
+        }
+    except Exception as exc:
+        probes["holonomic_runtime"] = {"error": f"{type(exc).__name__}: {exc}",
+                                        "passed": False,
+                                        "traceback": traceback.format_exc()}
+
     for _probe in probes.values():
         _probe["runtime_status"] = "passed" if _probe.get("passed", False) else "failed"
     all_passed = all(p.get("passed", False) for p in probes.values())

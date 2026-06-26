@@ -384,6 +384,7 @@ set(TC_COMMON_SOURCES
     lib/distributed/sparse_compress.cpp
     lib/distributed/remote_tensor.cpp
     lib/distributed/mesh_collective.cpp
+    lib/distributed/remote_shard.cpp
     lib/hip/device.cpp
     lib/hip/gemm.cpp
     lib/cuda/device.cpp
@@ -399,6 +400,9 @@ set(TC_COMMON_SOURCES
     lib/ops/product_manifold_cpu.cpp
     lib/ops/torus_cpu.cpp
     lib/ops/lie_groups_cpu.cpp
+    lib/ops/metric_cpu.cpp
+    lib/ops/geodesic_cpu.cpp
+    lib/ops/holonomic_cpu.cpp
     lib/ops/quantum_gates_cpu.cpp
     lib/ops/density_matrix_cpu.cpp
     lib/ops/phase_attention_cpu.cpp
