@@ -562,3 +562,112 @@ oracles:
         severity: high
         label: Fork-based 2-peer shard smoke has both ranks at zero fails
         action: fix_shard_fork_2peer
+
+  - name: python-substrate-runtime-evidence
+    target: python-substrate-runtime-evidence
+    aliases:
+      - python-substrate
+      - tensorcore-python-wrappers
+    criteria:
+      - id: python_substrate_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: Python substrate runtime evidence is present
+        action: run_check_python_substrate_runtime
+
+      - id: python_substrate_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: Python substrate wrappers are failure-free
+        action: fix_python_substrate_failure
+
+      - id: python_substrate_runtime_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.python_substrate.runtime_status]
+          event_values: [passed, skipped]
+        severity: high
+        label: Python substrate end-to-end smoke passes (or is skipped)
+        action: run_python_substrate_smoke
+
+      - id: python_lorentz_wrapper_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.python_substrate.probes.lorentz_wrapper.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Lorentz wrapper round-trip via NumPy → C → NumPy passes
+        action: fix_python_lorentz_wrapper
+
+      - id: python_sphere_wrapper_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.python_substrate.probes.sphere_wrapper.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Sphere wrapper exp/log/slerp via NumPy passes
+        action: fix_python_sphere_wrapper
+
+      - id: python_torus_wrapper_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.python_substrate.probes.torus_wrapper.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Torus wrapper round-trip via NumPy passes
+        action: fix_python_torus_wrapper
+
+      - id: python_lie_groups_wrapper_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.python_substrate.probes.lie_su2_wrapper.runtime_status,
+                          checks.python_substrate.probes.lie_so3_wrapper.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: SU(2) + SO(3) Lie-group wrappers (exp/log/double-cover) pass
+        action: fix_python_lie_groups_wrapper
+
+      - id: python_quantum_state_wrapper_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.python_substrate.probes.quantum_state_wrapper.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Quantum state-vector apply wrapper passes (H on q0, prob_one)
+        action: fix_python_quantum_state_wrapper
+
+      - id: python_metric_wrapper_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.python_substrate.probes.metric_wrapper.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Metric tensor wrapper (apply/inverse/sphere stereographic) passes
+        action: fix_python_metric_wrapper
+
+      - id: python_geodesic_wrapper_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.python_substrate.probes.geodesic_wrapper.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Geodesic integrator wrapper reproduces Euclidean straight line
+        action: fix_python_geodesic_wrapper
+
+      - id: python_holonomic_wrapper_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.python_substrate.probes.holonomic_wrapper.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Holonomic gate wrapper composes + extracts Berry phase
+        action: fix_python_holonomic_wrapper
+
+      - id: python_shard_plan_wrapper_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.python_substrate.probes.shard_plan_wrapper.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Shard plan wrapper covers all rows with the balanced block-row partition
+        action: fix_python_shard_plan_wrapper

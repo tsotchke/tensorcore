@@ -856,6 +856,80 @@ if _lib is not None:
     _lib.tc_status_string.argtypes = [c_int]; _lib.tc_status_string.restype = c_char_p
     _lib.tc_version.argtypes = []; _lib.tc_version.restype = c_char_p
 
+    # ---------------------------------------------------------------------
+    # Phase 4 substrate ABI (metric / geodesic / holonomic / shard).
+    # Raw fp32-pointer surfaces; the Pythonic wrappers below give NumPy
+    # callers an array-in / array-out path that hides the ctypes plumbing.
+    # ---------------------------------------------------------------------
+    _f32p = POINTER(c_float)
+
+    # tc_metric_fn callback type: void(*)(const float*, int, float*, void*).
+    _TCMetricFn = ctypes.CFUNCTYPE(None, _f32p, c_int, _f32p, c_void_p)
+    _lib._tc_metric_fn_t = _TCMetricFn
+    _lib.tc_metric_apply.argtypes = [_TCMetricFn, c_void_p, _f32p, c_int, _f32p, _f32p]
+    _lib.tc_metric_apply.restype = c_float
+    _lib.tc_metric_inverse.argtypes = [_f32p, c_int, _f32p]
+    _lib.tc_metric_inverse.restype = c_int
+    _lib.tc_metric_inverse_apply.argtypes = [_TCMetricFn, c_void_p, _f32p, c_int, _f32p, _f32p]
+    _lib.tc_metric_inverse_apply.restype = c_float
+    _lib.tc_metric_christoffel.argtypes = [_TCMetricFn, c_void_p, _f32p, c_int, c_float, _f32p]
+    _lib.tc_metric_christoffel.restype = c_int
+    # Stock metrics — bind as raw symbols so we can hand them straight back
+    # to apply/christoffel without paying for a Python callback round-trip.
+    _lib.tc_metric_euclidean.argtypes = [_f32p, c_int, _f32p, c_void_p]
+    _lib.tc_metric_euclidean.restype = None
+    _lib.tc_metric_poincare.argtypes = [_f32p, c_int, _f32p, c_void_p]
+    _lib.tc_metric_poincare.restype = None
+    _lib.tc_metric_sphere_stereographic.argtypes = [_f32p, c_int, _f32p, c_void_p]
+    _lib.tc_metric_sphere_stereographic.restype = None
+
+    # Geodesic ODE solver.
+    _lib.tc_geodesic_step.argtypes = [_TCMetricFn, c_void_p, c_int, c_float, c_float,
+                                       _f32p, _f32p, _f32p, _f32p]
+    _lib.tc_geodesic_step.restype = c_int
+    _lib.tc_geodesic_integrate.argtypes = [_TCMetricFn, c_void_p, c_int, c_float, c_int, c_float,
+                                            _f32p, _f32p, _f32p, _f32p]
+    _lib.tc_geodesic_integrate.restype = c_int
+
+    # Holonomic gates.
+    _lib.tc_holonomic_compose_su2.argtypes = [_f32p, c_int32, _f32p]
+    _lib.tc_holonomic_compose_su2.restype = c_int
+    _lib.tc_holonomic_berry_phase.argtypes = [_f32p, _f32p]
+    _lib.tc_holonomic_berry_phase.restype = None
+
+    # Remote shard (owner-routed tensor sharding over the mesh transport).
+    class _TCShardPlan(Structure):
+        _fields_ = [("n_peers",        c_int32),
+                    ("rows",           c_int32),
+                    ("cols",           c_int32),
+                    ("dtype",          c_int)]   # tc_coll_dtype_t
+    _lib._tc_shard_plan_struct = _TCShardPlan
+    _lib.tc_remote_shard_owner.argtypes = [POINTER(_TCShardPlan), c_int32]
+    _lib.tc_remote_shard_owner.restype = c_int32
+    _lib.tc_remote_shard_local_range.argtypes = [POINTER(_TCShardPlan), c_int32,
+                                                   POINTER(c_int32), POINTER(c_int32)]
+    _lib.tc_remote_shard_local_range.restype = None
+    _lib.tc_remote_shard_register.argtypes = [c_void_p, POINTER(_TCShardPlan), c_char_p, c_void_p]
+    _lib.tc_remote_shard_register.restype = c_int
+    _lib.tc_remote_shard_get.argtypes = [c_void_p, POINTER(_TCShardPlan), c_char_p,
+                                           c_int32, c_int32, c_void_p, c_void_p]
+    _lib.tc_remote_shard_get.restype = c_int
+
+    # Mesh-collective group lifecycle (already shipped, but never bound here).
+    _lib.tc_mesh_group_init.argtypes = [c_void_p, c_int32, c_int32, POINTER(c_char_p),
+                                          POINTER(c_void_p)]
+    _lib.tc_mesh_group_init.restype = c_int
+    _lib.tc_mesh_group_shutdown.argtypes = [c_void_p]
+    _lib.tc_mesh_group_shutdown.restype = c_int
+    _lib.tc_mesh_allreduce.argtypes = [c_void_p, c_void_p, c_size_t, c_int, c_int]
+    _lib.tc_mesh_allreduce.restype = c_int
+    _lib.tc_mesh_broadcast.argtypes = [c_void_p, c_void_p, c_size_t, c_int, c_int32]
+    _lib.tc_mesh_broadcast.restype = c_int
+    _lib.tc_mesh_allgather.argtypes = [c_void_p, c_void_p, c_size_t, c_void_p, c_int]
+    _lib.tc_mesh_allgather.restype = c_int
+    _lib.tc_mesh_total_bytes.argtypes = [c_void_p]
+    _lib.tc_mesh_total_bytes.restype = c_uint64
+
 
 # ---------------------------------------------------------------------------
 # Pythonic surface
@@ -2844,6 +2918,444 @@ class QuantizedMatrix:
         gemv_quantized_async(run_ctx, X, self.buffer, Y, self.quant_type,
                              int(M), self.N, self.K, stream)
         return Y
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 NumPy-friendly substrate surface.
+#
+# These wrappers exist so sibling repos (qLLM, Noesis, moonlab, QGTL) can
+# call the tensorcore math substrate from Python WITHOUT writing raw
+# ctypes glue. Inputs are NumPy float32 arrays (or anything np.asarray
+# can convert); outputs are fresh NumPy arrays. The wrappers handle
+# shape, dtype coercion, and contiguous-buffer marshalling — the
+# underlying C kernels are the same single-source-of-truth math.
+#
+# All functions are no-NumPy-import-cost: numpy is imported on first call.
+# ---------------------------------------------------------------------------
+
+
+def _np():
+    import numpy as np  # noqa: WPS433
+    return np
+
+
+def _f32_buf(arr_or_seq):
+    """Coerce to a contiguous float32 NumPy array (copy if needed) and
+    return (array, void_pointer_into_it). The caller MUST keep the
+    array alive while it uses the pointer."""
+    np = _np()
+    a = np.ascontiguousarray(np.asarray(arr_or_seq, dtype=np.float32))
+    return a, a.ctypes.data_as(POINTER(c_float))
+
+
+def _f32_out(shape):
+    """Allocate a fresh contiguous float32 array of the given shape."""
+    np = _np()
+    return np.zeros(shape, dtype=np.float32)
+
+
+# ---- Lorentz / hyperboloid ----
+
+def lorentz_exp(base, tangent, curvature=1.0):
+    """exp_base(tangent) on the Lorentz hyperboloid of curvature `c`."""
+    base_a, base_p = _f32_buf(base)
+    tan_a,  tan_p  = _f32_buf(tangent)
+    n = base_a.size
+    out = _f32_out(base_a.shape)
+    _lib.tc_lorentz_exp(base_p, tan_p, out.ctypes.data_as(POINTER(c_float)),
+                         c_size_t(n), c_float(float(curvature)))
+    return out
+
+
+def lorentz_log(base, point, curvature=1.0):
+    """log_base(point) → tangent on the Lorentz hyperboloid."""
+    base_a, base_p = _f32_buf(base)
+    pt_a,   pt_p   = _f32_buf(point)
+    n = base_a.size
+    out = _f32_out(base_a.shape)
+    _lib.tc_lorentz_log(base_p, pt_p, out.ctypes.data_as(POINTER(c_float)),
+                         c_size_t(n), c_float(float(curvature)))
+    return out
+
+
+def lorentz_distance(p, q, curvature=1.0):
+    """Geodesic distance on the Lorentz hyperboloid."""
+    p_a, p_p = _f32_buf(p)
+    q_a, q_p = _f32_buf(q)
+    return float(_lib.tc_lorentz_distance(p_p, q_p, c_size_t(p_a.size),
+                                            c_float(float(curvature))))
+
+
+# ---- Sphere ----
+
+def sphere_exp(base, tangent, radius=1.0):
+    base_a, base_p = _f32_buf(base)
+    tan_a,  tan_p  = _f32_buf(tangent)
+    n = base_a.size
+    out = _f32_out(base_a.shape)
+    _lib.tc_sphere_exp(base_p, tan_p, out.ctypes.data_as(POINTER(c_float)),
+                        c_size_t(n), c_float(float(radius)))
+    return out
+
+
+def sphere_log(base, point, radius=1.0):
+    base_a, base_p = _f32_buf(base)
+    pt_a,   pt_p   = _f32_buf(point)
+    n = base_a.size
+    out = _f32_out(base_a.shape)
+    _lib.tc_sphere_log(base_p, pt_p, out.ctypes.data_as(POINTER(c_float)),
+                        c_size_t(n), c_float(float(radius)))
+    return out
+
+
+def sphere_distance(p, q, radius=1.0):
+    p_a, p_p = _f32_buf(p)
+    q_a, q_p = _f32_buf(q)
+    return float(_lib.tc_sphere_distance(p_p, q_p, c_size_t(p_a.size),
+                                            c_float(float(radius))))
+
+
+def sphere_slerp(p, q, t, radius=1.0):
+    p_a, p_p = _f32_buf(p)
+    q_a, q_p = _f32_buf(q)
+    out = _f32_out(p_a.shape)
+    _lib.tc_sphere_slerp(p_p, q_p, c_float(float(t)),
+                          out.ctypes.data_as(POINTER(c_float)),
+                          c_size_t(p_a.size), c_float(float(radius)))
+    return out
+
+
+# ---- Torus ----
+
+def torus_exp(base, tangent, radius=1.0):
+    base_a, base_p = _f32_buf(base)
+    tan_a,  tan_p  = _f32_buf(tangent)
+    out = _f32_out(base_a.shape)
+    _lib.tc_torus_exp(base_p, tan_p, out.ctypes.data_as(POINTER(c_float)),
+                       c_size_t(base_a.size), c_float(float(radius)))
+    return out
+
+
+def torus_log(base, point, radius=1.0):
+    base_a, base_p = _f32_buf(base)
+    pt_a,   pt_p   = _f32_buf(point)
+    out = _f32_out(base_a.shape)
+    _lib.tc_torus_log(base_p, pt_p, out.ctypes.data_as(POINTER(c_float)),
+                       c_size_t(base_a.size), c_float(float(radius)))
+    return out
+
+
+def torus_distance(p, q, radius=1.0):
+    p_a, p_p = _f32_buf(p)
+    q_a, q_p = _f32_buf(q)
+    return float(_lib.tc_torus_distance(p_p, q_p, c_size_t(p_a.size),
+                                          c_float(float(radius))))
+
+
+# ---- Lie groups (SU(2) / SO(3)) ----
+
+def su2_exp(a, b, c):
+    """exp(i (a σx + b σy + c σz)) → 2×2 SU(2) unitary as 8 floats
+    (row-major interleaved complex)."""
+    U = _f32_out((8,))
+    _lib.tc_su2_exp(c_float(float(a)), c_float(float(b)), c_float(float(c)),
+                     U.ctypes.data_as(POINTER(c_float)))
+    return U
+
+
+def su2_log(U):
+    """log_{SU(2)}(U) → (a, b, c) algebra vector."""
+    U_a, U_p = _f32_buf(U)
+    a = c_float(0.0); b = c_float(0.0); cc = c_float(0.0)
+    _lib.tc_su2_log(U_p, ctypes.byref(a), ctypes.byref(b), ctypes.byref(cc))
+    return (a.value, b.value, cc.value)
+
+
+def su2_mul(U, V):
+    U_a, U_p = _f32_buf(U)
+    V_a, V_p = _f32_buf(V)
+    out = _f32_out((8,))
+    _lib.tc_su2_mul(U_p, V_p, out.ctypes.data_as(POINTER(c_float)))
+    return out
+
+
+def so3_exp(wx, wy, wz):
+    R = _f32_out((9,))
+    _lib.tc_so3_exp(c_float(float(wx)), c_float(float(wy)), c_float(float(wz)),
+                     R.ctypes.data_as(POINTER(c_float)))
+    return R.reshape(3, 3)
+
+
+def so3_log(R):
+    R_a, R_p = _f32_buf(R)
+    wx = c_float(0.0); wy = c_float(0.0); wz = c_float(0.0)
+    _lib.tc_so3_log(R_p, ctypes.byref(wx), ctypes.byref(wy), ctypes.byref(wz))
+    return (wx.value, wy.value, wz.value)
+
+
+def su2_to_so3(U):
+    U_a, U_p = _f32_buf(U)
+    R = _f32_out((9,))
+    _lib.tc_su2_to_so3(U_p, R.ctypes.data_as(POINTER(c_float)))
+    return R.reshape(3, 3)
+
+
+# ---- Quantum gates / state-vector apply ----
+
+def qstate_zero(n_qubits):
+    """|0...0⟩ on n_qubits as a 2 * 2^n_qubits float32 buffer (interleaved
+    complex)."""
+    n = int(n_qubits)
+    state = _f32_out((2 * (1 << n),))
+    _lib.tc_qstate_zero(state.ctypes.data_as(POINTER(c_float)), c_int(n))
+    return state
+
+
+def qstate_apply_1q(state, n_qubits, target_qubit, gate_matrix):
+    """In-place: apply a 1-qubit unitary (gate_matrix: 8 floats) to `state`
+    at `target_qubit`. `state` must be the same buffer used elsewhere
+    (this function mutates it). Returns `state` for chaining."""
+    np = _np()
+    s = np.ascontiguousarray(np.asarray(state, dtype=np.float32))
+    g_a, g_p = _f32_buf(gate_matrix)
+    _lib.tc_qstate_apply_1q_unitary(s.ctypes.data_as(POINTER(c_float)),
+                                     c_int(int(n_qubits)),
+                                     c_int(int(target_qubit)), g_p)
+    return s
+
+
+def qstate_apply_2q(state, n_qubits, qubit_a, qubit_b, gate_matrix):
+    np = _np()
+    s = np.ascontiguousarray(np.asarray(state, dtype=np.float32))
+    g_a, g_p = _f32_buf(gate_matrix)
+    _lib.tc_qstate_apply_2q_unitary(s.ctypes.data_as(POINTER(c_float)),
+                                     c_int(int(n_qubits)),
+                                     c_int(int(qubit_a)), c_int(int(qubit_b)),
+                                     g_p)
+    return s
+
+
+def qstate_prob_one(state, n_qubits, qubit):
+    s_a, s_p = _f32_buf(state)
+    return float(_lib.tc_qstate_prob_one(s_p, c_int(int(n_qubits)),
+                                            c_int(int(qubit))))
+
+
+def qstate_norm_sq(state, n_qubits):
+    s_a, s_p = _f32_buf(state)
+    return float(_lib.tc_qstate_norm_sq(s_p, c_int(int(n_qubits))))
+
+
+def gate_matrix_1q(gate_type):
+    """Materialise a 1-qubit gate by tc_gate_type_t enum value
+    (X=1, Y=2, Z=3, H=4, S=5, T=6, RX=10, RY=11, RZ=12, ...
+    — see include/tensorcore/quantum_gates.h for the full table).
+    Returns 8 floats (2×2 row-major interleaved complex)."""
+    out = _f32_out((8,))
+    _lib.tc_gate_matrix_1q(c_int(int(gate_type)), None,
+                            out.ctypes.data_as(POINTER(c_float)))
+    return out
+
+
+# ---- Phase 4: Riemannian metric tensor ----
+
+def metric_apply(metric_fn, point, v, w, user_ptr=None):
+    """g_{ij}(point) v^i w^j. `metric_fn` is either a stock symbol
+    (e.g. metric_euclidean()) or a Python callable wrapped via
+    metric_python_callback()."""
+    p_a, p_p = _f32_buf(point)
+    v_a, v_p = _f32_buf(v)
+    w_a, w_p = _f32_buf(w)
+    d = p_a.size
+    user = c_void_p(0) if user_ptr is None else c_void_p(int(user_ptr))
+    return float(_lib.tc_metric_apply(metric_fn, user, p_p, c_int(int(d)),
+                                        v_p, w_p))
+
+
+def metric_inverse(g):
+    """Invert a d×d symmetric positive-definite matrix `g` (NumPy array,
+    flattened or shaped (d, d)). Returns (g_inv, return_code); rc=0 OK."""
+    np = _np()
+    g_a = np.ascontiguousarray(np.asarray(g, dtype=np.float32))
+    if g_a.ndim == 2:
+        d = g_a.shape[0]
+    else:
+        d = int(round(g_a.size ** 0.5))
+    out = _f32_out((d, d))
+    rc = _lib.tc_metric_inverse(g_a.ctypes.data_as(POINTER(c_float)),
+                                  c_int(d), out.ctypes.data_as(POINTER(c_float)))
+    return out, int(rc)
+
+
+def metric_christoffel(metric_fn, point, h=1e-3, user_ptr=None):
+    """Numerical Christoffel symbols Γ^k_{ij}(point), shape (d, d, d)."""
+    p_a, p_p = _f32_buf(point)
+    d = p_a.size
+    out = _f32_out((d, d, d))
+    user = c_void_p(0) if user_ptr is None else c_void_p(int(user_ptr))
+    rc = _lib.tc_metric_christoffel(metric_fn, user, p_p, c_int(d),
+                                      c_float(float(h)),
+                                      out.ctypes.data_as(POINTER(c_float)))
+    if rc != 0:
+        raise RuntimeError(f"tc_metric_christoffel returned {rc} "
+                           f"(metric likely singular at point)")
+    return out
+
+
+def metric_euclidean():
+    """Stock Euclidean metric callback (g_{ij} = δ_{ij})."""
+    return ctypes.cast(_lib.tc_metric_euclidean, _lib._tc_metric_fn_t)
+
+
+def metric_poincare(curvature):
+    """Stock Poincaré-ball metric callback. Returns (fn, holder) — keep
+    `holder` alive so its address (passed via user_ptr) stays valid."""
+    c_val = c_float(float(curvature))
+    fn = ctypes.cast(_lib.tc_metric_poincare, _lib._tc_metric_fn_t)
+    return fn, c_val
+
+
+def metric_sphere_stereographic(radius):
+    """Stock stereographic-sphere metric callback. Returns (fn, holder)."""
+    r_val = c_float(float(radius))
+    fn = ctypes.cast(_lib.tc_metric_sphere_stereographic, _lib._tc_metric_fn_t)
+    return fn, r_val
+
+
+# ---- Phase 4: Geodesic ODE solver ----
+
+def geodesic_integrate(metric_fn, pos0, vel0, dt, n_steps,
+                       h_christoffel=1e-3, user_ptr=None):
+    """Integrate γ̈ + Γγ̇γ̇ = 0 for n_steps of length dt starting from
+    (pos0, vel0). Returns (pos_final, vel_final) as NumPy float32 arrays."""
+    p_a, p_p = _f32_buf(pos0)
+    v_a, v_p = _f32_buf(vel0)
+    d = p_a.size
+    pos_out = _f32_out(p_a.shape)
+    vel_out = _f32_out(v_a.shape)
+    user = c_void_p(0) if user_ptr is None else c_void_p(int(user_ptr))
+    rc = _lib.tc_geodesic_integrate(metric_fn, user, c_int(d),
+                                      c_float(float(dt)), c_int(int(n_steps)),
+                                      c_float(float(h_christoffel)),
+                                      p_p, v_p,
+                                      pos_out.ctypes.data_as(POINTER(c_float)),
+                                      vel_out.ctypes.data_as(POINTER(c_float)))
+    if rc != 0:
+        raise RuntimeError(f"tc_geodesic_integrate returned {rc} "
+                           f"(metric singular at some substep)")
+    return pos_out, vel_out
+
+
+# ---- Phase 4: Holonomic gates ----
+
+def holonomic_compose_su2(generators):
+    """Compose a sequence of SU(2) generators (shape (N, 3) or flat 3N)
+    into one loop unitary. Returns 8 floats (interleaved complex)."""
+    np = _np()
+    gens = np.ascontiguousarray(np.asarray(generators, dtype=np.float32).reshape(-1, 3))
+    n_segs = gens.shape[0]
+    U = _f32_out((8,))
+    rc = _lib.tc_holonomic_compose_su2(gens.ctypes.data_as(POINTER(c_float)),
+                                         c_int32(n_segs),
+                                         U.ctypes.data_as(POINTER(c_float)))
+    if rc != 0:
+        raise RuntimeError(f"tc_holonomic_compose_su2 returned {rc}")
+    return U
+
+
+def holonomic_berry_phase(U):
+    """Extract the SU(2) Berry phase (signed rotation angle) from a
+    composed loop unitary. Returns a float in (-π, π]."""
+    U_a, U_p = _f32_buf(U)
+    out = c_float(0.0)
+    _lib.tc_holonomic_berry_phase(U_p, ctypes.byref(out))
+    return float(out.value)
+
+
+# ---- Phase 4: Remote shard ----
+
+# tc_coll_dtype_t — mirror enum from include/tensorcore/mesh_collective.h
+TC_COLL_DTYPE_F32 = 0
+
+
+def shard_plan(n_peers, rows, cols, dtype=TC_COLL_DTYPE_F32):
+    """Build a tc_shard_plan_t struct (passed to the shard ops)."""
+    return _lib._tc_shard_plan_struct(int(n_peers), int(rows), int(cols),
+                                       int(dtype))
+
+
+def shard_owner(plan, row):
+    return int(_lib.tc_remote_shard_owner(ctypes.byref(plan), c_int32(int(row))))
+
+
+def shard_local_range(plan, my_rank):
+    lo = c_int32(0); hi = c_int32(0)
+    _lib.tc_remote_shard_local_range(ctypes.byref(plan), c_int32(int(my_rank)),
+                                       ctypes.byref(lo), ctypes.byref(hi))
+    return int(lo.value), int(hi.value)
+
+
+def shard_register(group_handle, plan, name, my_buf):
+    """Register the caller's local row-block on the mesh transport. The
+    buffer is read zero-copy on the server side — caller MUST keep it
+    alive (e.g. hold a reference) until the next register call or
+    group shutdown."""
+    np = _np()
+    buf = np.ascontiguousarray(np.asarray(my_buf, dtype=np.float32))
+    rc = _lib.tc_remote_shard_register(_as_handle(group_handle),
+                                         ctypes.byref(plan),
+                                         name.encode("utf-8") if isinstance(name, str) else name,
+                                         buf.ctypes.data_as(c_void_p))
+    if rc != 0:
+        raise RuntimeError(f"tc_remote_shard_register returned {rc}")
+    return buf  # caller holds the lifetime via the returned reference
+
+
+def shard_get(group_handle, plan, name, row_start, row_end, local_buf=None):
+    """Fetch rows [row_start, row_end) into a fresh NumPy array of shape
+    (row_end - row_start, plan.cols). Provide `local_buf` for the
+    local-fast-path optimisation; pass None to skip it (slightly slower
+    for ranges that include locally-owned rows)."""
+    np = _np()
+    n_rows = int(row_end) - int(row_start)
+    dst = np.zeros((n_rows, int(plan.cols)), dtype=np.float32)
+    local_p = c_void_p(0)
+    local_ref = None
+    if local_buf is not None:
+        local_ref = np.ascontiguousarray(np.asarray(local_buf, dtype=np.float32))
+        local_p = local_ref.ctypes.data_as(c_void_p)
+    rc = _lib.tc_remote_shard_get(_as_handle(group_handle),
+                                    ctypes.byref(plan),
+                                    name.encode("utf-8") if isinstance(name, str) else name,
+                                    c_int32(int(row_start)), c_int32(int(row_end)),
+                                    local_p, dst.ctypes.data_as(c_void_p))
+    if rc != 0:
+        raise RuntimeError(f"tc_remote_shard_get returned {rc}")
+    return dst
+
+
+# ---- Mesh group lifecycle ----
+
+def mesh_group_init(ctx, n_peers, my_rank, peer_urls):
+    """Initialise a mesh group bound to peer_urls[my_rank], connected
+    to all other peer_urls. Returns the group handle (c_void_p)."""
+    n = int(n_peers)
+    url_array = (c_char_p * n)()
+    for i, u in enumerate(peer_urls):
+        url_array[i] = u.encode("utf-8") if isinstance(u, str) else u
+    out = c_void_p()
+    _check(_lib.tc_mesh_group_init(_as_handle(ctx), c_int32(n),
+                                     c_int32(int(my_rank)), url_array,
+                                     ctypes.byref(out)))
+    return out
+
+
+def mesh_group_shutdown(group_handle):
+    _check(_lib.tc_mesh_group_shutdown(_as_handle(group_handle)))
+
+
+def mesh_total_bytes(group_handle):
+    return int(_lib.tc_mesh_total_bytes(_as_handle(group_handle)))
 
 
 def version():

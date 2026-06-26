@@ -66,7 +66,7 @@ Tensorcore's mandate: be the **single C/Eshkol math substrate** that every sibli
 
 | binding | tensorcore | priority |
 |---|:---:|:---:|
-| Python ctypes (`python/tensorcore`) | ✓ | shipped |
+| Python ctypes (`python/tensorcore`) | ✓ | shipped (NumPy-friendly wrappers for Lorentz/Sphere/Torus/SU(2)/SO(3)/quantum gates/metric/geodesic/holonomic/shard/mesh — Phase 5) |
 | PyTorch autograd (matmul/bmm/einsum auto-engage) | ✓ | shipped |
 | Eshkol native (`eshkol/*.esk` flat-ABI bindings) | ✓ | shipped |
 | Rust crate | ✗ | MED |
@@ -108,10 +108,15 @@ Current oracles cover: cuda-for-apple-public-integration, pytorch-bridge-runtime
 - tc_remote_shard (owner-based row-shard routing) — ✓ shipped
 - New ICC oracles: `geometry-higher-order-runtime-evidence`, `remote-shard-runtime-evidence`, plus bridge oracles for qllm / qgtl / moonlab — ✓ shipped
 
-**Phase 5 — Bindings + ICC oracle expansion:**
-- Rust crate (small surface, big consumer story)
-- Swift package (Noesis / iOS)
-- WASM bindings (moonlab demo gallery)
+**Phase 5 — Bindings + ICC oracle expansion (in progress):**
+- ✓ NumPy-friendly Python wrappers for every shipped substrate op family
+  (Lorentz / Sphere / Torus / SU(2) / SO(3) / quantum state-vector +
+  gate matrices / metric tensor / geodesic ODE / holonomic gates /
+  shard plan + register/get / mesh group lifecycle). New oracle
+  `python-substrate-runtime-evidence` with 12 criteria — all PASS.
+- Rust crate (small surface, big consumer story) — TODO
+- Swift package (Noesis / iOS) — TODO
+- WASM bindings (moonlab demo gallery) — TODO
 
 **Phase 6 — Production rollout:**
 - qLLM replaces `src/geometric/` calls with tensorcore via `qgtl_bridge.c` (the bridge already exists, just needs wiring)

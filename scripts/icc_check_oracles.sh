@@ -80,3 +80,8 @@ print_oracle mesh-collective-runtime-evidence --trace-file "$MC_TRACE"
 RS_SHARD_TRACE="$REPO_ROOT/build/remote_shard_runtime_evidence.json"
 trace_or_skip "$RS_SHARD_TRACE" || true
 print_oracle remote-shard-runtime-evidence --trace-file "$RS_SHARD_TRACE"
+
+# 8. Python substrate wrappers (NumPy → C round-trips for all op families).
+PY_SUB_TRACE="$REPO_ROOT/build/python_substrate_runtime_evidence.json"
+trace_or_skip "$PY_SUB_TRACE" || true
+print_oracle python-substrate-runtime-evidence --trace-file "$PY_SUB_TRACE"
