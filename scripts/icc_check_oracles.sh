@@ -101,3 +101,8 @@ print_oracle adversarial-evals-runtime-evidence --trace-file "$AE_TRACE"
 SW_TRACE="$REPO_ROOT/build/swift_package_runtime_evidence.json"
 trace_or_skip "$SW_TRACE" || true
 print_oracle swift-package-runtime-evidence --trace-file "$SW_TRACE"
+
+# 12. WASM bindings (emscripten-built; node smoke against tensorcore.wasm).
+WASM_TRACE="$REPO_ROOT/build/wasm_bindings_runtime_evidence.json"
+trace_or_skip "$WASM_TRACE" || true
+print_oracle wasm-bindings-runtime-evidence --trace-file "$WASM_TRACE"

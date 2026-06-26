@@ -989,3 +989,96 @@ oracles:
         severity: high
         label: Swift Context (tc_init/shutdown) lifecycle passes with RAII deinit
         action: fix_swift_context_lifecycle
+
+  - name: wasm-bindings-runtime-evidence
+    target: wasm-bindings-runtime-evidence
+    aliases:
+      - wasm-bindings
+      - tensorcore-wasm
+    criteria:
+      - id: wasm_bindings_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: WASM bindings runtime evidence is present
+        action: run_check_wasm_bindings_runtime
+
+      - id: wasm_bindings_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: WASM bindings smoke is failure-free
+        action: fix_wasm_bindings_failure
+
+      - id: wasm_bindings_runtime_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.wasm_bindings.runtime_status]
+          event_values: [passed, skipped]
+        severity: high
+        label: WASM bindings node smoke passes (or is skipped without emscripten/node)
+        action: run_wasm_bindings_smoke
+
+      - id: wasm_lorentz_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.wasm_bindings.probes.lorentz_roundtrip.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: WASM Lorentz exp/log round-trip via JS typed-arrays passes
+        action: fix_wasm_lorentz
+
+      - id: wasm_sphere_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.wasm_bindings.probes.sphere_slerp.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: WASM Sphere slerp halves the geodesic
+        action: fix_wasm_sphere
+
+      - id: wasm_torus_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.wasm_bindings.probes.torus_roundtrip.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: WASM Torus exp/log round-trip passes
+        action: fix_wasm_torus
+
+      - id: wasm_lie_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.wasm_bindings.probes.su2_exp_log.runtime_status,
+                          checks.wasm_bindings.probes.so3_quarter_turn.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: WASM Lie-group wrappers (SU(2) + SO(3)) pass
+        action: fix_wasm_lie
+
+      - id: wasm_quantum_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.wasm_bindings.probes.quantum_hadamard_prob.runtime_status,
+                          checks.wasm_bindings.probes.quantum_overlap.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: WASM quantum state-vector apply + Born-rule overlap pass
+        action: fix_wasm_quantum
+
+      - id: wasm_entanglement_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.wasm_bindings.probes.bell_entanglement.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: WASM entanglement entropy = 1 bit on Bell state
+        action: fix_wasm_entanglement
+
+      - id: wasm_holonomic_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.wasm_bindings.probes.holonomic_phase_pi4.runtime_status,
+                          checks.wasm_bindings.probes.holonomic_closed_loop.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: WASM holonomic gate composition + Berry phase (single + closed-loop) pass
+        action: fix_wasm_holonomic
