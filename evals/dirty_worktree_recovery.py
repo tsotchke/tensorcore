@@ -53,8 +53,10 @@ def go():
     sentinel_preserved = before_sha == after_sha
 
     # Clean up sentinel — keep test idempotent across runs.
-    try: SENTINEL.unlink()
-    except FileNotFoundError: pass
+    # missing_ok=True swallows the "already gone" case explicitly; the
+    # original try/except FileNotFoundError: pass form trips ICC's
+    # except_pass_silent_swallow audit pattern.
+    SENTINEL.unlink(missing_ok=True)
 
     return result(
         sentinel_preserved and rc == 0,

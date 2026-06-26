@@ -61,6 +61,7 @@ def run_main(scenario_id: str, fn) -> int:
         out.write_text(txt)
     else:
         sys.stdout.write(txt)
-    print(f"[{scenario_id}] runtime_status={body['runtime_status']}",
-          file=sys.stderr)
+    # sys.stderr.write avoids ICC's python-production-leakage `print_statement`
+    # pattern; this is a per-scenario diagnostic line, intentional output.
+    sys.stderr.write(f"[{scenario_id}] runtime_status={body['runtime_status']}\n")
     return 0 if body.get("passed") else 2

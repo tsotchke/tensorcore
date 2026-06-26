@@ -270,15 +270,27 @@ silicon-bound vs software-bound axes are all in
 - **[bindings/rust/tensorcore-rs/README.md](bindings/rust/tensorcore-rs/README.md)**
   — safe Rust wrapper around `libtensorcore.{dylib,so}` for
   Rust-side consumers (12 cargo integration tests, all PASS).
+- **[bindings/swift/TensorCore/README.md](bindings/swift/TensorCore/README.md)**
+  — Swift Package Manager wrapper for Apple-platform consumers
+  (macOS / iOS / visionOS; 12 XCTest cases all PASS).
+- **[bindings/wasm/README.md](bindings/wasm/README.md)** —
+  Emscripten-built WebAssembly module for moonlab's browser-side
+  demo gallery (10 node smoke probes, all PASS).
+- **[evals/README.md](evals/README.md)** — adversarial operational
+  evals (dirty-worktree-recovery, stale-artifact-repair,
+  qwen-unavailable-degraded-mode, disk-pressure, fail-gate-surface,
+  new-development-suggestions; all 6 PASS).
 
 ### ICC-grounded audits
 
+- **[docs/icc_audit_2026-06-27.md](docs/icc_audit_2026-06-27.md)** —
+  **current** ICC audit (post all-tiers sweep). 129/130 oracle
+  criteria PASS across 13 oracles; 6 language bindings; 0 contract
+  gaps; 0 audit-pattern findings; 0 orphan docs.
 - **[docs/icc_audit_2026-06-26.md](docs/icc_audit_2026-06-26.md)** —
-  **current** ICC audit, post-Phase-5 (NumPy wrappers, Rust crate,
-  Phase 4 bench harness). 91/92 oracle criteria PASS across 9
-  oracles; full next-step queue.
+  prior audit (post-Phase-5; 91/92 PASS across 9 oracles).
 - **[docs/icc_audit_2026-06-25.md](docs/icc_audit_2026-06-25.md)** —
-  prior audit (Phase 4 baseline), kept for trail / diff comparison.
+  earlier audit (Phase 4 baseline), kept for trail / diff comparison.
 
 ### Distributed inference notes
 
