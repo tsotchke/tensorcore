@@ -392,6 +392,7 @@ set(TC_COMMON_SOURCES
     lib/c_api/eshkol_bridge.c
     lib/core/memory_tier_stub.cpp
     lib/core/checkpoint_stub.cpp
+    lib/core/cuda_stubs.cpp
     lib/ops/poincare_cpu.cpp
     lib/ops/lorentz_cpu.cpp
     lib/ops/sphere_cpu.cpp
