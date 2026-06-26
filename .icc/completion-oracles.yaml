@@ -1082,3 +1082,28 @@ oracles:
         severity: high
         label: WASM holonomic gate composition + Berry phase (single + closed-loop) pass
         action: fix_wasm_holonomic
+
+  - name: doc-truth-runtime-evidence
+    target: doc-truth-runtime-evidence
+    aliases:
+      - doc-truth
+      - documentation-truth-gate
+    criteria:
+      - id: doc_truth_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: Doc-truth runtime evidence is present
+        action: run_check_doc_truth_runtime
+
+      - id: doc_truth_runtime_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.doc_truth.runtime_status]
+          event_values: [passed, skipped]
+        severity: high
+        label: Doc-truth gate passes (unsupported/unresolved/hallucination ratios under ceilings)
+        action: tighten_doc_truth_ceilings_or_fix_docs
+
+      # Per-axis ratchets — the gate is "all three under their ceiling".
+      # Tighten ceilings in check_doc_truth_runtime.py as docs improve.
+      # Today's baselines: unsupported 0.264, unresolved 0.332, halluc 0.332.

@@ -106,3 +106,8 @@ print_oracle swift-package-runtime-evidence --trace-file "$SW_TRACE"
 WASM_TRACE="$REPO_ROOT/build/wasm_bindings_runtime_evidence.json"
 trace_or_skip "$WASM_TRACE" || true
 print_oracle wasm-bindings-runtime-evidence --trace-file "$WASM_TRACE"
+
+# 13. Doc-truth ratchet (unsupported/unresolved/hallucination claim ratios).
+DT_TRACE="$REPO_ROOT/build/doc_truth_runtime_evidence.json"
+trace_or_skip "$DT_TRACE" || true
+print_oracle doc-truth-runtime-evidence --trace-file "$DT_TRACE"
