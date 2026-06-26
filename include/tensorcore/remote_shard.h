@@ -37,13 +37,35 @@
  * `<name>` is caller-supplied (e.g. "weights/L7", "grads/L7"). This lets
  * multiple sharded tensors coexist on one group without collision.
  *
- * Push semantics (owner ← non-owner gradient apply) deliberately not in
- * this version: the pull-only TCP transport in remote_tensor.cpp makes
- * a true push awkward — would need either a server-side message queue
- * or a pull-based "drain pending puts" loop on the owner. Future work.
- * For now, parameter-server flows that need push can have workers
- * re-register their local shard slice each step (the same path the
- * owner uses) and have the owner pull-merge via tc_remote_shard_get.
+ * Push semantics (owner ← non-owner gradient apply) live as a
+ * publish/drain protocol on top of the pull-only TCP transport:
+ *
+ *   - Non-owner calls tc_remote_shard_publish_put(group, plan, name,
+ *     row_start, row_end, src). It snapshots `src` into the local
+ *     put cache and registers it on the local server under a
+ *     deterministic put-name "_shard_put/<name>/<source_rank>"
+ *     prefixed with the row range. The publisher returns immediately;
+ *     no synchronous handshake with the owner.
+ *
+ *   - Owner calls tc_remote_shard_drain_puts(group, plan, name,
+ *     owner_mut_buf, out_applied). The owner iterates every
+ *     non-self peer, attempts to fetch any pending put named
+ *     "_shard_put/<name>/<peer>". If a put exists, it's applied
+ *     into the owner's mutable shard at the row range encoded in
+ *     the put header, then the put is unregistered on the
+ *     publisher's side (via a clear-side fetch). out_applied
+ *     reports how many puts were applied this round.
+ *
+ *   - Workers + owners cooperate at the application layer: e.g. a
+ *     parameter-server flow calls publish_put at the end of every
+ *     gradient round and the owner calls drain_puts at the start
+ *     of every weight-update round.
+ *
+ *  Per-put header layout in the publish cache (first 16 bytes of
+ *  the registered blob): { row_start: int32, row_end: int32,
+ *  source_rank: int32, magic: 0x53504755 }. Followed by the
+ *  row-block payload in row-major fp32. The owner reads the header
+ *  first, then the payload.
  *
  * Replaces: ad-hoc per-tensor MPI scatter+gather in tsotchke-chan's
  * parameter-server, the manual rank-route table in DiLoCo's gradient
@@ -98,6 +120,32 @@ tc_status_t tc_remote_shard_get(tc_mesh_group_t* group,
                                  int32_t row_start, int32_t row_end,
                                  const void* local_buf,
                                  void* dst);
+
+/* Publisher side of the push protocol. Snapshots `src` (length
+ * (row_end - row_start) * cols * dtype-size) into a put cache and
+ * registers it on this rank's server. row_start/row_end MUST lie
+ * within the owner's local range; the publisher rank MUST NOT be
+ * the owner of any of those rows (use a local memcpy for that). */
+tc_status_t tc_remote_shard_publish_put(tc_mesh_group_t* group,
+                                         const tc_shard_plan_t* plan,
+                                         const char* name,
+                                         int32_t row_start, int32_t row_end,
+                                         const void* src);
+
+/* Owner side of the push protocol. Polls every non-self peer for a
+ * pending put under "_shard_put/<name>/<peer>"; for each one that
+ * exists, applies the row range encoded in its header into
+ * `owner_mut_buf` (which MUST point at the owner's local row-block
+ * for this shard, same buffer originally registered via
+ * tc_remote_shard_register). Returns TC_OK on success;
+ * `out_applied` (may be NULL) receives the number of puts applied
+ * this round. Drain is non-blocking — peers without a pending put
+ * are skipped silently. */
+tc_status_t tc_remote_shard_drain_puts(tc_mesh_group_t* group,
+                                        const tc_shard_plan_t* plan,
+                                        const char* name,
+                                        void* owner_mut_buf,
+                                        int32_t* out_applied);
 
 #ifdef __cplusplus
 }

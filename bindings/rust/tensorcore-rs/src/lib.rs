@@ -400,3 +400,71 @@ pub mod holonomic {
         out
     }
 }
+
+/// Owner-routed shard plan + push/drain protocol.
+///
+/// The opaque mesh group handle is a `*mut c_void` returned by
+/// `tc_mesh_group_init`. This module deliberately doesn't wrap mesh
+/// lifecycle — callers in Rust typically drive a long-lived mesh
+/// from the Python or C side and pass the raw handle in.
+pub mod shard {
+    use super::*;
+    use libc::c_char;
+    use std::ffi::CString;
+
+    pub use ffi::TcShardPlan;
+
+    /// Compute the owner rank for a given row under the balanced
+    /// block-row partition. Returns -1 on invalid input.
+    pub fn owner(plan: &TcShardPlan, row: i32) -> i32 {
+        unsafe { ffi::tc_remote_shard_owner(plan, row) }
+    }
+
+    /// Local row range [lo, hi) owned by `my_rank`.
+    pub fn local_range(plan: &TcShardPlan, my_rank: i32) -> (i32, i32) {
+        let (mut lo, mut hi) = (0i32, 0i32);
+        unsafe { ffi::tc_remote_shard_local_range(plan, my_rank, &mut lo, &mut hi); }
+        (lo, hi)
+    }
+
+    /// Non-owner publishes a row-range push. All target rows MUST share
+    /// one owner; for multi-owner ranges call `publish_put` once per
+    /// owner-block.
+    /// SAFETY: caller guarantees `group` is a live `tc_mesh_group_t*`.
+    pub unsafe fn publish_put(
+        group: *mut c_void,
+        plan: &TcShardPlan,
+        name: &str,
+        row_start: i32,
+        row_end: i32,
+        src: &[f32],
+    ) -> Result<(), i32> {
+        let cn = CString::new(name).map_err(|_| -7)?; // TC_ERR_INVALID_ARG
+        let rc = ffi::tc_remote_shard_publish_put(
+            group, plan, cn.as_ptr() as *const c_char,
+            row_start, row_end,
+            src.as_ptr() as *const c_void,
+        );
+        if rc == 0 { Ok(()) } else { Err(rc) }
+    }
+
+    /// Owner polls every peer for pending puts and applies them into
+    /// `owner_mut_buf` in place. Returns the number of puts applied
+    /// this round.
+    /// SAFETY: see `publish_put`.
+    pub unsafe fn drain_puts(
+        group: *mut c_void,
+        plan: &TcShardPlan,
+        name: &str,
+        owner_mut_buf: &mut [f32],
+    ) -> Result<i32, i32> {
+        let cn = CString::new(name).map_err(|_| -7)?;
+        let mut applied = 0i32;
+        let rc = ffi::tc_remote_shard_drain_puts(
+            group, plan, cn.as_ptr() as *const c_char,
+            owner_mut_buf.as_mut_ptr() as *mut c_void,
+            &mut applied,
+        );
+        if rc == 0 { Ok(applied) } else { Err(rc) }
+    }
+}

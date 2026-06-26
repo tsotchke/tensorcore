@@ -236,3 +236,5 @@ _tc_remote_shard_owner
 _tc_remote_shard_local_range
 _tc_remote_shard_register
 _tc_remote_shard_get
+_tc_remote_shard_publish_put
+_tc_remote_shard_drain_puts

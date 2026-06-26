@@ -146,6 +146,65 @@ static int run_peer(int my_rank, const char* my_url, const char* peer_url) {
         }
     }
 
+    /* ===== Push protocol: publish_put + drain_puts =====
+     *
+     * Non-owner (rank 0) publishes a one-row update for row 4 (owner=1)
+     * setting every cell to 7777. Owner (rank 1) calls drain_puts;
+     * verifies the cell was applied. Symmetric: rank 1 publishes a
+     * put for row 1 (owner=0), rank 0 drains. */
+    {
+        float push_row[COLS];
+        for (int c = 0; c < COLS; ++c) push_row[c] = 7777.0f + (float)c;
+        const int target_row = (my_rank == 0) ? 4 : 1;
+        const int target_owner = tc_remote_shard_owner(&plan, target_row);
+        if (target_owner != my_rank) {
+            /* I'm the publisher for this target row. */
+            tc_status_t ps = tc_remote_shard_publish_put(g, &plan, "smoke/weights",
+                                                          target_row, target_row + 1,
+                                                          push_row);
+            if (ps != TC_OK) {
+                fprintf(stderr, "rank %d: publish_put failed status=%d\n", my_rank, ps);
+                fails++;
+            }
+        }
+        /* Both ranks try to drain. Owners will see one applied put;
+         * non-owners will see zero (their drain just polls peers and
+         * finds no put with the right header). */
+        /* Allow publisher's registration to propagate. */
+        sleep(1);
+        int32_t applied = -1;
+        tc_status_t ds = tc_remote_shard_drain_puts(g, &plan, "smoke/weights",
+                                                      local, &applied);
+        if (ds != TC_OK) {
+            fprintf(stderr, "rank %d: drain_puts failed status=%d\n", my_rank, ds);
+            fails++;
+        }
+        /* Owner must have applied exactly 1 put; non-owner applies 0. */
+        const int my_local_row = (my_rank == 0) ? 1 : 4;
+        const int my_lo = (my_rank == 0) ? 0 : 4;
+        if (applied != 1) {
+            fprintf(stderr, "rank %d: expected applied=1, got %d\n",
+                    my_rank, applied);
+            fails++;
+        } else {
+            /* Check our local copy now carries 7777+c at the relevant row. */
+            int mism = 0;
+            for (int c = 0; c < COLS; ++c) {
+                const float got = local[(my_local_row - my_lo) * COLS + c];
+                const float want = 7777.0f + (float)c;
+                if (fabsf(got - want) > 1e-6f) mism++;
+            }
+            if (mism > 0) {
+                fprintf(stderr, "rank %d: drain_puts applied wrong values "
+                        "(%d cells mismatch on local row %d)\n",
+                        my_rank, mism, my_local_row);
+                fails++;
+            } else if (my_rank == 0) {
+                printf("  PASS rank 0 shard_drain_puts applied=1\n");
+            }
+        }
+    }
+
     if (my_rank == 0) {
         printf("  total mesh bytes shipped through rank %d: %llu\n",
                my_rank, (unsigned long long)tc_mesh_total_bytes(g));

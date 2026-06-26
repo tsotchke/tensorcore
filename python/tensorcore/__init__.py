@@ -914,6 +914,12 @@ if _lib is not None:
     _lib.tc_remote_shard_get.argtypes = [c_void_p, POINTER(_TCShardPlan), c_char_p,
                                            c_int32, c_int32, c_void_p, c_void_p]
     _lib.tc_remote_shard_get.restype = c_int
+    _lib.tc_remote_shard_publish_put.argtypes = [c_void_p, POINTER(_TCShardPlan), c_char_p,
+                                                   c_int32, c_int32, c_void_p]
+    _lib.tc_remote_shard_publish_put.restype = c_int
+    _lib.tc_remote_shard_drain_puts.argtypes = [c_void_p, POINTER(_TCShardPlan), c_char_p,
+                                                  c_void_p, POINTER(c_int32)]
+    _lib.tc_remote_shard_drain_puts.restype = c_int
 
     # Mesh-collective group lifecycle (already shipped, but never bound here).
     _lib.tc_mesh_group_init.argtypes = [c_void_p, c_int32, c_int32, POINTER(c_char_p),
@@ -3309,6 +3315,40 @@ def shard_register(group_handle, plan, name, my_buf):
     if rc != 0:
         raise RuntimeError(f"tc_remote_shard_register returned {rc}")
     return buf  # caller holds the lifetime via the returned reference
+
+
+def shard_publish_put(group_handle, plan, name, row_start, row_end, src):
+    """Non-owner publishes a row-range push targeting whichever rank owns
+    [row_start, row_end). All target rows MUST share one owner; for
+    multi-owner ranges call publish_put once per owner-block."""
+    np = _np()
+    buf = np.ascontiguousarray(np.asarray(src, dtype=np.float32))
+    rc = _lib.tc_remote_shard_publish_put(_as_handle(group_handle),
+                                            ctypes.byref(plan),
+                                            name.encode("utf-8") if isinstance(name, str) else name,
+                                            c_int32(int(row_start)),
+                                            c_int32(int(row_end)),
+                                            buf.ctypes.data_as(c_void_p))
+    if rc != 0:
+        raise RuntimeError(f"tc_remote_shard_publish_put returned {rc}")
+    return buf  # caller holds the lifetime
+
+
+def shard_drain_puts(group_handle, plan, name, owner_mut_buf):
+    """Owner polls every peer for pending puts, applies them into
+    owner_mut_buf in place. Returns the number of puts applied this
+    round (0 if no peers had pending puts)."""
+    np = _np()
+    buf = np.ascontiguousarray(np.asarray(owner_mut_buf, dtype=np.float32))
+    applied = c_int32(0)
+    rc = _lib.tc_remote_shard_drain_puts(_as_handle(group_handle),
+                                           ctypes.byref(plan),
+                                           name.encode("utf-8") if isinstance(name, str) else name,
+                                           buf.ctypes.data_as(c_void_p),
+                                           ctypes.byref(applied))
+    if rc != 0:
+        raise RuntimeError(f"tc_remote_shard_drain_puts returned {rc}")
+    return int(applied.value)
 
 
 def shard_get(group_handle, plan, name, row_start, row_end, local_buf=None):

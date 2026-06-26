@@ -563,6 +563,15 @@ oracles:
         label: Fork-based 2-peer shard smoke has both ranks at zero fails
         action: fix_shard_fork_2peer
 
+      - id: shard_drain_puts_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.remote_shard.probes.shard_drain_puts_applied=1.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Push protocol (publish_put + drain_puts) applies one put round-trip
+        action: fix_shard_push_protocol
+
   - name: python-substrate-runtime-evidence
     target: python-substrate-runtime-evidence
     aliases:

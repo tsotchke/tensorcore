@@ -223,3 +223,145 @@ extern "C" tc_status_t tc_remote_shard_get(tc_mesh_group_t* g,
     return TC_OK;
 }
 
+/* ---- Push protocol: publish_put + drain_puts ---- *
+ *
+ * Publishers register a header+payload blob under
+ * "_shard_put/<name>/<source_rank>"; the owner side polls every
+ * non-self peer, fetches whatever it finds, applies it into the
+ * mutable shard. Header is 16 bytes (4 int32: row_start, row_end,
+ * source_rank, magic) so the owner can validate + locate without a
+ * separate metadata channel. */
+
+namespace {
+constexpr uint32_t kShardPutMagic = 0x53504755u; /* 'SPGU' = Shard Put */
+
+/* Push protocol uses TWO named tensors per (name, source_rank): a
+ * fixed-16-byte header + a variable-size payload. The transport
+ * insists the fetch byte count match the registered byte count
+ * exactly, so we can't fetch just the header off a single blob. */
+std::string mk_shard_put_hdr_name(const char* name, int32_t source_rank) {
+    std::string s = "_shard_put_hdr/";
+    s += name; s += "/"; s += std::to_string(source_rank);
+    return s;
+}
+std::string mk_shard_put_blob_name(const char* name, int32_t source_rank) {
+    std::string s = "_shard_put_blob/";
+    s += name; s += "/"; s += std::to_string(source_rank);
+    return s;
+}
+}  // namespace
+
+extern "C" tc_status_t tc_remote_shard_publish_put(tc_mesh_group_t* g,
+                                                    const tc_shard_plan_t* plan,
+                                                    const char* name,
+                                                    int32_t row_start, int32_t row_end,
+                                                    const void* src) {
+    if (!g || !plan || !name || !src) return TC_ERR_INVALID_ARG;
+    if (plan->n_peers != tc_mesh_internal_n_peers(g)) return TC_ERR_INVALID_ARG;
+    if (plan->dtype != TC_COLL_DTYPE_F32) return TC_ERR_UNSUPPORTED_DTYPE;
+    if (row_start < 0 || row_end > plan->rows || row_start >= row_end) {
+        return TC_ERR_INVALID_ARG;
+    }
+    /* All target rows must share the same owner — the put is for one
+     * owner per call. (Caller can call publish_put twice for ranges
+     * that span two owners.) */
+    const int32_t target_owner = tc_remote_shard_owner(plan, row_start);
+    const int32_t end_owner = tc_remote_shard_owner(plan, row_end - 1);
+    if (target_owner < 0 || end_owner != target_owner) return TC_ERR_INVALID_ARG;
+    const int32_t my_rank = tc_mesh_internal_my_rank(g);
+    if (target_owner == my_rank) return TC_ERR_INVALID_ARG;  /* use local memcpy */
+
+    const size_t row_bytes = (size_t)plan->cols * shard_dtype_size(plan->dtype);
+    const size_t payload_bytes = (size_t)(row_end - row_start) * row_bytes;
+
+    /* Two-part registration: fixed 16-byte header + variable-size payload.
+     * Header layout: row_start, row_end, source_rank, magic — all
+     * memcpy'd as native int32 (host-native byte order matches the
+     * tc_remote transport convention on x86_64 + arm64). */
+    std::vector<uint8_t> hdr_blob(16);
+    int32_t hdr[4] = {row_start, row_end, my_rank, (int32_t)kShardPutMagic};
+    std::memcpy(hdr_blob.data(), hdr, 16);
+    std::vector<uint8_t> payload_blob(payload_bytes);
+    std::memcpy(payload_blob.data(), src, payload_bytes);
+
+    const std::string hdr_name  = mk_shard_put_hdr_name(name, my_rank);
+    const std::string blob_name = mk_shard_put_blob_name(name, my_rank);
+    auto* reg = registry_for(g);
+    void *hdr_ptr = nullptr, *blob_ptr = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(reg->mu);
+        auto& hslot = reg->snapshots[hdr_name];
+        hslot = std::move(hdr_blob); hdr_ptr = hslot.data();
+        auto& bslot = reg->snapshots[blob_name];
+        bslot = std::move(payload_blob); blob_ptr = bslot.data();
+    }
+    /* Re-register: unregister-then-register is idempotent. */
+    tc_remote_unregister_tensor(tc_mesh_internal_server(g), hdr_name.c_str());
+    tc_remote_unregister_tensor(tc_mesh_internal_server(g), blob_name.c_str());
+    tc_status_t hs = tc_remote_register_tensor(tc_mesh_internal_server(g),
+                                                 hdr_name.c_str(), hdr_ptr, 16);
+    if (hs != TC_OK) return hs;
+    return tc_remote_register_tensor(tc_mesh_internal_server(g),
+                                      blob_name.c_str(), blob_ptr, payload_bytes);
+}
+
+extern "C" tc_status_t tc_remote_shard_drain_puts(tc_mesh_group_t* g,
+                                                    const tc_shard_plan_t* plan,
+                                                    const char* name,
+                                                    void* owner_mut_buf,
+                                                    int32_t* out_applied) {
+    if (!g || !plan || !name || !owner_mut_buf) return TC_ERR_INVALID_ARG;
+    if (plan->n_peers != tc_mesh_internal_n_peers(g)) return TC_ERR_INVALID_ARG;
+    if (plan->dtype != TC_COLL_DTYPE_F32) return TC_ERR_UNSUPPORTED_DTYPE;
+
+    const int32_t my_rank = tc_mesh_internal_my_rank(g);
+    const int32_t n_peers = tc_mesh_internal_n_peers(g);
+
+    int32_t owner_lo, owner_hi;
+    tc_remote_shard_local_range(plan, my_rank, &owner_lo, &owner_hi);
+    const size_t row_bytes = (size_t)plan->cols * shard_dtype_size(plan->dtype);
+
+    int32_t applied = 0;
+    for (int32_t peer = 0; peer < n_peers; ++peer) {
+        if (peer == my_rank) continue;
+        const std::string hdr_name  = mk_shard_put_hdr_name(name, peer);
+        const std::string blob_name = mk_shard_put_blob_name(name, peer);
+        const int pid = tc_mesh_internal_peer_id(g, peer);
+        if (pid < 0) continue;
+
+        /* Single-shot fetch of the fixed 16-byte header — if it 404s
+         * the peer has nothing pending; drain stays non-blocking. */
+        uint8_t header[16];
+        tc_status_t hs = tc_remote_tensor_fetch(tc_mesh_internal_client(g),
+                                                  pid, hdr_name.c_str(),
+                                                  header, sizeof(header));
+        if (hs != TC_OK) continue;
+        int32_t hdr[4];
+        std::memcpy(hdr, header, 16);
+        const int32_t row_start = hdr[0];
+        const int32_t row_end   = hdr[1];
+        const int32_t src_rank  = hdr[2];
+        const uint32_t magic    = (uint32_t)hdr[3];
+        if (magic != kShardPutMagic) continue;
+        if (src_rank != peer) continue;
+        if (row_start < owner_lo || row_end > owner_hi || row_start >= row_end) {
+            continue;  /* header claims rows we don't own — protocol bug, skip */
+        }
+
+        /* Now fetch the payload at the size the header announced. */
+        const size_t payload_bytes = (size_t)(row_end - row_start) * row_bytes;
+        std::vector<uint8_t> payload(payload_bytes);
+        const tc_status_t bs = tc_remote_tensor_fetch(tc_mesh_internal_client(g),
+                                                       pid, blob_name.c_str(),
+                                                       payload.data(), payload_bytes);
+        if (bs != TC_OK) continue;
+
+        const size_t owner_local_offset = (size_t)(row_start - owner_lo) * row_bytes;
+        std::memcpy(static_cast<uint8_t*>(owner_mut_buf) + owner_local_offset,
+                    payload.data(), payload_bytes);
+        tc_mesh_internal_add_bytes(g, (uint64_t)(16 + payload_bytes));
+        ++applied;
+    }
+    if (out_applied) *out_applied = applied;
+    return TC_OK;
+}

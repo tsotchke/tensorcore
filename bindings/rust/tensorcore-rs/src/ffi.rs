@@ -200,3 +200,38 @@ extern "C" {
     ) -> c_int;
     pub fn tc_holonomic_berry_phase(u: *const c_float, out_phase: *mut c_float);
 }
+
+// ---------- Remote shard (Phase 4 + B2 push protocol) ----------
+
+#[repr(C)]
+pub struct TcShardPlan {
+    pub n_peers: i32,
+    pub rows: i32,
+    pub cols: i32,
+    pub dtype: i32,
+}
+
+extern "C" {
+    pub fn tc_remote_shard_owner(plan: *const TcShardPlan, row: i32) -> i32;
+    pub fn tc_remote_shard_local_range(
+        plan: *const TcShardPlan,
+        my_rank: i32,
+        out_lo: *mut i32,
+        out_hi: *mut i32,
+    );
+    pub fn tc_remote_shard_publish_put(
+        group: *mut c_void,
+        plan: *const TcShardPlan,
+        name: *const c_char,
+        row_start: i32,
+        row_end: i32,
+        src: *const c_void,
+    ) -> c_int;
+    pub fn tc_remote_shard_drain_puts(
+        group: *mut c_void,
+        plan: *const TcShardPlan,
+        name: *const c_char,
+        owner_mut_buf: *mut c_void,
+        out_applied: *mut i32,
+    ) -> c_int;
+}

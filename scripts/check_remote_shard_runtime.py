@@ -66,7 +66,8 @@ def main() -> int:
     # rank 1's success is implied by the final "ALL PASS" line + rc==0.
     expected_ops = ["shard_owner balanced",
                      "shard_get full_range",
-                     "shard_get cross_owner_range"]
+                     "shard_get cross_owner_range",
+                     "shard_drain_puts applied=1"]
     probes = {}
     for op in expected_ops:
         key = op.lower().replace(" ", "_")
