@@ -501,14 +501,25 @@ struct amx_work_unit {
     float* C;
 };
 
+/* AMX worker pool. Size is determined at runtime from the silicon's
+ * actual cluster topology via tc_amx_cluster_count(), NOT a compile-time
+ * constant. Storage is std::vector so the pool exactly matches the
+ * spawned worker count and we have no MAX_AMX_WORKERS hardcode to drift
+ * out of date as Apple ships more P-clusters per Ultra/Extreme tier. */
+
+/* Forward-declare so amx_pool_init_once() below can call it before the
+ * extern "C" definition further down. */
+extern "C" int tc_amx_cluster_count(void);
+
 struct amx_worker_pool_t {
-    pthread_t threads[2];
-    dispatch_semaphore_t start[2];
-    dispatch_semaphore_t done[2];
-    amx_work_unit work[2];
+    std::vector<pthread_t>            threads;
+    std::vector<dispatch_semaphore_t> start;
+    std::vector<dispatch_semaphore_t> done;
+    std::vector<amx_work_unit>        work;
     std::atomic<bool> shutdown{false};
     std::atomic<bool> ready{false};
     std::atomic<int> failed{0};
+    int n_workers{0};
 };
 
 static amx_worker_pool_t g_pool;
@@ -535,7 +546,13 @@ static void* amx_worker_thread_entry(void* arg) {
         workgroup_joined = 1;
     }
 
-    if (t == 1) {
+    /* Workers 1..N-1 ask the scheduler to push them to a P-cluster
+     * other than the one their siblings are on. On 2-cluster chips this
+     * cleanly splits worker 0 vs worker 1; on 4-cluster Ultra chips the
+     * scheduler cycles each successive worker across clusters. Worker 0
+     * stays on its parent's home cluster so we don't lose the cache
+     * affinity that the dispatching thread already has. */
+    if (t > 0) {
         auto prefer_alt = load_prefer_alternate_cluster();
         if (prefer_alt) prefer_alt();
     }
@@ -562,22 +579,35 @@ static void* amx_worker_thread_entry(void* arg) {
 }
 
 static void amx_pool_init_once() {
-    g_pool.start[0] = dispatch_semaphore_create(0);
-    g_pool.start[1] = dispatch_semaphore_create(0);
-    g_pool.done[0] = dispatch_semaphore_create(0);
-    g_pool.done[1] = dispatch_semaphore_create(0);
-    if (!g_pool.start[0] || !g_pool.start[1] || !g_pool.done[0] || !g_pool.done[1]) {
-        return;
+    /* Detect actual cluster count from sysctl. The result is the spawned
+     * worker count — no hardcoded ceiling. tc_amx_cluster_count() is the
+     * single source of truth and already clamps to >= 1. */
+    int n = tc_amx_cluster_count();
+    if (n < 1) n = 1;
+    g_pool.n_workers = n;
+    g_pool.threads.resize((size_t)n);
+    g_pool.start.resize((size_t)n, nullptr);
+    g_pool.done.resize((size_t)n, nullptr);
+    g_pool.work.resize((size_t)n);
+
+    for (int t = 0; t < n; ++t) {
+        g_pool.start[t] = dispatch_semaphore_create(0);
+        g_pool.done[t]  = dispatch_semaphore_create(0);
+        if (!g_pool.start[t] || !g_pool.done[t]) {
+            g_pool.n_workers = 0;
+            return;
+        }
     }
 
     int created = 0;
-    for (int t = 0; t < 2; ++t) {
+    for (int t = 0; t < n; ++t) {
         if (pthread_create(&g_pool.threads[t], nullptr, amx_worker_thread_entry,
                            (void*)(intptr_t)t) != 0) {
             g_pool.shutdown.store(true, std::memory_order_release);
             for (int i = 0; i < created; ++i) {
                 dispatch_semaphore_signal(g_pool.start[i]);
             }
+            g_pool.n_workers = 0;
             return;
         }
         pthread_detach(g_pool.threads[t]);
@@ -586,21 +616,39 @@ static void amx_pool_init_once() {
     g_pool.ready.store(true, std::memory_order_release);
 }
 
-static bool amx_pool_dispatch_pair(const amx_work_unit& w0, const amx_work_unit& w1) {
+/* Dispatch N work units across the pool. The pool must already be
+ * sized at >= n_units (typically n_units == g_pool.n_workers). Slots
+ * past n_units are not signaled.
+ *
+ * Held under g_pool_dispatch_lock for the duration to serialize
+ * concurrent callers — the pool has a single work-array per worker so
+ * concurrent dispatchers would clobber. The lock is the rate-limiter
+ * for cross-thread AMX use; a higher-throughput design would use
+ * per-worker MPSC queues, deferred. */
+static bool amx_pool_dispatch_n(const amx_work_unit* units, int n_units) {
     pthread_once(&g_pool_once, amx_pool_init_once);
     if (!g_pool.ready.load(std::memory_order_acquire)) return false;
+    if (n_units < 1 || n_units > g_pool.n_workers) return false;
 
     pthread_mutex_lock(&g_pool_dispatch_lock);
     g_pool.failed.store(0, std::memory_order_release);
-    g_pool.work[0] = w0;
-    g_pool.work[1] = w1;
-    dispatch_semaphore_signal(g_pool.start[0]);
-    dispatch_semaphore_signal(g_pool.start[1]);
-    dispatch_semaphore_wait(g_pool.done[0], DISPATCH_TIME_FOREVER);
-    dispatch_semaphore_wait(g_pool.done[1], DISPATCH_TIME_FOREVER);
+    for (int t = 0; t < n_units; ++t) g_pool.work[t] = units[t];
+    for (int t = 0; t < n_units; ++t) dispatch_semaphore_signal(g_pool.start[t]);
+    for (int t = 0; t < n_units; ++t) {
+        dispatch_semaphore_wait(g_pool.done[t], DISPATCH_TIME_FOREVER);
+    }
     const bool ok = (g_pool.failed.load(std::memory_order_acquire) == 0);
     pthread_mutex_unlock(&g_pool_dispatch_lock);
     return ok;
+}
+
+/* Expose pool worker count for callers that partition M. Returns the
+ * actual spawned worker count (>= 1 if pool initialized successfully),
+ * or 0 if init failed. */
+static int amx_pool_worker_count(void) {
+    pthread_once(&g_pool_once, amx_pool_init_once);
+    if (!g_pool.ready.load(std::memory_order_acquire)) return 0;
+    return g_pool.n_workers;
 }
 
 }  // namespace
@@ -646,17 +694,26 @@ static int tc_amx_gemm_f32_core(int M, int N, int K,
     const bool use_multi = !single_thread && M >= 256 && tc_amx_cluster_count() > 1;
 
     if (use_multi) {
-        /* Persistent pool: two long-lived pthreads, each USER_INTERACTIVE +
-         * pre-armed for AMX, with worker 1 pushed to the alternate cluster
-         * via the private hook. Across calls they stay warm — kernel learns
-         * their P-cluster placement instead of re-deciding per dispatch. */
+        /* Persistent pool: N long-lived pthreads (N = pool worker count =
+         * min(tc_amx_cluster_count, MAX_AMX_WORKERS)). Each pre-armed for
+         * AMX, workers 1..N-1 pushed to alternate P-clusters via the
+         * private hook. M is split into N strips, each 16-aligned.
+         * Remainder rows fold into the last worker. */
+        int n_workers = amx_pool_worker_count();
+        if (n_workers < 2) n_workers = 2;  /* shouldn't happen given use_multi */
         const int strips_total = M / 16;
-        const int strips_per_worker = strips_total / 2;
-        amx_work_unit w0 = {0, strips_per_worker * 16,
-                            N, K, lda, ldb, ldc, A, B, C};
-        amx_work_unit w1 = {strips_per_worker * 16, M,
-                            N, K, lda, ldb, ldc, A, B, C};
-        if (!amx_pool_dispatch_pair(w0, w1)) return -1;
+        const int strips_per_worker = strips_total / n_workers;
+        /* Stack-allocate per-call; n_workers is bounded by P-cluster count
+         * which any shipping silicon caps well below stack limits. */
+        std::vector<amx_work_unit> units((size_t)n_workers);
+        for (int t = 0; t < n_workers; ++t) {
+            const int i_start = strips_per_worker * 16 * t;
+            const int i_end = (t == n_workers - 1)
+                                  ? M
+                                  : strips_per_worker * 16 * (t + 1);
+            units[t] = {i_start, i_end, N, K, lda, ldb, ldc, A, B, C};
+        }
+        if (!amx_pool_dispatch_n(units.data(), n_workers)) return -1;
     } else {
         /* Mega pack buffers: pack ALL of A and B once each, then iterate
          * (i, j, kp) with no re-packing. Memory cost is M*K + K*N fp32
@@ -867,22 +924,35 @@ extern "C" TC_INTERNAL_SYMBOL int tc_amx_isa_version(void) {
     }
 }
 
-/* Number of P-clusters with their own AMX coprocessor. Apple silicon:
- *   M1/M2/M3/M4 base/Pro/Max: 1 P-cluster, 1 AMX unit
- *   M1/M2 Ultra (UltraFusion): 2 P-clusters, 2 AMX units (silicon max)
+/* Number of P-clusters (= independent AMX units) on this silicon.
+ * Derived from sysctl, never a baked constant. Apple's cluster size
+ * is consistently 4 P-cores but the number of clusters scales with
+ * the tier:
  *
- * The pool dispatcher is sized at min(this, 2) since current pool code
- * uses a 2-slot work array. Future hardware with >2 AMX would extend it. */
+ *   M base:             4 P-cores  / 4 = 1 cluster
+ *   M Pro/Max:          8 P-cores  / 4 = 2 clusters
+ *   M Ultra (Fusion):  16 P-cores  / 4 = 4 clusters
+ *   future Extreme:    32+ P-cores / 4 = 8+ clusters
+ *
+ * Falls back to the older "8 P-cores => 2 clusters" heuristic only
+ * when cpusperl2 sysctl is unavailable (very old macOS / non-Apple
+ * silicon). Returns at least 1. No upper ceiling — the pool resizes
+ * to match whatever this returns. */
 extern "C" TC_INTERNAL_SYMBOL int tc_amx_cluster_count(void) {
     uint32_t p_cpus = 0;
-    size_t sz = sizeof(p_cpus);
-    if (sysctlbyname("hw.perflevel0.physicalcpu", &p_cpus, &sz, nullptr, 0) == 0
-        && p_cpus > 0) {
-        /* Apple's P-cluster is consistently 4 cores. 8 P-cores ≡ 2
-         * clusters (UltraFusion). */
-        return (p_cpus > 4) ? 2 : 1;
+    uint32_t per_cluster = 0;
+    size_t sz1 = sizeof(p_cpus);
+    size_t sz2 = sizeof(per_cluster);
+    sysctlbyname("hw.perflevel0.physicalcpu", &p_cpus, &sz1, nullptr, 0);
+    sysctlbyname("hw.perflevel0.cpusperl2",   &per_cluster, &sz2, nullptr, 0);
+    if (p_cpus == 0) return 1;
+    int n;
+    if (per_cluster > 0) {
+        n = (int)((p_cpus + per_cluster - 1) / per_cluster);
+    } else {
+        n = (p_cpus > 4) ? 2 : 1;
     }
-    return 1;
+    return (n < 1) ? 1 : n;
 }
 
 /* fp16 AMX GEMM entry. Returns -1 (unsupported) until the FMA16 operand
