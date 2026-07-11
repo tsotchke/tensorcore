@@ -212,6 +212,87 @@ oracles:
         label: tensorcore_bridge_smoke.esk runs the broader bridge surface
         action: fix_tensorcore_bridge_runtime
 
+  - name: sparse-24-runtime-evidence
+    target: sparse-24-runtime-evidence
+    aliases:
+      - sparse-24
+      - tensorcore-sparse-24
+      - georefine-c5
+      - c5-tensorcore-sparse-24
+    criteria:
+      - id: sparse_24_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: Sparse 2:4 runtime evidence is present
+        action: run_sparse_24_runtime_evidence
+
+      - id: sparse_24_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: Sparse 2:4 runtime evidence is failure-free
+        action: fix_sparse_24_runtime_failure
+
+      - id: sparse_24_local_correctness_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.sparse_24.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Sparse 2:4 prune/check/GEMM correctness smoke passes
+        action: run_sparse_24_runtime_evidence
+
+      - id: sparse_24_k_axis_contract_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.sparse_24_k_axis_contract.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Linear-weight [N,K] K-axis 2:4 pruning contract passes
+        action: fix_sparse_24_weight_layout
+
+      - id: sparse_24_local_functions_called
+        runtime_event:
+          event_kinds: [function_called]
+          event_names:
+            - read_elem
+            - write_elem
+            - supported_dtype
+            - tc_sparse_24_prune
+            - tc_sparse_24_check
+            - tc_sparse_24_gemm
+            - tc_sparse_24_available
+            - main
+        required_names:
+          - read_elem
+          - write_elem
+          - supported_dtype
+          - tc_sparse_24_prune
+          - tc_sparse_24_check
+          - tc_sparse_24_gemm
+          - tc_sparse_24_available
+          - main
+        severity: high
+        label: Sparse 2:4 local source paths are covered by evidence
+        action: extend_sparse_24_evidence_coverage
+
+      - id: sparse_24_hardware_status_explicit
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.sparse_24_hardware.runtime_status]
+          event_values: [passed, blocked]
+        severity: medium
+        label: Hardware sparse 2:4 status is explicit
+        action: run_sparse_24_on_cusparselt_gpu
+
+      - id: sparse_24_hardware_backend_explicit
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.sparse_24_hardware.backend]
+          event_values: [cusparseLt, dense_fallback]
+        severity: medium
+        label: Hardware backend is recorded as cuSPARSELt or dense fallback
+        action: run_sparse_24_on_cusparselt_gpu
+
   - name: geometric-ops-runtime-evidence
     target: geometric-ops-runtime-evidence
     aliases:
@@ -1107,3 +1188,16 @@ oracles:
       # Per-axis ratchets — the gate is "all three under their ceiling".
       # Tighten ceilings in check_doc_truth_runtime.py as docs improve.
       # Today's baselines: unsupported 0.264, unresolved 0.332, halluc 0.332.
+
+  - name: tensorcore-architecture-model
+    target: tensorcore-architecture-model
+    aliases:
+      - tensorcore architecture model
+      - tensorcore manifold/optimizer invariants
+    criteria:
+      - id: architecture_model_holds
+        label: The machine-checked tensorcore architecture model holds (no blocking invariant FAIL)
+        kind: model_verified
+        model_name: tensorcore
+        severity: high
+        action: run_icc_architecture_verify_emit_trace

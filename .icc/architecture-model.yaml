@@ -1,0 +1,184 @@
+version: 1
+name: tensorcore
+repo: tensorcore
+description: >
+  Skeleton architecture model of tensorcore — the Riemannian tensor-op /
+  optimizer substrate (C/C++/ObjC + CUDA/HIP/Metal backends) under Selene and
+  GeoRefine.  Components map the op library, per-manifold kernels, the Riemannian
+  optimizer family, the tensorops dtype-dispatch selector, backends, and the
+  C-API / language bindings.  Invariants target the two highest-value seams:
+  (1) manifold-op / optimizer-dispatch registry completeness — every Riemannian
+  optimizer variant declared in the header is implemented; (2) gemm kernel
+  selection derives from the request descriptor, not an assumption.
+
+  C-FIDELITY NOTE.  `icc architecture-verify` deep checkers (authority) are
+  AST-native for Python only; against C/C++ TUs they degrade to whole-file regex
+  while still labelling the payload `ast`.  key-space checks self-report `grep`.
+  Drift over C/C++ symbols is real (ICC indexes symbol_records for this repo).
+
+components:
+  - id: core
+    role: core
+    description: Context, status/error, dtype, device, autotune, trace.
+    modules:
+      - lib/core/status.c
+      - lib/core/autotune.cpp
+      - lib/core/trace.cpp
+      - include/tensorcore/status.h
+      - include/tensorcore/dtype.h
+      - include/tensorcore/device.h
+
+  - id: gemm
+    role: gemm-kernels
+    description: CPU GEMM (AVX2/NEON/AMX), tensorops dtype-dispatch selector, backend GEMM.
+    modules:
+      - lib/ops/gemm_cpu.cpp
+      - lib/ops/gemm_cpu_avx2.cpp
+      - lib/ops/gemm_cpu_neon.cpp
+      - lib/ops/gemm_cpu_amx.cpp
+      - lib/tensorops/tensorops_select.c
+    entry_points:
+      - {path: lib/tensorops/tensorops_select.c, symbol: tc_tensorops_gemm_kernel_name}
+
+  - id: manifolds
+    role: manifold-ops
+    description: Per-manifold CPU ops — Poincaré, sphere, Lorentz, torus, product, geodesic, metric, Lie groups, holonomic.
+    modules:
+      - lib/ops/poincare_cpu.cpp
+      - lib/ops/sphere_cpu.cpp
+      - lib/ops/lorentz_cpu.cpp
+      - lib/ops/torus_cpu.cpp
+      - lib/ops/product_manifold_cpu.cpp
+      - lib/ops/geodesic_cpu.cpp
+      - lib/ops/metric_cpu.cpp
+      - lib/ops/lie_groups_cpu.cpp
+      - lib/ops/holonomic_cpu.cpp
+
+  - id: optimizer
+    role: optimizer
+    description: Riemannian Adam optimizer family (Poincaré / sphere / Euclidean variants).
+    modules:
+      - lib/ops/riemannian_adam_cpu.cpp
+      - include/tensorcore/riemannian_adam.h
+    entry_points:
+      - {path: lib/ops/riemannian_adam_cpu.cpp, symbol: tc_riemannian_adam_step_poincare}
+
+  - id: attention
+    role: attention-kernels
+    description: Attention / phase-attention / quantum-attention CPU kernels.
+    modules:
+      - lib/ops/attention_cpu.cpp
+      - lib/ops/phase_attention_cpu.cpp
+      - lib/ops/quantum_attention_cpu.cpp
+
+  - id: distributed
+    role: distributed
+    description: Mesh collective, remote shard/tensor, DiLoCo, gloo TCP.
+    modules:
+      - lib/distributed/mesh_collective.cpp
+      - lib/distributed/remote_shard.cpp
+      - lib/distributed/remote_tensor.cpp
+      - lib/distributed/diloco.cpp
+      - lib/distributed/gloo_tcp.cpp
+
+  - id: backends
+    role: gpu-backend
+    description: CUDA / HIP / Metal GEMM + device backends, CPU fallback.
+    modules:
+      - lib/cuda/gemm.cpp
+      - lib/hip/gemm.cpp
+      - kernels/metal/*.metal
+      - lib/fallback/accelerate_gemm.c
+
+  - id: capi
+    role: c-api
+    description: C-API surface + Eshkol bridge + language bindings (pytorch/rust/swift/wasm).
+    modules:
+      - lib/c_api/c_api_cpu.c
+      - lib/c_api/eshkol_bridge.c
+      - bindings/pytorch/*.cpp
+      - bindings/rust/**/*.rs
+
+dataflows:
+  - id: adamheader_to_impl
+    producer: optimizer
+    consumer: optimizer
+    produces: [adam_manifold_variant]
+    consumes: [adam_manifold_variant]
+    key_space: {kind: other, identifier: "tc_riemannian_adam_step_{poincare,sphere,euclidean} symbol"}
+    description: Every Riemannian-Adam manifold variant the header declares must be implemented in the CPU op TU.
+
+  - id: desc_to_gemm_kernel
+    producer: gemm
+    consumer: gemm
+    produces: [gemm_dtype]
+    consumes: [gemm_kernel_name]
+    key_space: {kind: other, identifier: "tc_gemm_desc.a_dtype -> tc4_gemm_{f16,bf16,f32}"}
+    description: The gemm kernel name is selected from the request descriptor's dtype.
+
+capabilities:
+  - id: riemannian_optimizer
+    feature: Riemannian Adam optimizer step (manifold-aware)
+    entry_points:
+      - {path: lib/ops/riemannian_adam_cpu.cpp, symbol: tc_riemannian_adam_step_poincare}
+    dependencies: [manifolds, optimizer]
+
+  - id: tensorops_gemm
+    feature: TensorOps dtype-dispatched GEMM kernel selection
+    entry_points:
+      - {path: lib/tensorops/tensorops_select.c, symbol: tc_tensorops_gemm_kernel_name}
+    dependencies: [gemm]
+
+invariants:
+
+  # (1) manifold-op registry vs optimizer dispatch — every declared Riemannian
+  # optimizer variant must be implemented, and no orphan implementation.
+  - id: INV-riemannian-adam-decl-def-coverage
+    kind: key-space-equality
+    incident: optimizer-variant-declared-not-implemented
+    severity: high
+    description: >
+      The tc_riemannian_adam_step_* manifold variants declared in
+      riemannian_adam.h must equal the variants defined in
+      riemannian_adam_cpu.cpp.  A declared-but-undefined variant is a link
+      error; an orphan definition is dead dispatch.  GREP fidelity.
+    sites:
+      - id: declared
+        path: include/tensorcore/riemannian_adam.h
+        key_pattern: '(tc_riemannian_adam_step_[a-z]+)'
+      - id: defined
+        path: lib/ops/riemannian_adam_cpu.cpp
+        key_pattern: '(tc_riemannian_adam_step_[a-z]+)'
+
+  # (2) dispatch authority — the gemm kernel selector must derive the kernel
+  # from the request descriptor's dtype, not assume one.
+  - id: INV-tensorops-gemm-dtype-authority
+    kind: authority
+    incident: gemm-kernel-dtype-assumed
+    severity: high
+    description: >
+      tc_tensorops_gemm_kernel_name must decide the kernel name from the
+      descriptor dtype fields (a_dtype), never assume a single kernel.
+      Fidelity reported `ast`, effectively whole-file grep for this C TU.
+    config:
+      name: a_dtype
+      path: lib/tensorops/tensorops_select.c
+      symbol: tc_tensorops_gemm_kernel_name
+    decision:
+      path: lib/tensorops/tensorops_select.c
+      symbol: tc_tensorops_gemm_kernel_name
+      var: kernel
+
+  # (3) exercise — the Riemannian optimizer must show recent runtime evidence,
+  # else dormant.  Expected UNCHECKABLE/FAIL absent an optimizer-step trace.
+  - id: INV-riemannian-optimizer-exercised
+    kind: exercise
+    incident: dormant-riemannian-optimizer
+    severity: low
+    description: >
+      The Riemannian optimizer capability should show runtime evidence within
+      the window, else it is dormant.
+    capability: riemannian_optimizer
+    window_days: 60
+    evidence:
+      trace_name_pattern: 'riemannian|adam|optimizer'
