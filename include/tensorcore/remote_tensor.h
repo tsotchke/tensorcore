@@ -41,6 +41,22 @@
  *     read — the caller orchestrates async overlap by spawning fetches
  *     ahead of the compute that needs the bytes (use cudaMemcpyAsync
  *     after the fetch returns to overlap with the GPU pipeline).
+ *   - Calls that fetch concurrently from the same peer are safe and are
+ *     serialized at the connection. Different peer connections can proceed
+ *     concurrently.
+ *
+ * Trust boundary:
+ *   - tc_remote_init retains the v1 unauthenticated compatibility path.
+ *     tc_remote_init_authenticated adds mutual identity authentication but
+ *     not payload encryption. Bind to a private/overlay address (for example
+ *     a Tailscale address) when confidentiality is required. The bind host is
+ *     honored exactly; use "0.0.0.0" or "*" only intentionally.
+ *   - Active client reads and all socket writes time out after 30 seconds by
+ *     default. An idle server connection remains valid across long compute
+ *     phases and is interrupted explicitly at shutdown. Override active I/O
+ *     timeouts with TC_REMOTE_IO_TIMEOUT_MS (100..600000).
+ *     TC_REMOTE_MAX_CLIENTS bounds simultaneous server connections (default
+ *     64, range 1..4096).
  *
  * Versioning: protocol magic = 'TCRT' v1. Mismatch → TC_ERR_INTERNAL.
  *
@@ -52,6 +68,7 @@
 #include <stdint.h>
 #include "tensorcore/status.h"
 #include "tensorcore/tensorcore.h"
+#include "tensorcore/transport_auth.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -68,7 +85,8 @@ typedef enum {
  *
  *   ctx        : owning tc_context (for diagnostics / future buffer alloc).
  *   role       : SERVER or CLIENT.
- *   bind_url   : SERVER: "tcp://0.0.0.0:port" address to listen on.
+ *   bind_url   : SERVER: "tcp://host:port" address to listen on. The host is
+ *                not widened; "tcp://127.0.0.1:port" is loopback-only.
  *                CLIENT: ignored (pass NULL); use tc_remote_connect.
  *   out        : returns the new tc_remote_ctx handle. */
 tc_status_t tc_remote_init(tc_context* ctx,
@@ -76,13 +94,24 @@ tc_status_t tc_remote_init(tc_context* ctx,
                             const char* bind_url,
                             tc_remote_ctx** out);
 
-/* Shut down the endpoint. Closes the listener (server) or all open
- * connections (client). Joins all worker threads. */
+/* Authenticated constructor. The config is validated and deep-copied before
+ * this function returns. An authenticated server rejects legacy clients; an
+ * authenticated client must use tc_remote_connect_authenticated. */
+tc_status_t tc_remote_init_authenticated(
+    tc_context* ctx,
+    tc_remote_role_t role,
+    const char* bind_url,
+    const tc_transport_auth_config* auth,
+    tc_remote_ctx** out);
+
+/* Shut down the endpoint. Closes the listener and all accepted connections
+ * (server) or all peer connections (client), then waits for workers to exit. */
 tc_status_t tc_remote_shutdown(tc_remote_ctx* h);
 
-/* WEIGHT_SERVER: register a tensor blob by name. The pointer must remain
- * valid for the lifetime of the handle; the server reads bytes directly
- * out of it on each fetch (no copy).
+/* WEIGHT_SERVER: register a tensor blob by name. The server reads bytes
+ * directly out of it on each fetch (no copy). The pointer must remain valid
+ * until tc_remote_unregister_tensor returns, or until endpoint shutdown if
+ * it is never unregistered.
  *
  *   h          : SERVER handle from tc_remote_init.
  *   name       : NUL-terminated UTF-8 identifier (e.g. "expert/L31/E5/W2").
@@ -95,7 +124,8 @@ tc_status_t tc_remote_register_tensor(tc_remote_ctx* h,
                                        size_t bytes);
 
 /* Forget a previously registered tensor (frees the registry slot; does
- * NOT free the underlying ptr — caller owns the storage). */
+ * NOT free the underlying ptr — caller owns the storage). This is a lifetime
+ * barrier: when it returns, in-flight server writes no longer access ptr. */
 tc_status_t tc_remote_unregister_tensor(tc_remote_ctx* h, const char* name);
 
 /* Number of tensors currently registered on this server handle. */
@@ -105,6 +135,29 @@ size_t tc_remote_registered_count(tc_remote_ctx* h);
  * ("tcp://host:port"). Returns a peer id (int) used by subsequent
  * fetches. Negative on error. */
 int tc_remote_connect(tc_remote_ctx* h, const char* peer_url);
+
+/* Authenticated connect with explicit server identity binding. On success,
+ * out_peer_id receives the normal fetch peer ID. On failure it remains -1.
+ * Legacy/authenticated mixing fails closed with TC_ERR_AUTH. */
+tc_status_t tc_remote_connect_authenticated(
+    tc_remote_ctx* h,
+    const char* peer_url,
+    const char* expected_peer_identity,
+    int* out_peer_id);
+
+/* Replace the keyring used by future handshakes. The endpoint identity must
+ * remain unchanged. Existing authenticated sessions are not interrupted.
+ * Keeping old and new key IDs together provides the rotation overlap window. */
+tc_status_t tc_remote_auth_rotate(
+    tc_remote_ctx* h,
+    const tc_transport_auth_config* auth);
+
+/* Authenticated identity/key observability for an established client peer.
+ * Unauthenticated peers return NULL/0. The identity pointer lives until
+ * endpoint shutdown. */
+const char* tc_remote_peer_identity(tc_remote_ctx* h, int peer_id);
+uint64_t tc_remote_peer_key_id(tc_remote_ctx* h, int peer_id);
+uint64_t tc_remote_auth_failure_count(tc_remote_ctx* h);
 
 /* COMPUTE_CLIENT: synchronous fetch of a named tensor's bytes into the
  * caller-supplied destination buffer.

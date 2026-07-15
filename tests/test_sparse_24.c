@@ -7,8 +7,10 @@
  *   1. tc_sparse_24_prune keeps exactly 2 non-zeros per 4-block.
  *   2. The kept entries are the 2 largest by magnitude.
  *   3. tc_sparse_24_check accepts pruned matrices and rejects unpruned.
- *   4. tc_sparse_24_gemm produces the bit-correct dense product when B is
- *      2:4-pruned (zeros contribute zero — fallback path is correctness-
+ *   4. A linear-weight view [N, K] can be pruned along K and transposed
+ *      back into GEMM B [K, N].
+ *   5. tc_sparse_24_gemm produces the bit-correct dense product when B is
+ *      2:4-pruned (zeros contribute zero; fallback path is correctness-
  *      preserving even without the tensor-core speedup).
  */
 
@@ -26,8 +28,7 @@ int main(void) {
     tc_context* ctx = NULL;
     if (tc_init(&ctx) != TC_OK) return fail_("tc_init");
 
-    const int rows = 8;
-    const int cols = 16;   /* multiple of 4 ✓ */
+    enum { rows = 8, cols = 16 };   /* cols is a multiple of 4 ✓ */
     tc_buffer* bW;
     if (tc_buffer_alloc(ctx, (size_t)rows * cols * sizeof(float), &bW) != TC_OK) return 1;
     void* Wp = NULL; tc_buffer_map(bW, &Wp);
@@ -98,7 +99,7 @@ int main(void) {
 
     /* Sparse GEMM fallback: C = A @ B_pruned should be the dense product
      * (zeros contribute zero). Verify against a hand-computed dense ref. */
-    const int M = 4, K_ = cols, N_ = 4;
+    enum { M = 4, K_ = cols, N_ = 4 };
     tc_buffer *bA, *bB, *bC;
     tc_buffer_alloc(ctx, (size_t)M * K_ * sizeof(float), &bA);
     tc_buffer_alloc(ctx, (size_t)K_ * N_ * sizeof(float), &bB);
@@ -108,16 +109,32 @@ int main(void) {
     float* A = (float*)Ap; float* B = (float*)Bp; float* C = (float*)Cp;
     for (int i = 0; i < M * K_; ++i) A[i] = ((float)rand()/RAND_MAX - 0.5f);
     for (int i = 0; i < K_ * N_; ++i) B[i] = ((float)rand()/RAND_MAX - 0.5f) * 2.0f;
-    /* Prune B along its K axis. B is [K, N] row-major; the 4-block axis
-     * is K, so we treat B^T as [N, K] and prune along K via per-row 4-blocks
-     * — equivalent to viewing B as N rows of length K. Easiest: rearrange
-     * to use prune over rows=K, cols=N… instead, prune the transposed view
-     * by reshaping: call prune over (rows=N, cols=K) on B reinterpreted —
-     * but cusparseLt expects K along cols of B. We just prune `bB` as
-     * (rows=K, cols=N) treating each K-row as 4-blocks; this isn't the
-     * tensor-core layout but does exercise the same code path correctly
-     * for the dense-fallback's purposes. */
-    tc_sparse_24_prune(ctx, bB, TC_DTYPE_F32, K_, N_);
+    /* Prune in canonical linear-weight layout: W_linear is [N, K] row-major,
+     * so its contiguous 4-blocks are exactly along the K axis. Then transpose
+     * it back to B [K, N] for tensorcore's GEMM convention. */
+    tc_buffer* bWlin = NULL;
+    tc_buffer_alloc(ctx, (size_t)N_ * K_ * sizeof(float), &bWlin);
+    void* Wlinp = NULL;
+    tc_buffer_map(bWlin, &Wlinp);
+    float* Wlin = (float*)Wlinp;
+    for (int n = 0; n < N_; ++n) {
+        for (int k = 0; k < K_; ++k) {
+            Wlin[n*K_ + k] = B[k*N_ + n];
+        }
+    }
+    if (tc_sparse_24_prune(ctx, bWlin, TC_DTYPE_F32, N_, K_) != TC_OK) {
+        return fail_("linear-weight prune");
+    }
+    {
+        tc_status_t s = tc_sparse_24_check(ctx, bWlin, TC_DTYPE_F32, N_, K_);
+        printf("  canonical K-axis 2:4 layout %s\n", s == TC_OK ? "OK" : "FAIL");
+        if (s != TC_OK) rc = 1;
+    }
+    for (int n = 0; n < N_; ++n) {
+        for (int k = 0; k < K_; ++k) {
+            B[k*N_ + n] = Wlin[n*K_ + k];
+        }
+    }
 
     /* tc_sparse_24_gemm: dense-fallback computes A @ B as standard GEMM. */
     if (tc_sparse_24_gemm(ctx, bA, bB, bC, M, N_, K_,
@@ -142,13 +159,14 @@ int main(void) {
            max_err, max_err < 1e-4 ? "OK" : "FAIL");
     if (max_err >= 1e-4f) rc = 1;
 
-    /* tc_sparse_24_available: 0 on this Mac build (no cusparseLt). */
+    /* tc_sparse_24_available: 0 on portable builds without cusparseLt. */
     const int avail = tc_sparse_24_available();
     printf("  tc_sparse_24_available = %d (cusparseLt: %s)\n",
            avail, avail ? "yes" : "no — dense fallback");
 
     tc_buffer_free(ctx, bW);
     tc_buffer_free(ctx, bA); tc_buffer_free(ctx, bB); tc_buffer_free(ctx, bC);
+    tc_buffer_free(ctx, bWlin);
     tc_shutdown(ctx);
     printf("%s\n", rc ? "FAIL" : "OK");
     return rc;

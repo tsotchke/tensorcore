@@ -5,6 +5,56 @@
 
 find_package(Threads REQUIRED)
 
+add_executable(test_runtime_capabilities test_runtime_capabilities.c)
+target_link_libraries(test_runtime_capabilities PRIVATE tensorcore)
+target_include_directories(test_runtime_capabilities PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME test_runtime_capabilities COMMAND test_runtime_capabilities)
+set_tests_properties(test_runtime_capabilities PROPERTIES TIMEOUT 30)
+if(TC_ENABLE_METAL)
+    set_tests_properties(test_runtime_capabilities PROPERTIES
+        ENVIRONMENT "TC_METALLIB=${TC_METALLIB_PATH}"
+    )
+endif()
+
+# Async DiLoCo is implemented in the platform-independent distributed layer.
+# Keep its snapshot/rebase and peer-loss state-machine coverage enabled on
+# both the portable CPU and Apple/Metal builds.
+add_executable(test_diloco_async test_diloco_async.c)
+target_link_libraries(test_diloco_async PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
+target_include_directories(test_diloco_async PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME test_diloco_async COMMAND test_diloco_async)
+set_tests_properties(test_diloco_async PROPERTIES TIMEOUT 60)
+
+add_executable(test_diloco_async_failure_fork test_diloco_async_failure_fork.c)
+target_link_libraries(test_diloco_async_failure_fork PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
+target_include_directories(test_diloco_async_failure_fork PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME test_diloco_async_failure_fork COMMAND test_diloco_async_failure_fork)
+set_tests_properties(test_diloco_async_failure_fork PROPERTIES
+    SKIP_RETURN_CODE 77
+    TIMEOUT 60
+)
+
+add_executable(test_diloco_checkpoint test_diloco_checkpoint.c)
+target_link_libraries(test_diloco_checkpoint PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
+target_include_directories(test_diloco_checkpoint PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME test_diloco_checkpoint COMMAND test_diloco_checkpoint)
+set_tests_properties(test_diloco_checkpoint PROPERTIES TIMEOUT 60)
+
+add_executable(test_transport_auth test_transport_auth.cpp)
+target_link_libraries(test_transport_auth PRIVATE
+    tensorcore ${ACCELERATE_FRAMEWORK} Threads::Threads)
+target_include_directories(test_transport_auth PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME test_transport_auth COMMAND test_transport_auth)
+set_tests_properties(test_transport_auth PROPERTIES
+    SKIP_RETURN_CODE 77
+    TIMEOUT 90
+)
+if(TC_ENABLE_METAL)
+    set_tests_properties(test_transport_auth PROPERTIES
+        ENVIRONMENT "TC_METALLIB=${TC_METALLIB_PATH}"
+    )
+endif()
+
 if(NOT TC_ENABLE_METAL)
     add_executable(test_portable_cpu test_portable_cpu.c)
     target_link_libraries(test_portable_cpu PRIVATE tensorcore)
@@ -41,6 +91,12 @@ if(NOT TC_ENABLE_METAL)
     target_include_directories(test_conv2d PRIVATE ${CMAKE_SOURCE_DIR}/include)
     add_test(NAME test_conv2d COMMAND test_conv2d)
     set_tests_properties(test_conv2d PROPERTIES TIMEOUT 120)
+
+    add_executable(test_sparse_24 test_sparse_24.c)
+    target_link_libraries(test_sparse_24 PRIVATE tensorcore)
+    target_include_directories(test_sparse_24 PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    add_test(NAME test_sparse_24 COMMAND test_sparse_24)
+    set_tests_properties(test_sparse_24 PROPERTIES TIMEOUT 30)
 
     add_executable(test_training_kernels test_training_kernels.c)
     target_link_libraries(test_training_kernels PRIVATE tensorcore)
@@ -189,6 +245,31 @@ if(NOT TC_ENABLE_METAL)
             TIMEOUT 60
         )
     endif()
+
+    # The remote/mesh transport is backend-independent. Exercise its legacy
+    # framing and lifecycle coverage on portable Unix builds as well as Metal.
+    if(NOT WIN32)
+        add_executable(test_mesh_collective test_mesh_collective.c)
+        target_link_libraries(test_mesh_collective PRIVATE tensorcore Threads::Threads)
+        target_include_directories(test_mesh_collective PRIVATE ${CMAKE_SOURCE_DIR}/include)
+        add_test(NAME test_mesh_collective COMMAND test_mesh_collective)
+        set_tests_properties(test_mesh_collective PROPERTIES TIMEOUT 30)
+
+        add_executable(test_remote_tensor_fork test_remote_tensor_fork.c)
+        target_link_libraries(test_remote_tensor_fork PRIVATE tensorcore Threads::Threads)
+        target_include_directories(test_remote_tensor_fork PRIVATE ${CMAKE_SOURCE_DIR}/include)
+        add_test(NAME test_remote_tensor_fork COMMAND test_remote_tensor_fork)
+        set_tests_properties(test_remote_tensor_fork PROPERTIES
+            TIMEOUT 60
+            SKIP_RETURN_CODE 77
+        )
+
+        add_executable(test_remote_tensor_adversarial test_remote_tensor_adversarial.cpp)
+        target_link_libraries(test_remote_tensor_adversarial PRIVATE tensorcore Threads::Threads)
+        target_include_directories(test_remote_tensor_adversarial PRIVATE ${CMAKE_SOURCE_DIR}/include)
+        add_test(NAME test_remote_tensor_adversarial COMMAND test_remote_tensor_adversarial)
+        set_tests_properties(test_remote_tensor_adversarial PROPERTIES TIMEOUT 15)
+    endif()
     return()
 endif()
 
@@ -300,6 +381,13 @@ set_tests_properties(test_remote_tensor_fork PROPERTIES
     TIMEOUT 60
     SKIP_RETURN_CODE 77
 )
+
+add_executable(test_remote_tensor_adversarial test_remote_tensor_adversarial.cpp)
+target_link_libraries(test_remote_tensor_adversarial PRIVATE
+    tensorcore ${ACCELERATE_FRAMEWORK} Threads::Threads)
+target_include_directories(test_remote_tensor_adversarial PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME test_remote_tensor_adversarial COMMAND test_remote_tensor_adversarial)
+set_tests_properties(test_remote_tensor_adversarial PROPERTIES TIMEOUT 15)
 
 # Split-binary remote distributed test. Launch manually with
 # --rank/--world/--url against another machine.

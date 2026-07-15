@@ -28,6 +28,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <vector>
 
 #if defined(_OPENMP)
 #include <omp.h>
@@ -231,6 +232,14 @@ extern "C" tc_status_t tc_poincare_exp_map(tc_context* ctx,
     const float* Vd = (const float*)Vp;
     float* Od = (float*)Op;
     const float sqrt_c = std::sqrt(c);
+    std::vector<float> dynamic_scratch;
+    if (D > 64) {
+        try {
+            dynamic_scratch.resize((size_t)N * D);
+        } catch (...) {
+            return TC_ERR_ALLOC;
+        }
+    }
 
 #if defined(_OPENMP)
     #pragma omp parallel for schedule(static) if (N > 1)
@@ -250,7 +259,7 @@ extern "C" tc_status_t tc_poincare_exp_map(tc_context* ctx,
             : (lam * 0.5f);
         float scaled[64];   /* small per-row stack scratch; D should be <= 64 typical */
         const bool use_stack = D <= 64;
-        float* tmp = use_stack ? scaled : (float*)alloca((size_t)D * sizeof(float));
+        float* tmp = use_stack ? scaled : dynamic_scratch.data() + (size_t)n * D;
         for (int d = 0; d < D; ++d) tmp[d] = second * v[d];
         mobius_add_row(x, tmp, o, D, c);
     }
@@ -272,6 +281,14 @@ extern "C" tc_status_t tc_poincare_log_map(tc_context* ctx,
     const float* Yd = (const float*)Yp;
     float* Od = (float*)Op;
     const float sqrt_c = std::sqrt(c);
+    std::vector<float> dynamic_scratch;
+    if (D > 64) {
+        try {
+            dynamic_scratch.resize((size_t)N * D);
+        } catch (...) {
+            return TC_ERR_ALLOC;
+        }
+    }
 
 #if defined(_OPENMP)
     #pragma omp parallel for schedule(static) if (N > 1)
@@ -283,7 +300,8 @@ extern "C" tc_status_t tc_poincare_log_map(tc_context* ctx,
         /* delta = −x ⊕_c y, into o (temporary). */
         float neg_x[64];
         const bool use_stack = D <= 64;
-        float* neg_x_buf = use_stack ? neg_x : (float*)alloca((size_t)D * sizeof(float));
+        float* neg_x_buf = use_stack ? neg_x
+                                     : dynamic_scratch.data() + (size_t)n * D;
         for (int d = 0; d < D; ++d) neg_x_buf[d] = -x[d];
         mobius_add_row(neg_x_buf, y, o, D, c);
 
@@ -325,6 +343,14 @@ extern "C" tc_status_t tc_poincare_distance(tc_context* ctx,
     const float* Yd = (const float*)Yp;
     float* Dd = (float*)Dp;
     const float sqrt_c = std::sqrt(c);
+    std::vector<float> dynamic_scratch;
+    if (D > 64) {
+        try {
+            dynamic_scratch.resize((size_t)N * D * 2);
+        } catch (...) {
+            return TC_ERR_ALLOC;
+        }
+    }
 
 #if defined(_OPENMP)
     #pragma omp parallel for schedule(static) if (N > 1)
@@ -334,9 +360,11 @@ extern "C" tc_status_t tc_poincare_distance(tc_context* ctx,
         const float* y = Yd + (size_t)n * D;
         float delta[64];
         const bool use_stack = D <= 64;
-        float* d_buf = use_stack ? delta : (float*)alloca((size_t)D * sizeof(float));
+        float* row_scratch = use_stack ? nullptr
+                                       : dynamic_scratch.data() + (size_t)n * D * 2;
+        float* d_buf = use_stack ? delta : row_scratch;
         float neg_x[64];
-        float* neg_x_buf = use_stack ? neg_x : (float*)alloca((size_t)D * sizeof(float));
+        float* neg_x_buf = use_stack ? neg_x : row_scratch + D;
         for (int d = 0; d < D; ++d) neg_x_buf[d] = -x[d];
         mobius_add_row(neg_x_buf, y, d_buf, D, c);
         const float nd = safe_norm(d_buf, D);

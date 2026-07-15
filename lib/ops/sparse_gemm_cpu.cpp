@@ -29,6 +29,12 @@
 #include <omp.h>
 #endif
 
+#if defined(__GNUC__) || defined(__clang__)
+#  define TC_SPARSE_WEAK __attribute__((weak))
+#else
+#  define TC_SPARSE_WEAK
+#endif
+
 namespace {
 
 inline float read_elem(const void* base, int idx, tc_dtype_t dtype) {
@@ -41,7 +47,7 @@ inline float read_elem(const void* base, int idx, tc_dtype_t dtype) {
         return tc_cpu_f16_to_f32(((const uint16_t*)base)[idx]);
     }
     if (dtype == TC_DTYPE_BF16) {
-        uint32_t u = ((const uint32_t)((const uint16_t*)base)[idx]) << 16;
+        uint32_t u = ((uint32_t)((const uint16_t*)base)[idx]) << 16;
         float f;
         std::memcpy(&f, &u, 4);
         return f;
@@ -138,7 +144,7 @@ extern "C" tc_status_t tc_sparse_24_check(tc_context* ctx,
 /* Weak default — the CUDA backend will override this when cusparseLt is
  * available. For now (and on any non-CUDA host) we do a correct dense
  * GEMM through tc_gemm; the zeros in B contribute zero to the output. */
-extern "C" __attribute__((weak)) tc_status_t tc_sparse_24_gemm(
+extern "C" TC_SPARSE_WEAK tc_status_t tc_sparse_24_gemm(
         tc_context* ctx,
         const tc_buffer* A,
         const tc_buffer* B,
@@ -161,6 +167,6 @@ extern "C" __attribute__((weak)) tc_status_t tc_sparse_24_gemm(
 }
 
 /* Default to 0 — CUDA + cusparseLt override sets to 1. */
-extern "C" __attribute__((weak)) int tc_sparse_24_available(void) {
+extern "C" TC_SPARSE_WEAK int tc_sparse_24_available(void) {
     return 0;
 }

@@ -4,6 +4,7 @@
 #include "tensorcore/status.h"
 #include "tensorcore/dtype.h"
 #include "tensorcore/device.h"
+#include "tensorcore/transport_auth.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -54,6 +55,21 @@ tc_status_t tc_dist_init(tc_context*        tc,
                          int                 rank,
                          const char*         rendezvous_url,
                          tc_dist_ctx**       out);
+
+/* Authenticated Gloo constructor. rank_identities contains world_size stable
+ * identities and binds every rendezvous/ring socket to its claimed rank.
+ * auth->local_identity must equal rank_identities[rank]. Key overlap in auth
+ * supports rolling rotation; legacy/authenticated ranks cannot mix. */
+tc_status_t tc_dist_init_authenticated(
+    tc_context* tc,
+    tc_dist_backend_t backend,
+    int world_size,
+    int rank,
+    const char* rendezvous_url,
+    const char* const* rank_identities,
+    size_t rank_identity_count,
+    const tc_transport_auth_config* auth,
+    tc_dist_ctx** out);
 
 tc_status_t tc_dist_finalize(tc_dist_ctx* d);
 

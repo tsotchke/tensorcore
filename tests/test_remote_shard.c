@@ -210,16 +210,10 @@ static int run_peer(int my_rank, const char* my_url, const char* peer_url) {
                my_rank, (unsigned long long)tc_mesh_total_bytes(g));
     }
 
-    /* The mesh transport has no real barrier — broadcast root publishes
-     * and returns; allreduce root publishes the result and returns. Rank 0
-     * can complete its validation and call shutdown while rank 1 still has
-     * fetches in flight against rank 0's server, severing them. For this
-     * test the simplest correctness move is to give rank 1 explicit
-     * "leader-finished" time before rank 0 closes its server. 2 s is well
-     * above the shard fetch wall time on localhost (single-digit ms). */
-    if (my_rank == 0) sleep(2);
-
-    tc_mesh_group_shutdown(g);
+    if (tc_mesh_group_shutdown(g) != TC_OK) {
+        fprintf(stderr, "rank %d: group_shutdown failed\n", my_rank);
+        fails++;
+    }
     tc_shutdown(ctx);
     return fails;
 }

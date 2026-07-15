@@ -19,12 +19,6 @@
 
 namespace {
 
-/* Complex multiply-add: out += a * b on interleaved pairs. */
-inline void cmadd(const float* a, const float* b, float* out) {
-    out[0] += a[0] * b[0] - a[1] * b[1];
-    out[1] += a[0] * b[1] + a[1] * b[0];
-}
-
 /* Compute U† (the conjugate transpose) from a 1q unitary U
  * stored as 8 interleaved floats. */
 inline void unitary_conj_transpose(const float* U, float* Ud) {
@@ -270,7 +264,6 @@ extern "C" void tc_dmstate_apply_kraus_1q(float* rho, int n_qubits, int qubit,
         for (size_t i = 0; i < N; ++i) rho_acc[i] += rho_tmp[i];
     }
     std::memcpy(rho, rho_acc.data(), N * sizeof(float));
-    (void)cmadd;  /* declared inline above; not needed in this routine */
 }
 
 extern "C" void tc_dmstate_trace(const float* rho, int n_qubits,

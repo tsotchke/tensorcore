@@ -19,6 +19,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <vector>
 
 #if defined(_OPENMP)
 #include <omp.h>
@@ -99,6 +100,14 @@ extern "C" tc_status_t tc_riemannian_adam_step_poincare(
     float* P = (float*)Pp; const float* G = (const float*)Gp;
     float* M = (float*)Mp; float* V = (float*)Vp;
     const float sqrt_c = std::sqrt(c);
+    std::vector<float> dynamic_scratch;
+    if (D > 64) {
+        try {
+            dynamic_scratch.resize((size_t)N * D * 3);
+        } catch (...) {
+            return TC_ERR_ALLOC;
+        }
+    }
 
 #if defined(_OPENMP)
     #pragma omp parallel for schedule(static) if (N > 1)
@@ -118,12 +127,13 @@ extern "C" tc_status_t tc_riemannian_adam_step_poincare(
         const float inv_lam_sq = 1.0f / (lam_x * lam_x);
 
         /* Per-component Adam moments + step direction. Use small stack
-         * scratch for the update vector (D ≤ 64 typical for transformer
-         * head dims; alloca for larger). */
+         * scratch for typical transformer head dimensions and one bounded
+         * heap allocation for the full operation when D is larger. */
         float step_stack[64];
         const bool use_stack = D <= 64;
-        float* step = use_stack ? step_stack
-                                : (float*)alloca((size_t)D * sizeof(float));
+        float* row_scratch = use_stack ? nullptr
+                                       : dynamic_scratch.data() + (size_t)n * D * 3;
+        float* step = use_stack ? step_stack : row_scratch;
 
         for (int d = 0; d < D; ++d) {
             const float g_t = g[d] * inv_lam_sq;
@@ -147,13 +157,11 @@ extern "C" tc_status_t tc_riemannian_adam_step_poincare(
             ? (std::tanh(sc_n * lam_x * 0.5f) / sc_n)
             : (lam_x * 0.5f);
         float scaled_stack[64];
-        float* scaled = use_stack ? scaled_stack
-                                  : (float*)alloca((size_t)D * sizeof(float));
+        float* scaled = use_stack ? scaled_stack : row_scratch + D;
         for (int d = 0; d < D; ++d) scaled[d] = second * step[d];
 
         float x_new_stack[64];
-        float* x_new = use_stack ? x_new_stack
-                                 : (float*)alloca((size_t)D * sizeof(float));
+        float* x_new = use_stack ? x_new_stack : row_scratch + 2 * D;
         mobius_add_row(x, scaled, x_new, D, c);
         project_ball_row(x_new, D, sqrt_c);
 
@@ -186,6 +194,14 @@ extern "C" tc_status_t tc_riemannian_adam_step_sphere(
     tc_buffer_map(m, &Mp);      tc_buffer_map(v, &Vp);
     float* P = (float*)Pp; const float* G = (const float*)Gp;
     float* M = (float*)Mp; float* V = (float*)Vp;
+    std::vector<float> dynamic_scratch;
+    if (D > 64) {
+        try {
+            dynamic_scratch.resize((size_t)N * D * 2);
+        } catch (...) {
+            return TC_ERR_ALLOC;
+        }
+    }
 
 #if defined(_OPENMP)
     #pragma omp parallel for schedule(static) if (N > 1)
@@ -202,8 +218,9 @@ extern "C" tc_status_t tc_riemannian_adam_step_sphere(
 
         float step_stack[64];
         const bool use_stack = D <= 64;
-        float* step = use_stack ? step_stack
-                                : (float*)alloca((size_t)D * sizeof(float));
+        float* row_scratch = use_stack ? nullptr
+                                       : dynamic_scratch.data() + (size_t)n * D * 2;
+        float* step = use_stack ? step_stack : row_scratch;
 
         for (int d = 0; d < D; ++d) {
             const float g_t = g[d] - gx * x[d];
@@ -228,8 +245,7 @@ extern "C" tc_status_t tc_riemannian_adam_step_sphere(
         const float c_v = std::cos(n_s);
         const float s_v = std::sin(n_s);
         float x_new_stack[64];
-        float* x_new = use_stack ? x_new_stack
-                                 : (float*)alloca((size_t)D * sizeof(float));
+        float* x_new = use_stack ? x_new_stack : row_scratch + D;
         for (int d = 0; d < D; ++d) x_new[d] = c_v * x[d] + s_v * step[d] / n_s;
 
         /* Re-normalize x_new to the sphere (floating-point drift safety). */

@@ -376,6 +376,7 @@ endif()
 set(TC_COMMON_SOURCES
     lib/core/status.c
     lib/core/dtype.c
+    lib/core/capabilities.cpp
     lib/core/autotune.cpp
     lib/core/trace.cpp
     lib/io/gguf.c
@@ -383,6 +384,7 @@ set(TC_COMMON_SOURCES
     lib/distributed/diloco.cpp
     lib/distributed/sparse_compress.cpp
     lib/distributed/remote_tensor.cpp
+    lib/distributed/transport_auth.cpp
     lib/distributed/mesh_collective.cpp
     lib/distributed/remote_shard.cpp
     lib/hip/device.cpp
@@ -393,7 +395,6 @@ set(TC_COMMON_SOURCES
     lib/c_api/eshkol_bridge.c
     lib/core/memory_tier_stub.cpp
     lib/core/checkpoint_stub.cpp
-    lib/core/cuda_stubs.cpp
     lib/ops/poincare_cpu.cpp
     lib/ops/lorentz_cpu.cpp
     lib/ops/sphere_cpu.cpp
@@ -534,6 +535,8 @@ add_library(tensorcore STATIC ${TC_SOURCES})
 add_library(tensorcore_shared SHARED ${TC_SOURCES} ${TC_WINDOWS_EXPORTS_DEF})
 set_target_properties(tensorcore_shared PROPERTIES
     OUTPUT_NAME tensorcore
+    VERSION "${PROJECT_VERSION}"
+    SOVERSION "${PROJECT_VERSION_MAJOR}"
     MACHO_CURRENT_VERSION "${PROJECT_VERSION}"
     MACHO_COMPATIBILITY_VERSION "${TC_MACHO_COMPATIBILITY_VERSION}"
 )
@@ -553,6 +556,7 @@ target_include_directories(tensorcore_shared
 )
 if(TC_ENABLE_METAL)
     target_compile_definitions(tensorcore_shared PRIVATE
+        TC_ENABLE_METAL=1
         TC_METALLIB_PATH="${TC_METALLIB_PATH}"
     )
 endif()
@@ -595,6 +599,7 @@ target_include_directories(tensorcore
 
 if(TC_ENABLE_METAL)
     target_compile_definitions(tensorcore PRIVATE
+        TC_ENABLE_METAL=1
         TC_METALLIB_PATH="${TC_METALLIB_PATH}"
     )
 endif()
@@ -650,7 +655,9 @@ install(TARGETS tensorcore tensorcore_shared
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
-install(DIRECTORY include/tensorcore DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(DIRECTORY include/tensorcore DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    FILES_MATCHING PATTERN "*.h"
+)
 if(TC_ENABLE_METAL)
     install(FILES ${TC_METALLIB_PATH} DESTINATION ${CMAKE_INSTALL_LIBDIR})
 endif()

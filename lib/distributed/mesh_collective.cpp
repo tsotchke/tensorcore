@@ -21,6 +21,7 @@
 
 #include "tensorcore/mesh_collective.h"
 #include "tensorcore/remote_tensor.h"
+#include "remote_tensor_internal.h"
 
 #include <chrono>
 #include <cstring>
@@ -41,6 +42,7 @@ struct tc_mesh_group {
     std::mutex        round_mu;
     uint64_t          round_counter; /* per-group monotonic */
     uint64_t          bytes_shipped;
+    uint32_t          shutdown_token;
 
     /* Per-collective result snapshots. The remote_tensor registry is
      * pointer-based, so reusing the caller's buf across rounds would
@@ -141,12 +143,23 @@ void reduce_inplace_f32(float* accum, const float* src, size_t count,
 
 }  // namespace
 
-extern "C" tc_status_t tc_mesh_group_init(tc_context* ctx,
-                                          int32_t n_peers, int32_t my_rank,
-                                          const char* const* peer_urls,
-                                          tc_mesh_group_t** out) {
+static tc_status_t mesh_group_init_impl(
+    tc_context* ctx, int32_t n_peers, int32_t my_rank,
+    const char* const* peer_urls, const char* const* peer_identities,
+    const tc_transport_auth_config* auth, tc_mesh_group_t** out) {
     if (!ctx || !peer_urls || !out) return TC_ERR_INVALID_ARG;
+    *out = nullptr;
     if (n_peers <= 0 || my_rank < 0 || my_rank >= n_peers) return TC_ERR_INVALID_ARG;
+    if ((auth == nullptr) != (peer_identities == nullptr)) return TC_ERR_INVALID_ARG;
+    if (auth) {
+        if (!auth->local_identity || !peer_identities[my_rank] ||
+            std::strcmp(auth->local_identity, peer_identities[my_rank]) != 0)
+            return TC_ERR_INVALID_ARG;
+        for (int32_t r = 0; r < n_peers; ++r) {
+            if (!peer_urls[r] || !peer_identities[r] || !peer_identities[r][0])
+                return TC_ERR_INVALID_ARG;
+        }
+    }
 
     auto* g = new tc_mesh_group_t{};
     g->ctx = ctx;
@@ -158,15 +171,22 @@ extern "C" tc_status_t tc_mesh_group_init(tc_context* ctx,
     g->urls.reserve((size_t)n_peers);
     g->round_counter = 0;
     g->bytes_shipped = 0;
+    g->shutdown_token = static_cast<uint32_t>(my_rank);
     for (int r = 0; r < n_peers; ++r) g->urls.emplace_back(peer_urls[r]);
 
     /* Bind local server. */
-    tc_status_t s = tc_remote_init(ctx, TC_REMOTE_ROLE_WEIGHT_SERVER,
-                                    peer_urls[my_rank], &g->server);
+    tc_status_t s = auth
+        ? tc_remote_init_authenticated(ctx, TC_REMOTE_ROLE_WEIGHT_SERVER,
+                                       peer_urls[my_rank], auth, &g->server)
+        : tc_remote_init(ctx, TC_REMOTE_ROLE_WEIGHT_SERVER,
+                         peer_urls[my_rank], &g->server);
     if (s != TC_OK) { delete g; return s; }
 
     /* Client context for outbound fetches. */
-    s = tc_remote_init(ctx, TC_REMOTE_ROLE_COMPUTE_CLIENT, nullptr, &g->client);
+    s = auth
+        ? tc_remote_init_authenticated(ctx, TC_REMOTE_ROLE_COMPUTE_CLIENT,
+                                       nullptr, auth, &g->client)
+        : tc_remote_init(ctx, TC_REMOTE_ROLE_COMPUTE_CLIENT, nullptr, &g->client);
     if (s != TC_OK) {
         tc_remote_shutdown(g->server);
         delete g; return s;
@@ -182,7 +202,17 @@ extern "C" tc_status_t tc_mesh_group_init(tc_context* ctx,
         int pid = -1;
         int delay_ms = 50;
         for (int attempt = 0; attempt < 12; ++attempt) {
-            pid = tc_remote_connect(g->client, peer_urls[r]);
+            if (auth) {
+                const tc_status_t connect_status =
+                    tc_remote_connect_authenticated(g->client, peer_urls[r],
+                                                    peer_identities[r], &pid);
+                if (connect_status == TC_ERR_AUTH ||
+                    connect_status == TC_ERR_ABI_MISMATCH) {
+                    break;
+                }
+            } else {
+                pid = tc_remote_connect(g->client, peer_urls[r]);
+            }
             if (pid >= 0) break;
             std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
             if (delay_ms < 2000) delay_ms *= 2;
@@ -200,12 +230,67 @@ extern "C" tc_status_t tc_mesh_group_init(tc_context* ctx,
     return TC_OK;
 }
 
+extern "C" tc_status_t tc_mesh_group_init(tc_context* ctx,
+                                          int32_t n_peers, int32_t my_rank,
+                                          const char* const* peer_urls,
+                                          tc_mesh_group_t** out) {
+    return mesh_group_init_impl(ctx, n_peers, my_rank, peer_urls,
+                                nullptr, nullptr, out);
+}
+
+extern "C" tc_status_t tc_mesh_group_init_authenticated(
+    tc_context* ctx, int32_t n_peers, int32_t my_rank,
+    const char* const* peer_urls, const char* const* peer_identities,
+    const tc_transport_auth_config* auth, tc_mesh_group_t** out) {
+    if (!auth || !peer_identities) {
+        if (out) *out = nullptr;
+        return TC_ERR_INVALID_ARG;
+    }
+    return mesh_group_init_impl(ctx, n_peers, my_rank, peer_urls,
+                                peer_identities, auth, out);
+}
+
 extern "C" tc_status_t tc_mesh_group_shutdown(tc_mesh_group_t* g) {
     if (!g) return TC_ERR_INVALID_ARG;
-    if (g->client) tc_remote_shutdown(g->client);
-    if (g->server) tc_remote_shutdown(g->server);
+    tc_status_t result = TC_OK;
+
+    /* A collective may return on one rank just before another rank performs
+     * its final fetch. Publish a readiness token and observe every peer's
+     * token before closing outbound connections. The servers then wait for
+     * those outbound clients to close naturally, so no rank tears down an
+     * accepted socket while a peer is still crossing the barrier. */
+    if (g->server && g->client && g->n_peers > 1) {
+        const std::string my_name = mk_name("shutdown", 0, g->my_rank);
+        result = tc_remote_register_tensor(g->server, my_name.c_str(),
+                                           &g->shutdown_token,
+                                           sizeof(g->shutdown_token));
+        for (int rk = 0; result == TC_OK && rk < g->n_peers; ++rk) {
+            if (rk == g->my_rank) continue;
+            const std::string peer_name = mk_name("shutdown", 0, rk);
+            uint32_t peer_token = 0;
+            result = retry_fetch(g->client, g->peer_ids[rk],
+                                 peer_name.c_str(), &peer_token,
+                                 sizeof(peer_token));
+            if (result == TC_OK && peer_token != static_cast<uint32_t>(rk))
+                result = TC_ERR_INTERNAL;
+        }
+    }
+
+    if (g->client) {
+        const tc_status_t s = tc_remote_shutdown(g->client);
+        if (result == TC_OK && s != TC_OK) result = s;
+        g->client = nullptr;
+    }
+    if (g->server) {
+        const tc_status_t drain =
+            tc_remote_internal_wait_for_clients_closed(g->server, 5000);
+        if (result == TC_OK && drain != TC_OK) result = drain;
+        const tc_status_t s = tc_remote_shutdown(g->server);
+        if (result == TC_OK && s != TC_OK) result = s;
+        g->server = nullptr;
+    }
     delete g;
-    return TC_OK;
+    return result;
 }
 
 extern "C" uint64_t tc_mesh_total_bytes(const tc_mesh_group_t* g) {

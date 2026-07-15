@@ -18,6 +18,9 @@ typedef enum {
     TC_ERR_KERNEL_NOT_FOUND     = -9,
     TC_ERR_PIPELINE             = -10,
     TC_ERR_DISPATCH             = -11,
+    TC_ERR_ABI_MISMATCH         = -12,
+    TC_ERR_BUSY                 = -13,
+    TC_ERR_AUTH                 = -14,
     TC_ERR_INTERNAL             = -99,
 } tc_status_t;
 

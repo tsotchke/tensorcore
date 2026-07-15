@@ -38,6 +38,7 @@
 #include "tensorcore/device.h"
 /* Reuse tc_reduce_op_t from distributed.h (SUM=0, AVG=1, MAX=2, MIN=3). */
 #include "tensorcore/distributed.h"
+#include "tensorcore/transport_auth.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -56,7 +57,21 @@ tc_status_t tc_mesh_group_init(tc_context* ctx,
                                 const char* const* peer_urls,
                                 tc_mesh_group_t** out);
 
-/* Shutdown: close server, drop client connections, free state. */
+/* Authenticated group constructor. peer_identities has n_peers entries and
+ * binds each mesh rank to a keyring identity. auth->local_identity must equal
+ * peer_identities[my_rank]. Legacy/authenticated peers cannot mix. */
+tc_status_t tc_mesh_group_init_authenticated(
+    tc_context* ctx,
+    int32_t n_peers,
+    int32_t my_rank,
+    const char* const* peer_urls,
+    const char* const* peer_identities,
+    const tc_transport_auth_config* auth,
+    tc_mesh_group_t** out);
+
+/* Shutdown: synchronize with all ranks, close outbound clients, drain inbound
+ * clients, close the server, and free state. Every live rank in the group must
+ * call shutdown; a missing rank is reported as a transport error. */
 tc_status_t tc_mesh_group_shutdown(tc_mesh_group_t* group);
 
 /* In-place reduce across all peers. buf size = count * sizeof(dtype). */

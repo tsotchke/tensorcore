@@ -1,13 +1,15 @@
 # tests/
 
-31 default CTest entries cover every public ABI surface: 26 native
-correctness tests, the Python binding smoke, and four executable example
+44 default CTest entries cover the native library surface: 39 native
+correctness/lifecycle tests, the Python binding smoke, and four executable example
 smokes in the Metal build. The portable
 CPU-only build registers `test_portable_cpu.c`, `test_conv2d.c`,
 `test_training_kernels.c`, `test_e2e_training.c`, `test_diloco.c`,
+`test_diloco_async.c`, `test_diloco_async_failure_fork.c`,
 `test_sparse_compress.c`, `test_gloo_fork.c`, and `test_gloo_ring_fork.c`,
 plus `test_checkpoint.c` and the DiLoCo-over-GLOO fork tests. Non-Metal
-builds also register `example_training_step` when `TC_BUILD_EXAMPLES=ON`.
+builds also register the backend-independent legacy remote/mesh tests and
+`example_training_step` when `TC_BUILD_EXAMPLES=ON`.
 On Windows, the portable suite registers `test_dist_remote_local`, which
 launches two `test_dist_remote.exe` ranks over loopback to cover the
 Winsock-backed GLOO TCP path without relying on `fork()`.
@@ -18,7 +20,7 @@ oracle and pass the tolerances documented in
 [../docs/numerics.md](../docs/numerics.md).
 
 ```sh
-ctest --test-dir build --output-on-failure   # 31 default Apple tests
+ctest --test-dir build --output-on-failure   # 43 default Apple tests
 ```
 
 Runs in ~5-15s on M2 Ultra.
@@ -67,18 +69,34 @@ regression runs unconditionally and does not execute raw AMX instructions.
 | 17 | `test_tensorops_select.c` | M5 TensorOps dtype × accum selector (works without M5 hardware) |
 | 18 | `test_tensorops_runtime.c` | TensorOps runtime path coverage (skips politely on non-M5) |
 | 19 | `test_diloco.c` | Local/single-rank DiLoCo outer steps, counters, and unsupported multi-rank guards |
-| 20 | `test_sparse_compress.c` | DiLoCo top-k sparse compression pack/unpack accuracy and merge behavior |
-| 21 | `test_gloo_fork.c` | Four forked ranks over broker GLOO TCP; IPv4 and bracketed IPv6 rendezvous, fp32/fp16 allreduce, broadcast, allgather, barrier |
-| 22 | `test_diloco_gloo_fork.c` | Multi-rank DiLoCo over GLOO with forked localhost ranks |
-| 23 | `test_diloco_sparse_fork.c` | TOPK sparse DiLoCo over GLOO; validates sparse wire-byte reduction |
-| 24 | `test_gloo_ring_fork.c` | Four forked ranks with `TC_GLOO_RING=1`; IPv4/bracketed-IPv6 direct TCP ring fp32 SUM plus forced-unreachable broker fallback |
-| 25 | `test_checkpoint.c` | CPU/Metal discard/realize checkpoint lifecycle with handle-preserving storage detach |
-| 26 | `test_buffer_pool.mm` | LIFO recycling, bucket size classes, concurrent allocate/free |
-| 27 | `python_basic` | The Python binding's `tests/test_basic.py` — full ABI surface exercised from ctypes |
-| 28 | `example_decode_step` | Native decode-step smoke using the installed C ABI |
-| 29 | `example_training_step` | Native training-step smoke using the installed C ABI |
-| 30 | `example_mesh_training_demo` | Single-rank mesh training demo smoke: RMSNorm, GEMM, softmax+CE, AdamW, DiLoCo outer sync |
-| 31 | `example_mesh_training_demo_checkpoint` | Same mesh training demo with `X_norm` activation discard/realize around the backward GEMM |
+| 19a | `test_diloco_async.c` | Immutable async snapshots, private pre-commit state, overlap rebase, round IDs, counters, and finalize refusal |
+| 19b | `test_diloco_async_failure_fork.c` | Injected Gloo peer loss; observable/durable worker error, failed-state checkpoint restore, unchanged live parameters, and failed-round accounting |
+| 19c | `test_diloco_checkpoint.c` | Versioned deterministic state, Nesterov/top-k and Adam exact continuation, READY async restore, epoch/config/corruption rejection, and fail-closed reserved modes |
+| 19d | `test_transport_auth.cpp` | RFC HMAC known-answer gate; remote/mesh/Gloo mutual identity and rank binding; wrong-key, expected-identity, legacy-mix, captured-hello/final-proof replay rejection; live and overlap key rotation; authenticated direct ring |
+| 20 | `test_poincare.c` | Poincaré-ball distance, maps, transport, projection, and Möbius operations |
+| 21 | `test_sphere.c` | Spherical-manifold distance, maps, transport, and projection operations |
+| 22 | `test_product_manifold.c` | Product-manifold composition, weighted metrics, maps, and transport |
+| 23 | `test_quantum_gates.c` | Complex quantum-gate primitives and state evolution correctness |
+| 24 | `test_mesh_collective.c` | Two-rank remote-tensor AllReduce, Broadcast, and AllGather over loopback |
+| 25 | `test_remote_shard.c` | Owner-routed remote shard get/put, full and cross-owner ranges, and shutdown synchronization |
+| 26 | `test_phase_attention.c` | Phase-aware attention CPU primitive correctness and validation paths |
+| 27 | `test_riemannian_adam.c` | Riemannian Adam updates and manifold projection behavior |
+| 28 | `test_sparse_24.c` | Structured 2:4 sparse packing, dispatch, fallback, and runtime evidence paths |
+| 29 | `test_remote_tensor_fork.c` | 23.6 MiB remote tensor correctness, sustained throughput, and name-miss framing |
+| 30 | `test_remote_tensor_adversarial.cpp` | Exact binds, offset rejection, concurrent framing, unregister lifetime barrier, and bounded shutdown |
+| 31 | `test_sparse_compress.c` | DiLoCo top-k sparse compression pack/unpack accuracy and merge behavior |
+| 32 | `test_gloo_fork.c` | Four forked ranks over broker GLOO TCP; IPv4 and bracketed IPv6 rendezvous, fp32/fp16 allreduce, broadcast, allgather, barrier |
+| 33 | `test_diloco_gloo_fork.c` | Multi-rank DiLoCo over GLOO with forked localhost ranks |
+| 34 | `test_diloco_sparse_fork.c` | TOPK sparse DiLoCo over GLOO; validates sparse wire-byte reduction |
+| 35 | `test_gloo_ring_fork.c` | Four forked ranks with `TC_GLOO_RING=1`; IPv4/bracketed-IPv6 direct TCP ring fp32 SUM plus forced-unreachable broker fallback |
+| 36 | `test_checkpoint.c` | CPU/Metal discard/realize checkpoint lifecycle with handle-preserving storage detach |
+| 37 | `test_checkpoint_concurrency.cpp` | Concurrent checkpoint realize/discard lifecycle and handle synchronization |
+| 38 | `test_buffer_pool.mm` | LIFO recycling, bucket size classes, concurrent allocate/free |
+| 39 | `python_basic` | The Python binding's `tests/test_basic.py` — full ABI surface exercised from ctypes |
+| 40 | `example_decode_step` | Native decode-step smoke using the installed C ABI |
+| 41 | `example_training_step` | Native training-step smoke using the installed C ABI |
+| 42 | `example_mesh_training_demo` | Single-rank mesh training demo smoke: RMSNorm, GEMM, softmax+CE, AdamW, DiLoCo outer sync |
+| 43 | `example_mesh_training_demo_checkpoint` | Same mesh training demo with `X_norm` activation discard/realize around the backward GEMM |
 
 ## Tolerances
 

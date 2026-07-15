@@ -27,7 +27,12 @@
 /* Forward declarations of the GLOO TCP transport primitives implemented
  * in lib/distributed/gloo_tcp.cpp. Hidden-visibility symbols. */
 struct GlooState;
-extern "C" GlooState* tc_gloo_init(int world_size, int rank, const char* rendezvous_url);
+extern "C" GlooState* tc_gloo_init(int world_size, int rank,
+                                     const char* rendezvous_url,
+                                     const tc_transport_auth_config* auth,
+                                     const char* const* rank_identities,
+                                     size_t rank_identity_count,
+                                     tc_status_t* out_status);
 extern "C" void       tc_gloo_destroy(GlooState* s);
 extern "C" int        tc_gloo_allreduce_f32_sum(GlooState* s, int world_size, int rank,
                                                  float* data, size_t n);
@@ -54,12 +59,15 @@ struct tc_dist_ctx {
     GlooState*        gloo;   /* NULL unless backend == TC_DIST_GLOO */
 };
 
-extern "C" tc_status_t tc_dist_init(tc_context* tc,
-                                    tc_dist_backend_t backend,
-                                    int world_size,
-                                    int rank,
-                                    const char* rendezvous_url,
-                                    tc_dist_ctx** out) {
+static tc_status_t dist_init_impl(tc_context* tc,
+                                  tc_dist_backend_t backend,
+                                  int world_size,
+                                  int rank,
+                                  const char* rendezvous_url,
+                                  const char* const* rank_identities,
+                                  size_t rank_identity_count,
+                                  const tc_transport_auth_config* auth,
+                                  tc_dist_ctx** out) {
     if (!tc || !out || world_size <= 0 || rank < 0 || rank >= world_size) {
         return TC_ERR_INVALID_ARG;
     }
@@ -72,6 +80,18 @@ extern "C" tc_status_t tc_dist_init(tc_context* tc,
     if (backend == TC_DIST_GLOO && (!rendezvous_url || !rendezvous_url[0])) {
         return TC_ERR_INVALID_ARG;
     }
+    if ((auth == nullptr) != (rank_identities == nullptr)) return TC_ERR_INVALID_ARG;
+    if (auth) {
+        if (backend != TC_DIST_GLOO || !auth->local_identity ||
+            rank_identity_count != static_cast<size_t>(world_size) ||
+            !rank_identities[rank] ||
+            std::strcmp(auth->local_identity, rank_identities[rank]) != 0)
+            return TC_ERR_INVALID_ARG;
+        for (int r = 0; r < world_size; ++r) {
+            if (!rank_identities[r] || !rank_identities[r][0])
+                return TC_ERR_INVALID_ARG;
+        }
+    }
 
     tc_dist_ctx* d = new (std::nothrow) tc_dist_ctx();
     if (!d) return TC_ERR_ALLOC;
@@ -83,15 +103,42 @@ extern "C" tc_status_t tc_dist_init(tc_context* tc,
     d->gloo = nullptr;
 
     if (backend == TC_DIST_GLOO && world_size > 1) {
-        d->gloo = tc_gloo_init(world_size, rank, rendezvous_url ? rendezvous_url : "");
+        tc_status_t gloo_status = TC_ERR_INTERNAL;
+        d->gloo = tc_gloo_init(world_size, rank,
+                               rendezvous_url ? rendezvous_url : "",
+                               auth, rank_identities, rank_identity_count,
+                               &gloo_status);
         if (!d->gloo) {
             delete d;
-            return TC_ERR_INTERNAL;
+            return gloo_status;
         }
     }
 
     *out = d;
     return TC_OK;
+}
+
+extern "C" tc_status_t tc_dist_init(tc_context* tc,
+                                    tc_dist_backend_t backend,
+                                    int world_size,
+                                    int rank,
+                                    const char* rendezvous_url,
+                                    tc_dist_ctx** out) {
+    return dist_init_impl(tc, backend, world_size, rank, rendezvous_url,
+                          nullptr, 0, nullptr, out);
+}
+
+extern "C" tc_status_t tc_dist_init_authenticated(
+    tc_context* tc, tc_dist_backend_t backend, int world_size, int rank,
+    const char* rendezvous_url, const char* const* rank_identities,
+    size_t rank_identity_count, const tc_transport_auth_config* auth,
+    tc_dist_ctx** out) {
+    if (!auth || !rank_identities) {
+        if (out) *out = nullptr;
+        return TC_ERR_INVALID_ARG;
+    }
+    return dist_init_impl(tc, backend, world_size, rank, rendezvous_url,
+                          rank_identities, rank_identity_count, auth, out);
 }
 
 extern "C" tc_status_t tc_dist_finalize(tc_dist_ctx* d) {

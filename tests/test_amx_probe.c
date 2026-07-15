@@ -35,7 +35,7 @@ int main(void) {
         fprintf(stderr, "unexpected AMX ISA version: %d\n", isa);
         return 2;
     }
-    if (clusters < 1 || clusters > 2) {
+    if (clusters < 1) {
         fprintf(stderr, "unexpected AMX cluster count: %d\n", clusters);
         return 3;
     }

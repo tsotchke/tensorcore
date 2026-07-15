@@ -14,6 +14,9 @@ const char* tc_status_string(tc_status_t s) {
         case TC_ERR_KERNEL_NOT_FOUND:    return "kernel not in metallib";
         case TC_ERR_PIPELINE:            return "MTLComputePipelineState creation failed";
         case TC_ERR_DISPATCH:            return "command-buffer dispatch failed";
+        case TC_ERR_ABI_MISMATCH:        return "ABI version mismatch";
+        case TC_ERR_BUSY:                return "operation busy or result pending";
+        case TC_ERR_AUTH:                return "transport authentication failed";
         case TC_ERR_INTERNAL:            return "internal error";
     }
     return "unknown status";

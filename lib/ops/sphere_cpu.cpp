@@ -21,6 +21,7 @@
 namespace {
 constexpr float kSphereEps = 1e-30f;
 constexpr float kSmallTheta = 1e-6f;
+constexpr float kPi = 3.14159265358979323846f;
 }
 
 extern "C" float tc_sphere_inner(const float* a, const float* b, size_t n) {
@@ -97,7 +98,7 @@ extern "C" void tc_sphere_log(const float* base, const float* point,
     if (cos_theta >  1.0f) cos_theta =  1.0f;
     const float theta = std::acos(cos_theta);
 
-    if (theta < kSmallTheta || std::fabs(theta - (float)M_PI) < kSmallTheta) {
+    if (theta < kSmallTheta || std::fabs(theta - kPi) < kSmallTheta) {
         std::memset(tangent, 0, n * sizeof(float));
         return;
     }

@@ -18,7 +18,9 @@
 #include "tensorcore/tensorcore.h"
 #include "tensorcore/remote_tensor.h"
 
+#include <errno.h>
 #include <math.h>
+#include <poll.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,7 +38,7 @@ static double now(void) {
     return t.tv_sec + t.tv_nsec * 1e-9;
 }
 
-static int run_server(uint16_t port) {
+static int run_server(uint16_t port, int done_fd) {
     tc_context* ctx = NULL;
     if (tc_init(&ctx) != TC_OK) { fprintf(stderr, "server: tc_init failed\n"); return 1; }
 
@@ -55,17 +57,30 @@ static int run_server(uint16_t port) {
 
     tc_remote_register_tensor(srv, "expert/L31/E5/W2", expert, EXPERT_BYTES);
 
-    /* Wait for the client to do its work. Polled on bytes_served + a 30 s
-     * watchdog so a stuck client doesn't hang CI forever. */
-    const double deadline = now() + 30.0;
-    while (now() < deadline) {
-        if (tc_remote_total_bytes_served(srv) >= (uint64_t)EXPERT_BYTES * N_FETCHES) break;
-        usleep(20 * 1000);
-    }
+    /* Wait for the client to finish its correctness, throughput, and error
+     * path checks. A byte counter alone races the final request: the warm-up
+     * contributes bytes too, and shutdown can otherwise sever timed fetch 10. */
+    struct pollfd completion = {.fd = done_fd, .events = POLLIN, .revents = 0};
+    int poll_rc;
+    do {
+        poll_rc = poll(&completion, 1, 30000);
+    } while (poll_rc < 0 && errno == EINTR);
+    char done = 0;
+    const int completion_ok = poll_rc == 1 && read(done_fd, &done, 1) == 1;
+    const uint64_t expected = (uint64_t)EXPERT_BYTES * (N_FETCHES + 1);
+    const uint64_t served = tc_remote_total_bytes_served(srv);
+    const int bytes_ok = served == expected;
 
     tc_remote_shutdown(srv);
     free(expert);
     tc_shutdown(ctx);
+    if (!completion_ok || !bytes_ok) {
+        fprintf(stderr, "server: completion=%s bytes=%llu expected=%llu\n",
+                completion_ok ? "yes" : "no",
+                (unsigned long long)served,
+                (unsigned long long)expected);
+        return 1;
+    }
     return 0;
 }
 
@@ -130,14 +145,24 @@ int main(void) {
     /* Loopback port the test owns for the duration of this run. */
     const uint16_t port = 49152 + (uint16_t)(getpid() & 0x3FF);
 
+    int done_pipe[2];
+    if (pipe(done_pipe) != 0) { perror("pipe"); return 1; }
+
     const pid_t pid = fork();
     if (pid < 0) { perror("fork"); return 1; }
 
     if (pid == 0) {
-        return run_client(port);
+        close(done_pipe[0]);
+        const int rc = run_client(port);
+        const char done = 1;
+        if (write(done_pipe[1], &done, 1) != 1) _exit(8);
+        close(done_pipe[1]);
+        return rc;
     }
     /* parent = server */
-    const int srv_rc = run_server(port);
+    close(done_pipe[1]);
+    const int srv_rc = run_server(port, done_pipe[0]);
+    close(done_pipe[0]);
     int cstat = 0;
     waitpid(pid, &cstat, 0);
     const int cli_rc = WIFEXITED(cstat) ? WEXITSTATUS(cstat) : 1;

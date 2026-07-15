@@ -43,6 +43,7 @@
  */
 
 #include <stdint.h>
+#include <stddef.h>
 #include <stdbool.h>
 #include "tensorcore/status.h"
 #include "tensorcore/dtype.h"
@@ -55,17 +56,17 @@ extern "C" {
 
 typedef struct tc_diloco_ctx tc_diloco_ctx;
 
-/* Compression scheme applied to Δθ before the outer all-reduce.
- * fp16 / top-k / low-rank land on top of the same tc_buffer surface;
- * the all-reduce sees compressed payloads, decompressed at each rank. */
+/* Requested compression scheme for Δθ. Runtime support is transport-specific:
+ * TOPK uses sparse payloads on Gloo, FP16 currently remains dense fp32 on the
+ * wire, and reserved modes are rejected by tc_diloco_init. */
 typedef enum {
     TC_DILOCO_COMPRESS_NONE      = 0,   /* full-precision Δθ; 1:1 with model */
-    TC_DILOCO_COMPRESS_FP16      = 1,   /* 2× over fp32 master, free */
-    TC_DILOCO_COMPRESS_FP8       = 2,   /* 4× over fp32, per-tensor scale */
-    TC_DILOCO_COMPRESS_TOPK_1PCT = 3,   /* keep top 1% magnitudes, ~100× */
-    TC_DILOCO_COMPRESS_TOPK_01PCT = 4,  /* keep top 0.1%, ~1000× — INTELLECT-1 ran ~here */
-    TC_DILOCO_COMPRESS_LOWRANK   = 5,   /* PowerSGD-style low-rank Δθ */
-    TC_DILOCO_COMPRESS_SIGNSGD   = 6,   /* 1-bit per element, 32×; needs error-feedback */
+    TC_DILOCO_COMPRESS_FP16      = 1,   /* accepted; currently dense fp32 on wire */
+    TC_DILOCO_COMPRESS_FP8       = 2,   /* reserved; init currently rejects */
+    TC_DILOCO_COMPRESS_TOPK_1PCT = 3,   /* sparse on Gloo; dense masked fallback elsewhere */
+    TC_DILOCO_COMPRESS_TOPK_01PCT = 4,  /* sparse on Gloo; dense masked fallback elsewhere */
+    TC_DILOCO_COMPRESS_LOWRANK   = 5,   /* reserved; init currently rejects */
+    TC_DILOCO_COMPRESS_SIGNSGD   = 6,   /* reserved; init currently rejects */
 } tc_diloco_compress_t;
 
 typedef enum {
@@ -82,8 +83,8 @@ typedef struct {
     float                        outer_eps;         /* for Adam */
     tc_diloco_outer_optimizer_t  outer_optimizer;
     tc_diloco_compress_t         compress;
-    bool                         async_overlap;     /* true: outer comm in background while inner steps run */
-    bool                         tolerate_dropouts; /* true: ranks that disappear are skipped, not deadlocked */
+    bool                         async_overlap;     /* snapshot worker + explicit caller-thread commit */
+    bool                         tolerate_dropouts; /* reserved; recovery is not implemented yet */
 } tc_diloco_config;
 
 /* Initialize a DiLoCo context layered on an existing distributed context.
@@ -93,11 +94,14 @@ tc_status_t tc_diloco_init(tc_dist_ctx*               dist_ctx,
                            const tc_diloco_config*    cfg,
                            tc_diloco_ctx**            out);
 
+/* Destroy an idle context. If an async result is READY or FAILED, finalize
+ * returns TC_ERR_BUSY or the worker error without destroying the context;
+ * acknowledge it with tc_diloco_async_commit, then finalize again. */
 tc_status_t tc_diloco_finalize(tc_diloco_ctx* d);
 
-/* Register a parameter tensor with the DiLoCo context. The same buffer is
- * used as θ_local by the inner loop and as input to the outer-step Δθ
- * computation. */
+/* Register a parameter tensor with the DiLoCo context. Synchronous outer
+ * steps read this buffer directly on the caller thread. Async outer steps
+ * snapshot it before returning; the worker never reads or writes it. */
 tc_status_t tc_diloco_add_parameter(tc_diloco_ctx*   d,
                                     const char*      name,
                                     tc_buffer*       theta_local,
@@ -117,12 +121,76 @@ tc_status_t tc_diloco_step(tc_diloco_ctx* d, bool* out_outer_step_pending);
  *   4. Outer-optimizer update of θ_global_anchor
  *   5. θ_local := θ_global_anchor
  *
- * If cfg.async_overlap is true, the all-reduce runs on a worker thread and
- * tc_diloco_apply_outer returns immediately; the inner loop continues
- * against the *previous* θ_global_anchor until the new one is ready, then
- * the swap happens at the next outer-step boundary. This is what makes a
- * 100-200 ms transcontinental RTT invisible to per-token throughput. */
+ * If cfg.async_overlap is true, this captures an immutable fp32 snapshot on
+ * the caller thread, launches communication/optimizer work against private
+ * state, and returns. The worker never touches registered buffers. Call
+ * tc_diloco_async_wait/poll and tc_diloco_async_commit at a caller-owned
+ * parameter boundary. Commit rebases local updates made after the snapshot
+ * onto the new anchor before writing registered buffers. Only one async round
+ * may be outstanding; another apply returns TC_ERR_BUSY until commit. */
 tc_status_t tc_diloco_apply_outer(tc_diloco_ctx* d);
+
+typedef enum {
+    TC_DILOCO_ASYNC_IDLE    = 0,
+    TC_DILOCO_ASYNC_RUNNING = 1,
+    TC_DILOCO_ASYNC_READY   = 2,
+    TC_DILOCO_ASYNC_FAILED  = 3,
+} tc_diloco_async_state_t;
+
+/* Non-blocking status snapshot. out_worker_status is TC_OK for IDLE/RUNNING/
+ * READY and the background failure for FAILED. out_round_id is zero before
+ * the first async round. */
+tc_status_t tc_diloco_async_poll(const tc_diloco_ctx* d,
+                                 tc_diloco_async_state_t* out_state,
+                                 tc_status_t* out_worker_status,
+                                 uint64_t* out_round_id);
+
+/* Wait for the outstanding worker without touching registered parameters.
+ * Returns the background failure, or TC_OK when the result is READY/IDLE. */
+tc_status_t tc_diloco_async_wait(tc_diloco_ctx* d);
+
+/* Caller-thread commit/acknowledgement boundary. READY results are rebased and
+ * applied with rollback on a buffer-write failure. FAILED results are
+ * acknowledged and returned without changing parameters. RUNNING returns
+ * TC_ERR_BUSY; call wait first when a blocking boundary is desired. */
+tc_status_t tc_diloco_async_commit(tc_diloco_ctx* d);
+
+/* Versioned, little-endian checkpoint blob for DiLoCo-owned state. The model's
+ * live parameter bytes remain caller-owned and are intentionally not included.
+ * Version 1 preserves anchors, optimizer moments, top-k error feedback,
+ * counters/metrics, topology and membership epochs, and a READY/FAILED async
+ * result. A RUNNING worker must first reach READY/FAILED; serialization returns
+ * TC_ERR_BUSY while it is still executing. */
+#define TC_DILOCO_STATE_ABI_VERSION_1 UINT32_C(1)
+#define TC_DILOCO_STATE_ABI_VERSION_CURRENT TC_DILOCO_STATE_ABI_VERSION_1
+
+/* Bind checkpoint state to the caller's authoritative topology epochs. Epochs
+ * may be set only while the context is IDLE. A non-zero local epoch must match
+ * the serialized epoch during restore; zero adopts the checkpoint value. */
+tc_status_t tc_diloco_state_set_epochs(tc_diloco_ctx* d,
+                                       uint64_t topology_epoch,
+                                       uint64_t membership_epoch);
+tc_status_t tc_diloco_state_get_epochs(const tc_diloco_ctx* d,
+                                       uint64_t* out_topology_epoch,
+                                       uint64_t* out_membership_epoch);
+
+/* Query, serialize, and restore the deterministic v1 blob. Restore is atomic
+ * with respect to DiLoCo-owned state: the blob is fully parsed and validated
+ * against config, distributed rank/world, registered parameter names, dtypes,
+ * and sizes before the live context changes. The caller must separately
+ * restore each registered theta_local buffer from its model checkpoint. */
+tc_status_t tc_diloco_state_size(const tc_diloco_ctx* d,
+                                 uint32_t requested_abi_version,
+                                 size_t* out_size);
+tc_status_t tc_diloco_state_serialize(const tc_diloco_ctx* d,
+                                      uint32_t requested_abi_version,
+                                      void* out_data,
+                                      size_t out_size,
+                                      size_t* out_written);
+tc_status_t tc_diloco_state_deserialize(tc_diloco_ctx* d,
+                                        uint32_t requested_abi_version,
+                                        const void* data,
+                                        size_t data_size);
 
 /* For benchmarking + ops introspection. */
 uint64_t tc_diloco_outer_steps_completed(const tc_diloco_ctx* d);

@@ -34,8 +34,10 @@
 
 #include "tensorcore/tensorcore.h"
 #include "../core/internal.h"
+#include "transport_auth_internal.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -207,6 +209,47 @@ bool socket_set_int_option(tc_socket_t fd, int level, int optname, int value) {
 #endif
 }
 
+int auth_timeout_ms(void) {
+    constexpr int fallback = 5000;
+    const char* value = std::getenv("TC_TRANSPORT_AUTH_TIMEOUT_MS");
+    if (!value || !*value) return fallback;
+    char* end = nullptr;
+    const long parsed = std::strtol(value, &end, 10);
+    if (!end || *end != '\0' || parsed < 100 || parsed > 600000)
+        return fallback;
+    return static_cast<int>(parsed);
+}
+
+void socket_set_auth_timeout(tc_socket_t fd, int timeout_ms) {
+#if defined(_WIN32)
+    const DWORD timeout = static_cast<DWORD>(timeout_ms);
+    (void)::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO,
+                       reinterpret_cast<const char*>(&timeout), sizeof(timeout));
+    (void)::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO,
+                       reinterpret_cast<const char*>(&timeout), sizeof(timeout));
+#else
+    timeval timeout = {};
+    timeout.tv_sec = timeout_ms / 1000;
+    timeout.tv_usec = (timeout_ms % 1000) * 1000;
+    (void)::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    (void)::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+#endif
+}
+
+void socket_clear_auth_timeout(tc_socket_t fd) {
+#if defined(_WIN32)
+    const DWORD timeout = 0;
+    (void)::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO,
+                       reinterpret_cast<const char*>(&timeout), sizeof(timeout));
+    (void)::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO,
+                       reinterpret_cast<const char*>(&timeout), sizeof(timeout));
+#else
+    timeval timeout = {};
+    (void)::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    (void)::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+#endif
+}
+
 struct GlooState {
     tc_socket_t            rendez_listen_fd = TC_INVALID_SOCKET_FD;  /* rank 0 only */
     tc_socket_t            rendez_conn_fd   = TC_INVALID_SOCKET_FD;  /* rank > 0: connection to rank 0 */
@@ -313,6 +356,31 @@ bool read_all(tc_socket_t fd, void* data, size_t bytes) {
         bytes -= (size_t)n;
     }
     return true;
+}
+
+bool auth_read_all(void* user, void* data, size_t bytes) {
+    return read_all(*static_cast<tc_socket_t*>(user), data, bytes);
+}
+
+bool auth_write_all(void* user, const void* data, size_t bytes) {
+    return write_all(*static_cast<tc_socket_t*>(user), data, bytes);
+}
+
+void store_le32(uint8_t* out, uint32_t value) {
+    out[0] = static_cast<uint8_t>(value);
+    out[1] = static_cast<uint8_t>(value >> 8);
+    out[2] = static_cast<uint8_t>(value >> 16);
+    out[3] = static_cast<uint8_t>(value >> 24);
+}
+
+std::array<uint8_t, 12> auth_rank_context(int world_size,
+                                          int initiator_rank,
+                                          int acceptor_rank) {
+    std::array<uint8_t, 12> context{};
+    store_le32(context.data(), static_cast<uint32_t>(world_size));
+    store_le32(context.data() + 4, static_cast<uint32_t>(initiator_rank));
+    store_le32(context.data() + 8, static_cast<uint32_t>(acceptor_rank));
+    return context;
 }
 
 bool checked_mul_size(size_t a, size_t b, size_t* out) {
@@ -693,12 +761,49 @@ void close_gloo_state(GlooState* s) {
 
 /* Internal API consumed by distributed_cpu.cpp. */
 
-extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, const char* rendezvous_url) {
-    if (world_size < 1 || rank < 0 || rank >= world_size || !rendezvous_url) return nullptr;
+extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(
+    int world_size, int rank, const char* rendezvous_url,
+    const tc_transport_auth_config* auth,
+    const char* const* rank_identities,
+    size_t rank_identity_count,
+    tc_status_t* out_status) {
+    if (out_status) *out_status = TC_ERR_INTERNAL;
+    if (world_size < 1 || rank < 0 || rank >= world_size || !rendezvous_url ||
+        !out_status) {
+        if (out_status) *out_status = TC_ERR_INVALID_ARG;
+        return nullptr;
+    }
+    if ((auth == nullptr) != (rank_identities == nullptr)) {
+        *out_status = TC_ERR_INVALID_ARG;
+        return nullptr;
+    }
+    tc_transport_auth_internal::Keyring auth_keyring;
+    const bool authenticated = auth != nullptr;
+    if (authenticated) {
+        if (rank_identity_count != static_cast<size_t>(world_size) ||
+            !auth->local_identity || !rank_identities[rank] ||
+            std::strcmp(auth->local_identity, rank_identities[rank]) != 0) {
+            *out_status = TC_ERR_INVALID_ARG;
+            return nullptr;
+        }
+        for (int r = 0; r < world_size; ++r) {
+            if (!rank_identities[r] || !rank_identities[r][0]) {
+                *out_status = TC_ERR_INVALID_ARG;
+                return nullptr;
+            }
+        }
+        const tc_status_t keyring_status =
+            tc_transport_auth_internal::Keyring::copy_from(auth, &auth_keyring);
+        if (keyring_status != TC_OK) {
+            *out_status = keyring_status;
+            return nullptr;
+        }
+    }
     std::string host;
     uint16_t port = 0;
     if (!parse_rendezvous(rendezvous_url, &host, &port)) {
         gloo_trace(rank, "init=parse_failed url=%s", rendezvous_url);
+        *out_status = TC_ERR_INVALID_ARG;
         return nullptr;
     }
 
@@ -735,6 +840,27 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
                 gloo_trace(rank, "init=peer_rank_failed peer_rank=%u", peer_rank);
                 socket_close(fd); close_gloo_state(s); return nullptr;
             }
+            if (authenticated) {
+                const auto context = auth_rank_context(world_size,
+                                                       static_cast<int>(peer_rank), 0);
+                tc_transport_auth_internal::Io io{
+                    &fd, auth_read_all, auth_write_all};
+                socket_set_auth_timeout(fd, auth_timeout_ms());
+                const tc_status_t auth_status =
+                    tc_transport_auth_internal::server_handshake(
+                        io, auth_keyring, rank_identities[peer_rank],
+                        "tensorcore/gloo-rendezvous", context.data(),
+                        context.size(), nullptr);
+                socket_clear_auth_timeout(fd);
+                if (auth_status != TC_OK) {
+                    gloo_trace(rank, "init=peer_auth_failed peer_rank=%u status=%d",
+                               peer_rank, static_cast<int>(auth_status));
+                    *out_status = auth_status;
+                    socket_close(fd);
+                    close_gloo_state(s);
+                    return nullptr;
+                }
+            }
             (void)socket_set_int_option(fd, IPPROTO_TCP, TCP_NODELAY, 1);
             s->peer_conns[peer_rank] = fd;
         }
@@ -751,6 +877,26 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
         if (!write_all(fd, &self_rank, 4)) {
             gloo_trace(rank, "init=write_rank_failed errno=%d", socket_last_error());
             socket_close(fd); close_gloo_state(s); return nullptr;
+        }
+        if (authenticated) {
+            const auto context = auth_rank_context(world_size, rank, 0);
+            tc_transport_auth_internal::Io io{
+                &fd, auth_read_all, auth_write_all};
+            socket_set_auth_timeout(fd, auth_timeout_ms());
+            const tc_status_t auth_status =
+                tc_transport_auth_internal::client_handshake(
+                    io, auth_keyring, rank_identities[0],
+                    "tensorcore/gloo-rendezvous", context.data(),
+                    context.size(), nullptr);
+            socket_clear_auth_timeout(fd);
+            if (auth_status != TC_OK) {
+                gloo_trace(rank, "init=rank0_auth_failed status=%d",
+                           static_cast<int>(auth_status));
+                *out_status = auth_status;
+                socket_close(fd);
+                close_gloo_state(s);
+                return nullptr;
+            }
         }
         s->rendez_conn_fd = fd;
         s->peer_conns[0] = fd;
@@ -784,6 +930,7 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
             s->next_fd = s->peer_conns[(rank + 1) % world_size];
             s->prev_fd = s->peer_conns[(rank + 1) % world_size];   /* same fd */
         }
+        *out_status = TC_OK;
         return s;
     }
 
@@ -795,6 +942,7 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
      * deadlock peers waiting in the topology exchange. */
     const char* enable_ring = std::getenv("TC_GLOO_RING");
     if (!(enable_ring && enable_ring[0] == '1')) {
+        *out_status = TC_OK;
         return s;
     }
 
@@ -828,6 +976,7 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
         }
         s->next_fd = TC_INVALID_SOCKET_FD;
         s->prev_fd = TC_INVALID_SOCKET_FD;
+        *out_status = TC_OK;
         return s;
     };
 
@@ -914,6 +1063,60 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
         direct_ok = false;
     }
 
+    /* Authenticate each direct ring edge independently. A server handshake
+     * runs on prev_fd while the calling thread performs the client handshake
+     * on next_fd, avoiding a ring-wide challenge/response deadlock. Rank and
+     * direction are included in the authenticated context. Failure here may
+     * safely fall back to the already-authenticated broker sockets. */
+    if (authenticated && direct_ok) {
+        const int prev_rank = (rank - 1 + world_size) % world_size;
+        const auto client_context = auth_rank_context(world_size, rank, next_rank);
+        const auto server_context = auth_rank_context(world_size, prev_rank, rank);
+        tc_status_t server_status = TC_ERR_AUTH;
+        tc_status_t client_status = TC_ERR_AUTH;
+        socket_set_auth_timeout(s->next_fd, auth_timeout_ms());
+        socket_set_auth_timeout(s->prev_fd, auth_timeout_ms());
+        std::thread server_auth;
+        try {
+            server_auth = std::thread([&] {
+                try {
+                    tc_transport_auth_internal::Io io{
+                        &s->prev_fd, auth_read_all, auth_write_all};
+                    server_status = tc_transport_auth_internal::server_handshake(
+                        io, auth_keyring, rank_identities[prev_rank],
+                        "tensorcore/gloo-ring", server_context.data(),
+                        server_context.size(), nullptr);
+                } catch (...) {
+                    server_status = TC_ERR_INTERNAL;
+                }
+            });
+        } catch (...) {
+            direct_ok = false;
+        }
+        if (server_auth.joinable()) {
+            tc_transport_auth_internal::Io client_io{
+                &s->next_fd, auth_read_all, auth_write_all};
+            try {
+                client_status = tc_transport_auth_internal::client_handshake(
+                    client_io, auth_keyring, rank_identities[next_rank],
+                    "tensorcore/gloo-ring", client_context.data(),
+                    client_context.size(), nullptr);
+            } catch (...) {
+                client_status = TC_ERR_INTERNAL;
+            }
+            server_auth.join();
+        }
+        socket_clear_auth_timeout(s->next_fd);
+        socket_clear_auth_timeout(s->prev_fd);
+        if (server_status != TC_OK || client_status != TC_OK) {
+            gloo_trace(rank,
+                       "direct_ring=auth_failed prev_rank=%d next_rank=%d server_status=%d client_status=%d",
+                       prev_rank, next_rank, static_cast<int>(server_status),
+                       static_cast<int>(client_status));
+            direct_ok = false;
+        }
+    }
+
     uint8_t group_direct_ok = direct_ok ? 1 : 0;
     if (rank == 0) {
         for (int r = 1; r < world_size; ++r) {
@@ -940,6 +1143,7 @@ extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int world_size, int rank, cons
     gloo_trace(rank, "direct_ring=enabled next_rank=%d next=%s:%u timeout_ms=%d",
                next_rank, next_host.c_str(), peers[next_rank].port,
                timeout_ms);
+    *out_status = TC_OK;
     return s;
 }
 
@@ -1337,7 +1541,12 @@ extern "C" TC_GLOO_HIDDEN int tc_gloo_sparse_allreduce(GlooState* s, int world_s
 
 struct GlooState {};
 
-extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(int, int, const char*) { return nullptr; }
+extern "C" TC_GLOO_HIDDEN GlooState* tc_gloo_init(
+    int, int, const char*, const tc_transport_auth_config*,
+    const char* const*, size_t, tc_status_t* out_status) {
+    if (out_status) *out_status = TC_ERR_UNSUPPORTED_FAMILY;
+    return nullptr;
+}
 extern "C" TC_GLOO_HIDDEN void tc_gloo_destroy(GlooState*) {}
 extern "C" TC_GLOO_HIDDEN int  tc_gloo_allreduce_f32_sum(GlooState*, int, int, float*, size_t) { return -1; }
 extern "C" TC_GLOO_HIDDEN int  tc_gloo_allreduce_f16_sum(GlooState*, int, int, uint16_t*, size_t) { return -1; }

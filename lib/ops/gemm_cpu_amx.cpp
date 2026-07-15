@@ -30,10 +30,8 @@
  *   - Apple Silicon only (__APPLE__ && __aarch64__).
  *
  * Closed follow-up items:
- *   - Cluster count is probed with sysctl and the worker pool only uses the
- *     two-worker path on current Ultra-class chips with two P-clusters /
- *     AMX units. Current Apple silicon caps at two AMX units; future
- *     hardware with more clusters should grow the pool shape explicitly.
+ *   - Cluster count is probed with sysctl and the worker pool grows to the
+ *     detected P-cluster / AMX-unit topology without a baked upper bound.
  *   - fp16 / bf16 entry points and FMA16/FMA64 encodings are present but
  *     intentionally return -1 until the FMA16 IO-mode operand bits are
  *     validated by a single-instruction hardware probe.
@@ -485,14 +483,15 @@ static void amx_process_tile_strip(int i_start, int i_end,
  *
  * Per-call GCD dispatch_apply creates fresh threads. macOS often places those
  * threads on E-cores (no AMX) even with USER_INTERACTIVE QoS. A persistent
- * pool of 2 long-lived pthreads, each pre-armed and held with
- * `pthread_prefer_alternate_cluster_self` on worker 1, lets the kernel
- * settle their cluster placement once and reuse the threads on every call.
+ * pool of long-lived pthreads, each pre-armed and spread with
+ * `pthread_prefer_alternate_cluster_self`, lets the kernel settle their
+ * cluster placement once and reuse the threads on every call.
  *
  * Synchronization: each worker waits on its own start-semaphore; the main
- * thread posts both, workers cover all M, and waits on the done-semaphores.
+ * thread posts every worker, workers cover all M, and waits on their
+ * done-semaphores.
  * Worker queue depth = 1 (one outstanding job per worker), which is all we
- * need for a two-worker GEMM split. */
+ * need for one GEMM split. */
 struct amx_work_unit {
     int i_start, i_end;
     int N, K, lda, ldb, ldc;
@@ -683,19 +682,19 @@ static int tc_amx_gemm_f32_core(int M, int N, int K,
      *   - For M < 256: too small for parallel overhead to amortize. Pack
      *     once on the main thread (cluster-local for that thread) and run
      *     the single-thread strip processor.
-     *   - For M >= 256: use the persistent two-thread pool. Each worker
+     *   - For M >= 256: use the persistent topology-sized pool. Each worker
      *     packs ITS OWN A strip + full B locally, so the AMX kernel reads
      *     stay in the worker's cluster (no UltraFusion-fabric round-trip on
-     *     every K iter). Memory cost doubles vs shared pack (~2× M·K +
-     *     2× K·N fp32) but pack throughput parallelizes too.
+     *     every K iter). Memory cost scales with worker count vs shared pack,
+     *     but pack throughput parallelizes too.
      *   - TC_AMX_THREADS=1 forces single-thread (for A/B measurement). */
     const char* threads_env = std::getenv("TC_AMX_THREADS");
     const bool single_thread = (threads_env && threads_env[0] == '1');
     const bool use_multi = !single_thread && M >= 256 && tc_amx_cluster_count() > 1;
 
     if (use_multi) {
-        /* Persistent pool: N long-lived pthreads (N = pool worker count =
-         * min(tc_amx_cluster_count, MAX_AMX_WORKERS)). Each pre-armed for
+        /* Persistent pool: N long-lived pthreads (N = detected P-clusters).
+         * Each is pre-armed for
          * AMX, workers 1..N-1 pushed to alternate P-clusters via the
          * private hook. M is split into N strips, each 16-aligned.
          * Remainder rows fold into the last worker. */

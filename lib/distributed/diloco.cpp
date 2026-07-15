@@ -13,11 +13,11 @@
  *         tc_diloco_step(d, &outer_pending);
  *         if (outer_pending) tc_diloco_apply_outer(d);
  *
- * If async_overlap = true, apply_outer dispatches the cross-site work
- * to a background thread and returns immediately; the next inner-step
- * batch proceeds against the *previous* anchor until the background
- * thread's all-reduce + outer-step completes, at which point it swaps
- * the new anchor in (atomically, at an outer-step boundary).
+ * If async_overlap = true, apply_outer captures immutable parameter
+ * snapshots and dispatches cross-site work against private state. The next
+ * inner-step batch can continue against live buffers. The caller polls or
+ * waits, then commits at a declared boundary; commit rebases post-snapshot
+ * local updates onto the new anchor.
  *
  * Compression schemes:
  *
@@ -84,7 +84,9 @@ extern "C" TC_DILOCO_INTERNAL_SYMBOL size_t tc_diloco_sparse_packed_size(size_t 
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <mutex>
+#include <new>
 #include <string>
 #include <thread>
 #include <vector>
@@ -194,20 +196,567 @@ struct tc_diloco_ctx {
 
     /* async-overlap support */
     std::thread                outer_thread;
-    std::mutex                 outer_mutex;
+    mutable std::mutex         outer_mutex;
     std::condition_variable    outer_cv;
-    bool                       outer_busy = false;
-    bool                       shutdown = false;
+    tc_diloco_async_state_t    outer_state = TC_DILOCO_ASYNC_IDLE;
+    tc_status_t                outer_status = TC_OK;
+    uint64_t                   next_round_id = 1;
+    uint64_t                   active_round_id = 0;
+    std::vector<Parameter>     pending_params;
+    std::vector<std::vector<float>> pending_snapshots;
+    double                     pending_seconds = 0.0;
+    double                     pending_bytes = 0.0;
+
+    /* Caller-owned topology identities persisted in the checkpoint blob. */
+    uint64_t                   topology_epoch = 0;
+    uint64_t                   membership_epoch = 0;
 
     ~tc_diloco_ctx() {
-        {
-            std::lock_guard<std::mutex> lk(outer_mutex);
-            shutdown = true;
-        }
-        outer_cv.notify_all();
         if (outer_thread.joinable()) outer_thread.join();
     }
 };
+
+/* ------------------------------------------------------------------------
+ * Versioned checkpoint serialization
+ * ------------------------------------------------------------------------ */
+
+namespace {
+
+constexpr uint8_t kStateMagic[8] = {'T', 'C', 'D', 'L', 'S', 'T', 'A', '1'};
+constexpr uint32_t kStateHeaderSize = 32;
+constexpr size_t kStatePayloadOffset = kStateHeaderSize;
+constexpr size_t kStateTotalSizeOffset = 16;
+constexpr size_t kStateChecksumOffset = 24;
+
+uint32_t float_bits(float value) {
+    uint32_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+float bits_float(uint32_t bits) {
+    float value = 0.0f;
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+uint64_t double_bits(double value) {
+    uint64_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+double bits_double(uint64_t bits) {
+    double value = 0.0;
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+void store_u64_le(uint8_t* bytes, size_t offset, uint64_t value) {
+    for (size_t i = 0; i < 8; ++i) {
+        bytes[offset + i] = (uint8_t)((value >> (8 * i)) & UINT64_C(0xff));
+    }
+}
+
+uint64_t state_checksum(const uint8_t* data, size_t size) {
+    uint64_t hash = UINT64_C(14695981039346656037);
+    for (size_t i = 0; i < size; ++i) {
+        hash ^= data[i];
+        hash *= UINT64_C(1099511628211);
+    }
+    return hash;
+}
+
+class StateWriter {
+public:
+    StateWriter(void* data, size_t capacity)
+        : data_(static_cast<uint8_t*>(data)), capacity_(capacity) {}
+
+    void raw(const void* data, size_t size) {
+        if (!ok_ || size > capacity_ - offset_) {
+            ok_ = false;
+            return;
+        }
+        const uint8_t* begin = static_cast<const uint8_t*>(data);
+        std::memcpy(data_ + offset_, begin, size);
+        offset_ += size;
+    }
+
+    void u32(uint32_t value) {
+        if (!ok_ || 4 > capacity_ - offset_) {
+            ok_ = false;
+            return;
+        }
+        for (size_t i = 0; i < 4; ++i) {
+            data_[offset_ + i] =
+                (uint8_t)((value >> (8 * i)) & UINT32_C(0xff));
+        }
+        offset_ += 4;
+    }
+
+    void u64(uint64_t value) {
+        if (!ok_ || 8 > capacity_ - offset_) {
+            ok_ = false;
+            return;
+        }
+        for (size_t i = 0; i < 8; ++i) {
+            data_[offset_ + i] =
+                (uint8_t)((value >> (8 * i)) & UINT64_C(0xff));
+        }
+        offset_ += 8;
+    }
+
+    bool string(const std::string& value) {
+        if (value.size() > UINT32_MAX) return false;
+        u32((uint32_t)value.size());
+        raw(value.data(), value.size());
+        return ok_;
+    }
+
+    void floats(const std::vector<float>& values) {
+        u64((uint64_t)values.size());
+        for (float value : values) u32(float_bits(value));
+    }
+
+    bool ok() const { return ok_; }
+    size_t size() const { return offset_; }
+
+private:
+    uint8_t* data_ = nullptr;
+    size_t capacity_ = 0;
+    size_t offset_ = 0;
+    bool ok_ = true;
+};
+
+class StateReader {
+public:
+    StateReader(const uint8_t* data, size_t size) : data_(data), size_(size) {}
+
+    bool raw(void* out, size_t size) {
+        if (size > size_ - offset_) return false;
+        std::memcpy(out, data_ + offset_, size);
+        offset_ += size;
+        return true;
+    }
+
+    bool u32(uint32_t& value) {
+        if (4 > size_ - offset_) return false;
+        value = 0;
+        for (size_t i = 0; i < 4; ++i) {
+            value |= (uint32_t)data_[offset_ + i] << (8 * i);
+        }
+        offset_ += 4;
+        return true;
+    }
+
+    bool u64(uint64_t& value) {
+        if (8 > size_ - offset_) return false;
+        value = 0;
+        for (size_t i = 0; i < 8; ++i) {
+            value |= (uint64_t)data_[offset_ + i] << (8 * i);
+        }
+        offset_ += 8;
+        return true;
+    }
+
+    bool string(std::string& value) {
+        uint32_t size = 0;
+        if (!u32(size) || size > size_ - offset_) return false;
+        value.assign(reinterpret_cast<const char*>(data_ + offset_), size);
+        offset_ += size;
+        return true;
+    }
+
+    bool floats(std::vector<float>& values) {
+        uint64_t count = 0;
+        if (!u64(count) || count > (size_ - offset_) / sizeof(uint32_t) ||
+            count > (uint64_t)std::numeric_limits<size_t>::max()) {
+            return false;
+        }
+        values.resize((size_t)count);
+        for (size_t i = 0; i < values.size(); ++i) {
+            uint32_t bits = 0;
+            if (!u32(bits)) return false;
+            values[i] = bits_float(bits);
+        }
+        return true;
+    }
+
+    bool at_end() const { return offset_ == size_; }
+    size_t remaining() const { return size_ - offset_; }
+
+private:
+    const uint8_t* data_ = nullptr;
+    size_t size_ = 0;
+    size_t offset_ = 0;
+};
+
+struct SerializedParameter {
+    std::string name;
+    uint32_t dtype = 0;
+    uint64_t num_elements = 0;
+    std::vector<float> theta_anchor;
+    std::vector<float> outer_momentum;
+    std::vector<float> error_feedback;
+    std::vector<float> pending_theta_anchor;
+    std::vector<float> pending_outer_momentum;
+    std::vector<float> pending_error_feedback;
+    std::vector<float> pending_snapshot;
+};
+
+struct SerializedState {
+    uint32_t inner_steps = 0;
+    uint32_t outer_lr = 0;
+    uint32_t outer_momentum = 0;
+    uint32_t outer_beta2 = 0;
+    uint32_t outer_eps = 0;
+    uint32_t outer_optimizer = 0;
+    uint32_t compress = 0;
+    uint32_t async_overlap = 0;
+    uint32_t tolerate_dropouts = 0;
+    uint32_t world_size = 0;
+    uint32_t rank = 0;
+    uint64_t topology_epoch = 0;
+    uint64_t membership_epoch = 0;
+    uint64_t inner_steps_total = 0;
+    uint64_t outer_steps_total = 0;
+    uint64_t inner_steps_since_outer = 0;
+    uint64_t last_outer_seconds = 0;
+    uint64_t last_outer_bytes = 0;
+    uint64_t next_round_id = 0;
+    uint64_t active_round_id = 0;
+    uint32_t outer_state = 0;
+    uint32_t outer_status = 0;
+    uint64_t pending_seconds = 0;
+    uint64_t pending_bytes = 0;
+    std::vector<SerializedParameter> params;
+};
+
+bool valid_optimizer_state_size(const Parameter& p) {
+    return p.outer_momentum.empty() ||
+           p.outer_momentum.size() == p.num_elements ||
+           (p.num_elements <= std::numeric_limits<size_t>::max() / 2 &&
+            p.outer_momentum.size() == 2 * p.num_elements);
+}
+
+bool valid_parameter_state(const Parameter& p) {
+    return p.theta_anchor.size() == p.num_elements &&
+           valid_optimizer_state_size(p) &&
+           (p.error_feedback.empty() ||
+            p.error_feedback.size() == p.num_elements);
+}
+
+bool add_checkpoint_size(size_t& total, size_t amount) {
+    if (amount > std::numeric_limits<size_t>::max() - total) return false;
+    total += amount;
+    return true;
+}
+
+bool add_checkpoint_vector_size(size_t& total,
+                                const std::vector<float>& values) {
+    if (values.size() >
+        (std::numeric_limits<size_t>::max() - sizeof(uint64_t)) /
+            sizeof(uint32_t)) {
+        return false;
+    }
+    return add_checkpoint_size(
+        total, sizeof(uint64_t) + values.size() * sizeof(uint32_t));
+}
+
+tc_status_t state_blob_size_locked(const tc_diloco_ctx* d, size_t& out_size) {
+    if (d->outer_state == TC_DILOCO_ASYNC_RUNNING) return TC_ERR_BUSY;
+    if (d->inner_steps_since_outer < 0) return TC_ERR_INTERNAL;
+    if (d->outer_state != TC_DILOCO_ASYNC_IDLE &&
+        d->outer_state != TC_DILOCO_ASYNC_READY &&
+        d->outer_state != TC_DILOCO_ASYNC_FAILED) {
+        return TC_ERR_INTERNAL;
+    }
+    if ((d->outer_state == TC_DILOCO_ASYNC_FAILED &&
+         d->outer_status == TC_OK) ||
+        (d->outer_state != TC_DILOCO_ASYNC_FAILED &&
+         d->outer_status != TC_OK)) {
+        return TC_ERR_INTERNAL;
+    }
+
+    const bool has_pending = d->outer_state == TC_DILOCO_ASYNC_READY;
+    if (has_pending &&
+        (d->pending_params.size() != d->params.size() ||
+         d->pending_snapshots.size() != d->params.size())) {
+        return TC_ERR_INTERNAL;
+    }
+    if (!has_pending &&
+        (!d->pending_params.empty() || !d->pending_snapshots.empty())) {
+        return TC_ERR_INTERNAL;
+    }
+    if (!has_pending &&
+        (d->pending_seconds != 0.0 || d->pending_bytes != 0.0)) {
+        return TC_ERR_INTERNAL;
+    }
+
+    /* Header plus the fixed config/identity/counter/state prefix. */
+    size_t size = kStateHeaderSize + 148;
+    static const std::vector<float> empty;
+    for (size_t i = 0; i < d->params.size(); ++i) {
+        const Parameter& p = d->params[i];
+        if (!valid_parameter_state(p) || p.name.size() > UINT32_MAX ||
+            !add_checkpoint_size(size, 16 + p.name.size()) ||
+            !add_checkpoint_vector_size(size, p.theta_anchor) ||
+            !add_checkpoint_vector_size(size, p.outer_momentum) ||
+            !add_checkpoint_vector_size(size, p.error_feedback)) {
+            return TC_ERR_INTERNAL;
+        }
+
+        if (has_pending) {
+            const Parameter& pending = d->pending_params[i];
+            if (pending.name != p.name || pending.dtype != p.dtype ||
+                pending.num_elements != p.num_elements ||
+                !valid_parameter_state(pending) ||
+                d->pending_snapshots[i].size() != p.num_elements ||
+                !add_checkpoint_vector_size(size, pending.theta_anchor) ||
+                !add_checkpoint_vector_size(size, pending.outer_momentum) ||
+                !add_checkpoint_vector_size(size, pending.error_feedback) ||
+                !add_checkpoint_vector_size(size, d->pending_snapshots[i])) {
+                return TC_ERR_INTERNAL;
+            }
+        } else if (!add_checkpoint_vector_size(size, empty) ||
+                   !add_checkpoint_vector_size(size, empty) ||
+                   !add_checkpoint_vector_size(size, empty) ||
+                   !add_checkpoint_vector_size(size, empty)) {
+            return TC_ERR_INTERNAL;
+        }
+    }
+    out_size = size;
+    return TC_OK;
+}
+
+tc_status_t write_state_blob_locked(const tc_diloco_ctx* d,
+                                    void* out_data,
+                                    size_t out_size,
+                                    size_t& out_written) {
+    size_t required_size = 0;
+    const tc_status_t size_status = state_blob_size_locked(d, required_size);
+    if (size_status != TC_OK) return size_status;
+    if (!out_data || out_size < required_size) return TC_ERR_INVALID_ARG;
+
+    StateWriter writer(out_data, out_size);
+    writer.raw(kStateMagic, sizeof(kStateMagic));
+    writer.u32(TC_DILOCO_STATE_ABI_VERSION_1);
+    writer.u32(kStateHeaderSize);
+    writer.u64(0); /* total size, patched below */
+    writer.u64(0); /* payload checksum, patched below */
+
+    writer.u32((uint32_t)d->cfg.inner_steps);
+    writer.u32(float_bits(d->cfg.outer_lr));
+    writer.u32(float_bits(d->cfg.outer_momentum));
+    writer.u32(float_bits(d->cfg.outer_beta2));
+    writer.u32(float_bits(d->cfg.outer_eps));
+    writer.u32((uint32_t)d->cfg.outer_optimizer);
+    writer.u32((uint32_t)d->cfg.compress);
+    writer.u32(d->cfg.async_overlap ? 1u : 0u);
+    writer.u32(d->cfg.tolerate_dropouts ? 1u : 0u);
+    writer.u32((uint32_t)(d->dist ? tc_dist_world_size(d->dist) : 1));
+    writer.u32((uint32_t)(d->dist ? tc_dist_rank(d->dist) : 0));
+    writer.u64(d->topology_epoch);
+    writer.u64(d->membership_epoch);
+    writer.u64(d->inner_steps_total.load(std::memory_order_relaxed));
+    writer.u64(d->outer_steps_total.load(std::memory_order_relaxed));
+    writer.u64((uint64_t)d->inner_steps_since_outer);
+    writer.u64(double_bits(d->last_outer_seconds.load(std::memory_order_relaxed)));
+    writer.u64(double_bits(d->last_outer_bytes.load(std::memory_order_relaxed)));
+    writer.u64(d->next_round_id);
+    writer.u64(d->active_round_id);
+    writer.u32((uint32_t)d->outer_state);
+    writer.u32((uint32_t)(int32_t)d->outer_status);
+    writer.u64(double_bits(d->pending_seconds));
+    writer.u64(double_bits(d->pending_bytes));
+    writer.u64((uint64_t)d->params.size());
+
+    static const std::vector<float> empty;
+    for (size_t i = 0; i < d->params.size(); ++i) {
+        const Parameter& p = d->params[i];
+        if (!writer.string(p.name)) return TC_ERR_INTERNAL;
+        writer.u32((uint32_t)p.dtype);
+        writer.u64((uint64_t)p.num_elements);
+        writer.floats(p.theta_anchor);
+        writer.floats(p.outer_momentum);
+        writer.floats(p.error_feedback);
+
+        if (d->outer_state == TC_DILOCO_ASYNC_READY) {
+            const Parameter& pending = d->pending_params[i];
+            writer.floats(pending.theta_anchor);
+            writer.floats(pending.outer_momentum);
+            writer.floats(pending.error_feedback);
+            writer.floats(d->pending_snapshots[i]);
+        } else {
+            writer.floats(empty);
+            writer.floats(empty);
+            writer.floats(empty);
+            writer.floats(empty);
+        }
+    }
+
+    if (!writer.ok() || writer.size() != required_size) return TC_ERR_INTERNAL;
+    uint8_t* bytes = static_cast<uint8_t*>(out_data);
+    store_u64_le(bytes, kStateTotalSizeOffset, (uint64_t)required_size);
+    const uint64_t checksum = state_checksum(
+        bytes + kStatePayloadOffset, required_size - kStatePayloadOffset);
+    store_u64_le(bytes, kStateChecksumOffset, checksum);
+    out_written = required_size;
+    return TC_OK;
+}
+
+bool read_state_blob(const void* data, size_t data_size, SerializedState& state) {
+    if (!data || data_size < kStateHeaderSize) return false;
+    StateReader reader(static_cast<const uint8_t*>(data), data_size);
+    uint8_t magic[sizeof(kStateMagic)]{};
+    uint32_t abi_version = 0;
+    uint32_t header_size = 0;
+    uint64_t total_size = 0;
+    uint64_t checksum = 0;
+    if (!reader.raw(magic, sizeof(magic)) ||
+        !reader.u32(abi_version) || !reader.u32(header_size) ||
+        !reader.u64(total_size) || !reader.u64(checksum) ||
+        std::memcmp(magic, kStateMagic, sizeof(magic)) != 0 ||
+        abi_version != TC_DILOCO_STATE_ABI_VERSION_1 ||
+        header_size != kStateHeaderSize || total_size != data_size ||
+        checksum != state_checksum(
+            static_cast<const uint8_t*>(data) + kStatePayloadOffset,
+            data_size - kStatePayloadOffset)) {
+        return false;
+    }
+
+    uint64_t param_count = 0;
+    if (!reader.u32(state.inner_steps) ||
+        !reader.u32(state.outer_lr) ||
+        !reader.u32(state.outer_momentum) ||
+        !reader.u32(state.outer_beta2) ||
+        !reader.u32(state.outer_eps) ||
+        !reader.u32(state.outer_optimizer) ||
+        !reader.u32(state.compress) ||
+        !reader.u32(state.async_overlap) ||
+        !reader.u32(state.tolerate_dropouts) ||
+        !reader.u32(state.world_size) || !reader.u32(state.rank) ||
+        !reader.u64(state.topology_epoch) ||
+        !reader.u64(state.membership_epoch) ||
+        !reader.u64(state.inner_steps_total) ||
+        !reader.u64(state.outer_steps_total) ||
+        !reader.u64(state.inner_steps_since_outer) ||
+        !reader.u64(state.last_outer_seconds) ||
+        !reader.u64(state.last_outer_bytes) ||
+        !reader.u64(state.next_round_id) ||
+        !reader.u64(state.active_round_id) ||
+        !reader.u32(state.outer_state) || !reader.u32(state.outer_status) ||
+        !reader.u64(state.pending_seconds) ||
+        !reader.u64(state.pending_bytes) || !reader.u64(param_count) ||
+        param_count > (uint64_t)std::numeric_limits<size_t>::max()) {
+        return false;
+    }
+
+    /* Every parameter consumes at least name/dtype/count plus seven vector
+     * length fields. Bound allocation by the bytes actually present. */
+    constexpr size_t kMinimumSerializedParameterBytes = 72;
+    if (param_count > reader.remaining() / kMinimumSerializedParameterBytes) {
+        return false;
+    }
+    state.params.resize((size_t)param_count);
+    for (SerializedParameter& p : state.params) {
+        if (!reader.string(p.name) || !reader.u32(p.dtype) ||
+            !reader.u64(p.num_elements) ||
+            !reader.floats(p.theta_anchor) ||
+            !reader.floats(p.outer_momentum) ||
+            !reader.floats(p.error_feedback) ||
+            !reader.floats(p.pending_theta_anchor) ||
+            !reader.floats(p.pending_outer_momentum) ||
+            !reader.floats(p.pending_error_feedback) ||
+            !reader.floats(p.pending_snapshot)) {
+            return false;
+        }
+    }
+    return reader.at_end();
+}
+
+bool state_config_matches(const tc_diloco_ctx* d, const SerializedState& s) {
+    return s.inner_steps == (uint32_t)d->cfg.inner_steps &&
+           s.outer_lr == float_bits(d->cfg.outer_lr) &&
+           s.outer_momentum == float_bits(d->cfg.outer_momentum) &&
+           s.outer_beta2 == float_bits(d->cfg.outer_beta2) &&
+           s.outer_eps == float_bits(d->cfg.outer_eps) &&
+           s.outer_optimizer == (uint32_t)d->cfg.outer_optimizer &&
+           s.compress == (uint32_t)d->cfg.compress &&
+           s.async_overlap == (d->cfg.async_overlap ? 1u : 0u) &&
+           s.tolerate_dropouts == (d->cfg.tolerate_dropouts ? 1u : 0u);
+}
+
+bool serialized_vector_size_valid(const std::vector<float>& values,
+                                  size_t num_elements,
+                                  bool allow_double) {
+    return values.empty() || values.size() == num_elements ||
+           (allow_double &&
+            num_elements <= std::numeric_limits<size_t>::max() / 2 &&
+            values.size() == 2 * num_elements);
+}
+
+tc_status_t validate_serialized_state(const tc_diloco_ctx* d,
+                                      const SerializedState& s) {
+    if (!state_config_matches(d, s) || s.params.size() != d->params.size() ||
+        s.inner_steps_since_outer > (uint64_t)std::numeric_limits<int>::max()) {
+        return TC_ERR_INVALID_ARG;
+    }
+    const uint32_t world = (uint32_t)(d->dist ? tc_dist_world_size(d->dist) : 1);
+    const uint32_t rank = (uint32_t)(d->dist ? tc_dist_rank(d->dist) : 0);
+    if (s.world_size != world || s.rank != rank ||
+        (d->topology_epoch != 0 && d->topology_epoch != s.topology_epoch) ||
+        (d->membership_epoch != 0 &&
+         d->membership_epoch != s.membership_epoch) ||
+        s.next_round_id == 0 || s.next_round_id <= s.active_round_id) {
+        return TC_ERR_INVALID_ARG;
+    }
+
+    const bool ready = s.outer_state == TC_DILOCO_ASYNC_READY;
+    const bool failed = s.outer_state == TC_DILOCO_ASYNC_FAILED;
+    if (s.outer_state != TC_DILOCO_ASYNC_IDLE && !ready && !failed) {
+        return TC_ERR_INVALID_ARG;
+    }
+    if ((ready && (!d->cfg.async_overlap || (int32_t)s.outer_status != TC_OK)) ||
+        (failed && (!d->cfg.async_overlap || (int32_t)s.outer_status == TC_OK)) ||
+        (s.outer_state == TC_DILOCO_ASYNC_IDLE &&
+         (int32_t)s.outer_status != TC_OK) ||
+        (!ready && (s.pending_seconds != 0 || s.pending_bytes != 0))) {
+        return TC_ERR_INVALID_ARG;
+    }
+
+    for (size_t i = 0; i < s.params.size(); ++i) {
+        const Parameter& live = d->params[i];
+        const SerializedParameter& saved = s.params[i];
+        if (saved.name != live.name || saved.dtype != (uint32_t)live.dtype ||
+            saved.num_elements != live.num_elements ||
+            saved.theta_anchor.size() != live.num_elements ||
+            !serialized_vector_size_valid(
+                saved.outer_momentum, live.num_elements, true) ||
+            !serialized_vector_size_valid(
+                saved.error_feedback, live.num_elements, false)) {
+            return TC_ERR_INVALID_ARG;
+        }
+        if (ready) {
+            if (saved.pending_theta_anchor.size() != live.num_elements ||
+                !serialized_vector_size_valid(
+                    saved.pending_outer_momentum, live.num_elements, true) ||
+                !serialized_vector_size_valid(
+                    saved.pending_error_feedback, live.num_elements, false) ||
+                saved.pending_snapshot.size() != live.num_elements) {
+                return TC_ERR_INVALID_ARG;
+            }
+        } else if (!saved.pending_theta_anchor.empty() ||
+                   !saved.pending_outer_momentum.empty() ||
+                   !saved.pending_error_feedback.empty() ||
+                   !saved.pending_snapshot.empty()) {
+            return TC_ERR_INVALID_ARG;
+        }
+    }
+    return TC_OK;
+}
+
+}  // namespace
 
 /* ------------------------------------------------------------------------
  * Compression / decompression
@@ -332,6 +881,16 @@ extern "C" tc_status_t tc_diloco_init(tc_dist_ctx* dist_ctx,
     if (!cfg || !out) return TC_ERR_INVALID_ARG;
     *out = nullptr;
     if (cfg->inner_steps <= 0) return TC_ERR_INVALID_ARG;
+    if (cfg->outer_optimizer != TC_DILOCO_OUTER_SGD &&
+        cfg->outer_optimizer != TC_DILOCO_OUTER_NESTEROV &&
+        cfg->outer_optimizer != TC_DILOCO_OUTER_ADAM) {
+        return TC_ERR_INVALID_ARG;
+    }
+    if (cfg->tolerate_dropouts) {
+        /* Elastic membership and checkpoint-backed rank recovery are not yet
+         * implemented. Fail closed instead of silently weakening the flag. */
+        return TC_ERR_INVALID_ARG;
+    }
     if (cfg->compress != TC_DILOCO_COMPRESS_NONE &&
         cfg->compress != TC_DILOCO_COMPRESS_FP16 &&
         cfg->compress != TC_DILOCO_COMPRESS_TOPK_1PCT &&
@@ -339,7 +898,8 @@ extern "C" tc_status_t tc_diloco_init(tc_dist_ctx* dist_ctx,
         /* fp8 / lowrank / signsgd not yet implemented */
         return TC_ERR_UNSUPPORTED_DTYPE;
     }
-    auto* d = new tc_diloco_ctx();
+    auto* d = new (std::nothrow) tc_diloco_ctx();
+    if (!d) return TC_ERR_ALLOC;
     d->dist = dist_ctx;
     d->cfg = *cfg;
     *out = d;
@@ -348,6 +908,16 @@ extern "C" tc_status_t tc_diloco_init(tc_dist_ctx* dist_ctx,
 
 extern "C" tc_status_t tc_diloco_finalize(tc_diloco_ctx* d) {
     if (!d) return TC_ERR_INVALID_ARG;
+    if (d->outer_thread.joinable()) d->outer_thread.join();
+    {
+        std::lock_guard<std::mutex> lk(d->outer_mutex);
+        if (d->outer_state == TC_DILOCO_ASYNC_FAILED) {
+            return d->outer_status;
+        }
+        if (d->outer_state != TC_DILOCO_ASYNC_IDLE) {
+            return TC_ERR_BUSY;
+        }
+    }
     delete d;
     return TC_OK;
 }
@@ -359,15 +929,29 @@ extern "C" tc_status_t tc_diloco_add_parameter(tc_diloco_ctx* d,
                                                 tc_dtype_t dtype) {
     if (!d || !theta_local || num_elements == 0) return TC_ERR_INVALID_ARG;
     if (dtype != TC_DTYPE_F16 && dtype != TC_DTYPE_F32) return TC_ERR_UNSUPPORTED_DTYPE;
+    const size_t element_size = tc_dtype_size(dtype);
+    if (element_size == 0 ||
+        num_elements > std::numeric_limits<size_t>::max() / element_size ||
+        num_elements * element_size > tc_buffer_size(theta_local)) {
+        return TC_ERR_INVALID_ARG;
+    }
 
-    Parameter p;
-    p.name = name ? name : "";
-    p.theta_local = theta_local;
-    p.num_elements = num_elements;
-    p.dtype = dtype;
-    /* Snapshot θ_anchor from the current θ_local at registration time. */
-    if (!theta_to_fp32(p, p.theta_anchor)) return TC_ERR_INVALID_ARG;
-    d->params.push_back(std::move(p));
+    std::lock_guard<std::mutex> lk(d->outer_mutex);
+    if (d->outer_state != TC_DILOCO_ASYNC_IDLE) return TC_ERR_BUSY;
+    try {
+        Parameter p;
+        p.name = name ? name : "";
+        p.theta_local = theta_local;
+        p.num_elements = num_elements;
+        p.dtype = dtype;
+        /* Snapshot θ_anchor from the current θ_local at registration time. */
+        if (!theta_to_fp32(p, p.theta_anchor)) return TC_ERR_INVALID_ARG;
+        d->params.push_back(std::move(p));
+    } catch (const std::bad_alloc&) {
+        return TC_ERR_ALLOC;
+    } catch (...) {
+        return TC_ERR_INTERNAL;
+    }
     return TC_OK;
 }
 
@@ -382,26 +966,61 @@ extern "C" tc_status_t tc_diloco_step(tc_diloco_ctx* d,
 
 namespace {
 
-/* The synchronous core of the outer step. Called either directly from
- * tc_diloco_apply_outer or from the background worker thread. */
-tc_status_t do_outer_step(tc_diloco_ctx* d) {
+struct OuterMetrics {
+    double seconds = 0.0;
+    double bytes = 0.0;
+};
+
+tc_status_t capture_snapshots(
+    const std::vector<Parameter>& params,
+    std::vector<std::vector<float>>& snapshots) {
+    try {
+        snapshots.clear();
+        snapshots.resize(params.size());
+        for (size_t i = 0; i < params.size(); ++i) {
+            if (!theta_to_fp32(params[i], snapshots[i])) {
+                snapshots.clear();
+                return TC_ERR_INVALID_ARG;
+            }
+        }
+        return TC_OK;
+    } catch (const std::bad_alloc&) {
+        snapshots.clear();
+        return TC_ERR_ALLOC;
+    } catch (...) {
+        snapshots.clear();
+        return TC_ERR_INTERNAL;
+    }
+}
+
+/* Compute a complete outer round against immutable snapshots and private
+ * anchor/optimizer/error-feedback state. The worker never maps or writes a
+ * registered theta_local buffer. */
+tc_status_t compute_outer_round(
+    tc_dist_ctx* dist,
+    const tc_diloco_config& cfg,
+    std::vector<Parameter>& params,
+    const std::vector<std::vector<float>>& snapshots,
+    OuterMetrics& metrics) {
     using clock = std::chrono::steady_clock;
     const auto t0 = clock::now();
     size_t total_bytes_sent = 0;
 
+    if (snapshots.size() != params.size()) return TC_ERR_INVALID_ARG;
+
     /* For each registered parameter:
-     *   1. Read current θ_local into fp32 host buffer.
-     *   2. Compute Δθ (with compression / error feedback if configured).
+     *   1. Read the immutable fp32 round snapshot.
+     *   2. Compute Δθ against the private anchor copy.
      *   3. all-reduce Δθ across the dist_ctx.
-     *   4. Outer-optimizer updates θ_anchor.
-     *   5. Write θ_anchor back into θ_local (resync local to new anchor). */
-    std::vector<float> theta_now;
+     *   4. Update only the private anchor/optimizer state. */
     std::vector<float> delta;
 
-    for (auto& p : d->params) {
-        if (!theta_to_fp32(p, theta_now)) return TC_ERR_INVALID_ARG;
+    for (size_t param_index = 0; param_index < params.size(); ++param_index) {
+        auto& p = params[param_index];
+        const std::vector<float>& theta_now = snapshots[param_index];
+        if (theta_now.size() != p.num_elements) return TC_ERR_INVALID_ARG;
 
-        switch (d->cfg.compress) {
+        switch (cfg.compress) {
         case TC_DILOCO_COMPRESS_NONE:
         case TC_DILOCO_COMPRESS_FP16:
             compute_delta(p, theta_now, delta);
@@ -420,11 +1039,11 @@ tc_status_t do_outer_step(tc_diloco_ctx* d) {
          * modes use fp32 AVG allreduce; TOPK over portable GLOO takes the
          * sparse hook below so the transport ships only non-zero
          * (idx, fp16-val) pairs. */
-        const int world = d->dist ? tc_dist_world_size(d->dist) : 1;
+        const int world = dist ? tc_dist_world_size(dist) : 1;
         if (world > 1) {
-            tc_context* parent_ctx = tc_dist_get_context(d->dist);
+            tc_context* parent_ctx = tc_dist_get_context(dist);
             if (!parent_ctx) return TC_ERR_INTERNAL;
-            const int rank = tc_dist_rank(d->dist);
+            const int rank = tc_dist_rank(dist);
 
             /* Sparse-compressed path: when compression is TOPK and the
              * underlying transport is GLOO, ship only the (idx, fp16-val)
@@ -432,14 +1051,14 @@ tc_status_t do_outer_step(tc_diloco_ctx* d) {
              * 4N bytes per rank to ~8 * keep_fraction * N bytes — for top-k
              * 0.1% on a 70B model that's 140 MB instead of 280 GB on the
              * wire per outer step. */
-            GlooState* gloo_state = tc_dist_get_gloo_state(d->dist);
+            GlooState* gloo_state = tc_dist_get_gloo_state(dist);
             const bool sparse_path =
                 gloo_state &&
-                (d->cfg.compress == TC_DILOCO_COMPRESS_TOPK_1PCT ||
-                 d->cfg.compress == TC_DILOCO_COMPRESS_TOPK_01PCT);
+                (cfg.compress == TC_DILOCO_COMPRESS_TOPK_1PCT ||
+                 cfg.compress == TC_DILOCO_COMPRESS_TOPK_01PCT);
 
             if (sparse_path) {
-                const float keep = (d->cfg.compress == TC_DILOCO_COMPRESS_TOPK_1PCT)
+                const float keep = (cfg.compress == TC_DILOCO_COMPRESS_TOPK_1PCT)
                                        ? 0.01f : 0.001f;
                 const size_t pack_cap = tc_diloco_sparse_packed_size(p.num_elements, keep);
                 std::vector<uint8_t> payload(pack_cap);
@@ -477,7 +1096,7 @@ tc_status_t do_outer_step(tc_diloco_ctx* d) {
                     return TC_ERR_INTERNAL;
                 }
                 std::memcpy(mp, delta.data(), bytes);
-                tc_status_t s = tc_allreduce(d->dist, delta_buf, p.num_elements,
+                tc_status_t s = tc_allreduce(dist, delta_buf, p.num_elements,
                                               TC_DTYPE_F32, TC_REDUCE_AVG);
                 if (s == TC_OK) {
                     std::memcpy(delta.data(), mp, bytes);
@@ -489,17 +1108,78 @@ tc_status_t do_outer_step(tc_diloco_ctx* d) {
         }
 
         /* Outer-optimizer step on θ_anchor. */
-        apply_outer_optimizer(p, delta, d->cfg);
-
-        /* Resync θ_local := θ_anchor. */
-        if (!theta_from_fp32(p, p.theta_anchor)) return TC_ERR_INVALID_ARG;
+        apply_outer_optimizer(p, delta, cfg);
     }
 
-    const auto dt = std::chrono::duration<double>(clock::now() - t0).count();
-    d->last_outer_seconds.store(dt, std::memory_order_relaxed);
-    d->last_outer_bytes.store((double)total_bytes_sent, std::memory_order_relaxed);
-    d->outer_steps_total.fetch_add(1, std::memory_order_relaxed);
+    metrics.seconds = std::chrono::duration<double>(clock::now() - t0).count();
+    metrics.bytes = (double)total_bytes_sent;
     return TC_OK;
+}
+
+/* Apply private round state on the caller thread. For async commit, preserve
+ * inner-loop work performed after the snapshot:
+ *
+ *   committed_live = new_anchor + (current_live - round_snapshot)
+ *
+ * The anchor remains new_anchor, so the preserved local drift contributes to
+ * the next outer delta. Prepare every output before writing and roll back any
+ * earlier parameter if a later write fails. */
+tc_status_t commit_round(
+    std::vector<Parameter>& live_params,
+    std::vector<Parameter>& next_params,
+    const std::vector<std::vector<float>>& snapshots,
+    bool rebase_overlap) {
+    if (live_params.size() != next_params.size() ||
+        snapshots.size() != live_params.size()) {
+        return TC_ERR_INVALID_ARG;
+    }
+
+    try {
+        std::vector<std::vector<float>> live_before(live_params.size());
+        std::vector<std::vector<float>> outputs(live_params.size());
+        for (size_t i = 0; i < live_params.size(); ++i) {
+            if (!theta_to_fp32(live_params[i], live_before[i])) {
+                return TC_ERR_INVALID_ARG;
+            }
+            if (next_params[i].theta_anchor.size() != live_params[i].num_elements ||
+                snapshots[i].size() != live_params[i].num_elements) {
+                return TC_ERR_INVALID_ARG;
+            }
+            outputs[i] = next_params[i].theta_anchor;
+            if (rebase_overlap) {
+                for (size_t j = 0; j < live_params[i].num_elements; ++j) {
+                    outputs[i][j] += live_before[i][j] - snapshots[i][j];
+                }
+            }
+        }
+
+        size_t written = 0;
+        for (; written < live_params.size(); ++written) {
+            if (!theta_from_fp32(live_params[written], outputs[written])) {
+                for (size_t rollback = 0; rollback < written; ++rollback) {
+                    (void)theta_from_fp32(live_params[rollback], live_before[rollback]);
+                }
+                return TC_ERR_INVALID_ARG;
+            }
+        }
+
+        for (size_t i = 0; i < live_params.size(); ++i) {
+            live_params[i].theta_anchor = std::move(next_params[i].theta_anchor);
+            live_params[i].outer_momentum = std::move(next_params[i].outer_momentum);
+            live_params[i].error_feedback = std::move(next_params[i].error_feedback);
+        }
+        return TC_OK;
+    } catch (const std::bad_alloc&) {
+        return TC_ERR_ALLOC;
+    } catch (...) {
+        return TC_ERR_INTERNAL;
+    }
+}
+
+void publish_committed_metrics(tc_diloco_ctx* d, const OuterMetrics& metrics) {
+    d->last_outer_seconds.store(metrics.seconds, std::memory_order_relaxed);
+    d->last_outer_bytes.store(metrics.bytes, std::memory_order_relaxed);
+    d->outer_steps_total.fetch_add(1, std::memory_order_relaxed);
 }
 
 }  // namespace
@@ -507,37 +1187,290 @@ tc_status_t do_outer_step(tc_diloco_ctx* d) {
 extern "C" tc_status_t tc_diloco_apply_outer(tc_diloco_ctx* d) {
     if (!d) return TC_ERR_INVALID_ARG;
 
-    /* Reset the inner-step counter — caller will resume the inner loop. */
-    d->inner_steps_since_outer = 0;
-
     if (!d->cfg.async_overlap) {
-        return do_outer_step(d);
+        std::vector<std::vector<float>> snapshots;
+        tc_status_t status = capture_snapshots(d->params, snapshots);
+        if (status != TC_OK) return status;
+        try {
+            std::vector<Parameter> next_params = d->params;
+            OuterMetrics metrics;
+            status = compute_outer_round(d->dist, d->cfg, next_params,
+                                         snapshots, metrics);
+            if (status != TC_OK) return status;
+            status = commit_round(d->params, next_params, snapshots, false);
+            if (status != TC_OK) return status;
+            publish_committed_metrics(d, metrics);
+            d->inner_steps_since_outer = 0;
+            return TC_OK;
+        } catch (const std::bad_alloc&) {
+            return TC_ERR_ALLOC;
+        } catch (...) {
+            return TC_ERR_INTERNAL;
+        }
     }
 
-    /* Async path: ensure no prior outer step is still running (we serialize
-     * outer steps; if you're falling behind, this blocks). Then start a
-     * new background outer step. */
-    {
-        std::unique_lock<std::mutex> lk(d->outer_mutex);
-        d->outer_cv.wait(lk, [d]{ return !d->outer_busy || d->shutdown; });
-        if (d->shutdown) return TC_OK;
-        if (d->outer_thread.joinable()) {
-            lk.unlock();
-            d->outer_thread.join();
-            lk.lock();
-        }
-        d->outer_busy = true;
+    std::unique_lock<std::mutex> lk(d->outer_mutex);
+    if (d->outer_state == TC_DILOCO_ASYNC_FAILED) return d->outer_status;
+    if (d->outer_state != TC_DILOCO_ASYNC_IDLE) return TC_ERR_BUSY;
+    if (d->outer_thread.joinable()) {
+        lk.unlock();
+        d->outer_thread.join();
+        lk.lock();
     }
-    /* Keep the worker joinable so finalize cannot race a detached thread. */
-    d->outer_thread = std::thread([d]() {
-        do_outer_step(d);
-        {
-            std::lock_guard<std::mutex> lk(d->outer_mutex);
-            d->outer_busy = false;
-        }
-        d->outer_cv.notify_all();
-    });
+
+    std::vector<std::vector<float>> snapshots;
+    tc_status_t status = capture_snapshots(d->params, snapshots);
+    if (status != TC_OK) return status;
+
+    try {
+        std::vector<Parameter> round_params = d->params;
+        const uint64_t round_id = d->next_round_id++;
+        d->active_round_id = round_id;
+        d->outer_status = TC_OK;
+        d->outer_state = TC_DILOCO_ASYNC_RUNNING;
+
+        d->outer_thread = std::thread(
+            [d, round_id, round_params = std::move(round_params),
+             snapshots = std::move(snapshots)]() mutable {
+                OuterMetrics metrics;
+                tc_status_t worker_status = TC_OK;
+                try {
+                    worker_status = compute_outer_round(
+                        d->dist, d->cfg, round_params, snapshots, metrics);
+                } catch (const std::bad_alloc&) {
+                    worker_status = TC_ERR_ALLOC;
+                } catch (...) {
+                    worker_status = TC_ERR_INTERNAL;
+                }
+                {
+                    std::lock_guard<std::mutex> worker_lk(d->outer_mutex);
+                    d->outer_status = worker_status;
+                    d->active_round_id = round_id;
+                    if (worker_status == TC_OK) {
+                        d->pending_params = std::move(round_params);
+                        d->pending_snapshots = std::move(snapshots);
+                        d->pending_seconds = metrics.seconds;
+                        d->pending_bytes = metrics.bytes;
+                        d->outer_state = TC_DILOCO_ASYNC_READY;
+                    } else {
+                        d->pending_params.clear();
+                        d->pending_snapshots.clear();
+                        d->outer_state = TC_DILOCO_ASYNC_FAILED;
+                    }
+                }
+                d->outer_cv.notify_all();
+            });
+    } catch (const std::bad_alloc&) {
+        d->outer_state = TC_DILOCO_ASYNC_IDLE;
+        d->outer_status = TC_OK;
+        return TC_ERR_ALLOC;
+    } catch (...) {
+        d->outer_state = TC_DILOCO_ASYNC_IDLE;
+        d->outer_status = TC_OK;
+        return TC_ERR_INTERNAL;
+    }
+
+    d->inner_steps_since_outer = 0;
     return TC_OK;
+}
+
+extern "C" tc_status_t tc_diloco_async_poll(
+    const tc_diloco_ctx* d,
+    tc_diloco_async_state_t* out_state,
+    tc_status_t* out_worker_status,
+    uint64_t* out_round_id) {
+    if (!d || !out_state || !out_worker_status || !out_round_id) {
+        return TC_ERR_INVALID_ARG;
+    }
+    std::lock_guard<std::mutex> lk(d->outer_mutex);
+    *out_state = d->outer_state;
+    *out_worker_status = d->outer_status;
+    *out_round_id = d->active_round_id;
+    return TC_OK;
+}
+
+extern "C" tc_status_t tc_diloco_async_wait(tc_diloco_ctx* d) {
+    if (!d) return TC_ERR_INVALID_ARG;
+    std::unique_lock<std::mutex> lk(d->outer_mutex);
+    d->outer_cv.wait(lk, [d] {
+        return d->outer_state != TC_DILOCO_ASYNC_RUNNING;
+    });
+    return d->outer_state == TC_DILOCO_ASYNC_FAILED ? d->outer_status : TC_OK;
+}
+
+extern "C" tc_status_t tc_diloco_async_commit(tc_diloco_ctx* d) {
+    if (!d) return TC_ERR_INVALID_ARG;
+
+    std::unique_lock<std::mutex> lk(d->outer_mutex);
+    if (d->outer_state == TC_DILOCO_ASYNC_RUNNING) return TC_ERR_BUSY;
+    if (d->outer_state == TC_DILOCO_ASYNC_IDLE) return TC_OK;
+
+    lk.unlock();
+    if (d->outer_thread.joinable()) d->outer_thread.join();
+    lk.lock();
+
+    if (d->outer_state == TC_DILOCO_ASYNC_FAILED) {
+        const tc_status_t failure = d->outer_status;
+        d->pending_seconds = 0.0;
+        d->pending_bytes = 0.0;
+        d->outer_status = TC_OK;
+        d->outer_state = TC_DILOCO_ASYNC_IDLE;
+        return failure;
+    }
+    if (d->outer_state != TC_DILOCO_ASYNC_READY) return TC_ERR_INTERNAL;
+
+    OuterMetrics metrics;
+    metrics.seconds = d->pending_seconds;
+    metrics.bytes = d->pending_bytes;
+    const tc_status_t status = commit_round(
+        d->params, d->pending_params, d->pending_snapshots, true);
+    if (status == TC_OK) publish_committed_metrics(d, metrics);
+
+    d->pending_params.clear();
+    d->pending_snapshots.clear();
+    d->pending_seconds = 0.0;
+    d->pending_bytes = 0.0;
+    d->outer_status = TC_OK;
+    d->outer_state = TC_DILOCO_ASYNC_IDLE;
+    return status;
+}
+
+extern "C" tc_status_t tc_diloco_state_set_epochs(
+    tc_diloco_ctx* d,
+    uint64_t topology_epoch,
+    uint64_t membership_epoch) {
+    if (!d) return TC_ERR_INVALID_ARG;
+    std::lock_guard<std::mutex> lk(d->outer_mutex);
+    if (d->outer_state != TC_DILOCO_ASYNC_IDLE) return TC_ERR_BUSY;
+    d->topology_epoch = topology_epoch;
+    d->membership_epoch = membership_epoch;
+    return TC_OK;
+}
+
+extern "C" tc_status_t tc_diloco_state_get_epochs(
+    const tc_diloco_ctx* d,
+    uint64_t* out_topology_epoch,
+    uint64_t* out_membership_epoch) {
+    if (!d || !out_topology_epoch || !out_membership_epoch) {
+        return TC_ERR_INVALID_ARG;
+    }
+    std::lock_guard<std::mutex> lk(d->outer_mutex);
+    *out_topology_epoch = d->topology_epoch;
+    *out_membership_epoch = d->membership_epoch;
+    return TC_OK;
+}
+
+extern "C" tc_status_t tc_diloco_state_size(
+    const tc_diloco_ctx* d,
+    uint32_t requested_abi_version,
+    size_t* out_size) {
+    if (!d || !out_size) return TC_ERR_INVALID_ARG;
+    if (requested_abi_version != TC_DILOCO_STATE_ABI_VERSION_1) {
+        return TC_ERR_ABI_MISMATCH;
+    }
+
+    std::lock_guard<std::mutex> lk(d->outer_mutex);
+    size_t size = 0;
+    const tc_status_t status = state_blob_size_locked(d, size);
+    if (status != TC_OK) return status;
+    *out_size = size;
+    return TC_OK;
+}
+
+extern "C" tc_status_t tc_diloco_state_serialize(
+    const tc_diloco_ctx* d,
+    uint32_t requested_abi_version,
+    void* out_data,
+    size_t out_size,
+    size_t* out_written) {
+    if (!d || !out_data || !out_written) return TC_ERR_INVALID_ARG;
+    if (requested_abi_version != TC_DILOCO_STATE_ABI_VERSION_1) {
+        return TC_ERR_ABI_MISMATCH;
+    }
+
+    std::lock_guard<std::mutex> lk(d->outer_mutex);
+    size_t written = 0;
+    const tc_status_t status = write_state_blob_locked(
+        d, out_data, out_size, written);
+    if (status == TC_OK) *out_written = written;
+    return status;
+}
+
+extern "C" tc_status_t tc_diloco_state_deserialize(
+    tc_diloco_ctx* d,
+    uint32_t requested_abi_version,
+    const void* data,
+    size_t data_size) {
+    if (!d || !data) return TC_ERR_INVALID_ARG;
+    if (requested_abi_version != TC_DILOCO_STATE_ABI_VERSION_1) {
+        return TC_ERR_ABI_MISMATCH;
+    }
+
+    std::lock_guard<std::mutex> lk(d->outer_mutex);
+    if (d->outer_state != TC_DILOCO_ASYNC_IDLE ||
+        d->outer_thread.joinable()) {
+        return TC_ERR_BUSY;
+    }
+
+    try {
+        SerializedState saved;
+        if (!read_state_blob(data, data_size, saved)) {
+            return TC_ERR_INVALID_ARG;
+        }
+        const tc_status_t validation = validate_serialized_state(d, saved);
+        if (validation != TC_OK) return validation;
+
+        /* Prepare every allocation before mutating d so malformed or
+         * allocation-failed restores leave the live context untouched. */
+        std::vector<Parameter> restored_params = d->params;
+        for (size_t i = 0; i < restored_params.size(); ++i) {
+            restored_params[i].theta_anchor = saved.params[i].theta_anchor;
+            restored_params[i].outer_momentum = saved.params[i].outer_momentum;
+            restored_params[i].error_feedback = saved.params[i].error_feedback;
+        }
+
+        std::vector<Parameter> restored_pending;
+        std::vector<std::vector<float>> restored_snapshots;
+        if (saved.outer_state == TC_DILOCO_ASYNC_READY) {
+            restored_pending = restored_params;
+            restored_snapshots.resize(restored_params.size());
+            for (size_t i = 0; i < restored_pending.size(); ++i) {
+                restored_pending[i].theta_anchor =
+                    saved.params[i].pending_theta_anchor;
+                restored_pending[i].outer_momentum =
+                    saved.params[i].pending_outer_momentum;
+                restored_pending[i].error_feedback =
+                    saved.params[i].pending_error_feedback;
+                restored_snapshots[i] = saved.params[i].pending_snapshot;
+            }
+        }
+
+        d->params = std::move(restored_params);
+        d->pending_params = std::move(restored_pending);
+        d->pending_snapshots = std::move(restored_snapshots);
+        d->topology_epoch = saved.topology_epoch;
+        d->membership_epoch = saved.membership_epoch;
+        d->inner_steps_total.store(
+            saved.inner_steps_total, std::memory_order_relaxed);
+        d->outer_steps_total.store(
+            saved.outer_steps_total, std::memory_order_relaxed);
+        d->inner_steps_since_outer = (int)saved.inner_steps_since_outer;
+        d->last_outer_seconds.store(
+            bits_double(saved.last_outer_seconds), std::memory_order_relaxed);
+        d->last_outer_bytes.store(
+            bits_double(saved.last_outer_bytes), std::memory_order_relaxed);
+        d->next_round_id = saved.next_round_id;
+        d->active_round_id = saved.active_round_id;
+        d->outer_state = (tc_diloco_async_state_t)saved.outer_state;
+        d->outer_status = (tc_status_t)(int32_t)saved.outer_status;
+        d->pending_seconds = bits_double(saved.pending_seconds);
+        d->pending_bytes = bits_double(saved.pending_bytes);
+        return TC_OK;
+    } catch (const std::bad_alloc&) {
+        return TC_ERR_ALLOC;
+    } catch (...) {
+        return TC_ERR_INTERNAL;
+    }
 }
 
 extern "C" uint64_t tc_diloco_outer_steps_completed(const tc_diloco_ctx* d) {
