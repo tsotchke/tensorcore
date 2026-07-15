@@ -24,6 +24,7 @@ compile_commands.json
 
 # Tooling caches
 .icc/*
+!.icc/assistant-goals.yaml
 !.icc/completion-oracles.yaml
 !.icc/modularity-justifications.json
 .claude/

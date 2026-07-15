@@ -1,0 +1,516 @@
+{
+  "schema_version": 1,
+  "campaign_id": "tensorcore-full-capability-20260714",
+  "as_of": "2026-07-14",
+  "control_plane": {
+    "tool": "ICC",
+    "root_hint": "~/Desktop/infinite_context_coder",
+    "roadmap": ".icc/assistant-goals.yaml",
+    "frontier_ledger": "configs/beyond_sota_research.json"
+  },
+  "boundary_policy": {
+    "substrate_repo": "tensorcore",
+    "tensorcore_may_own": [
+      "stable public C ABI and versioned capability discovery",
+      "backend-neutral runtime implementations and transport protocols",
+      "generic first-party language bindings distributed as TensorCore packages",
+      "runtime evidence schemas and substrate conformance tests"
+    ],
+    "consumer_repos_must_own": [
+      "consumer tensor layouts and model semantics",
+      "consumer dispatch heuristics and fallback policy",
+      "consumer checkpoint and optimizer integration",
+      "compiler-specific code generation and application orchestration"
+    ],
+    "dependency_rule": "Consumer adapters depend on TensorCore's public ABI; TensorCore must not depend on consumer repositories."
+  },
+  "repositories": [
+    {
+      "id": "tensorcore",
+      "path_hint": "~/Desktop/tensorcore",
+      "role": "compute substrate, kernels, collectives, DiLoCo runtime, public ABI"
+    },
+    {
+      "id": "qllm",
+      "path_hint": "~/Desktop/semiclassical_qllm",
+      "role": "model-owned TensorCore dispatch, decentralized trainer, serving and checkpoint semantics"
+    },
+    {
+      "id": "computer_mesh",
+      "path_hint": "~/Desktop/computer_mesh",
+      "role": "authoritative topology, Tailscale observations, placement, leases, health, recovery and fleet evidence"
+    },
+    {
+      "id": "quantum_geometric_tensor",
+      "path_hint": "~/Desktop/quantum_geometric_tensor",
+      "role": "training-island policy, low-communication policy evidence and QGTL-owned TensorCore adapter"
+    },
+    {
+      "id": "eshkol",
+      "path_hint": "~/Desktop/eshkol",
+      "role": "compiler-owned TensorCore codegen and FFI adapter"
+    },
+    {
+      "id": "Selene",
+      "path_hint": "~/Desktop/Selene",
+      "role": "learning-promotion policy, federated checkpoint merge, value and rollback gates"
+    }
+  ],
+  "implemented_baseline": [
+    {
+      "id": "remote-transport-hardening",
+      "owner_repo": "tensorcore",
+      "state": "verified",
+      "evidence": [
+        "include/tensorcore/remote_tensor.h",
+        "lib/distributed/remote_tensor.cpp",
+        "tests/test_remote_tensor_adversarial.cpp"
+      ],
+      "limits": []
+    },
+    {
+      "id": "tensorcore-diloco-runtime",
+      "owner_repo": "tensorcore",
+      "state": "implemented_limited",
+      "evidence": [
+        "include/tensorcore/diloco.h",
+        "lib/distributed/diloco.cpp",
+        "tests/test_diloco_gloo_fork.c",
+        "tests/test_diloco_sparse_fork.c",
+        "scripts/run_live_mesh_training_demo.sh"
+      ],
+      "limits": [
+        "FP16 mode currently uses dense FP32 on the wire",
+        "FP8, low-rank and signSGD modes return unsupported",
+        "dropout tolerance is declared but not implemented",
+        "async mode lacks immutable snapshots, a completion API and background error propagation",
+        "live proof is a small deterministic training workload rather than a qLLM model run"
+      ]
+    },
+    {
+      "id": "qgtl-decentralized-training-policy",
+      "owner_repo": "quantum_geometric_tensor",
+      "state": "implemented_limited",
+      "evidence": [
+        "include/quantum_geometric/distributed/training_orchestrator.h",
+        "src/quantum_geometric/distributed/training_orchestrator.c",
+        "tests/test_training_orchestrator.c"
+      ],
+      "limits": [
+        "training islands, merge rules, adapter accounting and evidence validation are implemented",
+        "the DiLoCo merge rule does not yet call TensorCore",
+        "checkpoint recovery evidence construction is dry-run only",
+        "start_training records lifecycle state but does not execute a model training loop"
+      ]
+    },
+    {
+      "id": "mesh-distributed-evidence",
+      "owner_repo": "computer_mesh",
+      "state": "implemented_limited",
+      "evidence": [
+        "tsotchke/bin/tsotchke-tensorcore",
+        "tests/test_tensorcore_helper.py"
+      ],
+      "limits": [
+        "cross-host dense allreduce and sparse DiLoCo measurements exist",
+        "the helper records a fixed evidence snapshot rather than continuously reconciling the complete live topology"
+      ]
+    },
+    {
+      "id": "qllm-tensorcore-dispatch-scaffold",
+      "owner_repo": "qllm",
+      "state": "implemented_limited",
+      "evidence": [
+        "src/core/matmul_dispatch.c",
+        "include/semiclassical_qllm/matmul_dispatch.h",
+        "tests/test_matmul_dispatch.c"
+      ],
+      "limits": [
+        "the source is not registered in qLLM's CMake targets",
+        "the weak tc_is_available and tc_matmul_f32_passthrough names are not TensorCore exports",
+        "tests cover fallback behavior but not a real TensorCore execution"
+      ]
+    }
+  ],
+  "waves": [
+    {
+      "id": 0,
+      "name": "preserve-and-tell-the-truth"
+    },
+    {
+      "id": 1,
+      "name": "public-contracts-and-topology-authority"
+    },
+    {
+      "id": 2,
+      "name": "repo-owned-adapters-and-training-correctness"
+    },
+    {
+      "id": 3,
+      "name": "elastic-control-plane-and-failure-recovery"
+    },
+    {
+      "id": 4,
+      "name": "hardware-frontier-and-fleet-acceptance"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "tc-remote-transport-hardening",
+      "icc_task_id": "tensorcore-full-capability-remote-transport-20260713",
+      "owner_repo": "tensorcore",
+      "kind": "substrate",
+      "wave": 0,
+      "status": "verified",
+      "depends_on": [],
+      "acceptance": [
+        "native and AddressSanitizer transport suites pass",
+        "bind, framing, lifecycle, concurrency and request-bound contracts remain regression gated"
+      ]
+    },
+    {
+      "id": "tc-public-runtime-capabilities",
+      "icc_task_id": "tensorcore-public-runtime-capabilities",
+      "owner_repo": "tensorcore",
+      "kind": "substrate",
+      "wave": 1,
+      "status": "verified",
+      "depends_on": [
+        "tc-remote-transport-hardening"
+      ],
+      "acceptance": [
+        "a versioned public capability query replaces invented consumer weak symbols",
+        "ABI tests cover unavailable, supported and mixed-version behavior"
+      ]
+    },
+    {
+      "id": "mesh-topology-authority",
+      "icc_task_id": "tensorcore-topology-authority",
+      "owner_repo": "computer_mesh",
+      "kind": "control_plane",
+      "wave": 1,
+      "status": "planned",
+      "depends_on": [
+        "tc-remote-transport-hardening"
+      ],
+      "acceptance": [
+        "declared computer_mesh nodes, every Tailscale profile, cloud observations and TensorCore resources reconcile by stable identity",
+        "declared, observed, online, eligible, quarantined and retired states are explicit and drift checked"
+      ]
+    },
+    {
+      "id": "tc-peer-identity",
+      "icc_task_id": "tensorcore-transport-identity-auth",
+      "owner_repo": "tensorcore",
+      "kind": "substrate",
+      "wave": 1,
+      "status": "planned",
+      "depends_on": [
+        "tc-remote-transport-hardening",
+        "mesh-topology-authority"
+      ],
+      "acceptance": [
+        "versioned peer authentication binds transport peers to authoritative machine identities",
+        "negative, rotation and mixed-version cases are proven before fleet listener activation"
+      ]
+    },
+    {
+      "id": "tc-diloco-correctness",
+      "icc_task_id": "tensorcore-decentralized-training-frontier",
+      "owner_repo": "tensorcore",
+      "kind": "substrate",
+      "wave": 2,
+      "status": "in_progress",
+      "depends_on": [
+        "tc-public-runtime-capabilities",
+        "tc-peer-identity"
+      ],
+      "acceptance": [
+        "async outer steps operate on immutable snapshots and expose wait, poll and error status",
+        "each advertised compression mode is either implemented with measured wire bytes or rejected at initialization",
+        "checkpoint state includes anchors, optimizer moments, residuals, counters and round identity",
+        "rank loss, rejoin, replay and bounded timeout behavior are multi-rank tested"
+      ]
+    },
+    {
+      "id": "qllm-tensorcore-dispatch-adapter",
+      "icc_task_id": "qllm-tensorcore-decentralized-training-adapter",
+      "owner_repo": "qllm",
+      "kind": "consumer_adapter",
+      "adapter_surface": "qLLM tensor layout, dispatch heuristic, fallback and TensorCore context/buffer lifecycle",
+      "wave": 2,
+      "status": "in_progress",
+      "depends_on": [
+        "tc-public-runtime-capabilities",
+        "mesh-topology-authority"
+      ],
+      "acceptance": [
+        "the adapter is compiled into qLLM and links only public TensorCore symbols",
+        "AUTO, forced TensorCore and forced fallback paths have numerical and dispatch-counter tests",
+        "physical Apple and CUDA evidence proves the TensorCore path actually executed"
+      ]
+    },
+    {
+      "id": "qllm-tensorcore-decentralized-trainer",
+      "icc_task_id": "qllm-tensorcore-decentralized-training-adapter",
+      "owner_repo": "qllm",
+      "kind": "consumer_adapter",
+      "adapter_surface": "qLLM parameters, optimizer, data sampler, checkpoint lineage and TensorCore DiLoCo calls",
+      "wave": 2,
+      "status": "planned",
+      "depends_on": [
+        "tc-diloco-correctness",
+        "qllm-tensorcore-dispatch-adapter"
+      ],
+      "acceptance": [
+        "the documented distributed_trainer module exists and drives real qLLM parameters",
+        "resume preserves sampler, optimizer, DiLoCo and checkpoint lineage state",
+        "two heterogeneous hosts reduce held-out loss and converge after at least three outer rounds"
+      ]
+    },
+    {
+      "id": "qgtl-tensorcore-decentralized-policy-adapter",
+      "icc_task_id": "qgtl-tensorcore-decentralized-policy-adapter",
+      "owner_repo": "quantum_geometric_tensor",
+      "kind": "consumer_adapter",
+      "adapter_surface": "QGTL training-island policy and TensorCore DiLoCo execution/evidence mapping",
+      "wave": 2,
+      "status": "planned",
+      "depends_on": [
+        "tc-diloco-correctness",
+        "mesh-topology-authority"
+      ],
+      "acceptance": [
+        "QGTL's DiLoCo merge rule invokes the public TensorCore runtime through QGTL-owned code",
+        "low-communication bytes and loss fields come from runtime evidence rather than caller-supplied claims",
+        "recovery evidence includes a real injected rank failure and checkpoint resume"
+      ]
+    },
+    {
+      "id": "eshkol-tensorcore-compiler-adapter",
+      "icc_task_id": "eshkol-tensorcore-adapter-ownership",
+      "owner_repo": "eshkol",
+      "kind": "consumer_adapter",
+      "adapter_surface": "Eshkol compiler/codegen lowering and FFI declarations for TensorCore",
+      "wave": 2,
+      "status": "in_progress",
+      "depends_on": [
+        "tc-public-runtime-capabilities"
+      ],
+      "acceptance": [
+        "Eshkol's canonical repository owns the compiler/codegen adapter and its conformance tests",
+        "TensorCore exposes only the stable ABI and generic binding package needed by that adapter",
+        "migration preserves existing Eshkol smoke behavior without duplicate authoritative implementations"
+      ]
+    },
+    {
+      "id": "mesh-decentralized-training-control-plane",
+      "icc_task_id": "computer-mesh-decentralized-training-control-plane",
+      "owner_repo": "computer_mesh",
+      "kind": "control_plane",
+      "wave": 3,
+      "status": "planned",
+      "depends_on": [
+        "tc-peer-identity",
+        "qllm-tensorcore-decentralized-trainer",
+        "qgtl-tensorcore-decentralized-policy-adapter"
+      ],
+      "acceptance": [
+        "jobs declare model, checkpoint, fabric, synchronization, data-policy and accelerator requirements",
+        "placement uses measured bandwidth, topology class, memory, health, taints and lease state",
+        "the reconciler recovers expired leases and rank loss without overlapping checkpoint writers",
+        "observability reports per-rank progress, outer rounds, wire bytes, loss, checkpoint and failure state"
+      ]
+    },
+    {
+      "id": "selene-federated-checkpoint-promotion",
+      "icc_task_id": "selene-federated-checkpoint-promotion",
+      "owner_repo": "Selene",
+      "kind": "orchestration",
+      "wave": 3,
+      "status": "planned",
+      "depends_on": [
+        "mesh-decentralized-training-control-plane",
+        "qllm-tensorcore-decentralized-trainer"
+      ],
+      "acceptance": [
+        "federated candidates merge deterministically with checkpoint lineage",
+        "promotion requires held-out quality, value, anti-forgetting and rollback gates",
+        "a merged candidate is at least as good as the best contributing shard on the declared evaluation"
+      ]
+    },
+    {
+      "id": "tc-distributed-topology-scale",
+      "icc_task_id": "tensorcore-distributed-topology-scale",
+      "owner_repo": "tensorcore",
+      "kind": "substrate",
+      "wave": 3,
+      "status": "planned",
+      "depends_on": [
+        "tc-diloco-correctness",
+        "mesh-decentralized-training-control-plane"
+      ],
+      "acceptance": [
+        "collectives use topology-aware non-centralized algorithms with bounded round state",
+        "reconnect, concurrent ordering, rank churn and partial failure have multi-node evidence"
+      ]
+    },
+    {
+      "id": "tc-backend-hardware-proof",
+      "icc_task_id": "tensorcore-backend-hardware-proof",
+      "owner_repo": "tensorcore",
+      "kind": "evidence",
+      "wave": 4,
+      "status": "planned",
+      "depends_on": [
+        "mesh-topology-authority",
+        "tc-distributed-topology-scale"
+      ],
+      "acceptance": [
+        "Metal M4/M5, CUDA Blackwell/Ampere, Jetson, HIP and CPU classes have physical correctness and performance evidence",
+        "evidence binds machine, accelerator, build, backend path, workload, quality and raw logs"
+      ]
+    },
+    {
+      "id": "frontier-system-gates",
+      "icc_task_id": "tensorcore-beyond-sota-research-20260714",
+      "owner_repo": "tensorcore",
+      "kind": "evidence",
+      "wave": 4,
+      "status": "in_progress",
+      "depends_on": [
+        "tc-backend-hardware-proof",
+        "selene-federated-checkpoint-promotion"
+      ],
+      "acceptance": [
+        "all thirteen primary-source frontier gates pass on same-system reproducible evidence",
+        "quality, failure behavior, energy/cost and topology coverage accompany throughput claims"
+      ]
+    },
+    {
+      "id": "fleet-pareto-acceptance",
+      "icc_task_id": "tensorcore-fleet-acceptance",
+      "owner_repo": "computer_mesh",
+      "kind": "acceptance",
+      "wave": 4,
+      "status": "planned",
+      "depends_on": [
+        "frontier-system-gates",
+        "tc-backend-hardware-proof",
+        "tc-distributed-topology-scale",
+        "qllm-tensorcore-decentralized-trainer",
+        "qgtl-tensorcore-decentralized-policy-adapter",
+        "eshkol-tensorcore-compiler-adapter"
+      ],
+      "acceptance": [
+        "one reproducible matrix covers every eligible topology and accelerator class",
+        "no capability is inferred solely from compilation, enums, projections or a fixed stale inventory",
+        "the campaign publishes Pareto results and unresolved limitations instead of a scalar SOTA claim"
+      ]
+    }
+  ],
+  "research_gate_ownership": [
+    {
+      "gate_id": "frontier-evidence-integrity",
+      "owner_repo": "tensorcore",
+      "contributors": [
+        "computer_mesh"
+      ]
+    },
+    {
+      "gate_id": "adaptive-kernel-selection",
+      "owner_repo": "tensorcore",
+      "contributors": [
+        "qllm"
+      ]
+    },
+    {
+      "gate_id": "attention-frontier",
+      "owner_repo": "tensorcore",
+      "contributors": [
+        "qllm"
+      ]
+    },
+    {
+      "gate_id": "low-precision-quality-frontier",
+      "owner_repo": "tensorcore",
+      "contributors": [
+        "qllm",
+        "quantum_geometric_tensor"
+      ]
+    },
+    {
+      "gate_id": "metal4-native-frontier",
+      "owner_repo": "tensorcore",
+      "contributors": [
+        "qllm"
+      ]
+    },
+    {
+      "gate_id": "rocm-native-frontier",
+      "owner_repo": "tensorcore",
+      "contributors": [
+        "computer_mesh"
+      ]
+    },
+    {
+      "gate_id": "expert-parallel-frontier",
+      "owner_repo": "qllm",
+      "contributors": [
+        "tensorcore",
+        "computer_mesh"
+      ]
+    },
+    {
+      "gate_id": "disaggregation-admission",
+      "owner_repo": "computer_mesh",
+      "contributors": [
+        "qllm",
+        "tensorcore"
+      ]
+    },
+    {
+      "gate_id": "speculative-decode-frontier",
+      "owner_repo": "qllm",
+      "contributors": [
+        "tensorcore",
+        "computer_mesh"
+      ]
+    },
+    {
+      "gate_id": "collective-topology-frontier",
+      "owner_repo": "tensorcore",
+      "contributors": [
+        "computer_mesh",
+        "quantum_geometric_tensor"
+      ]
+    },
+    {
+      "gate_id": "topology-control-plane",
+      "owner_repo": "computer_mesh",
+      "contributors": [
+        "tensorcore"
+      ]
+    },
+    {
+      "gate_id": "workload-identity-frontier",
+      "owner_repo": "computer_mesh",
+      "contributors": [
+        "tensorcore",
+        "qllm",
+        "quantum_geometric_tensor"
+      ]
+    },
+    {
+      "gate_id": "fleet-pareto-acceptance",
+      "owner_repo": "computer_mesh",
+      "contributors": [
+        "tensorcore",
+        "qllm",
+        "quantum_geometric_tensor",
+        "eshkol",
+        "Selene"
+      ]
+    }
+  ]
+}
