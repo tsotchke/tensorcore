@@ -1,12 +1,13 @@
 # tensorcore
 
-**CUDA for Apple Silicon.**
+**A cross-platform tensor runtime, with Metal as its flagship backend.**
 
 `tensorcore` is the missing software layer that turns the matrix units on
 M-series GPUs into a training-grade foundation. It does for Metal what
 cuBLAS + cuDNN + CUTLASS + NCCL + ggml-quants combined do for CUDA: one
-hardware-aware library, one C ABI, one binary that runs unchanged from
-**M1 (Apple7) through M5 (Apple11)**.
+hardware-aware library and one C ABI. The same source builds for **M1
+(Apple7) through M5 (Apple11)**, portable Linux and Windows CPU targets,
+NVIDIA CUDA, and HIP-compatible runtimes.
 
 ```
                           ┌──────────────────────┐
@@ -66,12 +67,12 @@ equivalent, see **[docs/cuda_comparison.md](docs/cuda_comparison.md)**.
 | Distributed (single-host ring + portable GLOO TCP) | bit-exact local ranks | thread, fork, and TCP transports |
 | MPS + Accelerate fallback | wired, exercised by dispatch | — |
 | **Portable CPU backend** | builds on Linux / Intel-Mac with `TC_ENABLE_METAL=OFF`; covers buffers, streams, GEMM, attention/training/conv, GGUF, `TC_DIST_SINGLE`, GLOO TCP, DiLoCo, and sparse compression. | for non-Apple mesh workers |
-| CTest suite | 27/27 pass on M2 Ultra (25 library/package tests + 2 example smokes) | `ctest --test-dir build` |
-| CMake / pkg-config / Python install | `tensorcore::tensorcore[_shared]`, `tensorcore.pc` | tested out-of-tree |
+| CTest suite | all applicable tests pass on Metal and portable CPU builds | `ctest --test-dir build` |
+| CMake / pkg-config / Python install | `tensorcore::tensorcore[_shared]`, `tensorcore.pc` | out-of-tree consumers tested on macOS, Linux, and Windows |
 
 ## Public C ABI — `include/tensorcore/*.h`
 
-A 1.3K-line C ABI you can read end-to-end in an afternoon. Sixteen public
+A stable C ABI you can read end-to-end in an afternoon. Thirty-seven public
 headers including the umbrella. Grouped:
 
 - **Lifecycle:** `tc_init`, `tc_shutdown`, `tc_device_info_get`,
@@ -90,8 +91,8 @@ headers including the umbrella. Grouped:
 - **GGUF:** `tc_gguf_open`/`_close`, metadata getters, tensor iteration,
   `tc_gguf_load_supported_tensors`, matrix descriptor helpers,
   `tc_gguf_get_llama_config`.
-- **Distributed:** `tc_dist_init`/`_finalize`, `tc_allreduce`,
-  `tc_broadcast`, `tc_allgather`, `tc_barrier`.
+- **Distributed:** `tc_dist_init`/`_finalize`, authenticated Gloo/remote/mesh
+  constructors, `tc_allreduce`, `tc_broadcast`, `tc_allgather`, `tc_barrier`.
 
 Complete reference: **[docs/api_reference.md](docs/api_reference.md)**.
 
@@ -146,7 +147,7 @@ named dtypes.
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 
-ctest --test-dir build --output-on-failure          # 31/31
+ctest --test-dir build --output-on-failure
 ./build/bench/bench_gemm                             # TFLOPS sweep
 ./build/bench/bench_attention                        # FlashAttention TFLOPS
 ./build/bench/bench_inference_7b                     # Q4_0 7B decode harness
@@ -171,8 +172,9 @@ call. If you don't see `simdgroup_matrix`, see
 cmake --install build --prefix /opt/tensorcore
 ```
 
-The install carries the umbrella headers, both libraries (static + shared),
-the metallib, a CMake package config, and a pkg-config file:
+The install carries all public headers, both libraries (static + shared), a
+CMake package config, and a pkg-config file. Metal builds additionally carry
+`tensorcore.metallib`:
 
 ```cmake
 find_package(tensorcore CONFIG REQUIRED)
@@ -190,6 +192,16 @@ Python:
 python3 -m pip install -e . --no-build-isolation
 export TENSORCORE_LIB=/opt/tensorcore/lib/libtensorcore.dylib
 python3 -c 'import tensorcore as tc; print(tc.version())'
+```
+
+The published Python wheel remains the Apple/Metal distribution. Native SDK
+archives are emitted for macOS and Linux as `.tar.gz` files and Windows as a
+`.zip`; all three contain the same C ABI and relocatable CMake package.
+
+Windows portable CPU builds use the checked-in PowerShell gate:
+
+```powershell
+./scripts/ci_windows_cpu.ps1
 ```
 
 Complete integration guide: **[docs/integrating_tensorcore.md](docs/integrating_tensorcore.md)**.
@@ -239,6 +251,11 @@ silicon-bound vs software-bound axes are all in
 
 ## Documentation
 
+- **[Full-capability campaign](docs/tensorcore_full_capability_campaign.md)** —
+  ICC-driven cross-repository ownership, decentralized-training baseline,
+  dependency waves, and fleet acceptance gates.
+- **[Beyond-SOTA research campaign](docs/research/TENSORCORE_BEYOND_SOTA_CAMPAIGN_2026-07-14.md)** —
+  primary-source comparators and falsifiable same-system frontier gates.
 - **[docs/](docs/)** — full documentation tree (architecture, API per
   header, CUDA comparison, dtypes, every kernel area, GGUF, Python,
   benchmarks, troubleshooting, ICC-grounded codebase audit).

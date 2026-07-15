@@ -40,6 +40,8 @@ typedef enum {
     TC_ERR_KERNEL_NOT_FOUND     =  -9,  /* metallib missing the function */
     TC_ERR_PIPELINE             = -10,  /* MTLComputePipelineState build failed */
     TC_ERR_DISPATCH             = -11,
+    TC_ERR_ABI_MISMATCH         = -12,
+    TC_ERR_BUSY                 = -13,
     TC_ERR_INTERNAL             = -99,
 } tc_status_t;
 
@@ -145,6 +147,52 @@ tc_status_t tc_stream_sync   (tc_stream*  s);
 ```
 
 NULL stream means "use the default stream" — sync-commit on every call.
+
+## Runtime capabilities — `capabilities.h`
+
+Downstream adapters use this size/versioned query instead of package-version
+guesses or invented weak symbols:
+
+```c
+#define TC_RUNTIME_CAPABILITIES_ABI_VERSION_CURRENT 1
+
+typedef struct {
+    uint32_t struct_size;              /* runtime's known v1 size */
+    uint32_t abi_version;              /* version actually written */
+    uint32_t runtime_version_major;
+    uint32_t runtime_version_minor;
+    uint32_t runtime_version_patch;
+    uint32_t reserved0;
+    uint64_t known_capability_mask;
+    uint64_t available_capability_mask;
+    uint64_t compiled_backend_mask;
+    uint64_t available_backend_mask;
+    uint64_t reserved[4];
+} tc_runtime_capabilities;
+
+tc_status_t tc_runtime_capabilities_get(
+    tc_context* ctx,
+    uint32_t requested_abi_version,
+    tc_runtime_capabilities* out,
+    size_t out_size);
+```
+
+A feature is supported only when its bit is present in both
+`known_capability_mask` and `available_capability_mask`. This makes unknown
+future features fail closed. The v1 known bits cover fp32 GEMM, single-rank
+and Gloo distributed execution, the implemented DiLoCo baseline, sparse Gloo
+DiLoCo, remote tensors, and four campaign features. Snapshot-safe async DiLoCo
+and versioned checkpoint/resume state are available. Elastic membership and
+actual FP16 wire packing remain known but unavailable.
+
+`compiled_backend_mask` reports code included in the binary;
+`available_backend_mask` is the subset selectable on the current context under
+the current runtime policy. A compiled CUDA or HIP backend is therefore not
+reported as available merely because its toolkit was present at build time.
+
+Callers may pass the documented v1 prefix size or a larger buffer. The runtime
+copies only the prefix it knows and leaves a newer caller's tail untouched.
+Unknown ABI versions return `TC_ERR_ABI_MISMATCH` without modifying the output.
 
 ## Memory Tiering — `memory_tier.h`
 
@@ -723,6 +771,12 @@ tc_status_t tc_dist_init   (tc_context* tc,
                             const char* rendezvous_url,
                             tc_dist_ctx** out);
 
+tc_status_t tc_dist_init_authenticated(
+    tc_context* tc, tc_dist_backend_t backend,
+    int world_size, int rank, const char* rendezvous_url,
+    const char* const* rank_identities, size_t rank_identity_count,
+    const tc_transport_auth_config* auth, tc_dist_ctx** out);
+
 tc_status_t tc_dist_finalize(tc_dist_ctx* d);
 
 int tc_dist_world_size(const tc_dist_ctx* d);
@@ -750,7 +804,9 @@ tc_status_t tc_barrier  (tc_dist_ctx* d);
 ```
 
 See [distributed.md](distributed.md) for the single-host ring tests,
-GLOO TCP baseline, and the v0.5 TB5 transport plan.
+GLOO TCP baseline, and the v0.5 TB5 transport plan. See
+[transport_auth.md](transport_auth.md) for authenticated remote, mesh, and
+Gloo constructors, the `tc_transport_auth_config` ABI, and key rotation.
 
 ## DiLoCo — `diloco.h`
 
@@ -805,11 +861,63 @@ tc_status_t tc_diloco_step(tc_diloco_ctx* d,
                            bool* out_outer_step_pending);
 tc_status_t tc_diloco_apply_outer(tc_diloco_ctx* d);
 
+typedef enum {
+    TC_DILOCO_ASYNC_IDLE = 0,
+    TC_DILOCO_ASYNC_RUNNING = 1,
+    TC_DILOCO_ASYNC_READY = 2,
+    TC_DILOCO_ASYNC_FAILED = 3,
+} tc_diloco_async_state_t;
+
+tc_status_t tc_diloco_async_poll(const tc_diloco_ctx* d,
+                                 tc_diloco_async_state_t* out_state,
+                                 tc_status_t* out_worker_status,
+                                 uint64_t* out_round_id);
+tc_status_t tc_diloco_async_wait(tc_diloco_ctx* d);
+tc_status_t tc_diloco_async_commit(tc_diloco_ctx* d);
+
+#define TC_DILOCO_STATE_ABI_VERSION_1 1
+#define TC_DILOCO_STATE_ABI_VERSION_CURRENT TC_DILOCO_STATE_ABI_VERSION_1
+
+tc_status_t tc_diloco_state_set_epochs(tc_diloco_ctx* d,
+                                       uint64_t topology_epoch,
+                                       uint64_t membership_epoch);
+tc_status_t tc_diloco_state_get_epochs(const tc_diloco_ctx* d,
+                                       uint64_t* out_topology_epoch,
+                                       uint64_t* out_membership_epoch);
+tc_status_t tc_diloco_state_size(const tc_diloco_ctx* d,
+                                 uint32_t requested_abi_version,
+                                 size_t* out_size);
+tc_status_t tc_diloco_state_serialize(const tc_diloco_ctx* d,
+                                      uint32_t requested_abi_version,
+                                      void* out_data,
+                                      size_t out_size,
+                                      size_t* out_written);
+tc_status_t tc_diloco_state_deserialize(tc_diloco_ctx* d,
+                                        uint32_t requested_abi_version,
+                                        const void* data,
+                                        size_t data_size);
+
 uint64_t tc_diloco_outer_steps_completed(const tc_diloco_ctx* d);
 uint64_t tc_diloco_inner_steps_completed(const tc_diloco_ctx* d);
 double tc_diloco_last_outer_step_seconds(const tc_diloco_ctx* d);
 double tc_diloco_last_outer_bytes_sent(const tc_diloco_ctx* d);
 ```
+
+With `async_overlap=true`, `apply_outer` snapshots registered parameters on the
+caller thread and the worker operates only on private state. `poll` and `wait`
+observe completion or failure. `commit` is the caller-owned parameter boundary:
+it rebases local updates made after the snapshot onto the new anchor and only
+then increments the completed-round counter. A second launch before commit
+returns `TC_ERR_BUSY`. `finalize` refuses to destroy a context with an
+unacknowledged ready/failed result.
+
+The v1 checkpoint blob preserves every DiLoCo-owned continuation input:
+anchors, outer-optimizer moments, top-k error feedback, counters/metrics,
+round identity, topology/membership epochs, and READY/FAILED pending state.
+The caller restores model parameter buffers separately and first. Restore
+validates config, rank/world, epochs, and the registered parameter layout
+atomically. RUNNING state is not serializable and returns `TC_ERR_BUSY`.
+`tolerate_dropouts=true` remains unsupported and is rejected at initialization.
 
 See [diloco.md](diloco.md) for the algorithm, topology model, and staged
 transport work.
@@ -892,6 +1000,7 @@ typedef struct {
 } tc_cuda_device_info;
 
 tc_status_t tc_cuda_init(tc_context* ctx);
+int tc_cuda_is_active(void);
 int tc_cuda_device_count(void);
 tc_status_t tc_cuda_device_at(int index, tc_cuda_device_info* out_info);
 tc_status_t tc_cuda_select_device(tc_context* ctx, int index);

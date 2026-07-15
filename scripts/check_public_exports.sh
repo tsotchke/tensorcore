@@ -39,7 +39,12 @@ import re
 import sys
 
 header_dir = pathlib.Path(sys.argv[1])
-inline_only = {"tc_dtype_size"}
+inline_only = {
+    "tc_dtype_size",
+    "tc_dmstate_size",
+    "tc_qstate_size",
+    "tc_runtime_capability_available",
+}
 symbols = set()
 
 for path in sorted(header_dir.glob("*.h")):

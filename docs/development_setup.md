@@ -259,11 +259,13 @@ cmake --install build --prefix /tmp/tensorcore-install
 REQUIRE_GPU=1 scripts/release_smoke.sh
 ```
 
-This builds the wheel, the native SDK archive, verifies the install via
+On macOS this builds the wheel and native SDK archive, verifies the install via
 CMake `find_package` and pkg-config, runs the full ctest, and writes a
 JSON evidence file to `build/release_smoke_runtime_evidence.json`. See
 [ci_and_scripts.md § release_smoke.sh](ci_and_scripts.md) for the
-schema.
+schema. Use `scripts/ci_portable_cpu.sh` plus the shell archive scripts on
+Linux, and `scripts/ci_windows_cpu.ps1` plus the PowerShell archive scripts on
+Windows; the release workflow requires all three platform gates.
 
 ## Common environment knobs
 

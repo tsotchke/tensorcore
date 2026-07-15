@@ -44,24 +44,49 @@ done
 LC_ALL=C tar -xzf "$ARCHIVE" -C "$sdk"
 
 required=(
-    "include/tensorcore/tensorcore.h"
-    "include/tensorcore/status.h"
-    "include/tensorcore/dtype.h"
-    "include/tensorcore/device.h"
-    "include/tensorcore/gemm.h"
-    "include/tensorcore/attention.h"
-    "include/tensorcore/training.h"
-    "include/tensorcore/conv.h"
-    "include/tensorcore/quantized.h"
-    "include/tensorcore/distributed.h"
-    "include/tensorcore/gguf.h"
     "lib/libtensorcore.a"
-    "lib/libtensorcore.dylib"
-    "lib/tensorcore.metallib"
     "lib/cmake/tensorcore/tensorcoreConfig.cmake"
     "lib/cmake/tensorcore/tensorcoreConfigVersion.cmake"
     "lib/pkgconfig/tensorcore.pc"
 )
+
+case "$(uname -s)" in
+    Darwin)
+        platform="macos"
+        shared_lib="lib/libtensorcore.dylib"
+        ;;
+    Linux)
+        platform="linux"
+        shared_lib="lib/libtensorcore.so"
+        ;;
+    *)
+        echo "native SDK tarballs are supported on macOS and Linux; use the PowerShell checker on Windows" >&2
+        exit 2
+        ;;
+esac
+
+case "$(uname -m)" in
+    arm64|aarch64) archive_arch="arm64" ;;
+    x86_64|amd64) archive_arch="x86_64" ;;
+    *) archive_arch="$(uname -m)" ;;
+esac
+
+expected_name="tensorcore-native-sdk-${EXPECTED_VERSION}-${platform}-${archive_arch}.tar.gz"
+if [ "$(basename "$ARCHIVE")" != "$expected_name" ]; then
+    echo "native SDK archive name mismatch: expected $expected_name" >&2
+    exit 1
+fi
+
+required+=("$shared_lib")
+config_file="$sdk/lib/cmake/tensorcore/tensorcoreConfig.cmake"
+metal_enabled=0
+if grep -Fq 'set(tensorcore_ENABLE_METAL "ON")' "$config_file"; then
+    metal_enabled=1
+    required+=("lib/tensorcore.metallib")
+fi
+for header in "$ROOT"/include/tensorcore/*.h; do
+    required+=("include/tensorcore/$(basename "$header")")
+done
 
 missing=()
 for rel in "${required[@]}"; do
@@ -81,8 +106,8 @@ if LC_ALL=C grep -R -n -E '/Applications/.+Xcode|MacOSX\.sdk' \
     exit 1
 fi
 
-if command -v lipo >/dev/null 2>&1; then
-    archs="$(lipo -archs "$sdk/lib/libtensorcore.dylib")"
+if [ "$platform" = "macos" ] && command -v lipo >/dev/null 2>&1; then
+    archs="$(lipo -archs "$sdk/$shared_lib")"
     host_arch="$(uname -m)"
     case " $archs " in
         *" $host_arch "*) ;;
@@ -93,8 +118,8 @@ if command -v lipo >/dev/null 2>&1; then
     esac
 fi
 
-if command -v otool >/dev/null 2>&1; then
-    "$PYTHON_BIN" - "$sdk/lib/libtensorcore.dylib" "$EXPECTED_VERSION" <<'PY'
+if [ "$platform" = "macos" ] && command -v otool >/dev/null 2>&1; then
+    "$PYTHON_BIN" - "$sdk/$shared_lib" "$EXPECTED_VERSION" <<'PY'
 import re
 import subprocess
 import sys
@@ -106,12 +131,14 @@ expected_compat = f"{major}.{minor}.0"
 
 out = subprocess.check_output(["otool", "-L", dylib], text=True)
 match = re.search(
-    r"@rpath/libtensorcore\.dylib "
+    rf"@rpath/libtensorcore\.{re.escape(major)}\.dylib "
     r"\(compatibility version ([^,]+), current version ([^)]+)\)",
     out,
 )
 if not match:
-    raise SystemExit("libtensorcore.dylib install name is not @rpath/libtensorcore.dylib")
+    raise SystemExit(
+        f"libtensorcore.dylib install name is not @rpath/libtensorcore.{major}.dylib"
+    )
 
 compat, current = match.groups()
 if current != expected:
@@ -124,12 +151,20 @@ if compat != expected_compat:
 PY
 fi
 
+if [ "$platform" = "linux" ] && command -v readelf >/dev/null 2>&1; then
+    expected_soname="libtensorcore.so.${EXPECTED_VERSION%%.*}"
+    if ! readelf -d "$sdk/$shared_lib" | grep -F '(SONAME)' | grep -Fq "[$expected_soname]"; then
+        echo "libtensorcore.so SONAME mismatch: expected $expected_soname" >&2
+        exit 1
+    fi
+fi
+
 consumer="$tmpdir/consumer"
 mkdir -p "$consumer"
 cmake -S "$ROOT/examples/native_sdk_consumer" -B "$consumer/build" \
     -DCMAKE_PREFIX_PATH="$sdk"
 cmake --build "$consumer/build"
-if [ ! -f "$consumer/build/tensorcore.metallib" ]; then
+if [ "$metal_enabled" -eq 1 ] && [ ! -f "$consumer/build/tensorcore.metallib" ]; then
     echo "tensorcore_copy_metallib did not copy tensorcore.metallib" >&2
     exit 1
 fi
@@ -150,7 +185,9 @@ if command -v pkg-config >/dev/null 2>&1; then
     "$CC_BIN" "$ROOT/examples/native_sdk_consumer/main.c" \
         $(PKG_CONFIG_PATH="$sdk/lib/pkgconfig" pkg-config --cflags --libs tensorcore) \
         -o "$consumer/pkg-consumer"
-    "$consumer/pkg-consumer"
+    DYLD_LIBRARY_PATH="$sdk/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
+    LD_LIBRARY_PATH="$sdk/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+        "$consumer/pkg-consumer"
 else
     "$PYTHON_BIN" - "$sdk/lib/pkgconfig/tensorcore.pc" "$EXPECTED_VERSION" <<'PY'
 import pathlib

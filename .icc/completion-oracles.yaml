@@ -1201,3 +1201,28 @@ oracles:
         model_name: tensorcore
         severity: high
         action: run_icc_architecture_verify_emit_trace
+
+  - name: tensorcore-public-cross-platform-release
+    target: tensorcore-public-cross-platform-release-20260715
+    aliases:
+      - tensorcore-public-cross-platform-release
+    criteria:
+      - id: public_release_platform_gates
+        runtime_event:
+          event_kinds: [public_release_gate]
+          event_values: [PASS]
+        required_names:
+          - macos_metal
+          - macos_wheel
+          - macos_sdk
+          - linux_cpu
+          - linux_sdk
+          - windows_cpu
+          - windows_sdk
+          - optional_accelerators
+          - bindings_abi
+          - release_checksums
+          - docs_security
+        severity: high
+        label: All cross-platform public release gates passed
+        action: run_cross_platform_release_sprint

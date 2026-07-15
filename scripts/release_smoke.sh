@@ -37,6 +37,12 @@ PY
 )"
 export EXPECTED_VERSION
 
+if ! "$PYTHON_BIN" -c 'import setuptools.build_meta, wheel' >/dev/null 2>&1; then
+    echo "Release packaging requires setuptools and wheel for $PYTHON_BIN." >&2
+    echo "Create a virtual environment, install 'pip setuptools wheel', and set PYTHON_BIN to its interpreter." >&2
+    exit 2
+fi
+
 TC_SDK_VERSION="$(xcrun --show-sdk-version 2>/dev/null || true)"
 if [ -z "$TC_SDK_VERSION" ]; then
     TC_SDK_VERSION="0.0"
@@ -1135,15 +1141,17 @@ def dylib_macos_version(path):
     return normalize((int(match.group(1)), int(match.group(2))))
 
 
-def dylib_identity(path):
+def dylib_identity(path, soversion):
     out = subprocess.check_output(["otool", "-L", str(path)], text=True)
     match = re.search(
-        r"@rpath/libtensorcore\.dylib "
+        rf"@rpath/libtensorcore\.{re.escape(soversion)}\.dylib "
         r"\(compatibility version ([^,]+), current version ([^)]+)\)",
         out,
     )
     if not match:
-        raise SystemExit("wheel dylib install name is not @rpath/libtensorcore.dylib")
+        raise SystemExit(
+            f"wheel dylib install name is not @rpath/libtensorcore.{soversion}.dylib"
+        )
     return match.groups()
 
 
@@ -1165,7 +1173,7 @@ with tempfile.TemporaryDirectory(prefix="tensorcore-wheel-native.", dir="/privat
 
     archs = set(subprocess.check_output(["lipo", "-archs", str(dylib)], text=True).split())
     minos = dylib_macos_version(dylib)
-    compat, current = dylib_identity(dylib)
+    compat, current = dylib_identity(dylib, major)
     if current != expected:
         raise SystemExit(f"wheel dylib current version mismatch: expected {expected}, got {current}")
     if compat != expected_compat:
@@ -1297,7 +1305,9 @@ if command -v pkg-config >/dev/null 2>&1; then
         "$CC_BIN" "$CONSUMER_SRC/main.c" \
         $(PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" pkg-config --cflags --libs tensorcore) \
         -o "$CONSUMER_DIR/pkg-consumer"
-    "$CONSUMER_DIR/pkg-consumer"
+    DYLD_LIBRARY_PATH="$PREFIX/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
+    LD_LIBRARY_PATH="$PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+        "$CONSUMER_DIR/pkg-consumer"
     PKG_CONFIG_CONSUMER_STATUS="passed"
 else
     echo "pkg-config not found; skipping pkg-config consumer smoke."

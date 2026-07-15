@@ -1441,11 +1441,12 @@ in the public headers. Catches drift like "Python says
 
 ### `create_native_sdk_archive.sh`
 
-From a populated `--prefix` install dir, packages the headers, libraries,
-metallib, CMake config, and pkg-config files into a versioned
-`tensorcore-native-sdk-X.Y.Z-darwin-arm64.tar.gz`. The archive carries
-no build-tree paths; the install paths it references are relative to
-the archive root.
+From a populated install prefix on macOS or Linux, packages every public
+header, the static and versioned shared libraries, CMake config, and
+pkg-config metadata into
+`tensorcore-native-sdk-X.Y.Z-PLATFORM-ARCH.tar.gz`. Metal installs also
+require and carry the metallib. The archive carries no build-tree paths;
+the install paths it references are relative to the archive root.
 
 ```sh
 cmake --install build --prefix /private/tmp/tensorcore-install
@@ -1457,20 +1458,26 @@ scripts/create_native_sdk_archive.sh /private/tmp/tensorcore-install
 Validates a native SDK archive:
 
 - File structure matches the contract
-- `pkgconfig/tensorcore.pc` resolves
-- Compiles a minimal C consumer against the archived headers / dylib
-- Asserts `tc.version()` matches the embedded version
+- `pkgconfig/tensorcore.pc` resolves without injecting an install rpath
+- Mach-O install-name/version or ELF SONAME matches the release ABI
+- Fresh C and C++ CMake consumers link and execute against shared and static targets
+- The runtime version matches the embedded package version
 
 ```sh
-scripts/check_native_sdk_archive.sh tensorcore-native-sdk-0.1.22-darwin-arm64.tar.gz
+scripts/check_native_sdk_archive.sh tensorcore-native-sdk-0.1.22-linux-arm64.tar.gz
 ```
+
+### `create_native_sdk_archive.ps1` / `check_native_sdk_archive.ps1`
+
+The Windows equivalents emit a `windows-ARCH.zip`, reject unsafe archive
+members, require the DLL plus import and static libraries, and build/run the
+same installed C and C++ consumers under MSVC.
 
 ### `create_release_checksums.sh`
 
-Emits a SHA manifest (`tensorcore-release-checksums-X.Y.Z.txt`) for the
-wheel + native SDK archive of a given release. Used by
-`release.yml` to publish reproducibility evidence alongside the
-artifacts.
+Emits and verifies `SHA256SUMS` for the Apple wheel and all macOS, Linux, and
+Windows native SDKs. It refuses to succeed with fewer than three SDK artifacts.
+`release.yml` publishes the manifest alongside the artifacts.
 
 ### `release_smoke.sh`
 

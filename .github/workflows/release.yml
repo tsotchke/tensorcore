@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 jobs:
-  wheel:
+  macos-release:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v6
@@ -40,7 +40,7 @@ jobs:
       - name: Check runtime evidence
         run: python3 scripts/check_release_evidence.py build/release_smoke_runtime_evidence.json
 
-      - name: Create native SDK archive
+      - name: Create and verify macOS native SDK
         env:
           PYTHON_BIN: ${{ runner.temp }}/tensorcore-release-venv/bin/python
           OUT_DIR: dist
@@ -48,30 +48,99 @@ jobs:
           archive="$(scripts/create_native_sdk_archive.sh "$RUNNER_TEMP/tensorcore-native-sdk")"
           scripts/check_native_sdk_archive.sh "$archive"
 
-      - name: Create release checksums
-        run: scripts/create_release_checksums.sh dist
-
       - name: Upload runtime evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: tensorcore-release-smoke-evidence
+          name: tensorcore-smoke-evidence
           path: build/release_smoke_runtime_evidence.json
           if-no-files-found: error
 
-      - name: Upload wheel artifact
+      - name: Upload macOS release artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: tensorcore-apple-wheel
-          path: dist/tensorcore_apple-*.whl
+          name: tensorcore-release-macos
+          path: |
+            dist/tensorcore_apple-*.whl
+            dist/tensorcore-native-sdk-*-macos-*.tar.gz
           if-no-files-found: error
 
-      - name: Upload native SDK artifact
+  linux-sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Version consistency
+        run: scripts/check_version_consistency.sh
+
+      - name: Portable CPU build, tests, and consumers
+        env:
+          TC_CPU_BUILD_DIR: ${{ runner.temp }}/tensorcore-build
+          TC_CPU_INSTALL_DIR: ${{ runner.temp }}/tensorcore-install
+          TC_CPU_CONSUMER_DIR: ${{ runner.temp }}/tensorcore-consumer
+        run: scripts/ci_portable_cpu.sh
+
+      - name: Create and verify Linux native SDK
+        env:
+          OUT_DIR: dist
+        run: |
+          mkdir -p dist
+          archive="$(scripts/create_native_sdk_archive.sh "$RUNNER_TEMP/tensorcore-install")"
+          scripts/check_native_sdk_archive.sh "$archive"
+
+      - name: Upload Linux native SDK
         uses: actions/upload-artifact@v7
         with:
-          name: tensorcore-native-sdk
-          path: dist/tensorcore-native-sdk-*.tar.gz
+          name: tensorcore-release-linux
+          path: dist/tensorcore-native-sdk-*-linux-*.tar.gz
           if-no-files-found: error
+
+  windows-sdk:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Version consistency
+        shell: bash
+        run: scripts/check_version_consistency.sh
+
+      - name: Portable CPU build, tests, and consumers
+        shell: pwsh
+        run: >
+          ./scripts/ci_windows_cpu.ps1
+          -BuildDir "$env:RUNNER_TEMP/tensorcore-build"
+          -Prefix "$env:RUNNER_TEMP/tensorcore-install"
+
+      - name: Create and verify Windows native SDK
+        shell: pwsh
+        run: |
+          $Archive = ./scripts/create_native_sdk_archive.ps1 `
+            -Prefix "$env:RUNNER_TEMP/tensorcore-install" `
+            -OutDir "$env:GITHUB_WORKSPACE/dist"
+          ./scripts/check_native_sdk_archive.ps1 -Archive $Archive
+
+      - name: Upload Windows native SDK
+        uses: actions/upload-artifact@v7
+        with:
+          name: tensorcore-release-windows
+          path: dist/tensorcore-native-sdk-*-windows-*.zip
+          if-no-files-found: error
+
+  publish:
+    needs: [macos-release, linux-sdk, windows-sdk]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: tensorcore-release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create and verify release checksums
+        run: scripts/create_release_checksums.sh dist
 
       - name: Upload release checksums
         uses: actions/upload-artifact@v7
@@ -92,5 +161,6 @@ jobs:
           gh release upload "$GITHUB_REF_NAME" \
             dist/tensorcore_apple-*.whl \
             dist/tensorcore-native-sdk-*.tar.gz \
+            dist/tensorcore-native-sdk-*.zip \
             dist/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" --clobber

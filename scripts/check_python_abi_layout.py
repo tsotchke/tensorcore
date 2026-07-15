@@ -35,6 +35,32 @@ int main(void) {
     FIELD(tc_device_info, supports_tensorops_m5);
     FIELD(tc_device_info, supports_fp64_native);
 
+    SIZE(tc_runtime_capabilities);
+    FIELD(tc_runtime_capabilities, struct_size);
+    FIELD(tc_runtime_capabilities, abi_version);
+    FIELD(tc_runtime_capabilities, runtime_version_major);
+    FIELD(tc_runtime_capabilities, runtime_version_minor);
+    FIELD(tc_runtime_capabilities, runtime_version_patch);
+    FIELD(tc_runtime_capabilities, reserved0);
+    FIELD(tc_runtime_capabilities, known_capability_mask);
+    FIELD(tc_runtime_capabilities, available_capability_mask);
+    FIELD(tc_runtime_capabilities, compiled_backend_mask);
+    FIELD(tc_runtime_capabilities, available_backend_mask);
+    FIELD(tc_runtime_capabilities, reserved);
+
+    SIZE(tc_transport_auth_key);
+    FIELD(tc_transport_auth_key, identity);
+    FIELD(tc_transport_auth_key, key_id);
+    FIELD(tc_transport_auth_key, secret);
+    FIELD(tc_transport_auth_key, secret_bytes);
+
+    SIZE(tc_transport_auth_config);
+    FIELD(tc_transport_auth_config, abi_version);
+    FIELD(tc_transport_auth_config, local_identity);
+    FIELD(tc_transport_auth_config, active_key_id);
+    FIELD(tc_transport_auth_config, keys);
+    FIELD(tc_transport_auth_config, key_count);
+
     SIZE(tc_gemm_desc);
     FIELD(tc_gemm_desc, M);
     FIELD(tc_gemm_desc, N);
@@ -191,6 +217,19 @@ def python_layout() -> dict[str, int]:
             "max_threadgroup_memory", "max_threads_per_threadgroup",
             "thread_execution_width", "unified_memory", "supports_bf16_simdgroup",
             "supports_i8_simdgroup", "supports_tensorops_m5", "supports_fp64_native",
+        ]),
+        "tc_runtime_capabilities": (tc.TCRuntimeCapabilities, [
+            "struct_size", "abi_version", "runtime_version_major",
+            "runtime_version_minor", "runtime_version_patch", "reserved0",
+            "known_capability_mask", "available_capability_mask",
+            "compiled_backend_mask", "available_backend_mask", "reserved",
+        ]),
+        "tc_transport_auth_key": (tc.TCTransportAuthKey, [
+            "identity", "key_id", "secret", "secret_bytes",
+        ]),
+        "tc_transport_auth_config": (tc.TCTransportAuthConfig, [
+            "abi_version", "local_identity", "active_key_id", "keys",
+            "key_count",
         ]),
         "tc_gemm_desc": (tc.TCGemmDesc, [
             "M", "N", "K", "a_dtype", "b_dtype", "c_dtype", "accum_dtype",

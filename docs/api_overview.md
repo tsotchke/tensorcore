@@ -11,6 +11,7 @@ and shape semantics, see [api_reference.md](api_reference.md).
 | `tc_init(out_ctx)` | Initialize the global context. Idempotent. |
 | `tc_shutdown(ctx)` | Drain pending work, release the context. |
 | `tc_device_info_get(ctx, out_info)` | Fill `tc_device_info` (family, name, capability flags). |
+| `tc_runtime_capabilities_get(ctx, abi, out, out_size)` | Size/versioned production capability and backend discovery; unknown versions fail closed. |
 | `tc_version()` | Version string such as `"tensorcore 0.1.22"`. |
 
 ## Buffers
@@ -124,6 +125,7 @@ and shape semantics, see [api_reference.md](api_reference.md).
 | Symbol | One-liner |
 |---|---|
 | `tc_dist_init(ctx, backend, world_size, rank, rendezvous_url, out)` | New distributed context. |
+| `tc_dist_init_authenticated(..., rank_identities, n, auth, out)` | Gloo context with mutual identity/rank binding. |
 | `tc_dist_finalize(d)` | Release the distributed context. |
 | `tc_dist_world_size(d)` / `tc_dist_rank(d)` | Topology query. |
 | `tc_allreduce(d, buf, n, dtype, op)` | In-place all-reduce (sum / avg / max / min). |
@@ -132,6 +134,11 @@ and shape semantics, see [api_reference.md](api_reference.md).
 | `tc_barrier(d)` | All ranks meet before any continues. |
 
 `tc_dist_backend_t`: `TC_DIST_SINGLE` (no-op), `TC_DIST_RING` (TB5, v0.5), `TC_DIST_GLOO` (TCP collectives on Apple/portable CPU builds).
+
+Authenticated remote/mesh entry points are
+`tc_remote_init_authenticated`, `tc_remote_connect_authenticated`,
+`tc_remote_auth_rotate`, and `tc_mesh_group_init_authenticated`. See
+[transport_auth.md](transport_auth.md) for the keyring and rotation contract.
 
 ## Dtype + status
 
@@ -148,7 +155,7 @@ and shape semantics, see [api_reference.md](api_reference.md).
 `TC_ERR_NO_DEVICE`, `TC_ERR_UNSUPPORTED_FAMILY`, `TC_ERR_UNSUPPORTED_DTYPE`,
 `TC_ERR_INVALID_SHAPE`, `TC_ERR_INVALID_ARG`, `TC_ERR_ALLOC`,
 `TC_ERR_KERNEL_NOT_FOUND`, `TC_ERR_PIPELINE`, `TC_ERR_DISPATCH`,
-`TC_ERR_INTERNAL`.
+`TC_ERR_ABI_MISMATCH`, `TC_ERR_BUSY`, `TC_ERR_AUTH`, `TC_ERR_INTERNAL`.
 
 ### `tc_dtype_t`
 `TC_DTYPE_F16`, `_BF16`, `_F32`, `_I8`, `_I32`, `_F64`, `_SF64`, `_DF64`,
@@ -185,20 +192,21 @@ and shape semantics, see [api_reference.md](api_reference.md).
 | `dtype.h` | `tc_dtype_t` enum, `tc_dtype_size`, `tc_dtype_name`. |
 | `device.h` | `tc_context/buffer/stream` opaque types, `tc_family_t`, `tc_device_info`, lifecycle + buffer/stream entries. |
 | `gemm.h` | `tc_gemm_desc`, `tc_gemm_batched_desc`, GEMM entries, `tc_backend_t`. |
+| `capabilities.h` | Versioned `tc_runtime_capabilities`, known/available feature masks, compiled/active backend masks. |
 | `attention.h` | `tc_attention_desc`, attention forward/backward. |
 | `training.h` | RMSnorm, LayerNorm, RoPE, SwiGLU, softmax, AdamW, fused RMSnorm+GEMV. |
 | `conv.h` | Conv2D forward + backward (dInput + dWeight). |
 | `quantized.h` | `tc_quant_t`, Q4_0 / Q8_0 quantize + GEMV. |
 | `gguf.h` | `tc_gguf_type_t`, file + tensor handles, metadata getters, bulk load. |
 | `distributed.h` | `tc_dist_backend_t`, `tc_reduce_op_t`, distributed primitives. |
-| `diloco.h` | DiLoCo config, parameter registration, local outer-step runtime. |
+| `diloco.h` | DiLoCo config, parameter registration, snapshot-safe async outer rounds, wait/poll/error state, and caller-owned commit. |
 | `hip.h` | HIP/chipStar device discovery and backend selection diagnostics. |
 | `cuda.h` | CUDA device discovery and backend selection diagnostics. |
 | `memory_tier.h` | Buffer tier hints, promote/demote hooks, tier usage counters. |
 | `checkpoint.h` | Activation-checkpoint lifecycle and resident/discarded counters. |
 | `tensorcore.h` | Umbrella include for the public ABI. |
 
-16 headers, 106 exported symbols (`cmake/tensorcore.exports`), full
+36 headers, 249 exported symbols (`cmake/tensorcore.exports`), full
 Python wrapper parity in `python/tensorcore/__init__.py`.
 
 ## Per-backend coverage matrix

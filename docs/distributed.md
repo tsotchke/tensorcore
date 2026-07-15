@@ -96,6 +96,13 @@ allgather, barrier, and the internal sparse TOPK DiLoCo wire path.
 bf16/int8 reductions and public generic sparse packed wire-format APIs
 still return explicit unsupported statuses.
 
+Production groups can use `tc_dist_init_authenticated` to bind every
+rendezvous and direct-ring socket to a stable `rank_identities[]` entry. The
+versioned HMAC handshake rejects wrong keys, identity/rank mismatches, captured
+transcript replay, and legacy/authenticated mixing before collective payloads
+are accepted. It authenticates but does not encrypt; see
+[transport_auth.md](transport_auth.md) for the PSK and rotation contract.
+
 ## All-reduce algorithm
 
 The ring all-reduce is the standard NCCL-style implementation:

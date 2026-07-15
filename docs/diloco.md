@@ -75,8 +75,8 @@ tc_diloco_config cfg = {
     .outer_momentum = 0.9f,
     .outer_optimizer = TC_DILOCO_OUTER_NESTEROV,
     .compress = TC_DILOCO_COMPRESS_TOPK_01PCT,
-    .async_overlap = true,
-    .tolerate_dropouts = true,
+    .async_overlap = true,           /* immutable snapshot + explicit commit */
+    .tolerate_dropouts = false,      /* recovery is staged work */
 };
 tc_diloco_ctx* d = NULL;
 tc_diloco_init(cross_site, &cfg, &d);
@@ -89,30 +89,44 @@ tc_diloco_add_parameter(d, "blk.0.attn_q.weight", theta_q, n_q_elems, TC_DTYPE_F
 bool outer_pending;
 tc_diloco_step(d, &outer_pending);
 if (outer_pending) {
-    tc_diloco_apply_outer(d);   /* may be async; returns immediately if async_overlap */
+    tc_diloco_apply_outer(d);   /* snapshots and returns while the worker runs */
+}
+
+/* At a caller-owned parameter boundary, before launching another round: */
+tc_diloco_async_state_t state;
+tc_status_t worker_status;
+uint64_t round_id;
+tc_diloco_async_poll(d, &state, &worker_status, &round_id);
+if (state == TC_DILOCO_ASYNC_READY) {
+    tc_diloco_async_commit(d);
+} else if (state == TC_DILOCO_ASYNC_FAILED) {
+    /* Commit acknowledges and returns the background error without mutation. */
+    tc_diloco_async_commit(d);
 }
 ```
 
 ## Compression schemes
 
-| Scheme | Volume reduction | Accuracy cost | Notes |
-|---|---|---|---|
-| `NONE` | 1× | nil | fp32 master deltas, baseline |
-| `FP16` | 2× | nil | trivial, always-on free win |
-| `FP8` (per-tensor scaled) | 4× | <0.1% on most models | needs per-tensor scale exchange |
-| `TOPK_1PCT` | ~100× | <0.5% with error-feedback | retains top 1% by magnitude |
-| `TOPK_01PCT` | ~1000× | 0.5-1% with error-feedback | INTELLECT-1 production setting |
-| `LOWRANK` (PowerSGD) | 50-500× | <1% | rank-1 / rank-2 approximation of Δθ |
-| `SIGNSGD` | 32× | 1-2% | 1-bit sign of each element |
+| Scheme | Intended reduction | Current runtime status |
+|---|---:|---|
+| `NONE` | 1× | Implemented as dense fp32 |
+| `FP16` | 2× | Accepted, but the multi-rank path currently sends dense fp32; no wire reduction yet |
+| `FP8` (per-tensor scaled) | 4× | Reserved; `tc_diloco_init` returns unsupported |
+| `TOPK_1PCT` | ~100× | Implemented with error feedback and sparse `(index, fp16 value)` Gloo payloads; non-Gloo transports use a dense masked fallback |
+| `TOPK_01PCT` | ~1000× | Implemented with the same Gloo-only sparse transport path |
+| `LOWRANK` (PowerSGD) | 50-500× | Reserved; `tc_diloco_init` returns unsupported |
+| `SIGNSGD` | 32× | Reserved; `tc_diloco_init` returns unsupported |
 
 Error feedback (storing the lost residual locally and adding it to the
 next outer Δθ) is what makes top-k stable; the runtime handles this
 internally when `compress` is one of the top-k variants.
 
-## Async overlap
+## Snapshot-safe async overlap
 
-`cfg.async_overlap = true` is the move that makes WAN latency invisible.
-Wall-clock breakdown without overlap:
+Immutable-snapshot async overlap is the intended mechanism for hiding WAN
+latency. The target schedule is:
+
+Without overlap:
 
 ```
    |--inner K steps (10 sec)--||---outer sync (11 sec)---||--inner K--||---outer---|
@@ -129,20 +143,74 @@ the next outer-step boundary:
                                               |---outer sync (11s)---|
 ```
 
-Net effect: zero wall-clock overhead for the cross-site sync, as long as
-K × inner_step_time > outer_sync_time.
+Net effect can approach zero wall-clock overhead for the cross-site sync when
+`K × inner_step_time > outer_sync_time`.
+
+The runtime realizes this contract with an explicit state machine. `apply_outer`
+captures immutable fp32 snapshots on the caller thread. The worker performs
+compression, collectives, and the outer optimizer against private parameter
+state and never maps a registered live buffer. `tc_diloco_async_poll` and
+`tc_diloco_async_wait` expose READY/FAILED state and the round identity.
+`tc_diloco_async_commit` runs on the caller thread and preserves inner work made
+after the snapshot using:
+
+```
+committed_live = new_anchor + (current_live - round_snapshot)
+```
+
+Only a successful commit increments `outer_steps_completed`. A failed worker
+leaves live parameters and counters unchanged; commit acknowledges and returns
+the background error. A second launch before commit returns `TC_ERR_BUSY`.
+Finalize refuses to destroy a context with an unacknowledged result. Portable
+regressions cover successful rebase, private pre-commit state, round ordering,
+and an injected Gloo peer loss.
+
+## Versioned checkpoint state
+
+`TC_CAPABILITY_DILOCO_CHECKPOINT_RESUME` is available when the runtime exposes
+the v1 checkpoint blob. The blob is deterministic and little-endian. It owns
+only DiLoCo state: anchors, Nesterov/Adam moments, top-k error-feedback
+residuals, counters and metrics, round identity, topology/membership epochs,
+and a READY or FAILED async result. Model parameter bytes remain owned by the
+caller and must be restored before the DiLoCo blob.
+
+```c
+tc_diloco_state_set_epochs(d, topology_epoch, membership_epoch);
+
+size_t state_size = 0;
+tc_diloco_state_size(d, TC_DILOCO_STATE_ABI_VERSION_CURRENT, &state_size);
+void* state = malloc(state_size);
+size_t written = 0;
+tc_diloco_state_serialize(d, TC_DILOCO_STATE_ABI_VERSION_CURRENT,
+                          state, state_size, &written);
+
+/* Recreate the same config, dist rank/world, and registered parameters;
+ * restore each live model buffer first, then restore DiLoCo-owned state. */
+tc_diloco_state_deserialize(resumed,
+                            TC_DILOCO_STATE_ABI_VERSION_CURRENT,
+                            state, written);
+```
+
+Restore validates the exact config, rank/world, parameter name/dtype/size, and
+any non-zero local topology epochs before changing the context. Corrupt blobs,
+unknown versions, config drift, epoch drift, or parameter-layout drift fail
+without partial state mutation. A RUNNING worker returns `TC_ERR_BUSY`; wait
+for READY/FAILED before checkpointing. READY state can be committed after
+restore, and FAILED state preserves its error until acknowledgement.
 
 ## Failure tolerance
 
 Real cross-continent links drop. Tailscale relays through Seattle if a
 direct path can't be negotiated; ISPs reset; mid-step crashes happen.
-`cfg.tolerate_dropouts = true` makes the outer all-reduce skip ranks
-that don't ack within a timeout. The training continues on whoever's
-present; missing ranks resync to the current `θ_global_anchor` when they
-return.
+Dropout-tolerant rounds are the target policy: a bounded-time round should
+re-form membership, continue with the accepted cohort, and resynchronize a
+returning rank from an authenticated checkpoint and anchor.
 
-This is straight from INTELLECT-1's playbook for training across
-volunteer hardware.
+That behavior is not implemented yet. `tolerate_dropouts` is a reserved config
+field and `tc_diloco_init` rejects `true`; current collectives can still block
+or fail when a rank disappears. The campaign requires injected rank-loss,
+rejoin, replay, checkpoint-lineage, and bounded-time evidence before the flag
+is accepted as functional.
 
 ## Position in the distributed stack
 

@@ -76,6 +76,8 @@ are the entry points; everything below goes deeper.
 - **[distributed.md](distributed.md)** — distributed primitives, single /
   ring / GLOO backends, the world_size=1 path, TCP baseline, and fork
   tests.
+- **[transport_auth.md](transport_auth.md)** — versioned mutual identity
+  authentication, rank binding, replay behavior, and PSK rotation.
 - **[diloco.md](diloco.md)** — low-communication outer-loop training for
   cross-site meshes, plus current implementation status.
 - **[mesh_resource_scheduler.md](mesh_resource_scheduler.md)** — the
@@ -86,6 +88,14 @@ are the entry points; everything below goes deeper.
 
 ### Operations
 
+- **[tensorcore_full_capability_campaign.md](tensorcore_full_capability_campaign.md)** —
+  ICC-controlled cross-repository program, adapter ownership, implemented
+  decentralized-training baseline, execution waves, and fleet exit gates.
+- **[campaigns/tensorcore-full-capability-20260714/README.md](campaigns/tensorcore-full-capability-20260714/README.md)** —
+  individual ICC handoff notes for the TensorCore, qLLM, computer_mesh, QGTL,
+  Eshkol, and Selene repository agents.
+- **[research/TENSORCORE_BEYOND_SOTA_CAMPAIGN_2026-07-14.md](research/TENSORCORE_BEYOND_SOTA_CAMPAIGN_2026-07-14.md)** —
+  current primary-source frontier observatory and benchmark-gate policy.
 - **[integrating_tensorcore.md](integrating_tensorcore.md)** — link tensorcore
   into another C / C++ / Python / CMake project.
 - **[eshkol_integration.md](eshkol_integration.md)** — the Eshkol FFI

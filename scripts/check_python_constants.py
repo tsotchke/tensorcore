@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify that Python public constants match public C enum values."""
+"""Verify that Python public constants match public C enum/macro values."""
 
 from __future__ import annotations
 
@@ -40,6 +40,12 @@ def c_constants() -> dict[str, int]:
     constants: dict[str, int] = {}
     enum_pattern = re.compile(r"typedef\s+enum\s*\{(?P<body>.*?)\}\s+\w+\s*;", re.S)
     item_pattern = re.compile(r"\b(?P<name>TC_[A-Z0-9_]+)\b(?:\s*=\s*(?P<value>-?\d+))?")
+    macro_pattern = re.compile(
+        r"^\s*#define\s+(?P<name>TC_[A-Z0-9_]+)\s+"
+        r"(?:(?:U?INT(?:8|16|32|64)_C)\()?"
+        r"(?P<value>-?\d+)(?:[uUlL]+)?\)?\s*$",
+        re.M,
+    )
 
     for path in sorted(HEADER_DIR.glob("*.h")):
         text = strip_comments(path.read_text(encoding="utf-8", errors="replace"))
@@ -58,6 +64,10 @@ def c_constants() -> dict[str, int]:
                 next_value = value + 1
                 if is_public_constant(name):
                     constants[name] = value
+        for macro_match in macro_pattern.finditer(text):
+            name = macro_match.group("name")
+            if is_public_constant(name):
+                constants[name] = int(macro_match.group("value"))
     return constants
 
 
@@ -110,8 +120,8 @@ def main() -> int:
     )
 
     if missing or extra or mismatched:
-        emit_block("C enum constants missing from Python", missing)
-        emit_block("Python constants not declared in public C enums", extra)
+        emit_block("C constants missing from Python", missing)
+        emit_block("Python constants not declared in public C headers", extra)
         emit_block("Python constants with mismatched values", mismatched)
         return 1
 

@@ -111,6 +111,9 @@ TC_ERR_ALLOC = -8
 TC_ERR_KERNEL_NOT_FOUND = -9
 TC_ERR_PIPELINE = -10
 TC_ERR_DISPATCH = -11
+TC_ERR_ABI_MISMATCH = -12
+TC_ERR_BUSY = -13
+TC_ERR_AUTH = -14
 TC_ERR_INTERNAL = -99
 
 TC_DTYPE_F16 = 0
@@ -142,6 +145,24 @@ TC_BACKEND_PORTABLE_CPU = 7
 TC_BACKEND_METAL_COMPUTE = 8
 TC_BACKEND_CUDA = 9
 TC_BACKEND_HIP = 10
+
+TC_RUNTIME_CAPABILITIES_ABI_VERSION_1 = 1
+TC_RUNTIME_CAPABILITIES_ABI_VERSION_CURRENT = 1
+
+TC_CAPABILITY_GEMM_F32 = 1 << 0
+TC_CAPABILITY_DISTRIBUTED_SINGLE = 1 << 1
+TC_CAPABILITY_DISTRIBUTED_GLOO = 1 << 2
+TC_CAPABILITY_DILOCO = 1 << 3
+TC_CAPABILITY_DILOCO_SPARSE_GLOO = 1 << 4
+TC_CAPABILITY_REMOTE_TENSOR = 1 << 5
+TC_CAPABILITY_DILOCO_ASYNC_SNAPSHOT_SAFE = 1 << 6
+TC_CAPABILITY_DILOCO_CHECKPOINT_RESUME = 1 << 7
+TC_CAPABILITY_DILOCO_ELASTIC_MEMBERSHIP = 1 << 8
+TC_CAPABILITY_DILOCO_FP16_WIRE = 1 << 9
+TC_CAPABILITY_TRANSPORT_IDENTITY_AUTH = 1 << 10
+
+TC_TRANSPORT_AUTH_ABI_VERSION_1 = 1
+TC_TRANSPORT_AUTH_ABI_VERSION_CURRENT = 1
 
 TC_TIER_L0_DEVICE = 0
 TC_TIER_L1_HOST_RAM = 1
@@ -175,6 +196,14 @@ TC_DILOCO_COMPRESS_SIGNSGD = 6
 TC_DILOCO_OUTER_SGD = 0
 TC_DILOCO_OUTER_NESTEROV = 1
 TC_DILOCO_OUTER_ADAM = 2
+
+TC_DILOCO_ASYNC_IDLE = 0
+TC_DILOCO_ASYNC_RUNNING = 1
+TC_DILOCO_ASYNC_READY = 2
+TC_DILOCO_ASYNC_FAILED = 3
+
+TC_DILOCO_STATE_ABI_VERSION_1 = 1
+TC_DILOCO_STATE_ABI_VERSION_CURRENT = TC_DILOCO_STATE_ABI_VERSION_1
 
 TC_REDUCE_SUM = 0
 TC_REDUCE_AVG = 1
@@ -288,6 +317,41 @@ class TCDeviceInfo(Structure):
         ("supports_i8_simdgroup",        c_bool),
         ("supports_tensorops_m5",        c_bool),
         ("supports_fp64_native",         c_bool),
+    ]
+
+
+class TCRuntimeCapabilities(Structure):
+    _fields_ = [
+        ("struct_size", c_uint32),
+        ("abi_version", c_uint32),
+        ("runtime_version_major", c_uint32),
+        ("runtime_version_minor", c_uint32),
+        ("runtime_version_patch", c_uint32),
+        ("reserved0", c_uint32),
+        ("known_capability_mask", c_uint64),
+        ("available_capability_mask", c_uint64),
+        ("compiled_backend_mask", c_uint64),
+        ("available_backend_mask", c_uint64),
+        ("reserved", c_uint64 * 4),
+    ]
+
+
+class TCTransportAuthKey(Structure):
+    _fields_ = [
+        ("identity", c_char_p),
+        ("key_id", c_uint64),
+        ("secret", c_void_p),
+        ("secret_bytes", c_size_t),
+    ]
+
+
+class TCTransportAuthConfig(Structure):
+    _fields_ = [
+        ("abi_version", c_uint32),
+        ("local_identity", c_char_p),
+        ("active_key_id", c_uint64),
+        ("keys", POINTER(TCTransportAuthKey)),
+        ("key_count", c_size_t),
     ]
 
 
@@ -439,6 +503,10 @@ if _lib is not None:
     _lib.tc_init.argtypes = [POINTER(c_void_p)];          _lib.tc_init.restype = c_int
     _lib.tc_shutdown.argtypes = [c_void_p];               _lib.tc_shutdown.restype = c_int
     _lib.tc_device_info_get.argtypes = [c_void_p, POINTER(TCDeviceInfo)]; _lib.tc_device_info_get.restype = c_int
+    _lib.tc_runtime_capabilities_get.argtypes = [
+        c_void_p, c_uint32, POINTER(TCRuntimeCapabilities), c_size_t,
+    ]
+    _lib.tc_runtime_capabilities_get.restype = c_int
     _lib.tc_buffer_alloc.argtypes = [c_void_p, c_size_t, POINTER(c_void_p)]; _lib.tc_buffer_alloc.restype = c_int
     _lib.tc_buffer_from_ptr.argtypes = [c_void_p, c_void_p, c_size_t, POINTER(c_void_p)]
     _lib.tc_buffer_from_ptr.restype = c_int
@@ -661,6 +729,34 @@ if _lib is not None:
     _lib.tc_sphere_parallel_transport.restype = None
     _lib.tc_sphere_slerp.argtypes = [_f32p, _f32p, c_float, _f32p, c_size_t, c_float]
     _lib.tc_sphere_slerp.restype = None
+    # Flat torus ops (see include/tensorcore/torus.h).
+    _lib.tc_torus_project.argtypes = [_f32p, c_size_t, c_float]
+    _lib.tc_torus_project.restype = None
+    _lib.tc_torus_exp.argtypes = [_f32p, _f32p, _f32p, c_size_t, c_float]
+    _lib.tc_torus_exp.restype = None
+    _lib.tc_torus_log.argtypes = [_f32p, _f32p, _f32p, c_size_t, c_float]
+    _lib.tc_torus_log.restype = None
+    _lib.tc_torus_distance.argtypes = [_f32p, _f32p, c_size_t, c_float]
+    _lib.tc_torus_distance.restype = c_float
+    _lib.tc_torus_parallel_transport.argtypes = [
+        _f32p, _f32p, _f32p, _f32p, c_size_t, c_float,
+    ]
+    _lib.tc_torus_parallel_transport.restype = None
+    # Lie group ops (see include/tensorcore/lie_groups.h).
+    _lib.tc_su2_exp.argtypes = [c_float, c_float, c_float, _f32p]
+    _lib.tc_su2_exp.restype = None
+    _lib.tc_su2_log.argtypes = [_f32p, _f32p, _f32p, _f32p]
+    _lib.tc_su2_log.restype = None
+    _lib.tc_su2_mul.argtypes = [_f32p, _f32p, _f32p]
+    _lib.tc_su2_mul.restype = None
+    _lib.tc_so3_exp.argtypes = [c_float, c_float, c_float, _f32p]
+    _lib.tc_so3_exp.restype = None
+    _lib.tc_so3_log.argtypes = [_f32p, _f32p, _f32p, _f32p]
+    _lib.tc_so3_log.restype = None
+    _lib.tc_so3_mul.argtypes = [_f32p, _f32p, _f32p]
+    _lib.tc_so3_mul.restype = None
+    _lib.tc_su2_to_so3.argtypes = [_f32p, _f32p]
+    _lib.tc_su2_to_so3.restype = None
     # Product manifold (see include/tensorcore/product_manifold.h).
     # Factor struct mirrors tc_factor_t in C: { kind, intrinsic_dim, curvature }.
     class _TCFactor(Structure):
@@ -689,18 +785,66 @@ if _lib is not None:
     _lib.tc_gate_matrix_1q.restype = None
     _lib.tc_gate_matrix_2q.argtypes = [c_int, _f32p, _f32p]
     _lib.tc_gate_matrix_2q.restype = None
+    _lib.tc_gate_matrix_3q.argtypes = [c_int, _f32p, _f32p]
+    _lib.tc_gate_matrix_3q.restype = None
     _lib.tc_qstate_zero.argtypes = [_f32p, c_int]
     _lib.tc_qstate_zero.restype = None
     _lib.tc_qstate_apply_1q_unitary.argtypes = [_f32p, c_int, c_int, _f32p]
     _lib.tc_qstate_apply_1q_unitary.restype = None
     _lib.tc_qstate_apply_2q_unitary.argtypes = [_f32p, c_int, c_int, c_int, _f32p]
     _lib.tc_qstate_apply_2q_unitary.restype = None
+    _lib.tc_qstate_apply_3q_unitary.argtypes = [
+        _f32p, c_int, c_int, c_int, c_int, _f32p,
+    ]
+    _lib.tc_qstate_apply_3q_unitary.restype = None
     _lib.tc_qstate_apply_gate.argtypes = [_f32p, c_int, c_int, POINTER(c_int), _f32p]
     _lib.tc_qstate_apply_gate.restype = None
     _lib.tc_qstate_prob_one.argtypes = [_f32p, c_int, c_int]
     _lib.tc_qstate_prob_one.restype = c_float
     _lib.tc_qstate_norm_sq.argtypes = [_f32p, c_int]
     _lib.tc_qstate_norm_sq.restype = c_float
+    _lib.tc_qstate_inner.argtypes = [_f32p, _f32p, c_int, _f32p, _f32p]
+    _lib.tc_qstate_inner.restype = None
+    class _TCPauliTerm(Structure):
+        _fields_ = [("n_paulis", c_int32),
+                    ("axes", POINTER(c_int32)),
+                    ("qubits", POINTER(c_int32)),
+                    ("coef", c_float)]
+    _lib._tc_pauli_term_struct = _TCPauliTerm
+    _lib.tc_qstate_trotter_step.argtypes = [
+        _f32p, c_int, POINTER(_TCPauliTerm), c_int, c_float, c_int,
+    ]
+    _lib.tc_qstate_trotter_step.restype = None
+    _lib.tc_quantum_geometric_tensor.argtypes = [
+        _f32p, POINTER(_f32p), c_int, c_int, _f32p,
+    ]
+    _lib.tc_quantum_geometric_tensor.restype = None
+    # Density matrices / open systems (see include/tensorcore/density_matrix.h).
+    _lib.tc_dmstate_zero.argtypes = [_f32p, c_int]
+    _lib.tc_dmstate_zero.restype = None
+    _lib.tc_dmstate_from_pure.argtypes = [_f32p, _f32p, c_int]
+    _lib.tc_dmstate_from_pure.restype = None
+    _lib.tc_dmstate_apply_1q_unitary.argtypes = [_f32p, c_int, c_int, _f32p]
+    _lib.tc_dmstate_apply_1q_unitary.restype = None
+    _lib.tc_dmstate_apply_2q_unitary.argtypes = [
+        _f32p, c_int, c_int, c_int, _f32p,
+    ]
+    _lib.tc_dmstate_apply_2q_unitary.restype = None
+    _lib.tc_dmstate_partial_trace.argtypes = [_f32p, c_int, c_int, _f32p]
+    _lib.tc_dmstate_partial_trace.restype = None
+    _lib.tc_dmstate_apply_kraus_1q.argtypes = [
+        _f32p, c_int, c_int, _f32p, c_int,
+    ]
+    _lib.tc_dmstate_apply_kraus_1q.restype = None
+    _lib.tc_dmstate_trace.argtypes = [_f32p, c_int, _f32p, _f32p]
+    _lib.tc_dmstate_trace.restype = None
+    _lib.tc_dmstate_purity.argtypes = [_f32p, c_int]
+    _lib.tc_dmstate_purity.restype = c_float
+    _lib.tc_dmstate_lindblad_step.argtypes = [
+        _f32p, c_int, POINTER(_TCPauliTerm), c_int, _f32p,
+        POINTER(c_int), c_int, c_float, c_int,
+    ]
+    _lib.tc_dmstate_lindblad_step.restype = None
     # Phase attention + Born-rule (see include/tensorcore/phase_attention.h).
     _lib.tc_phase_attention_combine.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int]
     _lib.tc_phase_attention_combine.restype = c_int
@@ -721,11 +865,15 @@ if _lib is not None:
     _lib.tc_sparse_24_gemm.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_int, c_int, c_int, c_int, c_int, c_int, c_float, c_float]
     _lib.tc_sparse_24_gemm.restype = c_int
     _lib.tc_sparse_24_available.argtypes = []
+    _lib.tc_sparse_24_available.restype = c_int
     _lib.tc_gguf_open.argtypes = [c_char_p, POINTER(c_void_p)]
     # Remote tensor-fetch transport (Kimi inference weight paging,
     # see include/tensorcore/remote_tensor.h).
     _lib.tc_remote_init.argtypes = [c_void_p, c_int, c_char_p, POINTER(c_void_p)]
     _lib.tc_remote_init.restype = c_int
+    _lib.tc_remote_init_authenticated.argtypes = [
+        c_void_p, c_int, c_char_p, POINTER(TCTransportAuthConfig), POINTER(c_void_p)]
+    _lib.tc_remote_init_authenticated.restype = c_int
     _lib.tc_remote_shutdown.argtypes = [c_void_p]
     _lib.tc_remote_shutdown.restype = c_int
     _lib.tc_remote_register_tensor.argtypes = [c_void_p, c_char_p, c_void_p, c_size_t]
@@ -736,6 +884,17 @@ if _lib is not None:
     _lib.tc_remote_registered_count.restype = c_size_t
     _lib.tc_remote_connect.argtypes = [c_void_p, c_char_p]
     _lib.tc_remote_connect.restype = c_int
+    _lib.tc_remote_connect_authenticated.argtypes = [
+        c_void_p, c_char_p, c_char_p, POINTER(c_int)]
+    _lib.tc_remote_connect_authenticated.restype = c_int
+    _lib.tc_remote_auth_rotate.argtypes = [c_void_p, POINTER(TCTransportAuthConfig)]
+    _lib.tc_remote_auth_rotate.restype = c_int
+    _lib.tc_remote_peer_identity.argtypes = [c_void_p, c_int]
+    _lib.tc_remote_peer_identity.restype = c_char_p
+    _lib.tc_remote_peer_key_id.argtypes = [c_void_p, c_int]
+    _lib.tc_remote_peer_key_id.restype = c_uint64
+    _lib.tc_remote_auth_failure_count.argtypes = [c_void_p]
+    _lib.tc_remote_auth_failure_count.restype = c_uint64
     _lib.tc_remote_tensor_fetch.argtypes = [c_void_p, c_int, c_char_p, c_void_p, c_size_t]
     _lib.tc_remote_tensor_fetch.restype = c_int
     _lib.tc_remote_total_bytes_served.argtypes = [c_void_p]
@@ -799,6 +958,10 @@ if _lib is not None:
     _lib.tc_tensorops_gemm_kernel_name.restype = c_char_p
     _lib.tc_dist_init.argtypes = [c_void_p, c_int, c_int, c_int, c_char_p, POINTER(c_void_p)]
     _lib.tc_dist_init.restype = c_int
+    _lib.tc_dist_init_authenticated.argtypes = [
+        c_void_p, c_int, c_int, c_int, c_char_p, POINTER(c_char_p), c_size_t,
+        POINTER(TCTransportAuthConfig), POINTER(c_void_p)]
+    _lib.tc_dist_init_authenticated.restype = c_int
     _lib.tc_dist_finalize.argtypes = [c_void_p]
     _lib.tc_dist_finalize.restype = c_int
     _lib.tc_dist_world_size.argtypes = [c_void_p]
@@ -827,6 +990,8 @@ if _lib is not None:
     _lib.tc_hip_last_kernel_name.restype = c_char_p
     _lib.tc_cuda_init.argtypes = [c_void_p]
     _lib.tc_cuda_init.restype = c_int
+    _lib.tc_cuda_is_active.argtypes = []
+    _lib.tc_cuda_is_active.restype = c_int
     _lib.tc_cuda_device_count.argtypes = []
     _lib.tc_cuda_device_count.restype = c_int
     _lib.tc_cuda_device_at.argtypes = [c_int, POINTER(TCCudaDeviceInfo)]
@@ -845,6 +1010,30 @@ if _lib is not None:
     _lib.tc_diloco_step.restype = c_int
     _lib.tc_diloco_apply_outer.argtypes = [c_void_p]
     _lib.tc_diloco_apply_outer.restype = c_int
+    _lib.tc_diloco_async_poll.argtypes = [
+        c_void_p, POINTER(c_int), POINTER(c_int), POINTER(c_uint64),
+    ]
+    _lib.tc_diloco_async_poll.restype = c_int
+    _lib.tc_diloco_async_wait.argtypes = [c_void_p]
+    _lib.tc_diloco_async_wait.restype = c_int
+    _lib.tc_diloco_async_commit.argtypes = [c_void_p]
+    _lib.tc_diloco_async_commit.restype = c_int
+    _lib.tc_diloco_state_set_epochs.argtypes = [c_void_p, c_uint64, c_uint64]
+    _lib.tc_diloco_state_set_epochs.restype = c_int
+    _lib.tc_diloco_state_get_epochs.argtypes = [
+        c_void_p, POINTER(c_uint64), POINTER(c_uint64),
+    ]
+    _lib.tc_diloco_state_get_epochs.restype = c_int
+    _lib.tc_diloco_state_size.argtypes = [c_void_p, c_uint32, POINTER(c_size_t)]
+    _lib.tc_diloco_state_size.restype = c_int
+    _lib.tc_diloco_state_serialize.argtypes = [
+        c_void_p, c_uint32, c_void_p, c_size_t, POINTER(c_size_t),
+    ]
+    _lib.tc_diloco_state_serialize.restype = c_int
+    _lib.tc_diloco_state_deserialize.argtypes = [
+        c_void_p, c_uint32, c_void_p, c_size_t,
+    ]
+    _lib.tc_diloco_state_deserialize.restype = c_int
     _lib.tc_diloco_outer_steps_completed.argtypes = [c_void_p]
     _lib.tc_diloco_outer_steps_completed.restype = c_uint64
     _lib.tc_diloco_inner_steps_completed.argtypes = [c_void_p]
@@ -935,6 +1124,10 @@ if _lib is not None:
     _lib.tc_mesh_group_init.argtypes = [c_void_p, c_int32, c_int32, POINTER(c_char_p),
                                           POINTER(c_void_p)]
     _lib.tc_mesh_group_init.restype = c_int
+    _lib.tc_mesh_group_init_authenticated.argtypes = [
+        c_void_p, c_int32, c_int32, POINTER(c_char_p), POINTER(c_char_p),
+        POINTER(TCTransportAuthConfig), POINTER(c_void_p)]
+    _lib.tc_mesh_group_init_authenticated.restype = c_int
     _lib.tc_mesh_group_shutdown.argtypes = [c_void_p]
     _lib.tc_mesh_group_shutdown.restype = c_int
     _lib.tc_mesh_allreduce.argtypes = [c_void_p, c_void_p, c_size_t, c_int, c_int]
@@ -971,6 +1164,47 @@ def _bytes(value):
     if isinstance(value, bytes):
         return value
     return str(value).encode("utf-8")
+
+
+def _transport_auth_config(local_identity, active_key_id, keys):
+    """Build a temporary ctypes auth config.
+
+    ``keys`` contains ``(identity, key_id, secret_bytes)`` tuples or mappings
+    with those fields. Native constructors deep-copy the resulting keyring,
+    so the returned keepalive is needed only for the duration of the call.
+    """
+    entries = list(keys)
+    if not entries:
+        raise ValueError("transport auth keyring must not be empty")
+    key_array = (TCTransportAuthKey * len(entries))()
+    identities = []
+    secret_buffers = []
+    for index, entry in enumerate(entries):
+        if isinstance(entry, dict):
+            identity = entry["identity"]
+            key_id = entry["key_id"]
+            secret = entry["secret"]
+        else:
+            identity, key_id, secret = entry
+        identity_bytes = _bytes(identity)
+        secret_bytes = bytes(secret)
+        if len(secret_bytes) < 32:
+            raise ValueError("transport auth secrets must contain at least 32 bytes")
+        secret_buffer = (ctypes.c_ubyte * len(secret_bytes)).from_buffer_copy(secret_bytes)
+        identities.append(identity_bytes)
+        secret_buffers.append(secret_buffer)
+        key_array[index] = TCTransportAuthKey(
+            identity_bytes, c_uint64(int(key_id)),
+            ctypes.cast(secret_buffer, c_void_p), c_size_t(len(secret_bytes)))
+    local_identity_bytes = _bytes(local_identity)
+    auth = TCTransportAuthConfig(
+        c_uint32(TC_TRANSPORT_AUTH_ABI_VERSION_CURRENT),
+        local_identity_bytes,
+        c_uint64(int(active_key_id)),
+        key_array,
+        c_size_t(len(entries)),
+    )
+    return auth, (key_array, identities, secret_buffers, local_identity_bytes)
 
 
 def _quant(fmt):
@@ -1250,6 +1484,38 @@ def device_info(ctx):
     return info
 
 
+def runtime_capabilities(ctx, abi_version=TC_RUNTIME_CAPABILITIES_ABI_VERSION_CURRENT):
+    """Return the versioned runtime capability record for ``ctx``.
+
+    Unknown ABI versions raise ``TensorcoreError`` with
+    ``TC_ERR_ABI_MISMATCH``. Use :func:`capability_available` instead of
+    testing the available mask alone so unknown future bits fail closed.
+    """
+    capabilities = TCRuntimeCapabilities()
+    _check(_lib.tc_runtime_capabilities_get(
+        _as_handle(ctx),
+        c_uint32(int(abi_version)),
+        byref(capabilities),
+        c_size_t(ctypes.sizeof(capabilities)),
+    ))
+    return capabilities
+
+
+def capability_available(capabilities, capability):
+    """Return true only when ``capability`` is both known and available."""
+    bit = int(capability)
+    return (
+        bit != 0 and
+        (int(capabilities.known_capability_mask) & bit) == bit and
+        (int(capabilities.available_capability_mask) & bit) == bit
+    )
+
+
+def cuda_is_active():
+    """Return whether CUDA is active under the current runtime policy."""
+    return bool(_lib.tc_cuda_is_active())
+
+
 def buffer_alloc(ctx, nbytes):
     buf = c_void_p()
     _check(_lib.tc_buffer_alloc(_as_handle(ctx), c_size_t(nbytes), byref(buf)))
@@ -1429,6 +1695,21 @@ def dist_init(ctx, backend=TC_DIST_SINGLE, world_size=1, rank=0, rendezvous_url=
     return dist
 
 
+def dist_init_authenticated(ctx, backend, world_size, rank, rendezvous_url,
+                            rank_identities, local_identity, active_key_id, keys):
+    """Create a mutually authenticated Gloo context with rank identity binding."""
+    identities = [_bytes(identity) for identity in rank_identities]
+    identity_array = (c_char_p * len(identities))(*identities)
+    auth, keepalive = _transport_auth_config(local_identity, active_key_id, keys)
+    dist = c_void_p()
+    _check(_lib.tc_dist_init_authenticated(
+        _as_handle(ctx), _dist_backend(backend), int(world_size), int(rank),
+        _bytes(rendezvous_url), identity_array, c_size_t(len(identities)),
+        byref(auth), byref(dist)))
+    _ = keepalive
+    return dist
+
+
 def dist_finalize(dist):
     _check(_lib.tc_dist_finalize(_as_handle(dist)))
 
@@ -1585,8 +1866,75 @@ def diloco_step(diloco):
 
 
 def diloco_apply_outer(diloco):
-    """Run the DiLoCo outer optimizer step."""
+    """Run or launch the DiLoCo outer optimizer step."""
     _check(_lib.tc_diloco_apply_outer(_as_handle(diloco)))
+
+
+def diloco_async_poll(diloco):
+    """Return ``(state, worker_status, round_id)`` without blocking."""
+    state = c_int(TC_DILOCO_ASYNC_IDLE)
+    worker_status = c_int(TC_OK)
+    round_id = c_uint64(0)
+    _check(_lib.tc_diloco_async_poll(
+        _as_handle(diloco), byref(state), byref(worker_status), byref(round_id),
+    ))
+    return int(state.value), int(worker_status.value), int(round_id.value)
+
+
+def diloco_async_wait(diloco):
+    """Wait for private async work; raise if the worker failed."""
+    _check(_lib.tc_diloco_async_wait(_as_handle(diloco)))
+
+
+def diloco_async_commit(diloco):
+    """Commit a ready async round at the caller's parameter boundary."""
+    _check(_lib.tc_diloco_async_commit(_as_handle(diloco)))
+
+
+def diloco_state_set_epochs(diloco, topology_epoch, membership_epoch):
+    """Bind DiLoCo checkpoint state to authoritative topology epochs."""
+    _check(_lib.tc_diloco_state_set_epochs(
+        _as_handle(diloco), c_uint64(topology_epoch), c_uint64(membership_epoch),
+    ))
+
+
+def diloco_state_get_epochs(diloco):
+    """Return ``(topology_epoch, membership_epoch)``."""
+    topology_epoch = c_uint64(0)
+    membership_epoch = c_uint64(0)
+    _check(_lib.tc_diloco_state_get_epochs(
+        _as_handle(diloco), byref(topology_epoch), byref(membership_epoch),
+    ))
+    return int(topology_epoch.value), int(membership_epoch.value)
+
+
+def diloco_state_serialize(
+        diloco, abi_version=TC_DILOCO_STATE_ABI_VERSION_CURRENT):
+    """Return a versioned checkpoint blob for DiLoCo-owned state."""
+    size = c_size_t(0)
+    _check(_lib.tc_diloco_state_size(
+        _as_handle(diloco), c_uint32(abi_version), byref(size),
+    ))
+    output = (ctypes.c_ubyte * size.value)()
+    written = c_size_t(0)
+    _check(_lib.tc_diloco_state_serialize(
+        _as_handle(diloco), c_uint32(abi_version),
+        ctypes.cast(output, c_void_p), size, byref(written),
+    ))
+    return bytes(output[:written.value])
+
+
+def diloco_state_deserialize(
+        diloco, state, abi_version=TC_DILOCO_STATE_ABI_VERSION_CURRENT):
+    """Restore DiLoCo-owned state after caller-owned model buffers."""
+    payload = bytes(state)
+    if not payload:
+        raise ValueError("DiLoCo state blob must not be empty")
+    source = (ctypes.c_ubyte * len(payload)).from_buffer_copy(payload)
+    _check(_lib.tc_diloco_state_deserialize(
+        _as_handle(diloco), c_uint32(abi_version),
+        ctypes.cast(source, c_void_p), c_size_t(len(payload)),
+    ))
 
 
 def diloco_outer_steps_completed(diloco):
@@ -1913,6 +2261,18 @@ def remote_init(ctx, role, bind_url):
     return h
 
 
+def remote_init_authenticated(ctx, role, bind_url, local_identity,
+                              active_key_id, keys):
+    """Initialize a mutually authenticated remote-tensor endpoint."""
+    auth, keepalive = _transport_auth_config(local_identity, active_key_id, keys)
+    h = c_void_p()
+    bu = None if bind_url is None else _bytes(bind_url)
+    _check(_lib.tc_remote_init_authenticated(
+        _as_handle(ctx), int(role), bu, byref(auth), byref(h)))
+    _ = keepalive
+    return h
+
+
 def remote_shutdown(handle):
     _check(_lib.tc_remote_shutdown(handle))
 
@@ -1936,6 +2296,35 @@ def remote_connect(handle, peer_url):
     if pid < 0:
         raise TensorcoreError(-1)
     return int(pid)
+
+
+def remote_connect_authenticated(handle, peer_url, expected_peer_identity):
+    """Connect and mutually authenticate an explicitly named server."""
+    peer_id = c_int(-1)
+    _check(_lib.tc_remote_connect_authenticated(
+        _as_handle(handle), _bytes(peer_url), _bytes(expected_peer_identity),
+        byref(peer_id)))
+    return int(peer_id.value)
+
+
+def remote_auth_rotate(handle, local_identity, active_key_id, keys):
+    """Atomically replace the keyring used by future remote handshakes."""
+    auth, keepalive = _transport_auth_config(local_identity, active_key_id, keys)
+    _check(_lib.tc_remote_auth_rotate(_as_handle(handle), byref(auth)))
+    _ = keepalive
+
+
+def remote_peer_identity(handle, peer_id):
+    identity = _lib.tc_remote_peer_identity(_as_handle(handle), int(peer_id))
+    return None if identity is None else identity.decode("utf-8")
+
+
+def remote_peer_key_id(handle, peer_id):
+    return int(_lib.tc_remote_peer_key_id(_as_handle(handle), int(peer_id)))
+
+
+def remote_auth_failure_count(handle):
+    return int(_lib.tc_remote_auth_failure_count(_as_handle(handle)))
 
 
 def remote_tensor_fetch(handle, peer_id, name, dst_ptr, nbytes):
@@ -2369,6 +2758,9 @@ class Context:
     def device_info(self):
         return device_info(self)
 
+    def runtime_capabilities(self, abi_version=TC_RUNTIME_CAPABILITIES_ABI_VERSION_CURRENT):
+        return runtime_capabilities(self, abi_version)
+
     def memory_tier_usage(self, tier=TC_TIER_L0_DEVICE):
         return memory_tier_usage(self, tier)
 
@@ -2729,6 +3121,33 @@ class DiLoCoContext:
         diloco_apply_outer(self)
         return self
 
+    def async_poll(self):
+        return diloco_async_poll(self)
+
+    def async_wait(self):
+        diloco_async_wait(self)
+        return self
+
+    def async_commit(self):
+        diloco_async_commit(self)
+        return self
+
+    def set_state_epochs(self, topology_epoch, membership_epoch):
+        diloco_state_set_epochs(self, topology_epoch, membership_epoch)
+        return self
+
+    @property
+    def state_epochs(self):
+        return diloco_state_get_epochs(self)
+
+    def serialize_state(self, abi_version=TC_DILOCO_STATE_ABI_VERSION_CURRENT):
+        return diloco_state_serialize(self, abi_version)
+
+    def deserialize_state(
+            self, state, abi_version=TC_DILOCO_STATE_ABI_VERSION_CURRENT):
+        diloco_state_deserialize(self, state, abi_version)
+        return self
+
     @property
     def outer_steps_completed(self):
         return diloco_outer_steps_completed(self)
@@ -3068,6 +3487,28 @@ def torus_distance(p, q, radius=1.0):
                                           c_float(float(radius))))
 
 
+def torus_project(point, radius=1.0):
+    """Wrap torus coordinates into the fundamental interval [0, 2πr)."""
+    point_a, point_p = _f32_buf(point)
+    _lib.tc_torus_project(point_p, c_size_t(point_a.size),
+                           c_float(float(radius)))
+    return point_a
+
+
+def torus_parallel_transport(base_from, base_to, tangent, radius=1.0):
+    """Parallel transport a tangent vector on the flat torus."""
+    from_a, from_p = _f32_buf(base_from)
+    to_a, to_p = _f32_buf(base_to)
+    tangent_a, tangent_p = _f32_buf(tangent)
+    if to_a.size != from_a.size or tangent_a.size != from_a.size:
+        raise ValueError("torus points and tangent must have equal sizes")
+    out = _f32_out(from_a.shape)
+    _lib.tc_torus_parallel_transport(
+        from_p, to_p, tangent_p, out.ctypes.data_as(POINTER(c_float)),
+        c_size_t(from_a.size), c_float(float(radius)))
+    return out
+
+
 # ---- Lie groups (SU(2) / SO(3)) ----
 
 def su2_exp(a, b, c):
@@ -3107,6 +3548,17 @@ def so3_log(R):
     wx = c_float(0.0); wy = c_float(0.0); wz = c_float(0.0)
     _lib.tc_so3_log(R_p, ctypes.byref(wx), ctypes.byref(wy), ctypes.byref(wz))
     return (wx.value, wy.value, wz.value)
+
+
+def so3_mul(R1, R2):
+    """Compose two 3×3 SO(3) rotations."""
+    R1_a, R1_p = _f32_buf(R1)
+    R2_a, R2_p = _f32_buf(R2)
+    if R1_a.size != 9 or R2_a.size != 9:
+        raise ValueError("SO(3) matrices must contain 9 float values")
+    out = _f32_out((9,))
+    _lib.tc_so3_mul(R1_p, R2_p, out.ctypes.data_as(POINTER(c_float)))
+    return out.reshape(3, 3)
 
 
 def su2_to_so3(U):
@@ -3151,6 +3603,18 @@ def qstate_apply_2q(state, n_qubits, qubit_a, qubit_b, gate_matrix):
     return s
 
 
+def qstate_apply_3q(state, n_qubits, qubit_a, qubit_b, qubit_c, gate_matrix):
+    np = _np()
+    s = np.ascontiguousarray(np.asarray(state, dtype=np.float32))
+    g_a, g_p = _f32_buf(gate_matrix)
+    if g_a.size != 128:
+        raise ValueError("a 3-qubit unitary must contain 128 float values")
+    _lib.tc_qstate_apply_3q_unitary(
+        s.ctypes.data_as(POINTER(c_float)), c_int(int(n_qubits)),
+        c_int(int(qubit_a)), c_int(int(qubit_b)), c_int(int(qubit_c)), g_p)
+    return s
+
+
 def qstate_prob_one(state, n_qubits, qubit):
     s_a, s_p = _f32_buf(state)
     return float(_lib.tc_qstate_prob_one(s_p, c_int(int(n_qubits)),
@@ -3162,6 +3626,20 @@ def qstate_norm_sq(state, n_qubits):
     return float(_lib.tc_qstate_norm_sq(s_p, c_int(int(n_qubits))))
 
 
+def qstate_inner(a, b, n_qubits):
+    """Return the complex Hilbert-space inner product ⟨a|b⟩."""
+    a_a, a_p = _f32_buf(a)
+    b_a, b_p = _f32_buf(b)
+    expected = 2 * (1 << int(n_qubits))
+    if a_a.size != expected or b_a.size != expected:
+        raise ValueError("state buffers do not match n_qubits")
+    out_re = c_float(0.0)
+    out_im = c_float(0.0)
+    _lib.tc_qstate_inner(a_p, b_p, c_int(int(n_qubits)),
+                          ctypes.byref(out_re), ctypes.byref(out_im))
+    return complex(out_re.value, out_im.value)
+
+
 def gate_matrix_1q(gate_type):
     """Materialise a 1-qubit gate by tc_gate_type_t enum value
     (X=1, Y=2, Z=3, H=4, S=5, T=6, RX=10, RY=11, RZ=12, ...
@@ -3170,6 +3648,105 @@ def gate_matrix_1q(gate_type):
     out = _f32_out((8,))
     _lib.tc_gate_matrix_1q(c_int(int(gate_type)), None,
                             out.ctypes.data_as(POINTER(c_float)))
+    return out
+
+
+def gate_matrix_2q(gate_type, params=None):
+    """Materialise a 2-qubit gate as 32 interleaved-complex floats."""
+    params_a = None
+    params_p = None
+    if params is not None:
+        params_a, params_p = _f32_buf(params)
+    out = _f32_out((32,))
+    _lib.tc_gate_matrix_2q(c_int(int(gate_type)), params_p,
+                            out.ctypes.data_as(POINTER(c_float)))
+    _ = params_a
+    return out
+
+
+def gate_matrix_3q(gate_type, params=None):
+    """Materialise a 3-qubit gate as 128 interleaved-complex floats."""
+    params_a = None
+    params_p = None
+    if params is not None:
+        params_a, params_p = _f32_buf(params)
+    out = _f32_out((128,))
+    _lib.tc_gate_matrix_3q(c_int(int(gate_type)), params_p,
+                            out.ctypes.data_as(POINTER(c_float)))
+    _ = params_a
+    return out
+
+
+def quantum_geometric_tensor(state, derivatives, n_qubits):
+    """Return the complex quantum geometric tensor for state derivatives."""
+    np = _np()
+    state_a, state_p = _f32_buf(state)
+    expected = 2 * (1 << int(n_qubits))
+    if state_a.size != expected:
+        raise ValueError("state buffer does not match n_qubits")
+    derivative_arrays = [
+        np.ascontiguousarray(np.asarray(item, dtype=np.float32)).reshape(-1)
+        for item in derivatives
+    ]
+    if any(item.size != expected for item in derivative_arrays):
+        raise ValueError("derivative buffers do not match n_qubits")
+    pointers = (POINTER(c_float) * len(derivative_arrays))(*[
+        item.ctypes.data_as(POINTER(c_float)) for item in derivative_arrays
+    ])
+    out = _f32_out((len(derivative_arrays), len(derivative_arrays), 2))
+    _lib.tc_quantum_geometric_tensor(
+        state_p, pointers, c_int(int(n_qubits)), c_int(len(derivative_arrays)),
+        out.ctypes.data_as(POINTER(c_float)))
+    return out[..., 0] + 1j * out[..., 1]
+
+
+# ---- Density matrices / open quantum systems ----
+
+def dmstate_zero(n_qubits):
+    """Return |0…0⟩⟨0…0| as an interleaved-complex density matrix."""
+    n = int(n_qubits)
+    dim = 1 << n
+    rho = _f32_out((2 * dim * dim,))
+    _lib.tc_dmstate_zero(rho.ctypes.data_as(POINTER(c_float)), c_int(n))
+    return rho
+
+
+def dmstate_from_pure(state, n_qubits):
+    """Construct a density matrix ρ = |ψ⟩⟨ψ| from a pure state."""
+    state_a, state_p = _f32_buf(state)
+    n = int(n_qubits)
+    if state_a.size != 2 * (1 << n):
+        raise ValueError("state buffer does not match n_qubits")
+    rho = _f32_out((2 * (1 << n) * (1 << n),))
+    _lib.tc_dmstate_from_pure(rho.ctypes.data_as(POINTER(c_float)), state_p,
+                               c_int(n))
+    return rho
+
+
+def dmstate_trace(rho, n_qubits):
+    rho_a, rho_p = _f32_buf(rho)
+    out_re = c_float(0.0)
+    out_im = c_float(0.0)
+    _lib.tc_dmstate_trace(rho_p, c_int(int(n_qubits)),
+                           ctypes.byref(out_re), ctypes.byref(out_im))
+    return complex(out_re.value, out_im.value)
+
+
+def dmstate_purity(rho, n_qubits):
+    rho_a, rho_p = _f32_buf(rho)
+    return float(_lib.tc_dmstate_purity(rho_p, c_int(int(n_qubits))))
+
+
+def dmstate_partial_trace(rho, n_qubits, trace_qubit):
+    rho_a, rho_p = _f32_buf(rho)
+    n = int(n_qubits)
+    if n < 2:
+        raise ValueError("partial trace requires at least two qubits")
+    dim = 1 << (n - 1)
+    out = _f32_out((2 * dim * dim,))
+    _lib.tc_dmstate_partial_trace(
+        rho_p, c_int(n), c_int(int(trace_qubit)),
+        out.ctypes.data_as(POINTER(c_float)))
     return out
 
 
@@ -3440,6 +4017,26 @@ def mesh_group_init(ctx, n_peers, my_rank, peer_urls):
     _check(_lib.tc_mesh_group_init(_as_handle(ctx), c_int32(n),
                                      c_int32(int(my_rank)), url_array,
                                      ctypes.byref(out)))
+    return out
+
+
+def mesh_group_init_authenticated(ctx, n_peers, my_rank, peer_urls,
+                                  peer_identities, local_identity,
+                                  active_key_id, keys):
+    """Initialize an authenticated mesh with stable identity-per-rank binding."""
+    n = int(n_peers)
+    urls = [_bytes(value) for value in peer_urls]
+    identities = [_bytes(value) for value in peer_identities]
+    if len(urls) != n or len(identities) != n:
+        raise ValueError("peer_urls and peer_identities must have n_peers entries")
+    url_array = (c_char_p * n)(*urls)
+    identity_array = (c_char_p * n)(*identities)
+    auth, keepalive = _transport_auth_config(local_identity, active_key_id, keys)
+    out = c_void_p()
+    _check(_lib.tc_mesh_group_init_authenticated(
+        _as_handle(ctx), c_int32(n), c_int32(int(my_rank)), url_array,
+        identity_array, byref(auth), byref(out)))
+    _ = keepalive
     return out
 
 

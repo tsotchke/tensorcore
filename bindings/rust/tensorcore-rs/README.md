@@ -1,9 +1,9 @@
 # tensorcore-rs
 
 Safe Rust bindings to the **tensorcore** unified math substrate
-(`libtensorcore.{dylib,so}`).
+(`libtensorcore.{dylib,so}` or `tensorcore.dll`).
 
-Wraps every shipped op family:
+Provides a selected safe substrate surface:
 - **Geometric** — Lorentz, Sphere, Torus (exp / log / distance / slerp /
   parallel transport)
 - **Lie groups** — SU(2) + SO(3) closed-form exp / log + double-cover bridge
@@ -30,6 +30,10 @@ For consumers outside the tensorcore repo:
 ```bash
 TENSORCORE_LIB_DIR=/path/to/lib cargo build
 ```
+
+On Windows, point `TENSORCORE_LIB_DIR` at the SDK's `lib` directory containing
+`tensorcore.lib`; place the SDK's `bin` directory on `PATH` when executing.
+The installed C headers remain the complete public ABI.
 
 ## Example
 

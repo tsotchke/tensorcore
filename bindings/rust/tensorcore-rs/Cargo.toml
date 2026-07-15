@@ -1,9 +1,9 @@
 [package]
 name = "tensorcore"
-version = "0.1.0"
+version = "0.1.22"
 edition = "2021"
 description = "Safe Rust bindings to the tensorcore unified math substrate (geometric / quantum / mesh / shard ops, fp32, cross-device via libtensorcore.{dylib,so})"
-license = "Apache-2.0"
+license = "MIT"
 repository = "https://github.com/tsotchke/tensorcore"
 readme = "README.md"
 keywords = ["tensorcore", "geometric", "quantum", "manifold", "ffi"]

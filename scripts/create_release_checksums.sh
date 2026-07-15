@@ -22,9 +22,10 @@ if [ ! -d "$DIST_DIR" ]; then
     exit 1
 fi
 
-artifacts=(
-    "$DIST_DIR"/tensorcore_apple-*.whl
+artifacts=("$DIST_DIR"/tensorcore_apple-*.whl)
+sdk_artifacts=(
     "$DIST_DIR"/tensorcore-native-sdk-*.tar.gz
+    "$DIST_DIR"/tensorcore-native-sdk-*.zip
 )
 
 missing=()
@@ -33,6 +34,16 @@ for artifact in "${artifacts[@]}"; do
         missing+=("$artifact")
     fi
 done
+sdk_count=0
+for artifact in "${sdk_artifacts[@]}"; do
+    if [ -f "$artifact" ]; then
+        sdk_count=$((sdk_count + 1))
+        artifacts+=("$artifact")
+    fi
+done
+if [ "$sdk_count" -lt 3 ]; then
+    missing+=("at least three native SDK artifacts (macOS, Linux, Windows); found $sdk_count")
+fi
 if [ "${#missing[@]}" -ne 0 ]; then
     echo "release artifact(s) missing for checksum generation:" >&2
     printf '  %s\n' "${missing[@]}" >&2
@@ -48,7 +59,8 @@ trap cleanup_out_tmp EXIT
     cd "$DIST_DIR"
     LC_ALL=C shasum -a 256 \
         tensorcore_apple-*.whl \
-        tensorcore-native-sdk-*.tar.gz |
+        tensorcore-native-sdk-*.tar.gz \
+        tensorcore-native-sdk-*.zip |
         LC_ALL=C sort -k2
 ) > "$OUT_TMP"
 require_output_file_path "OUT (SHA256SUMS write)" "$OUT"

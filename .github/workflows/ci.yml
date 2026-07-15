@@ -139,6 +139,12 @@ jobs:
       - name: CPU backend build, tests, and install consumer
         run: scripts/ci_portable_cpu.sh
 
+      - name: Portable CPU native SDK archive
+        run: |
+          archive="$(OUT_DIR="$RUNNER_TEMP" scripts/create_native_sdk_archive.sh \
+            "$RUNNER_TEMP/tensorcore-portable-cpu-install")"
+          scripts/check_native_sdk_archive.sh "$archive"
+
   portable-windows:
     runs-on: windows-latest
     steps:
@@ -150,6 +156,14 @@ jobs:
           ./scripts/ci_windows_cpu.ps1
           -BuildDir "$env:RUNNER_TEMP/tensorcore-build"
           -Prefix "$env:RUNNER_TEMP/tensorcore-install"
+
+      - name: Windows native SDK archive
+        shell: pwsh
+        run: |
+          $Archive = ./scripts/create_native_sdk_archive.ps1 `
+            -Prefix "$env:RUNNER_TEMP/tensorcore-install" `
+            -OutDir "$env:RUNNER_TEMP"
+          ./scripts/check_native_sdk_archive.ps1 -Archive $Archive
 
   build-and-test:
     runs-on: macos-14

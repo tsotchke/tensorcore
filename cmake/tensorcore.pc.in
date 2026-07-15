@@ -4,8 +4,8 @@ includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
 libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
 
 Name: tensorcore
-Description: CUDA-equivalent tensor-core acceleration for Apple Silicon
+Description: Cross-platform tensor compute runtime with Metal, CUDA, HIP, and portable CPU backends
 Version: @PROJECT_VERSION@
 Cflags: -I${includedir}
-Libs: -L${libdir} -Wl,-rpath,${libdir} -ltensorcore
+Libs: -L${libdir} -ltensorcore
 Libs.private: @TC_PC_PRIVATE_LIBS@

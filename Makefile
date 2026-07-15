@@ -26,7 +26,7 @@ help:
 	@echo "  make clean            rm -rf $(BUILD_DIR)"
 	@echo ""
 	@echo "Test:"
-	@echo "  make test             full ctest suite (22 tests)"
+	@echo "  make test             full platform-appropriate CTest suite"
 	@echo "  make bench            GEMM + attention + 7B Q4_0 inference benches"
 	@echo "  make smoke            release_smoke.sh (REQUIRE_GPU=1)"
 	@echo ""

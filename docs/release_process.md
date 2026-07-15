@@ -1,18 +1,23 @@
 # Release process
 
-How a tensorcore release goes from local commit to published wheel +
-GitHub release artifact. This page is the runbook.
+How a tensorcore release goes from local commit to published wheel and
+cross-platform native SDKs. This page is the runbook.
 
-## The two artifacts a release produces
+## Release artifacts
 
 1. **`tensorcore_apple-X.Y.Z-py3-none-macosx_15_0_arm64.whl`** — pip-installable
    Python wheel; ships the native `libtensorcore.dylib` + `tensorcore.metallib`
    inside the package so end users `pip install` and it works.
-2. **`tensorcore-native-sdk-X.Y.Z-darwin-arm64.tar.gz`** — headers,
-   libraries, metallib, CMake config, pkg-config file. For C / C++ /
-   external CMake consumers that don't want Python in the loop.
+2. **`tensorcore-native-sdk-X.Y.Z-macos-ARCH.tar.gz`** — headers, static and
+   versioned shared libraries, metallib, CMake config, and pkg-config file.
+3. **`tensorcore-native-sdk-X.Y.Z-linux-ARCH.tar.gz`** — the same C ABI and
+   package metadata with a versioned ELF shared object; no metallib.
+4. **`tensorcore-native-sdk-X.Y.Z-windows-ARCH.zip`** — headers, DLL, import
+   library, static library, and CMake/pkg-config metadata.
 
-Both are published as assets on the GitHub release.
+All artifacts plus `SHA256SUMS` are published as assets on the GitHub release.
+The Python distribution is intentionally Apple-only in v0.1; Linux and Windows
+are public native SDK targets.
 
 ## The version triple
 
@@ -91,19 +96,12 @@ git tag -a v$NEW -m "tensorcore v$NEW"
 git push origin v$NEW
 ```
 
-The `v*` tag push triggers `.github/workflows/release.yml`. That
-workflow:
-
-1. Runs the version-consistency check.
-2. Configures + builds + tests on macos-15.
-3. Runs `scripts/release_smoke.sh`.
-4. Installs natively to a temp prefix.
-5. Builds the wheel via `pip wheel`, with `TENSORCORE_NATIVE_DIR` set
-   so the dylib + metallib are vendored into the package.
-6. Reinstalls the wheel into a fresh venv and asserts
-   `import tensorcore as tc; tc.version() == "tensorcore X.Y.Z (...)"`.
-7. `gh release create v$NEW` + `gh release upload v$NEW
-   tensorcore_apple-X.Y.Z-*.whl`.
+The `v*` tag push triggers `.github/workflows/release.yml`. The workflow runs
+three independent platform jobs: the full macOS release smoke and wheel build,
+the portable Linux build/test/install gate, and the Windows MSVC portable CPU
+gate. Each native SDK is unpacked, checked for the expected ABI metadata, and
+used to build and execute fresh C and C++ consumers. A final job downloads all
+artifacts, creates and verifies `SHA256SUMS`, then publishes the complete set.
 
 You can also dispatch the workflow manually on `master` via
 `workflow_dispatch` to get a snapshot release without a tag.
@@ -117,6 +115,8 @@ gh release view v$NEW -R tsotchke/tensorcore
 Should show:
 - `published: <timestamp>`
 - An asset named `tensorcore_apple-X.Y.Z-py3-none-macosx_15_0_arm64.whl`
+- Native SDK assets for macOS, Linux, and Windows
+- `SHA256SUMS`
 
 The release URL is
 `https://github.com/tsotchke/tensorcore/releases/tag/v$NEW`.
@@ -212,13 +212,22 @@ python -m pip install /tmp/tc-wheel-out/tensorcore_apple-*.whl \
 TENSORCORE_LIB= TC_METALLIB= python -c \
     "import tensorcore as tc; print(tc.version())"
 
-# 6. (Optional) Build the native SDK archive
+# 6. Build and validate the host native SDK archive
 scripts/create_native_sdk_archive.sh /tmp/tensorcore-install
 scripts/check_native_sdk_archive.sh \
-    /tmp/tensorcore-native-sdk-X.Y.Z-darwin-arm64.tar.gz
+    /tmp/tensorcore-native-sdk-X.Y.Z-macos-arm64.tar.gz
 ```
 
-If all six steps pass, the release pipeline will pass.
+On Linux, the same commands produce a `linux-ARCH.tar.gz`. On Windows:
+
+```powershell
+$Archive = ./scripts/create_native_sdk_archive.ps1 `
+  -Prefix C:\temp\tensorcore-install -OutDir C:\temp
+./scripts/check_native_sdk_archive.ps1 -Archive $Archive
+```
+
+Host-local success proves one platform. The release is publishable only when
+the macOS, Linux, and Windows jobs all pass.
 
 ## Compatibility commitments per version bump
 
@@ -239,6 +248,8 @@ v0.1 series has not removed or renamed any public symbol.
 | Tests fail on macos-14/15 | `ci.yml` build-and-test step | Investigate; reruns rarely help |
 | Wheel build fails to find native artifacts | `release.yml` "Build wheel" step | Check `TENSORCORE_NATIVE_DIR` setting |
 | Wheel reinstall fails | `release.yml` "Verify wheel" step | The dylib + metallib weren't vendored — re-check `pyproject.toml` `[tool.setuptools.package-data]` |
+| Linux SDK has no SONAME | native SDK checker | Keep `VERSION` and `SOVERSION` on `tensorcore_shared` |
+| Windows SDK misses an import/static library | PowerShell native SDK checker | Verify the shared and static install targets and MSVC configuration |
 | GitHub release upload fails | `release.yml` final step | Usually the tag already has a release — `gh release delete v$NEW && retry` |
 | Self-hosted runner offline | `hardware-evidence.yml` preflight artifact reports no online runner with the labels required by that dispatch, then the hardware job queues | Bring the runner online; cancel/re-run the queued hardware job |
 | Runner API unavailable | `hardware-evidence.yml` preflight artifact reports `runner_api_unavailable` | Add a repo secret named `TC_RUNNER_READ_TOKEN` with runner-list permission, or use the artifact as a visibility-only diagnostic |
@@ -248,7 +259,7 @@ v0.1 series has not removed or renamed any public symbol.
 Three workflows. Two run automatically on every push to master; one is
 manual.
 
-- **`ci.yml`** — gate on every push / PR
+- **`ci.yml`** — gate on every push / PR, including macOS/Linux/Windows SDK consumers
 - **`release.yml`** — runs only on `v*` tag push (and via
   `workflow_dispatch`)
 - **`hardware-evidence.yml`** — manual; runs on the self-hosted M-series

@@ -48,7 +48,9 @@ print(tc.version())          # "tensorcore 0.1.22 (metallib_path)"
 
 ctx = tc.init()
 info = tc.device_info(ctx)
+caps = tc.runtime_capabilities(ctx)
 print(info.name, info.family)
+print(tc.capability_available(caps, tc.TC_CAPABILITY_GEMM_F32))
 tc.shutdown(ctx)
 ```
 
@@ -104,9 +106,15 @@ Function names follow the C ABI with `tc_` dropped. Status codes raise
 `TensorcoreError`.
 
 ### Lifecycle
-`init`, `shutdown`, `device_info`, `buffer_alloc`, `buffer_from_ptr`,
+`init`, `shutdown`, `device_info`, `runtime_capabilities`,
+`capability_available`, `buffer_alloc`, `buffer_from_ptr`,
 `buffer_free`, `buffer_map`, `buffer_size`, `buffer_write`, `buffer_read`,
 `stream_create`, `stream_sync`, `stream_destroy`.
+
+`runtime_capabilities` mirrors the versioned C record. Test feature bits with
+`capability_available`; it checks both the known and available masks so unknown
+future bits fail closed. `Context.runtime_capabilities()` provides the same
+query on the owned wrapper.
 
 ### Diagnostics
 `version`, `status_string`, `dtype_name`, `backend_name`, `last_backend`,
@@ -135,7 +143,7 @@ fp32 `gemm` can dispatch as `backend=hip`; set `TC_DISABLE_HIP_GEMM=1`,
 `TC_HIP_GEMM=0`, or `TC_USE_HIP_GEMM=0` to force CPU fallback.
 
 ### CUDA
-`cuda_init`, `cuda_device_count`, `cuda_device_at`, `cuda_select_device`,
+`cuda_init`, `cuda_is_active`, `cuda_device_count`, `cuda_device_at`, `cuda_select_device`,
 `cuda_last_kernel_name`. The in-tree CUDA backend currently exposes
 deterministic unsupported diagnostics when no CUDA runtime is built in.
 When tensorcore is built with `TC_ENABLE_CUDA=ON`, CUDA initialization makes
@@ -186,9 +194,14 @@ helpers `conv2d_output_shape`, `conv2d_scratch_bytes`,
 ### DiLoCo
 `diloco_config`, `diloco_init`, `diloco_finalize`,
 `diloco_add_parameter`, `diloco_step`, `diloco_apply_outer`,
+`diloco_async_poll`, `diloco_async_wait`, `diloco_async_commit`,
+`diloco_state_set_epochs`, `diloco_state_get_epochs`,
+`diloco_state_serialize`, `diloco_state_deserialize`,
 `diloco_outer_steps_completed`, `diloco_inner_steps_completed`,
 `diloco_last_outer_step_seconds`, `diloco_last_outer_bytes_sent`.
-`DiLoCoContext` wraps these functions for owned lifetime management.
+`DiLoCoContext` wraps these functions for owned lifetime management. Restore
+caller-owned parameter buffers before calling `deserialize_state`; the blob
+contains DiLoCo-owned continuation state, not model bytes.
 
 ## Object wrappers
 
@@ -274,6 +287,17 @@ Default Apple and portable CPU builds expose `backend="gloo"` /
 `gloo+tcp://host:port` rendezvous URLs for TCP all-reduce, broadcast,
 allgather, barrier, and dense or sparse TOPK DiLoCo outer steps.
 
+For mutually authenticated transports, use `dist_init_authenticated`,
+`remote_init_authenticated`/`remote_connect_authenticated`, or
+`mesh_group_init_authenticated`. Each accepts keys as
+`(identity, key_id, secret_bytes)` tuples (or mappings with those fields).
+`remote_auth_rotate` replaces the keyring for future connections; peer
+identity/key and failure counters are available through
+`remote_peer_identity`, `remote_peer_key_id`, and
+`remote_auth_failure_count`. Secrets must be at least 32 bytes. Authentication
+does not replace transport encryption; see
+[transport_auth.md](transport_auth.md).
+
 ### `DiLoCoContext`
 
 ```python
@@ -284,13 +308,22 @@ with ctx.dist("single", 1, 0, "single://diloco") as dist:
                         num_elements=weight_count, dtype="f32")
         if d.step():
             d.apply_outer()
+        state, worker_status, round_id = d.async_poll()
+        if state == tc.TC_DILOCO_ASYNC_RUNNING:
+            d.async_wait()
+            state, worker_status, round_id = d.async_poll()
+        if state in (tc.TC_DILOCO_ASYNC_READY, tc.TC_DILOCO_ASYNC_FAILED):
+            d.async_commit()
         print(d.outer_steps_completed, d.last_outer_bytes_sent)
 ```
 
 The runtime covers local/single-rank DiLoCo outer steps plus dense and
-sparse TOPK multi-rank outer steps over `TC_DIST_GLOO`. Dropout-tolerant
-WAN recovery and advanced compression modes raise `TensorcoreError` with
-explicit unsupported status codes until those paths land.
+sparse TOPK multi-rank outer steps over `TC_DIST_GLOO`. With
+`async_overlap=True`, the worker uses immutable snapshots and private state;
+the caller explicitly waits/polls and commits at a safe parameter boundary.
+Dropout-tolerant WAN recovery and advanced compression modes raise
+`TensorcoreError` with explicit unsupported status codes until those paths
+land.
 
 Methods: `world_size`, `rank`, `allreduce(buf, n, dtype, op)`,
 `broadcast(buf, n, dtype, root)`, `allgather(src, dst, n_per_rank, dtype)`,

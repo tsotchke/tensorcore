@@ -25,24 +25,41 @@ PY
 )"
 
 required=(
-    "include/tensorcore/tensorcore.h"
-    "include/tensorcore/status.h"
-    "include/tensorcore/dtype.h"
-    "include/tensorcore/device.h"
-    "include/tensorcore/gemm.h"
-    "include/tensorcore/attention.h"
-    "include/tensorcore/training.h"
-    "include/tensorcore/conv.h"
-    "include/tensorcore/quantized.h"
-    "include/tensorcore/distributed.h"
-    "include/tensorcore/gguf.h"
     "lib/libtensorcore.a"
-    "lib/libtensorcore.dylib"
-    "lib/tensorcore.metallib"
     "lib/cmake/tensorcore/tensorcoreConfig.cmake"
     "lib/cmake/tensorcore/tensorcoreConfigVersion.cmake"
     "lib/pkgconfig/tensorcore.pc"
 )
+
+case "$(uname -s)" in
+    Darwin)
+        platform="macos"
+        shared_lib="lib/libtensorcore.dylib"
+        ;;
+    Linux)
+        platform="linux"
+        shared_lib="lib/libtensorcore.so"
+        ;;
+    *)
+        echo "native SDK archives are supported on macOS and Linux; use the PowerShell archive script on Windows" >&2
+        exit 2
+        ;;
+esac
+
+case "$(uname -m)" in
+    arm64|aarch64) archive_arch="arm64" ;;
+    x86_64|amd64) archive_arch="x86_64" ;;
+    *) archive_arch="$(uname -m)" ;;
+esac
+
+required+=("$shared_lib")
+config_file="$PREFIX/lib/cmake/tensorcore/tensorcoreConfig.cmake"
+if grep -Fq 'set(tensorcore_ENABLE_METAL "ON")' "$config_file"; then
+    required+=("lib/tensorcore.metallib")
+fi
+for header in "$ROOT"/include/tensorcore/*.h; do
+    required+=("include/tensorcore/$(basename "$header")")
+done
 
 missing=()
 for rel in "${required[@]}"; do
@@ -56,8 +73,8 @@ if [ "${#missing[@]}" -ne 0 ]; then
     exit 1
 fi
 
-if command -v lipo >/dev/null 2>&1; then
-    archs="$(lipo -archs "$PREFIX/lib/libtensorcore.dylib")"
+if [ "$platform" = "macos" ] && command -v lipo >/dev/null 2>&1; then
+    archs="$(lipo -archs "$PREFIX/$shared_lib")"
     host_arch="$(uname -m)"
     case " $archs " in
         *" $host_arch "*) ;;
@@ -90,7 +107,7 @@ if [ "$pkg_version" != "$EXPECTED_VERSION" ]; then
 fi
 
 mkdir -p "$OUT_DIR"
-archive="$OUT_DIR/tensorcore-native-sdk-${EXPECTED_VERSION}-macos-$(uname -m).tar.gz"
+archive="$OUT_DIR/tensorcore-native-sdk-${EXPECTED_VERSION}-${platform}-${archive_arch}.tar.gz"
 COPYFILE_DISABLE=1 LC_ALL=C tar -czf "$archive" -C "$PREFIX" .
 
 echo "$archive"

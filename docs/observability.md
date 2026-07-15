@@ -8,6 +8,7 @@ right now?" without `printf`-debugging into a Metal kernel.
 | Question | How |
 |---|---|
 | What chip am I on? | `tc_device_info_get(ctx, &info)` → `info.name`, `info.family`, capability flags |
+| Which stable features and backends can this runtime use? | `tc_runtime_capabilities_get(ctx, TC_RUNTIME_CAPABILITIES_ABI_VERSION_CURRENT, &caps, sizeof(caps))` |
 | Which dispatch path served my last compute call? | `tc_backend_name(tc_last_backend())` |
 | What dispatches are happening live? | `TC_TRACE=1` prints served compute dispatches to stderr |
 | Which tile shape is autotune using? | `~/.cache/tensorcore/autotune.json` (or the equivalent on the host) |
@@ -38,6 +39,32 @@ printf("max_buffer=%llu working_set=%llu tg_mem=%u sg_width=%u\n",
 
 This is what `hello_gemm` prints on startup. It's the diagnostic you
 quote in bug reports.
+
+## Versioned capability discovery
+
+`tc_device_info` describes the physical device, while
+`tc_runtime_capabilities_get` is the fail-closed contract for downstream
+adapters deciding whether a TensorCore feature is safe to use:
+
+```c
+tc_runtime_capabilities caps = {0};
+tc_status_t s = tc_runtime_capabilities_get(
+    ctx,
+    TC_RUNTIME_CAPABILITIES_ABI_VERSION_CURRENT,
+    &caps,
+    sizeof(caps));
+if (s != TC_OK ||
+    !tc_runtime_capability_available(&caps, TC_CAPABILITY_GEMM_F32)) {
+    /* Use the consuming repository's fallback. */
+}
+```
+
+Always test both the known and available masks through
+`tc_runtime_capability_available`. An unknown bit, a known-but-unimplemented
+feature, an ABI mismatch, and a missing query symbol in an older shared library
+all mean unavailable. `compiled_backend_mask` is not acceleration proof;
+`available_backend_mask` records what the current context can select, and
+`tc_last_backend()` remains the post-dispatch proof of what actually ran.
 
 ## Backend tracing
 

@@ -167,6 +167,61 @@ def _run_diagnostic_api_check():
     return dtype_ok and status_ok and backend_ok and tensorops_ok
 
 
+def _run_direct_math_binding_check():
+    """Exercise raw-pointer math bindings that do not require a device."""
+    radius = 1.0
+    wrapped = tc.torus_project([-0.25, 2.0 * np.pi + 0.5], radius)
+    base = np.array([0.1, 0.2], dtype=np.float32)
+    tangent = np.array([0.3, -0.4], dtype=np.float32)
+    point = tc.torus_exp(base, tangent, radius)
+    torus_ok = (
+        np.allclose(wrapped, [2.0 * np.pi - 0.25, 0.5], atol=1e-5) and
+        np.allclose(tc.torus_log(base, point, radius), tangent, atol=1e-6) and
+        np.isclose(tc.torus_distance(base, point, radius),
+                   np.linalg.norm(tangent), atol=1e-6) and
+        np.array_equal(
+            tc.torus_parallel_transport(base, point, tangent, radius),
+            tangent)
+    )
+
+    identity_su2 = tc.su2_exp(0.0, 0.0, 0.0)
+    identity_so3 = tc.so3_exp(0.0, 0.0, 0.0)
+    lie_ok = (
+        np.allclose(identity_su2, [1, 0, 0, 0, 0, 0, 1, 0]) and
+        np.allclose(tc.su2_log(identity_su2), [0, 0, 0]) and
+        np.allclose(tc.su2_mul(identity_su2, identity_su2), identity_su2) and
+        np.allclose(identity_so3, np.eye(3, dtype=np.float32)) and
+        np.allclose(tc.so3_log(identity_so3), [0, 0, 0]) and
+        np.allclose(tc.so3_mul(identity_so3, identity_so3), identity_so3) and
+        np.allclose(tc.su2_to_so3(identity_su2), identity_so3)
+    )
+
+    state = tc.qstate_zero(3)
+    state[0] = 0.0
+    state[2 * 6] = 1.0  # |110>, using qubit 0 as the least-significant bit.
+    ccx = tc.gate_matrix_3q(18)
+    transformed = tc.qstate_apply_3q(state, 3, 2, 1, 0, ccx)
+    qstate_ok = (
+        np.isclose(transformed[2 * 7], 1.0) and
+        np.isclose(tc.qstate_norm_sq(transformed, 3), 1.0) and
+        np.isclose(tc.qstate_inner(transformed, transformed, 3), 1.0 + 0.0j)
+    )
+
+    psi = tc.qstate_zero(1)
+    derivative = np.array([0.0, 0.0, 1.0, 0.0], dtype=np.float32)
+    qgt = tc.quantum_geometric_tensor(psi, [derivative], 1)
+    rho = tc.dmstate_from_pure(psi, 1)
+    rho2 = tc.dmstate_zero(2)
+    reduced = tc.dmstate_partial_trace(rho2, 2, 1)
+    density_ok = (
+        qgt.shape == (1, 1) and np.allclose(qgt, [[1.0 + 0.0j]]) and
+        np.isclose(tc.dmstate_trace(rho, 1), 1.0 + 0.0j) and
+        np.isclose(tc.dmstate_purity(rho, 1), 1.0) and
+        np.array_equal(reduced, tc.dmstate_zero(1))
+    )
+    return torus_ok and lie_ok and qstate_ok and density_ok
+
+
 def _run_distributed_wrapper_check(ctx):
     values = np.linspace(-2.0, 2.0, 16, dtype=np.float32)
     gathered = np.zeros_like(values)
@@ -869,6 +924,11 @@ def main():
     if not diagnostic_ok:
         return 5
 
+    direct_math_ok = _run_direct_math_binding_check()
+    print(f"Direct math bindings: {'OK' if direct_math_ok else 'FAIL'}")
+    if not direct_math_ok:
+        return 5
+
     print(f"tensorcore: {tc.version()}")
     try:
         ctx = tc.init()
@@ -878,6 +938,24 @@ def main():
             return 77
         raise
     info = tc.device_info(ctx)
+    capabilities = tc.runtime_capabilities(ctx)
+    capabilities_ok = (
+        capabilities.abi_version == tc.TC_RUNTIME_CAPABILITIES_ABI_VERSION_CURRENT and
+        tc.capability_available(capabilities, tc.TC_CAPABILITY_GEMM_F32) and
+        tc.capability_available(capabilities, tc.TC_CAPABILITY_DILOCO) and
+        tc.capability_available(
+            capabilities, tc.TC_CAPABILITY_DILOCO_ASYNC_SNAPSHOT_SAFE) and
+        tc.capability_available(
+            capabilities, tc.TC_CAPABILITY_DILOCO_CHECKPOINT_RESUME) and
+        tc.capability_available(
+            capabilities, tc.TC_CAPABILITY_TRANSPORT_IDENTITY_AUTH) and
+        not tc.capability_available(
+            capabilities, tc.TC_CAPABILITY_DILOCO_ELASTIC_MEMBERSHIP)
+    )
+    print(f"capabilities:         {'OK' if capabilities_ok else 'FAIL'}")
+    if not capabilities_ok:
+        tc.shutdown(ctx)
+        return 6
     print(f"device   : {info.name_str}")
     print(f"family   : Apple{info.family}")
     print(f"unified  : {info.unified_memory}")

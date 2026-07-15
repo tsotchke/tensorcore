@@ -8,9 +8,12 @@ version receiving fixes.
 
 ## Threat model
 
-`tensorcore` is a kernel library; it does not handle untrusted network
-input, persistent user data, authentication, or authorization. The
-practical attack surface is narrow:
+`tensorcore` is primarily a kernel library, but its distributed backends do
+handle network input. Authenticated remote-tensor, mesh, and GLOO constructors
+perform mutual HMAC-SHA256 authentication with stable peer-identity and rank
+binding. They do not provide transport encryption. Legacy constructors remain
+available for compatibility and are unauthenticated, so they must be confined
+to trusted networks. The practical attack surface includes:
 
 1. **GGUF file parsing** — `lib/io/gguf.c` parses a memory-mapped GGUF
    file. A maliciously crafted GGUF could trigger an out-of-bounds read
@@ -23,6 +26,13 @@ practical attack surface is narrow:
    A user able to set environment variables can substitute a different
    dynamic library at load time — but they could do that for any
    ctypes-loaded library.
+4. **Distributed transports** — `tc_remote_*`, mesh collectives built on it,
+   and the GLOO TCP backend parse messages and move caller-owned tensor data
+   over sockets. Bind services to a specific Tailscale/private address, apply
+   tailnet ACLs and host firewall rules, use the authenticated constructors,
+   rotate transport keys when membership changes, and never expose legacy
+   listeners directly to an untrusted network. `0.0.0.0` and `*` deliberately
+   listen on every available interface.
 
 `tensorcore` is **not** intended to be hardened against an attacker who
 can run arbitrary code in your process. It runs alongside model code as a
@@ -39,7 +49,7 @@ Include:
 
 - The vulnerability class (memory corruption, info leak, etc.).
 - A minimal reproducer (input file, descriptor, call sequence).
-- The version (`tc_version()` output) and chip / macOS / Xcode version.
+- The version (`tc_version()` output), OS, architecture, compiler, and backend.
 
 You should expect:
 
@@ -67,5 +77,9 @@ The library does not currently:
   works for local fuzzing.
 - Bounds-check GGUF tensor data offsets against the mmap region size
   exhaustively. v0.2 adds explicit checks.
+- Encrypt distributed payloads. Authenticated constructors prove peer identity
+  and bind identities to ranks, but confidentiality still requires a secure
+  network overlay such as Tailscale/WireGuard. Legacy constructors provide
+  neither authentication nor encryption.
 
 If you find an issue in these areas, please report it.
