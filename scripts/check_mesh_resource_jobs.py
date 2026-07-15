@@ -49,6 +49,11 @@ WINDOWS_PERSISTENT_LAUNCH_SCRIPT = "scripts/check_windows_persistent_launch.py"
 WINDOWS_CUDA_SMOKE_MAX_DURATION_SEC = 5
 LEGACY_GEOREFINE_CR025_STARTER = "scripts/start_georefine_qwen_cr025.py"
 GEOREFINE_QWEN_RANK_PROBE_STARTER = "scripts/start_georefine_qwen_rank_probe.py"
+GEOREFINE_QLLM_NATIVE_PROBE_STARTER = "scripts/start_georefine_qllm_native_probe.py"
+GEOREFINE_TENSORCORE_JOB_V1_STARTERS = (
+    GEOREFINE_QWEN_RANK_PROBE_STARTER,
+    GEOREFINE_QLLM_NATIVE_PROBE_STARTER,
+)
 TENSORCORE_JOB_V1_GEOREFINE_CONTRACT = "tensorcore_job_v1_cuda_exclusive_trusted_artifact"
 QLLM_PHASE1_CACHED_CONTRACT = "tensorcore_job_v1_qllm_phase1_cached"
 QLLM_PHASE1_CACHED_STARTER = "scripts/start_qllm_phase1_cached.py"
@@ -151,6 +156,10 @@ def command_has_script(value: Any, expected: str) -> bool:
     expected = expected.lstrip("./")
     candidates = {expected, f"./{expected}"}
     return any(part.lstrip("./") in candidates or part.endswith("/" + expected) for part in command_parts(value))
+
+
+def command_has_any_script(value: Any, expected: tuple[str, ...]) -> bool:
+    return any(command_has_script(value, script) for script in expected)
 
 
 def command_flag_value(value: Any, flag: str) -> str | None:
@@ -280,10 +289,10 @@ def validate_job_policy(errors: list[str], job: dict[str, Any]) -> None:
             f"{LEGACY_GEOREFINE_CR025_STARTER}; submit tensorcore.job.v1 instead"
         )
     if metadata.get("scheduler_contract") == TENSORCORE_JOB_V1_GEOREFINE_CONTRACT:
-        if not command_has_script(job.get("start_cmd"), GEOREFINE_QWEN_RANK_PROBE_STARTER):
+        if not command_has_any_script(job.get("start_cmd"), GEOREFINE_TENSORCORE_JOB_V1_STARTERS):
             errors.append(
                 f"job {job_id!r} {TENSORCORE_JOB_V1_GEOREFINE_CONTRACT} "
-                f"requires {GEOREFINE_QWEN_RANK_PROBE_STARTER} start_cmd"
+                f"requires one of {', '.join(GEOREFINE_TENSORCORE_JOB_V1_STARTERS)} start_cmd"
             )
     if metadata.get("scheduler_contract") == QLLM_PHASE1_CACHED_CONTRACT:
         if not command_has_script(job.get("start_cmd"), QLLM_PHASE1_CACHED_STARTER):

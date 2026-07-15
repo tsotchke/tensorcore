@@ -166,7 +166,7 @@ def test_running_jobs_reject_legacy_georefine_direct_starter() -> None:
     assert any("legacy direct GeoRefine starter" in error for error in errors)
 
 
-def test_tensorcore_job_v1_georefine_contract_requires_rank_probe_starter() -> None:
+def test_tensorcore_job_v1_georefine_contract_requires_approved_starter() -> None:
     jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
     errors: list[str] = []
     jobs.validate_job_policy(
@@ -181,6 +181,24 @@ def test_tensorcore_job_v1_georefine_contract_requires_rank_probe_starter() -> N
         },
     )
     assert any("start_georefine_qwen_rank_probe.py" in error for error in errors)
+    assert any("start_georefine_qllm_native_probe.py" in error for error in errors)
+
+
+def test_tensorcore_job_v1_georefine_contract_accepts_native_qllm_starter() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_job_policy(
+        errors,
+        {
+            "id": "native-georefine-v1",
+            "desired_state": "running",
+            "start_cmd": ["python3", "scripts/start_georefine_qllm_native_probe.py", "--json"],
+            "metadata": {
+                "scheduler_contract": "tensorcore_job_v1_cuda_exclusive_trusted_artifact",
+            },
+        },
+    )
+    assert errors == []
 
 
 def georefine_template() -> dict:
@@ -789,7 +807,8 @@ def main() -> int:
     test_disabled_jobs_require_cancel_metadata()
     test_running_jobs_reject_host_local_systemd_starts()
     test_running_jobs_reject_legacy_georefine_direct_starter()
-    test_tensorcore_job_v1_georefine_contract_requires_rank_probe_starter()
+    test_tensorcore_job_v1_georefine_contract_requires_approved_starter()
+    test_tensorcore_job_v1_georefine_contract_accepts_native_qllm_starter()
     test_georefine_template_policy_accepts_generic_selector_template()
     test_georefine_template_policy_rejects_rendered_cosbox_template()
     test_georefine_template_policy_requires_reconciliation_admission_placeholder()
