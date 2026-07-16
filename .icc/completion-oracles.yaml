@@ -1232,6 +1232,7 @@ oracles:
     aliases:
       - tensorcore complete topology authority
       - mesh topology authority
+      - reconcile computer_mesh declarations, every Tailscale profile, cloud inventory, and TensorCore scheduler resources into one drift-checked accelerator topology
     criteria:
       - id: topology_runtime_evidence
         runtime_check: runtime_evidence_present
