@@ -70,6 +70,7 @@ jobs:
       - name: Apple family runtime evidence checker fixtures
         run: |
           python3 scripts/check_apple_family_runtime_evidence_selftest.py
+          python3 scripts/run_apple_family_evidence_handoff_selftest.py
           python3 scripts/check_apple_family_docs.py
 
       - name: Quantized and GGUF runtime evidence checker fixtures

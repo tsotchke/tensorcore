@@ -99,9 +99,21 @@ def physical_check(path: pathlib.Path | None, chip: str, head: str) -> dict[str,
 
 def cross_platform_check() -> dict[str, Any]:
     fixture = run([sys.executable, "scripts/check_apple_family_runtime_evidence_selftest.py"])
+    handoff = run([sys.executable, "scripts/run_apple_family_evidence_handoff_selftest.py"])
+    if not handoff["ok"]:
+        fixture["ok"] = False
+        fixture["returncode"] = handoff["returncode"]
+        fixture["output_tail"] += "\n" + handoff["output_tail"]
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     cmake = (ROOT / "tests" / "CMakeLists.txt").read_text(encoding="utf-8")
-    required = ("ubuntu-latest", "macos-14", "windows-latest", "portable-cpu", "portable-windows")
+    required = (
+        "ubuntu-latest",
+        "macos-14",
+        "windows-latest",
+        "portable-cpu",
+        "portable-windows",
+        "run_apple_family_evidence_handoff_selftest.py",
+    )
     missing = [token for token in required if token not in workflow]
     if "test_apple_family_policy" not in cmake:
         missing.append("tests/CMakeLists.txt:test_apple_family_policy")
