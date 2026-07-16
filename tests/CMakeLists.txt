@@ -5,6 +5,15 @@
 
 find_package(Threads REQUIRED)
 
+# Family selection is a pure policy layer and must compile identically on
+# macOS, Linux, and Windows even though only macOS performs MTLDevice probes.
+add_executable(test_apple_family_policy test_apple_family_policy.cpp)
+target_include_directories(test_apple_family_policy PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/lib)
+add_test(NAME test_apple_family_policy COMMAND test_apple_family_policy)
+set_tests_properties(test_apple_family_policy PROPERTIES TIMEOUT 30)
+
 add_executable(test_runtime_capabilities test_runtime_capabilities.c)
 target_link_libraries(test_runtime_capabilities PRIVATE tensorcore)
 target_include_directories(test_runtime_capabilities PRIVATE ${CMAKE_SOURCE_DIR}/include)

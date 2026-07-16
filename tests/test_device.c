@@ -4,7 +4,41 @@
  */
 
 #include <stdio.h>
+#include <string.h>
 #include "tensorcore/tensorcore.h"
+
+static int check_named_family(const tc_device_info* info) {
+    struct expected_family {
+        const char* chip;
+        tc_family_t family;
+        bool bf16;
+    } expected[] = {
+        {"Apple M1", TC_FAMILY_APPLE7, false},
+        {"Apple M2", TC_FAMILY_APPLE8, false},
+        {"Apple M3", TC_FAMILY_APPLE9, true},
+        {"Apple M4", TC_FAMILY_APPLE9, true},
+        {"Apple M5", TC_FAMILY_APPLE10, true},
+    };
+    for (size_t i = 0; i < sizeof(expected) / sizeof(expected[0]); ++i) {
+        if (!strstr(info->name, expected[i].chip)) continue;
+        if (info->family != expected[i].family ||
+            info->supports_bf16_simdgroup != expected[i].bf16 ||
+            info->supports_i8_simdgroup) {
+            fprintf(stderr,
+                    "chip capability mismatch: device=%s family=Apple%d "
+                    "bf16_sg=%d i8_sg=%d expected_family=Apple%d expected_bf16=%d\n",
+                    info->name, (int)info->family,
+                    info->supports_bf16_simdgroup ? 1 : 0,
+                    info->supports_i8_simdgroup ? 1 : 0,
+                    (int)expected[i].family, expected[i].bf16 ? 1 : 0);
+            return 1;
+        }
+        printf("  family policy    : %s=Apple%d verified\n",
+               expected[i].chip, (int)expected[i].family);
+        return 0;
+    }
+    return 0;
+}
 
 int main(void) {
     tc_context* ctx = NULL;
@@ -34,6 +68,7 @@ int main(void) {
     if (info.family < TC_FAMILY_APPLE7) {
         fprintf(stderr, "warning: pre-M1 GPU detected — simdgroup_matrix unavailable\n");
     }
+    if (check_named_family(&info) != 0) return 7;
 
     tc_context* ctx2 = NULL;
     s = tc_init(&ctx2);

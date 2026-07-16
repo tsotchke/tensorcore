@@ -42,9 +42,10 @@ struct tc_gemm_tile {
  *
  * Apple7  (M1):     64x64 BK=32 WM=WN=2 TM=TN=4  →  128 threads
  * Apple8  (M2):     64x64 BK=32 WM=WN=2 TM=TN=4  →  128 threads (measured 17.6 TFLOPS on M2 Ultra)
- * Apple9  (M3):     64x64 BK=32 WM=WN=2 TM=TN=4  →  128 threads (also bf16 path)
- * Apple10 (M4):     64x64 BK=32 WM=WN=2 TM=TN=4  →  128 threads (also i8 path)
- * Apple11+ (M5+):   N/A — Metal 4 mpp::tensor_ops path used; tile is 64x64
+ * Apple9  (M3/M4):  64x64 BK=32 WM=WN=2 TM=TN=4  →  128 threads (also bf16 path)
+ * Apple10 (M5):     N/A — Metal 4 mpp::tensor_ops path used when available;
+ *                   simdgroup_matrix remains the fallback.
+ * Apple11:          reserved public ABI value with no current hardware mapping.
  *                   inside matmul2d_descriptor.
  *
  * The 128x128 (BM=BN=128, BK=8) tile is built but underperforms 64x64 on
@@ -62,8 +63,7 @@ TC_INTERNAL_SYMBOL tc_gemm_tile tc_autotune_gemm_tile_for_family(tc_family_t fam
         case TC_FAMILY_APPLE10:
             return def;
         case TC_FAMILY_APPLE11:
-            /* On M5+ the mpp::tensor_ops kernel uses an internal 64x64 tile;
-             * the host-side dispatch numbers below still apply. */
+            /* Reserved ABI value; retain the conservative proven tile. */
             return def;
         case TC_FAMILY_UNKNOWN:
         default:

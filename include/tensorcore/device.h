@@ -22,9 +22,9 @@ typedef enum {
     TC_FAMILY_UNKNOWN   = 0,
     TC_FAMILY_APPLE7    = 7,   /* M1                                  */
     TC_FAMILY_APPLE8    = 8,   /* M2                                  */
-    TC_FAMILY_APPLE9    = 9,   /* M3, A17 Pro (+ bf16 simdgroup_matrix) */
-    TC_FAMILY_APPLE10   = 10,  /* M4 (+ i8 simdgroup_matrix, + SME on CPU) */
-    TC_FAMILY_APPLE11   = 11,  /* M5  (+ Metal 4 mpp::tensor_ops)          */
+    TC_FAMILY_APPLE9    = 9,   /* M3/M4, A17/A18 (+ bf16 simdgroup_matrix) */
+    TC_FAMILY_APPLE10   = 10,  /* M5, A19 (+ Metal 4 mpp::tensor_ops)      */
+    TC_FAMILY_APPLE11   = 11,  /* reserved ABI value; no public mapping     */
 } tc_family_t;
 
 typedef struct {
@@ -37,7 +37,7 @@ typedef struct {
     uint32_t    thread_execution_width;   /* SIMD width, 32 on Apple7+   */
     bool        unified_memory;
     bool        supports_bf16_simdgroup;  /* Apple9+                     */
-    bool        supports_i8_simdgroup;    /* Apple10+                    */
+    bool        supports_i8_simdgroup;    /* false: no public integer matrix type */
     bool        supports_tensorops_m5;    /* Metal4 runtime gate for M5+ */
     bool        supports_fp64_native;     /* false on Apple GPU          */
 } tc_device_info;

@@ -6,6 +6,7 @@
 #import <Foundation/Foundation.h>
 
 #include "tensorcore/tensorcore.h"
+#include "apple_family.h"
 #include "internal.h"
 
 #include <atomic>
@@ -79,38 +80,36 @@ extern "C" const char* tc_version(void) {
 #undef TC_STRINGIFY_VERSION2
 
 /* ----------------------------------------------------------------- */
-/* Family detection — runtime probe of MTLGPUFamilyApple7..Apple11.   */
+/* Family detection — runtime probe of MTLGPUFamilyApple7..Apple10.   */
 /* ----------------------------------------------------------------- */
 extern "C" tc_family_t tc_device_family_from_mtl(id<MTLDevice> dev) {
-    tc_family_t fam = TC_FAMILY_UNKNOWN;
+    if (!dev) return TC_FAMILY_UNKNOWN;
+    tc_apple_family_support support = {};
 
-    /* Probe high-to-low so we report the highest supported family.
-     * Apple11 / MTLGPUFamilyMetal4 are macOS 26+ ; weak-link by branch on the
-     * symbol availability. */
+    /* Apple10 was added after the oldest supported SDK and is an enum member,
+     * not a preprocessor macro. Query its stable raw value on macOS 26+ so an
+     * old-SDK binary can still identify M5 hardware correctly. */
     if (@available(macOS 12.0, *)) {
-        if ([dev supportsFamily:MTLGPUFamilyApple7]) fam = TC_FAMILY_APPLE7;
+        support.apple7 = [dev supportsFamily:MTLGPUFamilyApple7];
     }
     if (@available(macOS 13.0, *)) {
-        if ([dev supportsFamily:MTLGPUFamilyApple8]) fam = TC_FAMILY_APPLE8;
+        support.apple8 = [dev supportsFamily:MTLGPUFamilyApple8];
     }
     if (@available(macOS 14.0, *)) {
-        if ([dev supportsFamily:MTLGPUFamilyApple9]) fam = TC_FAMILY_APPLE9;
+        support.apple9 = [dev supportsFamily:MTLGPUFamilyApple9];
     }
-#ifdef MTLGPUFamilyApple10
-    if (@available(macOS 15.0, *)) {
-        if ([dev supportsFamily:(MTLGPUFamily)MTLGPUFamilyApple10]) fam = TC_FAMILY_APPLE10;
-    }
-#endif
-#ifdef MTLGPUFamilyApple11
     if (@available(macOS 26.0, *)) {
-        if ([dev supportsFamily:(MTLGPUFamily)MTLGPUFamilyApple11]) fam = TC_FAMILY_APPLE11;
+        @try {
+            support.apple10 = [dev supportsFamily:(MTLGPUFamily)TC_MTL_GPU_FAMILY_APPLE10_RAW];
+        } @catch (...) {
+            support.apple10 = false;
+        }
     }
-#endif
-    return fam;
+    return tc_apple_family_select(support);
 }
 
-static bool tc_device_supports_tensorops_m5(id<MTLDevice> dev) {
-    if (!dev) return false;
+static bool tc_device_supports_tensorops_m5(id<MTLDevice> dev, tc_family_t family) {
+    if (!dev || !tc_apple_family_supports_tensorops_m5(family)) return false;
 
     BOOL metal4 = NO;
     @try {
@@ -233,9 +232,9 @@ extern "C" tc_status_t tc_init(tc_context** out_ctx) {
             ctx->info.max_threads_per_threadgroup   = 1024;
             ctx->info.thread_execution_width        = 32;  /* All Apple Silicon */
             ctx->info.unified_memory                = [dev hasUnifiedMemory];
-            ctx->info.supports_bf16_simdgroup       = (fam >= TC_FAMILY_APPLE9);
-            ctx->info.supports_i8_simdgroup         = (fam >= TC_FAMILY_APPLE10);
-            ctx->info.supports_tensorops_m5         = tc_device_supports_tensorops_m5(dev);
+            ctx->info.supports_bf16_simdgroup       = tc_apple_family_supports_bf16_simdgroup(fam);
+            ctx->info.supports_i8_simdgroup         = tc_apple_family_supports_i8_simdgroup(fam);
+            ctx->info.supports_tensorops_m5         = tc_device_supports_tensorops_m5(dev, fam);
             ctx->info.supports_fp64_native          = false;
 
             fprintf(stderr,
