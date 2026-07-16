@@ -77,7 +77,7 @@
       "metadata": {
         "project": "tensorcore",
         "scheduler_contract": "windows_cuda_admission_registered_lane",
-        "scheduler_pause_reason": "no submitted Jack CUDA workload yet",
+        "scheduler_pause_reason": "topology authority retired the physical Jack CUDA host; the replacement win11 guest has no NVIDIA GPU passthrough",
         "service": "cuda3060"
       },
       "owner": "tensorcore:jack-cuda",
@@ -140,7 +140,7 @@
         "evidence_path": "artifacts/mesh/windows/jack-cuda3060-smoke.json",
         "project": "tensorcore",
         "scheduler_contract": "windows_cuda_scheduled_smoke",
-        "scheduler_pause_reason": "Jack can create passwordless scheduled tasks but they do not execute from the noninteractive SSH session; keep paused until a durable service or credentialed scheduled-task launch path is installed",
+        "scheduler_pause_reason": "topology authority retired the physical Jack CUDA host; keep this historical smoke paused until a declared Windows CUDA replacement with real GPU passthrough exists",
         "service": "cuda3060-smoke",
         "target": "jack-cuda3060-scheduler-owned-cuda-smoke"
       },

@@ -174,14 +174,12 @@ the source of truth for accelerator ownership and scheduling eligibility:
   (`scripts/start_qllm_olddonkey_precompute_chain.py`) but stays paused until
   the dedicated qLLM checkout, data shards, and Python environment are verified
   on old-donkey.
-- `jack-blupc:cuda3060` is active as a scheduler-registered paused lane.
-  Windows SSH/bootstrap, portable CPU smoke, CUDA Toolkit 12.6 redistributable
-  discovery, exclusive admission, and CUDA build/CTest smoke are healthy.
-  Submitted Jack CUDA jobs must still provide workload-specific start,
-  post-start, and Windows worker-identity probes before they can launch. The
-  repo-owned scheduled-smoke helpers are also paused on Jack until a persistent
-  Windows service or credentialed scheduled-task path can keep CUDA work alive
-  after an SSH session exits.
+- `jack-blupc:cuda3060` is blocked historical inventory. `computer_mesh` now
+  declares the Windows replacement as the `win11` guest on `old-donkey`, and
+  that guest has no NVIDIA GPU passthrough. The old Windows CUDA probes remain
+  paused as diagnostics, but the topology authority and scheduler must reject
+  placement until a declared Windows CUDA host with a physical or passed-through
+  accelerator replaces it.
 - `atlas:metal_m2ultra` is active Metal capacity for validation, evaluation,
   generation support, and Tensorcore Metal workloads.
 - `enki:metal_m4_tsotchke_chan` is `reserved`; only `tsotchke-chan` owners may

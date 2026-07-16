@@ -79,12 +79,13 @@
       "worker_alias": "gpu:jack-blupc:0",
       "capacity": 1,
       "memory_gib": 12,
-      "status": "active",
-      "control_plane": "tensorcore_scheduler",
-      "general_queue_eligible": true,
+      "status": "blocked",
+      "control_plane": "blocked",
+      "general_queue_eligible": false,
+      "blocked_reason": "computer_mesh retired the physical Jack CUDA host; its replacement is the old-donkey win11 guest, which has no NVIDIA GPU passthrough",
       "gpu_reconciliation": {
         "enabled": false,
-        "reason": "windows worker snapshot agent pending; WDDM admission remains the launch-time guard"
+        "reason": "retired physical worker; retain diagnostics only until a declared Windows CUDA host is provisioned"
       },
       "cuda_probe_cmd": [
         "python3",
@@ -96,7 +97,7 @@
         "--require-toolchain",
         "--json"
       ],
-      "description": "Jack's RTX 3060 auxiliary CUDA lane. Windows CUDA readiness is validated with WDDM-aware admission plus nvcc/toolchain evidence."
+      "description": "Retired RTX 3060 lane retained as blocked historical inventory. It must not be scheduled unless a declared Windows CUDA host with real GPU passthrough replaces it."
     },
     {
       "id": "atlas:qwen_gen",
