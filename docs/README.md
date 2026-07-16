@@ -113,6 +113,9 @@ are the entry points; everything below goes deeper.
   runs and what every helper script in `scripts/` does.
 - **[hardware_runner_setup.md](hardware_runner_setup.md)** — M5/SDK26
   self-hosted runner setup and Hardware Evidence preflight runbook.
+- **[hardware_evidence_contribution.md](hardware_evidence_contribution.md)** —
+  zero-cost, one-shot M4/M5 evidence handoff from borrowed or contributor
+  hardware without persistent runner registration.
 - **[mesh_resource_scheduler.md](mesh_resource_scheduler.md)** — how agents
   submit shared-resource jobs without killing each other's work.
 

@@ -252,6 +252,11 @@ python3 scripts/check_apple_family_runtime_evidence.py \
   --require-chip M2 --require-clean-head --require-pass
 ```
 
+For borrowed or contributor hardware, prefer the single-command
+[hardware evidence contribution](hardware_evidence_contribution.md) flow. It
+configures the minimal build, verifies the exact commit and physical chip, and
+prints a SHA-256 transport record without registering a persistent runner.
+
 Replace `M2` with the physical chip class. The existing M4 resource in the
 current mesh is reserved, but it is not the only acceptable source of M4
 evidence. Every M4 run must declare a stable resource identifier and

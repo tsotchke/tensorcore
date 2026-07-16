@@ -170,6 +170,12 @@ PRs welcome. Include:
 - A `ROADMAP.md` update if the PR closes a v0.x item.
 - A `CHANGELOG.md` entry under the active checkpoint section.
 
+Physical M4/M5 owners can also contribute release evidence without opening a
+code PR or registering a persistent runner. Follow
+[docs/hardware_evidence_contribution.md](docs/hardware_evidence_contribution.md)
+to run the exact-commit one-shot handoff. Never submit credentials, runner
+tokens, serial numbers, or raw `system_profiler` output.
+
 Coding conventions are enforced by `-Wall -Wextra -Wpedantic` plus
 `-fobjc-arc`. The build is warning-clean today; keep it that way.
 

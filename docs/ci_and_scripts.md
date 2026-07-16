@@ -76,6 +76,20 @@ fetch, cancel, and preflight diagnostics.
 
 ## Scripts
 
+### `run_apple_family_evidence_handoff.py`
+
+One-command M4/M5 evidence producer for borrowed or contributor-owned
+hardware. It needs no repository credentials and installs no persistent
+runner. Before building, it enforces a full expected commit SHA, clean tracked
+tree, exact physical chip, public resource/owner provenance, and SDK 26+ on
+M5. It then configures a minimal test build, runs the physical collector and
+checker, and prints the evidence JSON SHA-256 for transport.
+
+The portable dry-run contract is covered by
+`run_apple_family_evidence_handoff_selftest.py` in normal Ubuntu/macOS/Windows
+CI. See [hardware_evidence_contribution.md](hardware_evidence_contribution.md)
+for contributor and maintainer commands.
+
 ### `hardware_runner_preflight.py`
 
 Writes the `tensorcore-hardware-runner-preflight` diagnostic used by

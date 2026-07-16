@@ -11,6 +11,8 @@ instance or asset id, and an accountable `authority_owner`. Do not identify
 the host as `enki:metal_m4_tsotchke_chan` unless the run is actually authorized
 for that reserved resource; reserved runs require a `tsotchke-chan:<run-id>`
 owner. See [family_gating.md](family_gating.md) for the one-shot local command.
+For borrowed hardware where repository runner credentials are unnecessary,
+use the safer [contributor handoff](hardware_evidence_contribution.md) instead.
 
 ## Current blocker snapshot
 
