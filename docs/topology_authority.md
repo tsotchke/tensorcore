@@ -161,6 +161,9 @@ python3 scripts/wrap_topology_observation_selftest.py
 python3 scripts/topology_authority_selftest.py
 python3 scripts/topology_scheduler_binding_selftest.py
 python3 scripts/check_topology_authority_docs.py
+python3 scripts/check_topology_authority_sprint.py \
+  --trace-output build/topology-authority-gates.jsonl \
+  --require-tracked-clean
 ```
 
 The tests cover complete source manifests, unknown identities, stale and

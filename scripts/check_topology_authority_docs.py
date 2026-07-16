@@ -43,6 +43,7 @@ REQUIRED_TEXT = {
         "python scripts/topology_authority_selftest.py",
         "python scripts/wrap_topology_observation_selftest.py",
         "python3 scripts/topology_scheduler_binding_selftest.py",
+        "python3 scripts/check_topology_authority_sprint.py",
     ),
 }
 
@@ -63,6 +64,7 @@ def main() -> int:
         "scripts/topology_authority.py",
         "scripts/wrap_topology_observation.py",
         "scripts/topology_scheduler_binding_selftest.py",
+        "scripts/check_topology_authority_sprint.py",
     ):
         if not (ROOT / relative).is_file():
             errors.append(f"documented topology path does not exist: {relative}")

@@ -108,7 +108,11 @@ jobs:
           python3 scripts/topology_scheduler_binding_selftest.py
 
       - name: Topology authority documentation contract
-        run: python3 scripts/check_topology_authority_docs.py
+        run: |
+          python3 scripts/check_topology_authority_docs.py
+          python3 scripts/check_topology_authority_sprint.py \
+            --trace-output "$RUNNER_TEMP/topology-authority-gates.jsonl" \
+            --require-tracked-clean
 
       - name: Mesh resource inventory fixtures
         run: |
