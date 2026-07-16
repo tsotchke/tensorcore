@@ -54,14 +54,15 @@ The reference dtype: `tc_gemm` fp32 is **bit-exact** against
 
 ### `TC_DTYPE_I8` — signed 8-bit integer
 
-**Storage:** 1 byte / element. **Apple10+ native** in `simdgroup_matrix`
-(M4 and newer). **Software fallback on Apple7..9.**
+**Storage:** 1 byte / element. Public MSL does not expose an integer
+`simdgroup_matrix` element type. Apple GPUs therefore use the tested MPS
+i8→fp32→i32 path on every family.
 
 Used for post-training quantization and Q-LoRA-style fine-tunes. The fallback
-widens to fp32; since fp32 has 24 bits of mantissa, the i8×i8 product
-accumulation is exact up to K = 2^16 (more than any realistic matmul). Tests
-report bit-exact agreement (0 errors / 65K cells at 256³) against an
-i32-reference on Apple8.
+widens to fp32. Tests bound inputs to `[-64, 63]` and K to 256, keeping the
+dot products within fp32's exact-integer range; they report bit-exact agreement
+(0 errors / 65K cells at 256³) against an i32 reference on Apple8. Larger or
+adversarial dot products are outside that bit-exact guarantee.
 
 ### `TC_DTYPE_I32` — signed 32-bit integer
 
@@ -113,7 +114,7 @@ for the precision-critical eigensolver paths in quantum compute.
 
 | Operation | F16 | BF16 | F32 | I8 | I32 | F64 / SF64 / DF64 / FP24 / FP53 |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|
-| `tc_gemm` | ✓ | ✓ (fallback < Apple9) | ✓ | ✓ (fallback < Apple10) | — | reserved (v0.4) |
+| `tc_gemm` | ✓ | ✓ (fallback < Apple9) | ✓ | ✓ (MPS on Apple GPU) | — | reserved (v0.4) |
 | `tc_gemm_async` | ✓ | ✓ | ✓ | ✓ | — | — |
 | `tc_attention_*` | ✓ | ✓ | — | — | — | — |
 | `tc_rmsnorm_*` | ✓ | — | — | — | — | — |
@@ -145,7 +146,7 @@ GEMM-shaped kernel, the rules are:
 | F16 | F32 | Standard ML practice. fp16 mantissa is 10 bits; long inner-products lose precision rapidly without fp32 accumulation. |
 | BF16 | F32 | Same reason; bf16 has 7-bit mantissa. |
 | F32 | F32 | Bit-exact against Accelerate. |
-| I8 | I32 | Required by the `simdgroup_matrix` int path. |
+| I8 | I32 | Public result/accumulator contract; Apple MPS computes through fp32 and converts to i32. |
 
 You can request other accumulators (e.g. fp16 accum for inference) by
 setting `tc_gemm_desc.accum_dtype` — but if you go below fp32 with fp16

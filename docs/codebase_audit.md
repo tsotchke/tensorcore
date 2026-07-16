@@ -129,7 +129,7 @@ cleanup for a future tightening pass.
 ICC's `architecture-cheatsheet` emits the full enum/define table verbatim.
 Excerpts:
 
-- `tc_family_t`: `APPLE7..APPLE11` (M1 → M5)
+- `tc_family_t`: `APPLE7..APPLE10` (M1 → M5), plus reserved `APPLE11`
 - `tc_dtype_t`: 10 dtypes; first-class F16/BF16/F32/I8/I32; emulated F64/SF64/DF64/FP24/FP53
 - `tc_backend_t`: NONE, SIMDGROUP_MATRIX, TENSOROPS_M5, MPS, ACCELERATE_CPU, SF64_EMULATED, OZAKI_II, PORTABLE_CPU, METAL_COMPUTE
 - `tc_status_t`: TC_OK plus 11 error codes

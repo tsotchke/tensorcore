@@ -11,15 +11,15 @@ open.
 
 ## GEMM family
 
-### `gemm_simdgroup.metal` — default fp16 / bf16 / fp32 / i8
+### `gemm_simdgroup.metal` — default fp16 / bf16 / fp32
 
-The workhorse. One kernel source, four dtype variants.
+The workhorse. One kernel source, three public floating-point variants.
 
 - **Tile:** BM = BN = 64, BK = 32
 - **Threads:** 4 simdgroups × 32 = 128 threads / TG (WM=2, WN=2)
 - **Per simdgroup:** 32 × 32 of the output, TM=4 × TN=4 of 8×8 MMA fragments
-- **Loads:** vec4 cooperative (half4 / float4 / char4)
-- **Accumulator:** fp32 unconditionally (i32 for int8); accumulation runs
+- **Loads:** vec4 cooperative (half4 / float4)
+- **Accumulator:** fp32 unconditionally; accumulation runs
   in-register, output is cast to the requested c_dtype on write
 - **Function constants:** dtype, transpose_a, transpose_b, alpha=0/1 shortcut
 
@@ -38,7 +38,7 @@ Same algorithm, larger tile.
 - **Threads:** 16 simdgroups × 32 = 512 threads / TG (WM=4, WN=4)
 - **Per simdgroup:** 32 × 32 of the output, TM=4, TN=4
 - **Loads:** half4 / float4 cooperative
-- **Accumulator:** fp32 (i32 for int8)
+- **Accumulator:** fp32
 
 Activate via `TC_USE_128_TILE=1`. Today regresses on M2 (~10 vs ~18
 TFLOPS at 4096³) due to register pressure; v0.2 retunes.

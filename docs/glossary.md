@@ -29,12 +29,13 @@ Attention with Linear Biases. A relative-position scheme where each
 attention score gets a `-slope * (i - j)` term added, instead of using
 RoPE. BLOOM uses it. `tc_attention_desc.alibi_slopes` enables it.
 
-### Apple7..Apple11
+### Apple7..Apple10
 
 Apple's GPU family identifiers, matching `MTLGPUFamilyApple{N}`. Apple7
-= M1, Apple8 = M2, Apple9 = M3 / A17 Pro, Apple10 = M4, Apple11 = M5.
-Each family adds capabilities — bf16 MMA on Apple9+, int8 MMA on
-Apple10+, `mpp::tensor_ops` on Apple11+.
+= M1, Apple8 = M2, Apple9 = M3/M4 and A17/A18, Apple10 = M5. The
+`TC_FAMILY_APPLE11` enum value is reserved for ABI compatibility and has no
+current public hardware mapping. Public bf16 MMA starts at Apple9;
+`mpp::tensor_ops` requires M5/Apple10 plus SDK 26.
 
 ### autotune
 
@@ -116,7 +117,7 @@ tensorcore exposes `__tc-*` builtins via the bridge file
 
 ### family / `tc_family_t`
 
-Apple's GPU family classification at runtime. See **Apple7..Apple11**.
+Apple's GPU family classification at runtime. See **Apple7..Apple10**.
 
 ### FlashAttention / FA / FA-2
 
@@ -189,10 +190,10 @@ softmax probabilities without re-materializing the score matrix.
 
 ### M-series (M1 / M2 / M3 / M4 / M5)
 
-Apple's marketing names for Apple Silicon SoC generations. Maps to
-Apple7..Apple11 GPU families respectively. Plus product variants — M*
-Max, M* Ultra — that differ in core count but share the family
-identifier.
+Apple's marketing names for Apple Silicon SoC generations. These do not map
+one-to-one to GPU family numbers: M3 and M4 are Apple9, while M5 is Apple10.
+Product variants such as M* Max and M* Ultra differ in core count but share
+the generation's family identifier.
 
 ### Mac Studio / unified-memory ceiling
 
@@ -309,9 +310,9 @@ in `tc_device_info`.
 ### simdgroup_matrix
 
 Metal's matrix-multiply-accumulate primitive operating on 8×8 fragments.
-The default tensorcore GEMM path. fp16 / fp32 supported on Apple7+;
-bf16 on Apple9+; int8 on Apple10+. Software fallback via fp32 on older
-chips.
+The default floating-point TensorCore GEMM path. fp16 / fp32 are supported
+on Apple7+ and bf16 on Apple9+. Public MSL exposes no integer matrix element
+type, so int8 GEMM uses the tested MPS path on Apple GPUs.
 
 ### softmax_scale
 

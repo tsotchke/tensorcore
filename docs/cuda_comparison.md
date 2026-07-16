@@ -31,7 +31,7 @@ software stack* at the kernel layer.
 | cudaMalloc / cudaFree | `tc_buffer_alloc` / `tc_buffer_free` (with a power-of-2 LIFO pool — no `cudaMallocAsync` needed because UMA) |
 | cudaMemcpyAsync (host↔device) | not needed — unified memory: `tc_buffer_map` returns a CPU-addressable pointer with no copy |
 | CUDA streams | `tc_stream_create`, `tc_stream_sync` |
-| Tensor Cores (sm_70+ MMA) | `simdgroup_matrix` on Apple7+ (M1+); `mpp::tensor_ops::matmul2d` on Apple11 (M5) |
+| Tensor Cores (sm_70+ MMA) | floating-point `simdgroup_matrix` on Apple7+ (M1+); `mpp::tensor_ops::matmul2d` on Apple10 (M5) |
 | TF32 / FP8 transformer engine | bf16 + fp32 accum today; fp8/fp4 emulation slated for v0.6 |
 | ggml (community) | first-class: built-in Q4_0 / Q8_0 GEMV plus a GGUF v3 reader |
 | Triton on CUDA | the eshkol bridge — write `.esk` and codegen drops into the same C ABI |
@@ -56,9 +56,9 @@ transfers.
 ### One library, every M-series chip
 
 The same library binary runs on M1 through M5. Family gating is a runtime
-detail: bf16 lights up on Apple9+ (M3+), int8 on Apple10+ (M4+), Metal 4
-TensorOps on Apple11+ (M5+). Older silicon falls back automatically — to a
-software emulation for bf16/int8, or to MPS / Accelerate. See
+detail: bf16 lights up on Apple9+ (M3/M4), while Metal 4 TensorOps requires
+M5/Apple10. Integer GEMM uses MPS on every Apple family because public MSL
+does not expose integer `simdgroup_matrix` elements. See
 [family_gating.md](family_gating.md).
 
 NVIDIA solves this with `sm_XX` PTX. Apple solves it with `MTLGPUFamily*`
@@ -74,8 +74,9 @@ ceiling. This is the single biggest difference from CUDA kernel design.
 ### `simdgroup_matrix` is the MMA unit
 
 The Metal equivalent of an `mma.sync` instruction is a `simdgroup_matrix`
-load + multiply + store at 8×8 (fp16, bf16, fp32) or 8×8 i8. One simdgroup
-(32 threads) cooperatively executes one MMA. We tile 64×64 with 4×4 MMA
+load + multiply + store at 8×8 for public floating-point element types
+(fp16, bf16, fp32). One simdgroup (32 threads) cooperatively executes one MMA.
+We tile 64×64 with 4×4 MMA
 fragments per simdgroup, 16 fragments per CTA at the standard tile.
 
 The 128×128 tile (`gemm_simdgroup_128.metal`) is opt-in via
@@ -84,7 +85,7 @@ The 128×128 tile (`gemm_simdgroup_128.metal`) is opt-in via
 ### No bespoke compute capability table
 
 You don't pick a kernel by compute capability; you pick by `tc_family_t`
-(Apple7..Apple11) and `tc_dtype_t`. The dispatch in `lib/ops/*.mm` does the
+(Apple7..Apple10, with Apple11 reserved) and `tc_dtype_t`. The dispatch in `lib/ops/*.mm` does the
 work. If a path isn't available on the current chip, you get
 `TC_ERR_UNSUPPORTED_FAMILY` or a fallback to MPS / Accelerate (which path
 served the call is reported by `tc_last_backend()`).

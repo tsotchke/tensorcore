@@ -38,9 +38,11 @@ Apple has to ship hardware, and what software work closes the gap.
 | FlashAttention | D=128 | fp16 | correctness verified | — | — |
 | Q4_0/Q8_0 GEMV | 7B decode-step harness | fp16 activations | verified | — | — |
 
-Same kernels run unchanged on M1 (Apple7), M2 (Apple8), M3 (Apple9), M4 (Apple10),
-M5 (Apple11). bf16 path gated to Apple9+, int8 to Apple10+, Metal-4 TensorOps
-to Apple11+. All tests pass; fp32 GEMM is bit-exact vs Accelerate.
+The same library runs on M1 (Apple7), M2 (Apple8), M3/M4 (Apple9), and M5
+(Apple10). The bf16 matrix path is gated to Apple9+, integer GEMM uses MPS on
+all Apple families, and Metal 4 TensorOps requires M5/Apple10 plus SDK 26.
+Apple11 remains a reserved ABI value. All tests pass; fp32 GEMM is bit-exact
+vs Accelerate.
 
 ---
 
@@ -196,7 +198,7 @@ some still queued.
 - [x] **`simdgroup_matrix` GEMM** — fp16/fp32 (64×64 tile, BK=32, vec4 loads,
       f32-accum) — **17.88 TFLOPS @ 4096³ on M2 Ultra, fp32 bit-exact vs Accelerate**
 - [x] bf16 GEMM — native on Apple9+, fp32-fallback on Apple7..8 (validated, rms ≤ 3e-3)
-- [x] int8 GEMM — native on Apple10+, fp32-widen fallback on Apple7..9 (bit-exact i32 accum)
+- [x] int8 GEMM — public MPS fallback on every Apple family (bit-exact on the bounded test matrix)
 - [x] 128×128 large-tile GEMM (env-flag opt-in; register-pressure tuning v0.2)
 - [x] **Fused FlashAttention forward** — fp16, D=64 and D=128, with causal,
       GQA, sliding-window, and ALiBi via function constants

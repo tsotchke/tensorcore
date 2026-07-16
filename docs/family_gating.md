@@ -9,6 +9,11 @@ path isn't available.
 This page explains how the detection works, what each family unlocks, and
 how to diagnose a misfire.
 
+The source contracts are Apple's [Metal feature set tables](https://developer.apple.com/metal/capabilities/)
+(revision 2026-05-21) and [Metal Shading Language specification](https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf)
+(revision 2026-06-04). The repository mirrors the machine-readable policy in
+`configs/apple_family_runtime.json`.
+
 ## The family enum
 
 ```c
@@ -16,15 +21,15 @@ typedef enum {
     TC_FAMILY_UNKNOWN = 0,
     TC_FAMILY_APPLE7  = 7,    /* M1                                   */
     TC_FAMILY_APPLE8  = 8,    /* M2                                   */
-    TC_FAMILY_APPLE9  = 9,    /* M3, A17 Pro     — adds bf16 MMA      */
-    TC_FAMILY_APPLE10 = 10,   /* M4              — adds int8 MMA      */
-    TC_FAMILY_APPLE11 = 11,   /* M5              — adds TensorOps M5  */
+    TC_FAMILY_APPLE9  = 9,    /* M3/M4, A17/A18  — adds bf16 MMA      */
+    TC_FAMILY_APPLE10 = 10,   /* M5              — adds TensorOps M5  */
+    TC_FAMILY_APPLE11 = 11,   /* reserved ABI value                    */
 } tc_family_t;
 ```
 
-The numbers match Apple's `MTLGPUFamilyApple{N}` constants exactly. `0`
-means "not classified" — should never happen in practice; if you see it,
-the device is non-Apple silicon and many ops will fail.
+Values 7 through 10 match Apple's public `MTLGPUFamilyApple{N}` constants.
+Apple11 is retained only for ABI compatibility and has no current public
+hardware mapping. `0` means "not classified."
 
 ## What each family unlocks
 
@@ -32,33 +37,32 @@ the device is non-Apple silicon and many ops will fail.
 |---|---|---|---|---|
 | Apple7 | M1 | fp16, fp32 | — | bf16 / int8 via fallback |
 | Apple8 | M2 | fp16, fp32 | — | bf16 / int8 via fallback |
-| Apple9 | M3, A17 Pro | fp16, bf16, fp32 | — | int8 via fallback |
-| Apple10 | M4 | fp16, bf16, fp32, int8 | — | full simdgroup_matrix coverage |
-| Apple11 | M5 | fp16, bf16, fp32, int8 | ✓ (SDK 26.0+ + M5 runtime) | `mpp::tensor_ops::matmul2d` adds the fast small-shape path |
+| Apple9 | M3, M4, A17/A18 | fp16, bf16, fp32 | — | int8 via MPS fallback |
+| Apple10 | M5 | fp16, bf16, fp32 | ✓ (SDK 26.0+ + M5 runtime) | `mpp::tensor_ops::matmul2d` adds the fast small-shape path |
+| Apple11 | reserved | — | — | no current public Metal family mapping |
 
 "Native MMA" means `simdgroup_matrix` instructions of that dtype are
-available on the silicon. When a dtype is not native, the dispatch routes
-through a software fallback (bf16 → fp32 cast, int8 → fp32 widen) that
-produces the right answer at lower throughput.
+available through public MSL. Integer `simdgroup_matrix` element types are
+not public, so int8 routes through the tested MPS i8→fp32→i32 path.
 
 ## How detection works
 
 `lib/core/device.mm` runs the following at `tc_init` time:
 
 1. Get the default `MTLDevice` (`MTLCreateSystemDefaultDevice()`).
-2. Find the highest family the device supports:
+2. Probe Apple7, Apple8, and Apple9 through the SDK constants, then probe
+   Apple10's stable raw value (`1010`) on macOS 26+ so builds made with
+   older headers can still classify M5:
    ```objc
-   for (NSInteger f = MTLGPUFamilyApple11; f >= MTLGPUFamilyApple7; --f) {
-       if ([device supportsFamily:(MTLGPUFamily)f]) {
-           info.family = (tc_family_t)f;
-           break;
-       }
-   }
+   apple10 = [device supportsFamily:(MTLGPUFamily)1010];
+   apple9  = [device supportsFamily:MTLGPUFamilyApple9];
+   apple8  = [device supportsFamily:MTLGPUFamilyApple8];
+   apple7  = [device supportsFamily:MTLGPUFamilyApple7];
    ```
 3. Set capability flags:
    - `supports_bf16_simdgroup = family >= Apple9`
-   - `supports_i8_simdgroup   = family >= Apple10`
-   - `supports_tensorops_m5   = family >= Apple11 && SDK 26.0+ && TC_ENABLE_TENSOROPS=ON`
+   - `supports_i8_simdgroup   = false`
+   - `supports_tensorops_m5   = family == Apple10 && SDK 26.0+ && Metal4 runtime support`
 4. Cache `device.name`, `max_buffer_bytes`, `recommended_working_set_bytes`,
    `max_threadgroup_memory`, `max_threads_per_threadgroup`, and
    `unified_memory` (always `true` on M-series).
@@ -76,11 +80,10 @@ input dtype × family → kernel path
 F16 / F32         × any                      → simdgroup_matrix native
 BF16              × Apple9+                  → simdgroup_matrix native
 BF16              × Apple7..8                → MPS bf16 (or fp32 cast fallback)
-I8                × Apple10+                 → simdgroup_matrix int
-I8                × Apple7..9                → fp32 widen fallback
+I8                × any Apple family         → MPS i8→fp32→i32 fallback
 F32 (very small)  × any                      → MPS (latency wins)
 unsupported shape × any                      → Accelerate cblas_sgemm
-F32 (TC_ENABLE_TENSOROPS=1 + Apple11 + SDK 26+) → tensorops_m5
+F32 (TC_ENABLE_TENSOROPS=1 + M5/Apple10 + SDK 26+) → tensorops_m5
 ```
 
 `tc_last_backend()` reports which row matched.
@@ -130,7 +133,7 @@ printf("family=Apple%d  bf16=%d  i8=%d  tensorops=%d\n",
 
 You can't force, but you can disable. To compare paths:
 
-- Build without TensorOps: `cmake -DTC_ENABLE_TENSOROPS=OFF` (default is `ON`, but it only has an effect with SDK 26.0+ and Apple11/M5+ runtime support).
+- Build without TensorOps: `cmake -DTC_ENABLE_TENSOROPS=OFF` (default is `ON`, but it only has an effect with SDK 26.0+ and M5/Apple10 runtime support).
   M5 then falls back to simdgroup_matrix.
 - Force MPS: deliberately call a shape outside the kernel's tile coverage
   (e.g. `M % 64 != 0`). This is brittle; we'll add an `TC_FORCE_BACKEND`
@@ -229,7 +232,7 @@ the chip doesn't support the path being tested:
 | Test | Skip condition |
 |---|---|
 | `test_gemm_bf16` | Apple < 9 → skipped pre-v0.1.3; now runs (validates the fp32 fallback) |
-| `test_gemm_i8` | Apple < 10 → skipped pre-v0.1.3; now runs (validates the fp32 widen fallback) |
+| `test_gemm_i8` | always runs (validates the bit-exact public MPS fallback) |
 | `test_attention_correctness` | always runs (fp16) |
 | `test_attention_backward` | always runs (fp16); validates D=64 and D=128 |
 | `test_quantized` | always runs |
@@ -238,6 +241,22 @@ the chip doesn't support the path being tested:
 | `test_diloco` | always runs (local/single-rank DiLoCo path) |
 | `test_sparse_compress` | always runs (host-side sparse pack/unpack) |
 | `test_tensorops_runtime` | skips politely until Metal 4 TensorOps is available |
+
+For publishable physical evidence, build the four tests and run:
+
+```sh
+python3 scripts/run_apple_family_runtime_evidence.py \
+  --build-dir build --expected-chip M2 --require-pass
+python3 scripts/check_apple_family_runtime_evidence.py \
+  build/apple_family_runtime_evidence.json \
+  --require-chip M2 --require-clean-head --require-pass
+```
+
+Replace `M2` with the physical chip class. M4 is a reserved resource in the
+current mesh and requires `TC_AUTHORITY_OWNER=tsotchke-chan:<run-id>`; the
+collector checks that authority immediately after host identification and
+does not execute a TensorCore GPU binary when it is absent. M5 additionally
+requires SDK 26+ and `tensorops_runtime_status=passed backend=tensorops_m5`.
 
 The default Apple suite is **31 tests** at this checkpoint: 27
 correctness/Python tests plus four native example smokes. It takes

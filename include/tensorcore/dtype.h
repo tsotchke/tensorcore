@@ -16,7 +16,7 @@ typedef enum {
     TC_DTYPE_F16  = 0,   /* IEEE 754 binary16, simdgroup_matrix on Apple7+        */
     TC_DTYPE_BF16 = 1,   /* bfloat16, simdgroup_matrix on Apple9+ (M3+)           */
     TC_DTYPE_F32  = 2,   /* IEEE 754 binary32, simdgroup_matrix on Apple7+        */
-    TC_DTYPE_I8   = 3,   /* int8, simdgroup_matrix on Apple10+ (M4+), i32 accum   */
+    TC_DTYPE_I8   = 3,   /* int8, tested MPS/portable/CUDA/HIP paths, i32 accum   */
     TC_DTYPE_I32  = 4,   /* int32, used for i8 accumulators / indices             */
     TC_DTYPE_F64  = 5,   /* IEEE 754 binary64 — emulated (SF64) on GPU            */
     TC_DTYPE_SF64 = 6,   /* SoftFloat-64 storage (uint2)                          */

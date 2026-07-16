@@ -1136,8 +1136,8 @@ Closes every remaining hardware-gated path from v0.1.2 by adding **software fall
 ### Software bf16 + i8 GEMM (every M-series, today)
 - `lib/fallback/mps_gemm.mm`: added `bf16_via_fp32` and `i8_via_fp32`. The
   bf16 path bit-casts bf16↔fp32 (bf16 = high 16 bits of fp32) and routes
-  through tc_gemm fp32. The i8 path is exact (fp32 has 24-bit mantissa,
-  more than enough for int8·int8 sums up to K=2^16).
+  through tc_gemm fp32. The i8 path is exact for the bounded test matrices,
+  whose dot products remain within fp32's exact-integer range.
 - `tests/test_gemm_bf16.c`: **was skipping on Apple<9; now runs and passes**
   on M2 Ultra at all 4 shapes. RMS-scaled error ~2.7e-3 vs fp64 reference.
 - `tests/test_gemm_i8.c`: **was skipping on Apple<10; now runs and passes**.
@@ -1261,7 +1261,9 @@ Adds the rest of the training stack on top of v0.1.0's kernel substrate.
 
 ### Known not-yet-shipped (deferred to v0.2)
 - `simdgroup_async_copy` MFA-style pattern adoption in GEMM. Compile-time gate (`TC_HAVE_ASYNC_COPY`) is in but the kernel still uses vec4 cooperative loads. Avoiding this in v0.1 because Metal lacks an explicit async DMA primitive (verified via dougallj/applegpu research) and the prior double-buffer attempt regressed perf. Real path requires M3+ hardware to validate the explicit async copy.
-- bf16 / int8 perf validation (M2 Ultra silicon doesn't expose those simdgroup_matrix variants; kernels compile and dispatch-skip cleanly).
+- bf16 perf validation remained hardware-gated. The earlier planned integer
+  `simdgroup_matrix` variant was not a public MSL contract and has since been
+  removed; integer GEMM now uses the tested MPS fallback on Apple GPUs.
 - Multi-batch Conv2D forward and dW accumulation (single-batch only on this path).
 - Real Thunderbolt-5 ring + JACCL distributed backend (single-host emulation is live; multi-Mac is a phase v0.5 hardware-validation milestone).
 

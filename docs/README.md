@@ -51,7 +51,7 @@ are the entry points; everything below goes deeper.
   cache, buffer pool, op dispatch, fallback ladder, autotune.
 - **[dtypes.md](dtypes.md)** — the 10-dtype spectrum, what's native vs
   emulated, accumulation rules.
-- **[family_gating.md](family_gating.md)** — Apple7..Apple11 detection,
+- **[family_gating.md](family_gating.md)** — Apple7..Apple10 detection (Apple11 reserved),
   per-dtype hardware gates, SDK gates, and how the dispatch picks a path.
 - **[cuda_comparison.md](cuda_comparison.md)** — direct
   cuBLAS / cuDNN / CUTLASS / NCCL / Triton ↔ tensorcore equivalents.

@@ -206,7 +206,7 @@ context's lifetime.
 | M2 Max | 96 GB | ~13B fp16 |
 | M2 Ultra | 192 GB | ~70B fp16 (with sharded KV-cache headroom) |
 | M3 Max | 128 GB | ~30B fp16 (Apple9 bf16 native) |
-| M4 Max | 128 GB | ~30B fp16 (Apple10 int8 native) |
+| M4 Max | 128 GB | ~30B fp16 (Apple9 bf16 native) |
 | M5 Max | 64 GB (rumored) | ~13B fp16 (TensorOps perf > capacity) |
 | M5 Ultra | 192-256 GB (rumored) | ~70B fp16 with TensorOps acceleration |
 

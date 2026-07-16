@@ -52,7 +52,7 @@ include/tensorcore/
   status.h          ← tc_status_t error codes; tc_status_string
   dtype.h           ← tc_dtype_t enum (10 dtypes); tc_dtype_size, tc_dtype_name
   device.h          ← tc_context, tc_buffer, tc_stream opaque types
-                      tc_family_t (Apple7..Apple11), tc_device_info
+                      tc_family_t (Apple7..Apple10; Apple11 reserved), tc_device_info
                       tc_init/shutdown, tc_buffer_alloc/free/map,
                       tc_stream_create/destroy/sync
   gemm.h            ← tc_gemm_desc, tc_gemm[/_async/_batched]
@@ -159,10 +159,12 @@ examples/
 ### `tc_init` (lib/core/device.mm)
 
 1. Acquire the default `MTLDevice`.
-2. Classify the device into `tc_family_t` by calling `supportsFamily:` for
-   each `MTLGPUFamilyApple{7..11}`.
-3. Detect `supports_bf16_simdgroup` (Apple9+), `supports_i8_simdgroup`
-   (Apple10+), `supports_tensorops_m5` (SDK 26.0+ build plus M5/Metal4 runtime).
+2. Classify the device into `tc_family_t` by probing public Apple7 through
+   Apple10 family values. Apple11 remains reserved.
+3. Detect `supports_bf16_simdgroup` (Apple9+) and
+   `supports_tensorops_m5` (SDK 26.0+ build plus M5/Apple10/Metal4 runtime).
+   `supports_i8_simdgroup` is always false because public MSL has no integer
+   matrix element type.
 4. Build the default `MTLCommandQueue`.
 5. Locate and load `tensorcore.metallib` (search order documented in
    [integrating_tensorcore.md](integrating_tensorcore.md)).
@@ -198,8 +200,7 @@ parts).
    - fp16/fp32 + Apple7+ → `gemm_simdgroup` 64×64 tile
    - bf16 + Apple9+ → `gemm_simdgroup_bf16` variant
    - bf16 + Apple7..8 → fallback path: bit-cast bf16↔fp32, call fp32 kernel
-   - i8 + Apple10+ → `gemm_simdgroup_i8` variant
-   - i8 + Apple7..9 → fallback: widen to fp32, call fp32 kernel
+   - i8 on every Apple family → tested MPS i8→fp32→i32 fallback
    - 128×128 tile if `TC_USE_128_TILE=1` and shape supports it
    - M5 + SDK 26+ + tensorops on → `mpp::tensor_ops::matmul2d` path
    - shape outside kernel coverage → MPS fallback
@@ -287,9 +288,9 @@ This is the Metal-native answer to CUDA's `__device__ template` instantiation.
 Every op has a backend ordering. For GEMM:
 
 ```
-simdgroup_matrix  ←  best path, M-series Apple7+
-   ↓ kernel not available (Apple7 + i8, etc.)
-tensorops_m5       ←  Apple11 + SDK 26+ specifically
+simdgroup_matrix  ←  best public floating-point path, M-series Apple7+
+   ↓ kernel not available
+tensorops_m5       ←  M5 / Apple10 + SDK 26+ specifically
    ↓ shape not handled by kernels
 mps                ←  MPSMatrix on the GPU
    ↓ MPS rejected the call

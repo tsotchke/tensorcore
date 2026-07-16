@@ -163,7 +163,7 @@ Authenticated remote/mesh entry points are
 
 ### `tc_family_t`
 `TC_FAMILY_UNKNOWN`=0, `_APPLE7`=7 (M1), `_APPLE8`=8 (M2), `_APPLE9`=9
-(M3 / A17 Pro), `_APPLE10`=10 (M4), `_APPLE11`=11 (M5).
+(M3/M4, A17/A18), `_APPLE10`=10 (M5), `_APPLE11`=11 (reserved ABI value).
 
 ### `tc_backend_t`
 `TC_BACKEND_NONE`, `_SIMDGROUP_MATRIX`, `_TENSOROPS_M5`, `_MPS`,
@@ -215,7 +215,7 @@ Python wrapper parity in `python/tensorcore/__init__.py`.
 |---|:---:|:---:|:---:|:---:|:---:|
 | `tc_gemm` (fp16/fp32) | ✓ | ✓ (M5 + SDK 26) | ✓ (fallback) | ✓ (fallback) | ✓ |
 | `tc_gemm` (bf16) | ✓ (Apple9+) | ✓ (M5 + SDK 26) | ✓ (fallback) | ✓ (cast) | ✓ |
-| `tc_gemm` (int8) | ✓ (Apple10+) | ✓ (M5 + SDK 26) | ✓ (fallback) | ✓ (widen) | ✓ |
+| `tc_gemm` (int8) | — | — | ✓ (MPS fallback) | ✓ (widen) | ✓ |
 | `tc_attention_forward` | ✓ | (v0.2) | — | — | ✓ |
 | `tc_attention_backward` | ✓ (D=64,D=128) | — | — | — | ✓ |
 | `tc_conv2d_*` | ✓ (im2col + gemm) | (inherits) | (inherits) | (inherits) | ✓ |

@@ -51,7 +51,7 @@ Three independent gates. Each must pass:
 | Gate | Check |
 |---|---|
 | Build-time SDK gate | `xcrun --show-sdk-version` ≥ 26.0 when you ran CMake |
-| Runtime family gate | `tc_device_info_get().family >= TC_FAMILY_APPLE11` |
+| Runtime family gate | `tc_device_info_get().family == TC_FAMILY_APPLE10` (M5) |
 | Runtime flag gate | `tc_device_info_get().supports_tensorops_m5 == true` (depends on macOS >= 26.0 + `-DTC_ENABLE_TENSOROPS=ON`) |
 
 If you have an M5 and built with SDK 26.0+, but `supports_tensorops_m5`

@@ -22,7 +22,7 @@ typedef struct {
      *   {a:F16, b:F16, c:F16, accum:F32}            (Apple7+)
      *   {a:BF16, b:BF16, c:BF16, accum:F32}         (Apple9+)
      *   {a:F32, b:F32, c:F32, accum:F32}            (Apple7+)
-     *   {a:I8, b:I8, c:I32, accum:I32}              (Apple10+)
+     *   {a:I8, b:I8, c:I32, accum:I32}              (MPS on Apple GPU)
      */
     tc_dtype_t a_dtype;
     tc_dtype_t b_dtype;

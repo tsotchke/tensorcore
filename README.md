@@ -6,7 +6,7 @@
 M-series GPUs into a training-grade foundation. It does for Metal what
 cuBLAS + cuDNN + CUTLASS + NCCL + ggml-quants combined do for CUDA: one
 hardware-aware library and one C ABI. The same source builds for **M1
-(Apple7) through M5 (Apple11)**, portable Linux and Windows CPU targets,
+(Apple7) through M5 (Apple10)**, portable Linux and Windows CPU targets,
 NVIDIA CUDA, and HIP-compatible runtimes.
 
 ```
@@ -52,7 +52,7 @@ equivalent, see **[docs/cuda_comparison.md](docs/cuda_comparison.md)**.
 | `tc_gemm` fp32 | bit-exact vs Accelerate | 2.46 TFLOPS @ 4096³ |
 | `tc_gemm` fp16 (Apple7+) | scaled-RMS err ≤ 5e-3 vs ref | **17.88 TFLOPS @ 4096³ (~66% of peak)** |
 | `tc_gemm` bf16 (Apple9+ native, Apple7..8 fallback) | scaled-RMS ≤ 3e-3 | correctness verified |
-| `tc_gemm` int8 (Apple10+ native, Apple7..9 fallback) | bit-exact i32 accum | correctness verified |
+| `tc_gemm` int8 (public MPS fallback on Apple GPUs) | bit-exact i32 results in the tested matrix suite | correctness verified |
 | `tc_gemm_*_128` 128×128 tile | env-flag opt-in | regresses v0.1; v0.2 retunes |
 | `tc_attention_forward` fp16 D=64, causal/GQA/window/ALiBi | scaled-RMS ≤ 1e-3 | 7.07 TFLOPS @ B=1, H=32, S=4096 |
 | `tc_attention_forward` fp16 D=128 | correctness verified | bench harness v0.2 |
@@ -102,12 +102,13 @@ Complete reference: **[docs/api_reference.md](docs/api_reference.md)**.
 |---|---|---|---|
 | Apple7 | M1 | fp16, fp32 | — |
 | Apple8 | M2 | fp16, fp32 | — |
-| Apple9 | M3, A17 Pro | + bf16 | — |
-| Apple10 | M4 | + int8 | — |
-| Apple11 | M5 | (all of the above) | ✓ (SDK 26.0+ + M5 runtime) |
+| Apple9 | M3, M4, A17/A18 | + bf16 | — |
+| Apple10 | M5 | fp16, bf16, fp32 | ✓ (SDK 26.0+ + M5 runtime) |
+| Apple11 | reserved ABI value | — | — |
 
-bf16 and int8 are software-fallback on older silicon, with the dispatch
-choosing the fastest available path. One library binary; no per-chip
+bf16 falls back on Apple7..8. Integer GEMM uses the tested MPS path on
+every Apple family because public MSL exposes no integer
+`simdgroup_matrix` element type. One library binary; no per-chip
 builds. See **[docs/family_gating.md](docs/family_gating.md)**.
 
 ## Where it slots in

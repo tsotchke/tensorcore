@@ -289,9 +289,9 @@ Rough TFLOPS ceilings the v0.2-v0.3 kernels should hit at fp16:
 | M2 Max (Apple8) | 38 | 1.4 GHz | ~13 TFLOPS | ~10 |
 | **M2 Ultra (Apple8)** | **76** | **1.4 GHz** | **~27 TFLOPS** | **~20 (measured 17.88 today)** |
 | M3 Max (Apple9) | 40 | 1.4 GHz | ~14 TFLOPS | ~10.5 |
-| M4 Max (Apple10) | 40 | 1.5 GHz | ~16 TFLOPS | ~12 |
-| M5 Max (Apple11) | 40 | 1.5 GHz | ~80-110 TFLOPS (TensorOps) | depends on TensorOps perf |
-| M5 Ultra (Apple11) | 80 | 1.5 GHz | ~160-220 TFLOPS (TensorOps) | pending M5 hardware |
+| M4 Max (Apple9) | 40 | 1.5 GHz | ~16 TFLOPS | ~12 |
+| M5 Max (Apple10) | 40 | 1.5 GHz | ~80-110 TFLOPS (TensorOps) | depends on TensorOps perf |
+| M5 Ultra (Apple10) | 80 | 1.5 GHz | ~160-220 TFLOPS (TensorOps) | pending M5 hardware |
 
 The M5 jump is real but speculative until we measure: Apple reports a 4×
 speedup on small-shape matmul from the "neural accelerators." The number

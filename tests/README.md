@@ -54,7 +54,7 @@ regression runs unconditionally and does not execute raw AMX instructions.
 | 2 | `test_gemm_f16.c` | fp16 GEMM at multiple shapes vs fp64 reference (rms_scaled ≤ 5e-3) |
 | 3 | `test_gemm_f32.c` | fp32 GEMM **bit-exact** vs `cblas_sgemm` |
 | 4 | `test_gemm_bf16.c` | bf16 GEMM; native on Apple9+, fp32-cast fallback on Apple7..8 |
-| 5 | `test_gemm_i8.c` | int8 GEMM; native on Apple10+, fp32-widen fallback on Apple7..9; bit-exact for K ≤ 2^16 |
+| 5 | `test_gemm_i8.c` | int8 GEMM; public MPS fallback on every Apple family; bit-exact exercised matrices |
 | 6 | `test_attention_correctness.c` | FlashAttention forward: causal, GQA (3 cases), sliding window, ALiBi |
 | 7 | `test_attention_backward.c` | FlashAttention backward at D=64 and D=128 vs numerical-differences reference |
 | 8 | `test_training_kernels.c` | RMSnorm fwd+bwd, LayerNorm fwd+bwd, RoPE fwd+bwd, SwiGLU fwd+bwd, softmax fwd+bwd, AdamW |

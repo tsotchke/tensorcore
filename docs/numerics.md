@@ -33,8 +33,8 @@ Two tensors agree to the last bit. Used when we expect the kernel and
 the reference to produce identical results:
 
 - fp32 GEMM matches `cblas_sgemm` exactly (`tests/test_gemm_f32.c`)
-- int8 GEMM with `accum_dtype=TC_DTYPE_I32` matches an i32-reference
-  exactly up to `K=2^16` (`tests/test_gemm_i8.c`)
+- int8 GEMM with `accum_dtype=TC_DTYPE_I32` matches an i32 reference for the
+  bounded matrices exercised by `tests/test_gemm_i8.c`
 - Q4 dequant-and-multiply matches the CPU reference exactly when both
   use the same block layout
 
@@ -51,7 +51,7 @@ rms_scaled in `test_attention_correctness.c`.
 | `tc_gemm` fp32 | `cblas_sgemm` | **bit-exact** |
 | `tc_gemm` fp16 (Apple7+) | fp64 reference | rms_scaled ≤ 5e-3 |
 | `tc_gemm` bf16 (Apple9+ native or fp32 fallback) | fp64 reference | rms_scaled ≤ 3e-3 |
-| `tc_gemm` int8 → i32 (Apple10+ native or fp32 widen fallback) | i32 reference up to K=2^16 | **bit-exact** |
+| `tc_gemm` int8 → i32 (MPS i8→fp32→i32 on Apple GPU) | i32 reference for the exercised shapes | **bit-exact in the test matrix** |
 | `tc_attention_forward` fp16 | fp64 reference | rms_scaled ≤ 1e-3 at S=4096 |
 | `tc_attention_backward` fp16 D=64/D=128 | numerical-differences reference | rms_scaled ≤ 3e-3 |
 | Q4_0 / Q8_0 GEMV | dequantized CPU reference | rms_scaled ≤ 2e-4 |
@@ -104,17 +104,15 @@ happen in the same order. The result is the same up to the last bit.
 This is the test we'd want to break first if we change anything in the
 fp32 path. It's that load-bearing.
 
-## Why int8 is bit-exact up to K=2^16
+## Why the exercised int8 matrices are bit-exact
 
-`i8 × i8 → i16` per multiply; summing K of them needs `i16 + log2(K)`
-bits to never overflow. For K=2^16, that's 16 + 16 = 32 bits — exactly
-what `i32` accumulators give. Below K=2^16, the fp32-widen fallback (used
-on Apple7..9) is also bit-exact because fp32's 24-bit mantissa is more
-than 24 bits ≥ 16 + log2(K) for K ≤ 2^8.
-
-Above K=2^16, accumulation can overflow on the native int8 path; the
-test caps K at 16384 to stay in-bound. Real Q-LoRA workloads stay well
-under this.
+Apple GPUs widen int8 inputs to fp32 for the MPS multiply and convert the
+result to i32. An integer is represented exactly in fp32 while its magnitude
+fits within the 24-bit significand. The test inputs are bounded to `[-64, 63]`
+and the largest exercised K is 256, which keeps every reference result in
+that exact range. Larger or adversarial matrices are not covered by the
+bit-exact claim; callers that need unconditional integer accumulation should
+use the portable, CUDA, or HIP integer path appropriate to their deployment.
 
 ## Why Q4 has tighter error than fp16
 

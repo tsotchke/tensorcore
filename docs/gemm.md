@@ -28,11 +28,10 @@ beta * C[M, N]`. Leading dims default to row-major contiguous when 0.
 | Kernel source | Tile | dtype | When used |
 |---|---|---|---|
 | `gemm_simdgroup.metal` | 64×64, BK=32 | fp16, bf16, fp32 | default `simdgroup_matrix` path |
-| `gemm_simdgroup.metal` (i8 variant) | 64×64, BK=32 | int8 → i32 accum | Apple10+ |
 | `gemm_simdgroup_128.metal` | 128×128, BK=32 | fp16, fp32 | opt-in via `TC_USE_128_TILE=1` |
 | `gemm_async.metal` | 64×64 with async_copy | fp16, bf16 | SDK < 26 only; uses private `__asm` |
 | `gemm_async_128.metal` | 128×128 with async_copy | fp16 | SDK < 26 only |
-| `tensorops_gemm.metal` | tile from `mpp::tensor_ops` | fp16, bf16, fp32 | Apple11 + SDK 26.0+ + `TC_ENABLE_TENSOROPS=ON` |
+| `tensorops_gemm.metal` | tile from `mpp::tensor_ops` | fp16, bf16, fp32 | M5 / Apple10 + SDK 26.0+ + `TC_ENABLE_TENSOROPS=ON` |
 | `gemm_quantized_v2.metal` | M ≤ 4 GEMV | Q4_0 → fp16 | `tc_gemv_quantized` default |
 | `gemm_quantized.metal` | M ≤ 4 GEMV | Q4_0/Q8_0 → fp16 | `tc_gemv_quantized` fallback (`TC_Q4_USE_V1=1`) |
 
@@ -95,7 +94,7 @@ Tuning is the v0.2 work:
 
 ## The TensorOps M5 path
 
-On Apple11 silicon (M5+) with SDK 26.0+ and `TC_ENABLE_TENSOROPS=ON`, the
+On Apple10 silicon (M5) with SDK 26.0+ and `TC_ENABLE_TENSOROPS=ON`, the
 dispatch can route to `mpp::tensor_ops::matmul2d` via the
 `MTL4MachineLearningCommandEncoder`. Apple's reported speedup is up to 4×
 at small-shape inference (the M5 "neural accelerators").
@@ -144,8 +143,7 @@ separate `tc_gemm` calls.
 If `simdgroup_matrix` can't serve a call:
 
 ```
-Apple10+ int8           → simdgroup_matrix (TC_BACKEND_SIMDGROUP_MATRIX)
-Apple7..9 int8          → fp32-widen fallback via tc_gemm (TC_BACKEND_SIMDGROUP_MATRIX after cast)
+all Apple families int8 → MPS i8→fp32→i32 correctness path (TC_BACKEND_MPS)
 Apple9+  bf16           → simdgroup_matrix (TC_BACKEND_SIMDGROUP_MATRIX)
 Apple7..8 bf16          → fp32-cast fallback via tc_gemm (TC_BACKEND_SIMDGROUP_MATRIX after cast)
 small/odd shapes        → MPSMatrix (TC_BACKEND_MPS)
@@ -170,7 +168,7 @@ TT) per dtype.
 | fp32 | bit-exact against `cblas_sgemm` | `tests/test_gemm_f32.c` |
 | fp16 | rms_scaled error ≤ 5e-3 vs fp64 reference | `tests/test_gemm_f16.c` |
 | bf16 | rms_scaled error ≤ 3e-3 vs fp64 reference (fallback) | `tests/test_gemm_bf16.c` |
-| int8 | bit-exact i32 accumulation up to K = 2^16 | `tests/test_gemm_i8.c` |
+| int8 | bit-exact i32 results for the exercised contiguous and padded/transpose matrices | `tests/test_gemm_i8.c` |
 
 `rms_scaled` is `||y - yref|| / (||yref|| + ε)`. Per-cell relative error
 isn't meaningful for matmul outputs that can be near-zero.

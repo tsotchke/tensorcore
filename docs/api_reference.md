@@ -55,7 +55,7 @@ typedef enum {
     TC_DTYPE_F16  = 0,   /* IEEE 754 binary16; simdgroup_matrix Apple7+        */
     TC_DTYPE_BF16 = 1,   /* bfloat16; simdgroup_matrix Apple9+; FP32 fallback  */
     TC_DTYPE_F32  = 2,   /* IEEE 754 binary32; simdgroup_matrix Apple7+        */
-    TC_DTYPE_I8   = 3,   /* int8; simdgroup_matrix Apple10+; FP32 fallback     */
+    TC_DTYPE_I8   = 3,   /* int8; tested MPS/portable/CUDA/HIP paths           */
     TC_DTYPE_I32  = 4,   /* int32; i8 accumulator or index dtype               */
     TC_DTYPE_F64  = 5,   /* IEEE 754 binary64; emulated on GPU                 */
     TC_DTYPE_SF64 = 6,   /* SoftFloat-64 storage (uint2)                       */
@@ -89,9 +89,9 @@ typedef enum {
     TC_FAMILY_UNKNOWN = 0,
     TC_FAMILY_APPLE7  = 7,    /* M1               */
     TC_FAMILY_APPLE8  = 8,    /* M2               */
-    TC_FAMILY_APPLE9  = 9,    /* M3, A17 Pro       — bf16 simdgroup_matrix */
-    TC_FAMILY_APPLE10 = 10,   /* M4                — int8 simdgroup_matrix */
-    TC_FAMILY_APPLE11 = 11,   /* M5                — mpp::tensor_ops      */
+    TC_FAMILY_APPLE9  = 9,    /* M3/M4, A17/A18    — bf16 simdgroup_matrix */
+    TC_FAMILY_APPLE10 = 10,   /* M5                — mpp::tensor_ops      */
+    TC_FAMILY_APPLE11 = 11,   /* reserved ABI value                       */
 } tc_family_t;
 
 typedef struct {

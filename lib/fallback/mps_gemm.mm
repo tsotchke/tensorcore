@@ -132,8 +132,9 @@ cleanup:
 }
 
 /* Software int8 GEMM: i8 -> fp32 (exact lift) -> tc_gemm(fp32) -> i32.
- * fp32 has 24-bit mantissa so exact for K ≤ 2^16 with int8 inputs in
- * [-128, 127]. Used when device lacks i8 simdgroup_matrix. */
+ * Results are bit-exact while each integer dot product fits fp32's 24-bit
+ * significand; tests use bounded values and K <= 256. Public MSL has no
+ * integer simdgroup_matrix element type, so this is the Apple GPU path. */
 static tc_status_t i8_via_fp32(tc_context* ctx,
                                const tc_gemm_desc* desc,
                                const tc_buffer* A,

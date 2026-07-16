@@ -151,7 +151,7 @@ widens it to every op.
 | fp32 | `tc_gemm` | bit-exact against `cblas_sgemm` |
 | fp16 | `tc_gemm` | rms_scaled ≤ 5e-3 vs fp64 reference at 4096³ |
 | bf16 | `tc_gemm` (Apple9+ native or Apple7..8 fallback) | rms_scaled ≤ 3e-3 |
-| int8 | `tc_gemm` (Apple10+ native or Apple7..9 fallback) | bit-exact i32 accumulation up to K = 2^16 |
+| int8 | `tc_gemm` (MPS fallback on Apple GPU) | bit-exact i32 results for the bounded exercised matrices |
 | fp16 | `tc_attention_forward` | rms_scaled ≤ 1e-3 vs fp64 reference |
 | fp16 | `tc_attention_backward` | rms_scaled ≤ 3e-3 (D=64) |
 | fp16 | Q4_0 / Q8_0 GEMV | rms_scaled ≤ 2e-4 vs dequantized reference |
