@@ -1,8 +1,8 @@
 /*
  * Correctness test: tc_gemm in int8 vs int32 reference.
  *
- * Uses simdgroup_matrix<char,8,8> on Apple10+ (M4). Older silicon routes
- * through the MPS software fallback and should still match int32 reference.
+ * Public MSL does not define integer simdgroup_matrix element types, so every
+ * Apple family routes through the MPS correctness fallback.
  */
 
 #include <stdio.h>
@@ -131,14 +131,6 @@ static int run_case(tc_context* ctx, int M, int N, int K) {
     d.c_dtype=TC_DTYPE_I32; d.accum_dtype=TC_DTYPE_I32;
     d.alpha=1.0f; d.beta=0.0f;
     tc_status_t s = tc_gemm(ctx, &d, A, B, C);
-
-    if (s == TC_ERR_UNSUPPORTED_FAMILY) {
-        printf("  M=%d N=%d K=%d   SKIPPED (i8 simdgroup_matrix requires Apple10+/M4+)\n",
-               M, N, K);
-        free(Cr);
-        tc_buffer_free(ctx, A); tc_buffer_free(ctx, B); tc_buffer_free(ctx, C);
-        return 0;
-    }
 
     int errors = 0;
     int64_t max_abs = 0;
@@ -282,11 +274,12 @@ int main(void) {
     tc_device_info info;
     tc_device_info_get(ctx, &info);
     if (!info.supports_i8_simdgroup) {
-        printf("[note] device family=Apple%d lacks i8 simdgroup_matrix; "
-               "testing SW fallback (i8 -> fp32 -> i32)\n", (int)info.family);
+        printf("[note] device family=Apple%d uses the public MPS i8 fallback "
+               "(i8 -> fp32 -> i32)\n", (int)info.family);
     } else {
-        printf("[note] device family=Apple%d supports i8 simdgroup_matrix\n",
-               (int)info.family);
+        fprintf(stderr, "unexpected public integer simdgroup_matrix capability\n");
+        tc_shutdown(ctx);
+        return 8;
     }
     int rc = 0;
     rc |= run_mps_i8_fallback_smoke(ctx);

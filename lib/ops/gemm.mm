@@ -7,7 +7,7 @@
  *   (F16,F16,F16,F32)              Apple7+   tc_gemm_f16_f32     simdgroup_matrix
  *   (F32,F32,F32,F32)              Apple7+   tc_gemm_f32_f32     simdgroup_matrix
  *   (BF16,BF16,BF16,F32)           Apple9+   tc_gemm_bf16_f32    simdgroup_matrix
- *   (I8, I8, I32, I32)             Apple10+  tc_gemm_i8_i32      simdgroup_matrix
+ *   (I8, I8, I32, I32)             any       MPS correctness fallback
  *   anything else / older family   any       MPSMatrixMultiplication fallback
  */
 
@@ -135,17 +135,13 @@ TileChoice kernel_for(const tc_gemm_desc* d, tc_family_t fam, tc_context* ctx, t
         }
         return { big ? @"tc_gemm_bf16_f32_128" : @"tc_gemm_bf16_f32", BM, BN, T };
     }
+    /* Public MSL simdgroup_matrix element types are half, bfloat, and float.
+     * Integer GEMM deliberately returns no Metal kernel and is routed through
+     * the correctness-checked MPS fallback below on every Apple family. */
     if (d->a_dtype == TC_DTYPE_I8 && d->b_dtype == TC_DTYPE_I8 &&
         d->c_dtype == TC_DTYPE_I32 && d->accum_dtype == TC_DTYPE_I32) {
-        if (fam < TC_FAMILY_APPLE10) { *err = TC_ERR_UNSUPPORTED_FAMILY; return {nil,0,0,0}; }
-        if (d->transpose_a || d->transpose_b ||
-            d->alpha != 1.0f || d->beta != 0.0f ||
-            (d->M % 8) != 0 || (d->N % 8) != 0) {
-            *err = TC_ERR_UNSUPPORTED_DTYPE;
-            return {nil,0,0,0};
-        }
-        /* 128-tile i8 variant lands in phase 2; for now use 64 tile. */
-        return { @"tc_gemm_i8_i32", 64, 64, 128 };
+        *err = TC_ERR_UNSUPPORTED_DTYPE;
+        return {nil,0,0,0};
     }
     *err = TC_ERR_UNSUPPORTED_DTYPE;
     return {nil,0,0,0};
