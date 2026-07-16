@@ -20,6 +20,7 @@ POLICY = ROOT / "configs" / "apple_family_runtime.json"
 SCHEMA = "tensorcore.apple_family_runtime_evidence.v1"
 FORMAT_VERSION = 1
 TESTS = ("test_device", "test_gemm_bf16", "test_gemm_i8", "test_tensorops_runtime")
+BUILD_TRACE = "build_runtime_tests"
 CHIP_RE = re.compile(r"\bApple M([1-5])(?:\s|\b)")
 DEVICE_RE = re.compile(
     r'device="([^"]+)" family=Apple(\d+).*?bf16_sg=(yes|no) '
@@ -116,6 +117,27 @@ def output(attempt: dict[str, Any]) -> str:
     return "\n".join((str(attempt.get("stdout_tail", "")), str(attempt.get("stderr_tail", ""))))
 
 
+def cmake_source_root(build_dir: pathlib.Path) -> pathlib.Path | None:
+    cache = build_dir / "CMakeCache.txt"
+    try:
+        lines = cache.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    prefix = "CMAKE_HOME_DIRECTORY:INTERNAL="
+    for line in lines:
+        if line.startswith(prefix):
+            return pathlib.Path(line[len(prefix):]).resolve()
+    return None
+
+
+def file_sha256(path: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def device_record(trace: list[dict[str, Any]]) -> dict[str, Any] | None:
     records: set[tuple[str, int, bool, bool, bool]] = set()
     for attempt in trace:
@@ -199,6 +221,11 @@ def base_evidence(args: argparse.Namespace, chip: str | None, host_attempt: dict
             "authority_owner": args.authority_owner,
             "authorized": chip != "M4" or owner_authorized(args.authority_owner),
         },
+        "build": {
+            "directory": str(args.build_dir.resolve()),
+            "source_root_matches_repo": False,
+            "binary_sha256": {},
+        },
         "device": None,
         "checks": {},
         "trace": [],
@@ -228,6 +255,26 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
         return evidence
 
     build_dir = args.build_dir.resolve()
+    source_root = cmake_source_root(build_dir)
+    evidence["build"]["source_root_matches_repo"] = source_root == ROOT.resolve()
+    if not evidence["build"]["source_root_matches_repo"]:
+        blocked.append("cmake_build_source_root_mismatch")
+        evidence["status"] = "blocked"
+        return evidence
+
+    build_attempt = command(
+        [
+            "cmake", "--build", str(build_dir), "--target", *TESTS, "--parallel",
+        ],
+        timeout=args.timeout_sec,
+    )
+    build_attempt["name"] = BUILD_TRACE
+    evidence["trace"].append(build_attempt)
+    if build_attempt.get("rc") != 0:
+        failures.append("runtime_test_build_failed")
+        evidence["status"] = "failed"
+        return evidence
+
     env = os.environ.copy()
     metallib = build_dir / "tensorcore.metallib"
     if metallib.exists():
@@ -237,6 +284,7 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
         if not binary.exists():
             blocked.append(f"test_binary_missing:{name}")
             continue
+        evidence["build"]["binary_sha256"][name] = file_sha256(binary)
         attempt = command([str(binary)], env=env, timeout=args.timeout_sec)
         attempt["name"] = name
         evidence["trace"].append(attempt)

@@ -53,6 +53,11 @@ def evidence(chip: str) -> dict[str, Any]:
     )
     trace = [
         attempt(
+            "build_runtime_tests",
+            "Built target test_device\nBuilt target test_gemm_bf16\nBuilt target test_gemm_i8\nBuilt target test_tensorops_runtime\n",
+            "",
+        ),
+        attempt(
             "test_device",
             f"family policy    : Apple {chip}=Apple{family} verified\n",
             device_line,
@@ -73,6 +78,11 @@ def evidence(chip: str) -> dict[str, Any]:
             device_line,
         ),
         attempt("test_tensorops_runtime", tensor_status, device_line),
+    ]
+    trace[0]["cmd"] = [
+        "cmake", "--build", "/repo/build", "--target",
+        "test_device", "test_gemm_bf16", "test_gemm_i8", "test_tensorops_runtime",
+        "--parallel",
     ]
     return {
         "schema": "tensorcore.apple_family_runtime_evidence.v1",
@@ -95,6 +105,16 @@ def evidence(chip: str) -> dict[str, Any]:
             "authority_owner": "tsotchke-chan:public-evidence" if chip == "M4" else "tensorcore:public-evidence",
             "authorized": True,
         },
+        "build": {
+            "directory": "/repo/build",
+            "source_root_matches_repo": True,
+            "binary_sha256": {
+                "test_device": "2" * 64,
+                "test_gemm_bf16": "3" * 64,
+                "test_gemm_i8": "4" * 64,
+                "test_tensorops_runtime": "5" * 64,
+            },
+        },
         "device": {
             "name": name,
             "chip": chip,
@@ -103,7 +123,7 @@ def evidence(chip: str) -> dict[str, Any]:
             "i8_simdgroup": i8,
             "tensorops_m5": tensorops,
         },
-        "checks": {test["name"]: {"status": "passed"} for test in trace},
+        "checks": {test["name"]: {"status": "passed"} for test in trace if test["name"] != "build_runtime_tests"},
         "trace": trace,
         "status": "passed",
         "summary": {"blocked_reasons": [], "failure_reasons": []},
@@ -166,6 +186,11 @@ def main() -> int:
     dirty = copy.deepcopy(evidence("M2"))
     dirty["meta"]["git_dirty"] = True
     fails(dirty, "clean tracked git tree", "--require-clean-head", "--git-head", "abc123")
+
+    stale_binary_provenance = copy.deepcopy(evidence("M2"))
+    stale_binary_provenance["build"]["source_root_matches_repo"] = False
+    stale_binary_provenance["trace"] = stale_binary_provenance["trace"][1:]
+    fails(stale_binary_provenance, "CMake build directory must be configured")
 
     skipped_m5 = copy.deepcopy(evidence("M5"))
     skipped_m5["trace"][-1]["stdout_tail"] = "tensorops_runtime_status=skipped_no_m5\n"

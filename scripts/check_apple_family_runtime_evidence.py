@@ -22,6 +22,7 @@ EXPECTED = {
     "M5": (10, True, False, True),
 }
 TESTS = ("test_device", "test_gemm_bf16", "test_gemm_i8", "test_tensorops_runtime")
+BUILD_TRACE = "build_runtime_tests"
 DEVICE_RE = re.compile(
     r'device="([^"]+)" family=Apple(\d+).*?bf16_sg=(yes|no) '
     r'i8_sg=(yes|no) tensorops_m5=(yes|no)'
@@ -114,14 +115,34 @@ def validate(data: Any, args: argparse.Namespace) -> list[str]:
         if chip == "M5" and version_tuple(host.get("sdk_version")) < (26, 0):
             errors.append("M5 TensorOps evidence requires SDK 26.0 or newer")
 
+    build = data.get("build")
+    if not isinstance(build, dict):
+        errors.append("build must be an object")
+        build = {}
+    if build.get("source_root_matches_repo") is not True:
+        errors.append("CMake build directory must be configured from the evidence repository")
+    binary_hashes = build.get("binary_sha256")
+    if not isinstance(binary_hashes, dict) or set(binary_hashes) != set(TESTS):
+        errors.append("build.binary_sha256 must contain exactly the four runtime tests")
+    elif any(not isinstance(binary_hashes[name], str) or not re.fullmatch(r"[0-9a-f]{64}", binary_hashes[name]) for name in TESTS):
+        errors.append("every runtime test must include a SHA-256 binary digest")
+
     trace = data.get("trace")
     if not isinstance(trace, list):
         errors.append("trace must be a list")
         trace = []
     attempts = {item.get("name"): item for item in trace if isinstance(item, dict)}
-    if set(attempts) != set(TESTS):
-        errors.append(f"trace must contain exactly {list(TESTS)!r}")
-    for name in TESTS:
+    required_traces = (BUILD_TRACE, *TESTS)
+    if set(attempts) != set(required_traces):
+        errors.append(f"trace must contain exactly {list(required_traces)!r}")
+    build_attempt = attempts.get(BUILD_TRACE)
+    if isinstance(build_attempt, dict):
+        argv = build_attempt.get("cmd")
+        if not isinstance(argv, list) or argv[:2] != ["cmake", "--build"] or "--target" not in argv:
+            errors.append("build trace must use cmake --build with explicit test targets")
+        elif any(name not in argv for name in TESTS):
+            errors.append("build trace must target all four runtime tests")
+    for name in required_traces:
         attempt = attempts.get(name)
         if not isinstance(attempt, dict):
             continue
@@ -131,7 +152,7 @@ def validate(data: Any, args: argparse.Namespace) -> list[str]:
         if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
             errors.append(f"{name} must include output_sha256")
 
-    outputs = {name: trace_output(item) for name, item in attempts.items()}
+    outputs = {name: trace_output(item) for name, item in attempts.items() if name in TESTS}
     all_device_records: set[tuple[str, int, bool, bool, bool]] = set()
     for text in outputs.values():
         for match in DEVICE_RE.finditer(text):
