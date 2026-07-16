@@ -7,6 +7,25 @@ on:
     branches: [main, master]
 
 jobs:
+  topology-authority-portable:
+    name: topology-authority (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Portable topology authority and observation envelopes
+        run: |
+          python scripts/topology_authority_selftest.py
+          python scripts/wrap_topology_observation_selftest.py
+
   docs:
     runs-on: ubuntu-latest
     steps:
@@ -84,7 +103,12 @@ jobs:
           python3 scripts/fetch_m5_tensorops_runtime_evidence_selftest.py
 
       - name: Mesh resource scheduler fixtures
-        run: python3 scripts/mesh_resource_scheduler_selftest.py
+        run: |
+          python3 scripts/mesh_resource_scheduler_selftest.py
+          python3 scripts/topology_scheduler_binding_selftest.py
+
+      - name: Topology authority documentation contract
+        run: python3 scripts/check_topology_authority_docs.py
 
       - name: Mesh resource inventory fixtures
         run: |

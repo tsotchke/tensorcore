@@ -2168,8 +2168,9 @@ def parse_topology_generated_at(value: Any) -> float:
 
 
 def topology_authority_gate(args: argparse.Namespace, inventory: dict[str, dict]) -> dict:
-    required = bool(getattr(args, "require_topology_authority", False))
     path = getattr(args, "topology_snapshot", None)
+    dry_run_without_snapshot = bool(getattr(args, "dry_run", False)) and not path
+    required = bool(getattr(args, "require_topology_authority", False)) and not dry_run_without_snapshot
     require_signature = bool(getattr(args, "require_topology_signature", False))
     if not path:
         return {
@@ -2209,18 +2210,24 @@ def topology_authority_gate(args: argparse.Namespace, inventory: dict[str, dict]
         report["errors"].append(f"topology snapshot integrity failed: {integrity_reason}")
         return report
     try:
-        age_sec = max(0.0, time.time() - parse_topology_generated_at(payload.get("generated_at")))
+        raw_age_sec = time.time() - parse_topology_generated_at(payload.get("generated_at"))
     except (TypeError, ValueError) as exc:
         report["reason"] = "invalid_generated_at"
         report["errors"].append(str(exc))
         return report
     max_age_sec = float(getattr(args, "topology_max_age_sec", 300.0))
-    report["age_sec"] = age_sec
+    report["age_sec"] = max(0.0, raw_age_sec)
     report["max_age_sec"] = max_age_sec
-    if age_sec > max_age_sec:
+    if raw_age_sec < -300.0:
+        report["reason"] = "snapshot_from_future"
+        report["errors"].append(
+            f"topology snapshot is {-raw_age_sec:.3f}s in the future, exceeding 300s clock skew"
+        )
+        return report
+    if raw_age_sec > max_age_sec:
         report["reason"] = "snapshot_stale"
         report["errors"].append(
-            f"topology snapshot is {age_sec:.3f}s old, exceeding {max_age_sec:.3f}s"
+            f"topology snapshot is {raw_age_sec:.3f}s old, exceeding {max_age_sec:.3f}s"
         )
         return report
     drift = payload.get("drift")

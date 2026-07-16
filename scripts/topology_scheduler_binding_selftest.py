@@ -176,6 +176,17 @@ def test_missing_snapshot_is_rejected(scheduler: ModuleType, authority: ModuleTy
     }
 
 
+def test_dry_run_may_omit_snapshot(scheduler: ModuleType, authority: ModuleType) -> None:
+    del authority
+    gate = scheduler.topology_authority_gate(gate_args(None, dry_run=True), {})
+    assert gate == {
+        "ok": True,
+        "required": False,
+        "configured": False,
+        "reason": "not_configured",
+    }
+
+
 def test_quarantined_active_resource_is_rejected(
     scheduler: ModuleType,
     authority: ModuleType,
@@ -202,6 +213,20 @@ def test_stale_snapshot_is_rejected(scheduler: ModuleType, authority: ModuleType
         gate = scheduler.topology_authority_gate(gate_args(snapshot, topology_max_age_sec=60.0), inventory)
         assert gate["ok"] is False
         assert gate["reason"] == "snapshot_stale"
+
+
+def test_future_snapshot_is_rejected(scheduler: ModuleType, authority: ModuleType) -> None:
+    with tempfile.TemporaryDirectory(prefix="tensorcore-scheduler-topology-") as raw:
+        directory = pathlib.Path(raw)
+        inventory = scheduler.load_inventory(str(write_inventory(directory)))
+        snapshot = write_snapshot(
+            authority,
+            directory,
+            generated_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+        gate = scheduler.topology_authority_gate(gate_args(snapshot), inventory)
+        assert gate["ok"] is False
+        assert gate["reason"] == "snapshot_from_future"
 
 
 def test_tampered_snapshot_is_rejected(scheduler: ModuleType, authority: ModuleType) -> None:
@@ -258,8 +283,10 @@ def main() -> int:
     tests = [
         test_signed_snapshot_binds_inventory_and_job_metadata,
         test_missing_snapshot_is_rejected,
+        test_dry_run_may_omit_snapshot,
         test_quarantined_active_resource_is_rejected,
         test_stale_snapshot_is_rejected,
+        test_future_snapshot_is_rejected,
         test_tampered_snapshot_is_rejected,
         test_cli_defaults_to_required_signed_authority,
     ]

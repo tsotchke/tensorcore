@@ -243,6 +243,17 @@ def test_stale_observations_fail_closed(mod: ModuleType, policy: dict[str, Any])
     assert resource["authority_reason"] == "node_stale_unknown"
 
 
+def test_future_observation_is_blocking(mod: ModuleType, policy: dict[str, Any]) -> None:
+    future = "2026-07-16T13:00:00Z"
+    private, _ = reconcile_inputs(
+        mod,
+        policy,
+        mesh_payload=tailscale_payload("mesh", observed_at=future),
+    )
+    assert private["drift"]["clean"] is False
+    assert any(item["code"] == "observation_from_future" for item in private["drift"]["issues"])
+
+
 def test_alias_conflict_fails_closed(mod: ModuleType, policy: dict[str, Any]) -> None:
     payload = declaration_payload()
     payload["nodes"].append(
@@ -387,6 +398,7 @@ def main() -> int:
         test_clean_reconciliation,
         test_unknown_scheduler_node_fails_closed,
         test_stale_observations_fail_closed,
+        test_future_observation_is_blocking,
         test_alias_conflict_fails_closed,
         test_backend_conflict_fails_closed,
         test_missing_profile_is_blocking,

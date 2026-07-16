@@ -792,12 +792,21 @@ the canonical event-log path. Use `--require-queue-event-log-integrity` on the
 scheduler loop, `status`, or `audit` to fail closed when current queue hashes
 no longer match the append-only submit/cancel log.
 
+Production scheduling is additionally bound to the signed snapshot generated
+by `scripts/topology_authority.py`. Set `TC_TOPOLOGY_SNAPSHOT`,
+`TC_TOPOLOGY_MAX_AGE_SEC`, and `TC_TOPOLOGY_SIGNING_KEY`; active resources are
+eligible only when the snapshot is fresh, drift-clean, signature-valid, and
+agrees exactly with the scheduler inventory. See
+[topology_authority.md](topology_authority.md) for private source capture,
+public redaction, failure behavior, and the current CPU-only Windows boundary.
+
 Run one dry pass:
 
 ```sh
 scripts/mesh_resource_scheduler.py \
   --arbiter-cmd tsotchke-arbiter \
   --inventory-json configs/mesh_resources.json \
+  --topology-snapshot "$TC_TOPOLOGY_SNAPSHOT" \
   --jobs-json configs/mesh_resource_jobs.json \
   --dry-run --pretty-json
 ```
@@ -808,6 +817,7 @@ Run the daemon loop and persist last-state evidence:
 scripts/mesh_resource_scheduler.py \
   --arbiter-cmd tsotchke-arbiter \
   --inventory-json configs/mesh_resources.json \
+  --topology-snapshot "$TC_TOPOLOGY_SNAPSHOT" \
   --jobs-json ~/.tsotchke/state/mesh-resource-jobs.json \
   --event-log-jsonl ~/.tsotchke/state/mesh-resource-queue-events.jsonl \
   --require-queue-event-log-integrity \
@@ -835,6 +845,10 @@ Fixture coverage:
 
 ```sh
 python3 scripts/mesh_resource_scheduler_selftest.py
+python3 scripts/topology_authority_selftest.py
+python3 scripts/topology_scheduler_binding_selftest.py
+python3 scripts/wrap_topology_observation_selftest.py
+python3 scripts/check_topology_authority_docs.py
 python3 scripts/mesh_arbiter_with_inventory_selftest.py
 python3 scripts/mesh_deploy_git_checkout_selftest.py
 python3 scripts/check_mesh_git_access_selftest.py

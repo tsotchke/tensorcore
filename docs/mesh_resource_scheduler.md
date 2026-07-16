@@ -52,12 +52,22 @@ loops should pass `--event-log-jsonl` and
 `--require-queue-event-log-integrity`; the gate rejects queue rows whose current
 hashes do not match the append-only submit/cancel log.
 
+Production loops, submissions, and audits also require the signed topology
+authority artifact described in [topology_authority.md](topology_authority.md).
+Set `TC_TOPOLOGY_SNAPSHOT`, `TC_TOPOLOGY_MAX_AGE_SEC`, and
+`TC_TOPOLOGY_SIGNING_KEY`, or pass `--topology-snapshot` explicitly. The
+scheduler rejects stale, tampered, drifted, incomplete, or unadmitted resource
+bindings before it contacts the arbiter. Dry-run commands may omit the artifact;
+`--allow-unreconciled-topology` and `--allow-unsigned-topology` are explicit
+development/emergency bypasses and are not part of the production service.
+
 Example scheduler loop:
 
 ```sh
 python3 scripts/mesh_resource_scheduler.py \
   --jobs-json /var/lib/tensorcore/mesh_resource_jobs.json \
   --inventory-json configs/mesh_resources.json \
+  --topology-snapshot /var/lib/tensorcore/topology/private.json \
   --state-json /var/lib/tensorcore/mesh_resource_state.json \
   --event-log-jsonl /var/lib/tensorcore/mesh_resource_queue_events.jsonl \
   --require-queue-event-log-integrity \
@@ -72,6 +82,7 @@ Example operator status with the same CUDA placement gate the loop enforces:
 python3 scripts/mesh_resource_scheduler.py status \
   --jobs-json /var/lib/tensorcore/mesh_resource_jobs.json \
   --inventory-json configs/mesh_resources.json \
+  --topology-snapshot /var/lib/tensorcore/topology/private.json \
   --event-log-jsonl /var/lib/tensorcore/mesh_resource_queue_events.jsonl \
   --require-queue-event-log-integrity \
   --gpu-reconciliation-audit-json /var/lib/tensorcore/gpu-reconciliation-audit.json \
@@ -114,6 +125,8 @@ Provisioning contract:
 
 - `/opt/tensorcore`: read-only or deployment-managed Tensorcore checkout.
 - `/var/lib/tensorcore`: scheduler-owned writable queue/state directory.
+- `/var/lib/tensorcore/topology/private.json`: fresh, signed, operator-only
+  `tensorcore.topology_snapshot.v1` used for scheduler admission.
 - `/etc/tensorcore/scheduler.env`: environment based on
   `configs/tensorcore-scheduler.env.example`.
 - `tensorcore-scheduler.service`: systemd unit based on
