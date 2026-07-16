@@ -111,3 +111,8 @@ print_oracle wasm-bindings-runtime-evidence --trace-file "$WASM_TRACE"
 DT_TRACE="$REPO_ROOT/build/doc_truth_runtime_evidence.json"
 trace_or_skip "$DT_TRACE" || true
 print_oracle doc-truth-runtime-evidence --trace-file "$DT_TRACE"
+
+# 14. Apple-family contract and physical M2/M4/M5 evidence.
+APPLE_TRACE="$REPO_ROOT/build-apple-family/apple-family-runtime-gates.jsonl"
+trace_or_skip "$APPLE_TRACE" || true
+print_oracle tensorcore-apple-family-runtime --trace-file "$APPLE_TRACE"
