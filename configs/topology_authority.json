@@ -1,0 +1,108 @@
+{
+  "schema": "tensorcore.topology_authority_policy.v1",
+  "canonical_snapshot_schema": "tensorcore.topology_snapshot.v1",
+  "public_snapshot_schema": "tensorcore.public_topology_snapshot.v1",
+  "identity": {
+    "canonical_node_field": "name",
+    "canonical_resource_separator": ":",
+    "case_sensitive": false,
+    "node_id_pattern": "^[a-z0-9][a-z0-9._-]*$"
+  },
+  "required_sources": {
+    "declarations": {
+      "ids": [
+        "computer_mesh"
+      ],
+      "minimum_count": 1
+    },
+    "tailscale_profiles": {
+      "ids": [
+        "mesh",
+        "personal"
+      ],
+      "minimum_count": 2,
+      "completeness": "exact_manifest"
+    },
+    "cloud_inventories": {
+      "ids": [
+        "gcp"
+      ],
+      "minimum_count": 1,
+      "completeness": "exact_manifest"
+    },
+    "scheduler_inventories": {
+      "ids": [
+        "tensorcore"
+      ],
+      "minimum_count": 1
+    }
+  },
+  "freshness": {
+    "tailscale_max_age_seconds": 86400,
+    "cloud_max_age_seconds": 86400,
+    "scheduler_max_age_seconds": 86400,
+    "future_clock_skew_seconds": 300
+  },
+  "state_model": {
+    "lifecycle": [
+      "active",
+      "retired"
+    ],
+    "observation": [
+      "fresh",
+      "stale",
+      "unknown"
+    ],
+    "connectivity": [
+      "online",
+      "offline",
+      "unknown"
+    ],
+    "admission": [
+      "eligible",
+      "reserved",
+      "quarantined",
+      "blocked"
+    ]
+  },
+  "scheduler_admission": {
+    "active_requires_declared_node": true,
+    "active_requires_fresh_online_observation": true,
+    "reserved_requires_declared_node": true,
+    "unknown_node_action": "quarantine",
+    "conflict_action": "quarantine",
+    "stale_observation_action": "quarantine",
+    "offline_observation_action": "quarantine"
+  },
+  "integrity": {
+    "digest_algorithm": "sha256",
+    "signature_algorithm": "hmac-sha256",
+    "signature_key_environment": "TC_TOPOLOGY_SIGNING_KEY",
+    "signature_required_for_promotion": true
+  },
+  "public_redaction": {
+    "deny_key_fragments": [
+      "address",
+      "credential",
+      "dnsname",
+      "dns_name",
+      "email",
+      "endpoint",
+      "hostname",
+      "internal_ip",
+      "lan_ip",
+      "public_ip",
+      "secret",
+      "tailnet",
+      "tailscale_ip",
+      "token",
+      "user"
+    ],
+    "deny_exact_keys": [
+      "account",
+      "owner",
+      "project"
+    ],
+    "replacement": "[redacted]"
+  }
+}
