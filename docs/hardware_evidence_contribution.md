@@ -89,20 +89,28 @@ SDK 26+, integer MPS fallback, and actual `tensorops_m5` execution.
 
 ## Maintainer intake
 
-Recompute the transport digest, then validate the artifact against the same
-checkout:
+Save the contributor's final transport line in `handoff-record.txt`. From the
+exact requested checkout, verify the transport digest, chip, commit, clean-head
+claim, hardware authority, runtime markers, binary hashes, and evidence schema
+in one command:
 
 ```sh
-shasum -a 256 <apple-family-evidence.json>
-python3 scripts/check_apple_family_runtime_evidence.py \
+python3 scripts/intake_apple_family_runtime_evidence.py \
   <apple-family-evidence.json> \
-  --git-head "$EXPECTED_HEAD" \
+  --handoff-record-file handoff-record.txt \
+  --expected-head "$EXPECTED_HEAD" \
   --require-chip M4 \
-  --require-clean-head \
-  --require-pass
+  --json
 ```
 
-Replace `M4` with `M5` as appropriate. Once both artifacts are available, run:
+The final line can instead be passed directly with `--handoff-record`. The
+intake rejects a changed artifact, duplicate JSON keys, multiple or malformed
+transport records, and any artifact that fails the physical runtime checker.
+The contributor's `path` is retained only as provenance; it is never trusted
+as the local artifact path.
+
+Replace `M4` with `M5` as appropriate. Once both artifacts have been accepted,
+run:
 
 ```sh
 python3 scripts/check_apple_family_runtime_sprint.py \

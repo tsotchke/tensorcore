@@ -117,10 +117,33 @@ def check_sources(errors: list[str]) -> None:
             errors.append(f"lib/core/apple_family.h missing policy token: {token}")
 
 
+def check_contributor_intake(errors: list[str]) -> None:
+    intake = (ROOT / "scripts" / "intake_apple_family_runtime_evidence.py").read_text(
+        encoding="utf-8"
+    )
+    for token in (
+        "APPLE_FAMILY_EVIDENCE_HANDOFF",
+        "evidence SHA-256 digest mismatch",
+        "duplicate object key in evidence JSON",
+        "evidence_checker.validate",
+    ):
+        if token not in intake:
+            errors.append(f"Apple evidence intake verifier missing contract token: {token}")
+    contribution = (ROOT / "docs" / "hardware_evidence_contribution.md").read_text(
+        encoding="utf-8"
+    )
+    if "intake_apple_family_runtime_evidence.py" not in contribution:
+        errors.append("hardware evidence contribution guide must use the intake verifier")
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    if "intake_apple_family_runtime_evidence_selftest.py" not in workflow:
+        errors.append("portable CI must run the Apple evidence intake selftest")
+
+
 def main() -> int:
     errors: list[str] = []
     check_policy(errors)
     check_sources(errors)
+    check_contributor_intake(errors)
     scan_forbidden(errors)
     if errors:
         print("Apple family documentation contract failed:", file=sys.stderr)

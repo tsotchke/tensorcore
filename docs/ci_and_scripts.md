@@ -90,6 +90,19 @@ The portable dry-run contract is covered by
 CI. See [hardware_evidence_contribution.md](hardware_evidence_contribution.md)
 for contributor and maintainer commands.
 
+### `intake_apple_family_runtime_evidence.py`
+
+Maintainer-side verifier for a contributor's returned JSON and final handoff
+record. It binds the artifact to the record's SHA-256, requested chip, and
+exact commit before invoking the physical evidence contract. It also rejects
+duplicate JSON keys, malformed or repeated transport records, oversized input,
+dirty-head evidence, invalid hardware authority, and incorrect runtime
+markers. The contributor's recorded path is provenance only and is never used
+to locate the local artifact.
+
+`intake_apple_family_runtime_evidence_selftest.py` exercises accepted M4/M5
+fixtures and transport tampering cases portably in CI.
+
 ### `hardware_runner_preflight.py`
 
 Writes the `tensorcore-hardware-runner-preflight` diagnostic used by

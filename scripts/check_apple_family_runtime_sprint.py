@@ -99,11 +99,15 @@ def physical_check(path: pathlib.Path | None, chip: str, head: str) -> dict[str,
 
 def cross_platform_check() -> dict[str, Any]:
     fixture = run([sys.executable, "scripts/check_apple_family_runtime_evidence_selftest.py"])
-    handoff = run([sys.executable, "scripts/run_apple_family_evidence_handoff_selftest.py"])
-    if not handoff["ok"]:
-        fixture["ok"] = False
-        fixture["returncode"] = handoff["returncode"]
-        fixture["output_tail"] += "\n" + handoff["output_tail"]
+    portable_contracts = (
+        run([sys.executable, "scripts/run_apple_family_evidence_handoff_selftest.py"]),
+        run([sys.executable, "scripts/intake_apple_family_runtime_evidence_selftest.py"]),
+    )
+    for contract in portable_contracts:
+        if not contract["ok"]:
+            fixture["ok"] = False
+            fixture["returncode"] = contract["returncode"]
+            fixture["output_tail"] += "\n" + contract["output_tail"]
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     cmake = (ROOT / "tests" / "CMakeLists.txt").read_text(encoding="utf-8")
     required = (
@@ -113,6 +117,7 @@ def cross_platform_check() -> dict[str, Any]:
         "portable-cpu",
         "portable-windows",
         "run_apple_family_evidence_handoff_selftest.py",
+        "intake_apple_family_runtime_evidence_selftest.py",
     )
     missing = [token for token in required if token not in workflow]
     if "test_apple_family_policy" not in cmake:
@@ -154,7 +159,7 @@ def main() -> int:
         "m2_fallback_runtime": "physical clean-head M2 proves Apple8, BF16 fallback, integer MPS, and TensorOps-negative selection",
         "m4_runtime": "authorized physical M4 proves Apple9, BF16 simdgroup, integer MPS, and TensorOps-negative selection",
         "m5_tensorops_runtime": "physical SDK26 M5 proves Apple10, floating matrix paths, integer MPS, and TensorOps execution",
-        "cross_platform_selftest": "portable fixtures and selector CTest are wired across Ubuntu, macOS, and Windows CI",
+        "cross_platform_selftest": "portable fixtures, handoff intake, and selector CTest are wired across Ubuntu, macOS, and Windows CI",
         "documentation_truth": "all public local documentation links resolve",
     }
     timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
