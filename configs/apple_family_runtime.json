@@ -1,0 +1,66 @@
+{
+  "schema": "tensorcore.apple_family_runtime_policy.v1",
+  "authority": {
+    "vendor": "Apple",
+    "feature_set_tables_url": "https://developer.apple.com/metal/capabilities/",
+    "feature_set_tables_revision": "2026-05-21",
+    "metal_language_spec_url": "https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf",
+    "metal_language_spec_revision": "2026-06-04"
+  },
+  "families": [
+    {
+      "mtl_family": "Apple7",
+      "mtl_raw_value": 1007,
+      "tensorcore_family": 7,
+      "apple_silicon": ["M1"]
+    },
+    {
+      "mtl_family": "Apple8",
+      "mtl_raw_value": 1008,
+      "tensorcore_family": 8,
+      "apple_silicon": ["M2"]
+    },
+    {
+      "mtl_family": "Apple9",
+      "mtl_raw_value": 1009,
+      "tensorcore_family": 9,
+      "apple_silicon": ["M3", "M4"]
+    },
+    {
+      "mtl_family": "Apple10",
+      "mtl_raw_value": 1010,
+      "tensorcore_family": 10,
+      "apple_silicon": ["M5"]
+    }
+  ],
+  "reserved_public_abi_values": [
+    {
+      "tensorcore_family": 11,
+      "name": "TC_FAMILY_APPLE11",
+      "status": "reserved",
+      "reason": "No current public Apple MTLGPUFamilyApple11 contract exists; retain the numeric value for ABI compatibility but never infer M5 from it."
+    }
+  ],
+  "simdgroup_matrix": {
+    "public_element_types": ["half", "bfloat", "float"],
+    "integer_element_types_publicly_supported": false,
+    "bf16_minimum_metal_language": "3.1",
+    "integer_policy": "Use a correctness-checked non-simdgroup-matrix fallback until Apple publishes integer simdgroup_matrix element types."
+  },
+  "tensorops": {
+    "minimum_chip": "M5",
+    "required_mtl_family": "Apple10",
+    "required_metal_family": "Metal4",
+    "minimum_sdk": "26.0",
+    "build_flag": "TC_ENABLE_TENSOROPS",
+    "physical_runtime_evidence_required": true
+  },
+  "evidence": {
+    "require_clean_git_head": true,
+    "required_physical_classes": ["M2", "M4", "M5"],
+    "allow_reserved_resource_without_matching_owner": false,
+    "m4_resource": "enki:metal_m4_tsotchke_chan",
+    "m4_required_owner_prefix": "tsotchke-chan",
+    "m5_runner_labels": ["self-hosted", "macOS", "ARM64", "m5", "sdk26", "metal4-tensorops"]
+  }
+}

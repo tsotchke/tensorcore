@@ -1263,3 +1263,38 @@ oracles:
         severity: high
         label: Every topology-authority acceptance gate passed
         action: run_topology_authority_sprint
+
+  - name: tensorcore-apple-family-runtime
+    target: tensorcore-apple-family-runtime
+    aliases:
+      - tensorcore apple family runtime
+      - prove Apple M4 and M5 capability selection
+      - correct Apple GPU family detection and collect physical M4 and M5 runtime evidence for integer simdgroup, bf16, tensor operations, and fallback selection
+    criteria:
+      - id: apple_family_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: Apple-family runtime evidence is present
+        action: run_apple_family_runtime_sprint
+
+      - id: apple_family_runtime_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: Apple-family verification is failure-free
+        action: fix_apple_family_runtime_failure
+
+      - id: apple_family_runtime_gates
+        runtime_event:
+          event_kinds: [apple_family_gate]
+          event_values: [PASS]
+        required_names:
+          - official_family_contract
+          - selector_selftest
+          - m2_fallback_runtime
+          - m4_runtime
+          - m5_tensorops_runtime
+          - cross_platform_selftest
+          - documentation_truth
+        severity: high
+        label: Every Apple-family acceptance gate passed on the required physical classes
+        action: run_apple_family_runtime_sprint
