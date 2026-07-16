@@ -85,6 +85,18 @@ jobs:
         run: |
           python3 scripts/check_release_evidence.py build/release_smoke_runtime_evidence.json --require-gpu
 
+      - name: Collect Apple family evidence
+        run: |
+          python3 scripts/run_apple_family_runtime_evidence.py \
+            --build-dir build \
+            --evidence-path build/apple_family_runtime_evidence.json \
+            --require-pass
+          python3 scripts/check_apple_family_runtime_evidence.py \
+            build/apple_family_runtime_evidence.json \
+            --git-head "$GITHUB_SHA" \
+            --require-clean-head \
+            --require-pass
+
       - name: Upload runtime evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -92,6 +104,7 @@ jobs:
           name: tensorcore-hardware-evidence
           path: |
             build/release_smoke_runtime_evidence.json
+            build/apple_family_runtime_evidence.json
             build/release_smoke_device.log
             build/Testing/Temporary/LastTest.log
           if-no-files-found: error
@@ -136,6 +149,20 @@ jobs:
             --require-gpu \
             --require-metal4-tensorops
 
+      - name: Collect M5 family evidence
+        run: |
+          python3 scripts/run_apple_family_runtime_evidence.py \
+            --build-dir build \
+            --evidence-path build/apple_family_runtime_evidence.json \
+            --expected-chip M5 \
+            --require-pass
+          python3 scripts/check_apple_family_runtime_evidence.py \
+            build/apple_family_runtime_evidence.json \
+            --git-head "$GITHUB_SHA" \
+            --require-chip M5 \
+            --require-clean-head \
+            --require-pass
+
       - name: Upload runtime evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -144,6 +171,7 @@ jobs:
           path: |
             build/m5_tensorops_runner_preflight.json
             build/release_smoke_runtime_evidence.json
+            build/apple_family_runtime_evidence.json
             build/release_smoke_device.log
             build/Testing/Temporary/LastTest.log
           if-no-files-found: error
