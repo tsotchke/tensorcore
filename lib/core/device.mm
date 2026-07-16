@@ -109,6 +109,11 @@ extern "C" tc_family_t tc_device_family_from_mtl(id<MTLDevice> dev) {
 }
 
 static bool tc_device_supports_tensorops_m5(id<MTLDevice> dev, tc_family_t family) {
+#ifndef TC_HAVE_METAL4_SDK
+    (void)dev;
+    (void)family;
+    return false;
+#else
     if (!dev || !tc_apple_family_supports_tensorops_m5(family)) return false;
 
     BOOL metal4 = NO;
@@ -124,6 +129,7 @@ static bool tc_device_supports_tensorops_m5(id<MTLDevice> dev, tc_family_t famil
     return [name containsString:@"M5"] ||
            [name containsString:@"M6"] ||
            [name containsString:@"M7"];
+#endif
 }
 
 /* ----------------------------------------------------------------- */
