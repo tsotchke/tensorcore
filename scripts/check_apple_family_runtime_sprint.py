@@ -60,6 +60,7 @@ def run(argv: list[str]) -> dict[str, Any]:
     return {
         "argv": argv,
         "ok": proc.returncode == 0,
+        "blocked": False,
         "returncode": proc.returncode,
         "output_sha256": hashlib.sha256(combined.encode()).hexdigest(),
         "output_tail": combined[-1600:],
@@ -76,6 +77,7 @@ def physical_check(path: pathlib.Path | None, chip: str, head: str) -> dict[str,
         return {
             "argv": [],
             "ok": False,
+            "blocked": True,
             "returncode": None,
             "output_sha256": hashlib.sha256(b"").hexdigest(),
             "output_tail": f"physical {chip} evidence missing",
@@ -148,20 +150,22 @@ def main() -> int:
     for gate in GATES:
         check = checks[gate]
         passed = bool(check["ok"])
+        blocked = bool(check.get("blocked"))
+        value = "PASS" if passed else ("BLOCKED" if blocked else "FAIL")
         if args.require_tracked_clean and tracked_dirty:
-            passed = False
+            value = "FAIL"
         events.append(
             {
                 "schema": SCHEMA,
                 "kind": EVENT_KIND,
                 "name": gate,
-                "value": "PASS" if passed else "FAIL",
-                "status": "PASS" if passed else "FAIL",
+                "value": value,
+                "status": value,
                 "timestamp": timestamp,
                 "git_head": head,
                 "git_tracked_dirty": tracked_dirty,
                 "checks": [gate],
-                "snippet": snippets[gate] if passed else check["output_tail"],
+                "snippet": snippets[gate] if value == "PASS" else check["output_tail"],
             }
         )
     write_trace(args.trace_output, events)
