@@ -21,6 +21,7 @@ SCHEMA = "tensorcore.apple_family_runtime_evidence.v1"
 FORMAT_VERSION = 1
 TESTS = ("test_device", "test_gemm_bf16", "test_gemm_i8", "test_tensorops_runtime")
 BUILD_TRACE = "build_runtime_tests"
+RESERVED_M4_RESOURCE = "enki:metal_m4_tsotchke_chan"
 CHIP_RE = re.compile(r"\bApple M([1-5])(?:\s|\b)")
 DEVICE_RE = re.compile(
     r'device="([^"]+)" family=Apple(\d+).*?bf16_sg=(yes|no) '
@@ -35,6 +36,14 @@ def parse_args() -> argparse.Namespace:
         "--evidence-path",
         type=pathlib.Path,
         default=ROOT / "build" / "apple_family_runtime_evidence.json",
+    )
+    parser.add_argument(
+        "--hardware-resource",
+        default=os.environ.get("TC_HARDWARE_RESOURCE", ""),
+        help=(
+            "Stable operator resource identifier. Required for M4 so the collector can "
+            "distinguish the reserved enki resource from independently supplied hardware."
+        ),
     )
     parser.add_argument("--authority-owner", default=os.environ.get("TC_AUTHORITY_OWNER", ""))
     parser.add_argument("--expected-chip", choices=[f"M{i}" for i in range(1, 6)])
@@ -106,6 +115,21 @@ def host_chip(timeout: float) -> tuple[str | None, dict[str, Any]]:
 
 def owner_authorized(owner: str) -> bool:
     return owner == "tsotchke-chan" or owner.startswith("tsotchke-chan:")
+
+
+def resource_scope(resource: str) -> str:
+    if resource == RESERVED_M4_RESOURCE:
+        return "reserved"
+    return "independent" if resource else "unspecified"
+
+
+def resource_authorized(chip: str | None, resource: str, owner: str) -> bool:
+    if chip != "M4":
+        return True
+    scope = resource_scope(resource)
+    if scope == "reserved":
+        return owner_authorized(owner)
+    return scope == "independent" and bool(owner.strip())
 
 
 def write_evidence(path: pathlib.Path, evidence: dict[str, Any]) -> None:
@@ -200,6 +224,7 @@ def test_checks(trace: list[dict[str, Any]], chip: str | None) -> dict[str, Any]
 def base_evidence(args: argparse.Namespace, chip: str | None, host_attempt: dict[str, Any]) -> dict[str, Any]:
     sdk_attempt = command(["xcrun", "--show-sdk-version"], timeout=args.timeout_sec)
     sdk = sdk_attempt.get("stdout_tail", "").strip() if sdk_attempt.get("rc") == 0 else ""
+    hardware_resource = args.hardware_resource.strip()
     return {
         "schema": SCHEMA,
         "meta": {
@@ -217,9 +242,10 @@ def base_evidence(args: argparse.Namespace, chip: str | None, host_attempt: dict
             "identity_probe": host_attempt,
         },
         "reservation": {
-            "resource": "enki:metal_m4_tsotchke_chan" if chip == "M4" else None,
+            "resource": hardware_resource or None,
+            "scope": resource_scope(hardware_resource),
             "authority_owner": args.authority_owner,
-            "authorized": chip != "M4" or owner_authorized(args.authority_owner),
+            "authorized": resource_authorized(chip, hardware_resource, args.authority_owner),
         },
         "build": {
             "directory": str(args.build_dir.resolve()),
@@ -246,8 +272,14 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
         blocked.append("apple_chip_identity_unavailable")
     if args.expected_chip and chip != args.expected_chip:
         failures.append(f"expected_chip_mismatch:{args.expected_chip}:{chip or 'unknown'}")
-    if chip == "M4" and not evidence["reservation"]["authorized"]:
-        blocked.append("reserved_m4_owner_not_authorized")
+    if chip == "M4":
+        reservation = evidence["reservation"]
+        if reservation["scope"] == "unspecified":
+            blocked.append("m4_resource_provenance_required")
+        elif reservation["scope"] == "independent" and not reservation["authority_owner"].strip():
+            blocked.append("independent_m4_owner_required")
+        elif not reservation["authorized"]:
+            blocked.append("reserved_m4_owner_not_authorized")
 
     # Reservation failures must stop before any TensorCore GPU binary executes.
     if blocked or failures:

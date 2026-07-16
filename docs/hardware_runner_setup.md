@@ -4,6 +4,14 @@ Operator runbook for closing the M5 / SDK 26 TensorOps runtime evidence
 blocker. This is the setup path for `.github/workflows/hardware-evidence.yml`
 when it is dispatched with `require_metal4_tensorops=true`.
 
+The same workflow's generic Apple lane can close the M4 family gate on an
+independently supplied physical M4. Dispatch it with
+`require_metal4_tensorops=false`, a stable `hardware_resource` such as a cloud
+instance or asset id, and an accountable `authority_owner`. Do not identify
+the host as `enki:metal_m4_tsotchke_chan` unless the run is actually authorized
+for that reserved resource; reserved runs require a `tsotchke-chan:<run-id>`
+owner. See [family_gating.md](family_gating.md) for the one-shot local command.
+
 ## Current blocker snapshot
 
 As of the current M5/SDK26 evidence handoff:

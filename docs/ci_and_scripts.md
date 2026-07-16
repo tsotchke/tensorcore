@@ -59,6 +59,13 @@ the promotion job. The workflow executes `scripts/release_smoke.sh` with
 machine-readable record of chip, family, TensorOps availability, and backend
 chosen per call that downstream integrators can consume.
 
+The dispatch inputs `hardware_resource` and `authority_owner` attach physical
+resource provenance to the Apple-family artifact. They are optional on M1-M3
+and M5, but an M4 run must provide both. An independently supplied M4 uses its
+provider or asset id and any accountable owner. The reserved
+`enki:metal_m4_tsotchke_chan` resource is accepted only when the owner begins
+with `tsotchke-chan`.
+
 The workflow also starts with a GitHub-hosted runner preflight job. That job
 emits `tensorcore-hardware-runner-preflight` with the required labels and any
 visible matching runner status so a missing self-hosted runner shows up as an

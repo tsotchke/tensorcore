@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import importlib.util
 import json
 import pathlib
 import subprocess
@@ -15,6 +16,7 @@ from typing import Any
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 CHECKER = ROOT / "scripts" / "check_apple_family_runtime_evidence.py"
+COLLECTOR = ROOT / "scripts" / "run_apple_family_runtime_evidence.py"
 EXPECTATIONS = {
     "M2": ("Apple M2 Ultra", 8, False, False, False, "15.2"),
     "M4": ("Apple M4 Max", 9, True, False, False, "26.0"),
@@ -102,6 +104,7 @@ def evidence(chip: str) -> dict[str, Any]:
         },
         "reservation": {
             "resource": "enki:metal_m4_tsotchke_chan" if chip == "M4" else None,
+            "scope": "reserved" if chip == "M4" else "unspecified",
             "authority_owner": "tsotchke-chan:public-evidence" if chip == "M4" else "tensorcore:public-evidence",
             "authorized": True,
         },
@@ -161,10 +164,36 @@ def fails(data: dict[str, Any], needle: str, *args: str) -> None:
 
 
 def main() -> int:
+    spec = importlib.util.spec_from_file_location("apple_family_collector", COLLECTOR)
+    if spec is None or spec.loader is None:
+        raise AssertionError("could not load Apple family evidence collector")
+    collector = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(collector)
+    assert collector.resource_scope("enki:metal_m4_tsotchke_chan") == "reserved"
+    assert collector.resource_scope("aws:ec2:mac-m4max") == "independent"
+    assert collector.resource_scope("") == "unspecified"
+    assert collector.resource_authorized("M4", "aws:ec2:mac-m4max", "tensorcore:aws")
+    assert not collector.resource_authorized("M4", "aws:ec2:mac-m4max", "")
+    assert collector.resource_authorized(
+        "M4", "enki:metal_m4_tsotchke_chan", "tsotchke-chan:public-evidence"
+    )
+    assert not collector.resource_authorized(
+        "M4", "enki:metal_m4_tsotchke_chan", "tensorcore:public-evidence"
+    )
+
     for chip in EXPECTATIONS:
         fixture = evidence(chip)
         passes(fixture, "--require-pass", "--require-chip", chip)
     passes(evidence("M2"), "--require-clean-head", "--git-head", "abc123")
+
+    independent_m4 = copy.deepcopy(evidence("M4"))
+    independent_m4["reservation"] = {
+        "resource": "aws:ec2:mac-m4max",
+        "scope": "independent",
+        "authority_owner": "tensorcore:aws-hardware-evidence",
+        "authorized": True,
+    }
+    passes(independent_m4, "--require-pass", "--require-chip", "M4")
 
     wrong_family = copy.deepcopy(evidence("M4"))
     wrong_family["device"]["family"] = 10
@@ -178,6 +207,21 @@ def main() -> int:
     unauthorized["reservation"]["authority_owner"] = "tensorcore:public-evidence"
     unauthorized["reservation"]["authorized"] = False
     fails(unauthorized, "tsotchke-chan prefix")
+
+    missing_resource = copy.deepcopy(evidence("M4"))
+    missing_resource["reservation"]["resource"] = None
+    missing_resource["reservation"]["scope"] = "unspecified"
+    missing_resource["reservation"]["authorized"] = False
+    fails(missing_resource, "identify its physical hardware resource")
+
+    ownerless_independent = copy.deepcopy(independent_m4)
+    ownerless_independent["reservation"]["authority_owner"] = ""
+    ownerless_independent["reservation"]["authorized"] = False
+    fails(ownerless_independent, "identify an authority owner")
+
+    wrong_scope = copy.deepcopy(independent_m4)
+    wrong_scope["reservation"]["scope"] = "reserved"
+    fails(wrong_scope, "reservation.scope=independent")
 
     old_sdk = copy.deepcopy(evidence("M5"))
     old_sdk["host"]["sdk_version"] = "15.2"

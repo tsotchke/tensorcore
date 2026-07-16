@@ -11,6 +11,16 @@ on:
         options:
           - "false"
           - "true"
+      hardware_resource:
+        description: "Stable physical resource id; required for M4 (for example aws:ec2:mac-m4max or enki:metal_m4_tsotchke_chan)"
+        required: false
+        default: ""
+        type: string
+      authority_owner:
+        description: "Accountable resource owner; reserved enki M4 runs require tsotchke-chan:<run-id>"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   actions: read
@@ -86,6 +96,9 @@ jobs:
           python3 scripts/check_release_evidence.py build/release_smoke_runtime_evidence.json --require-gpu
 
       - name: Collect Apple family evidence
+        env:
+          TC_HARDWARE_RESOURCE: ${{ inputs.hardware_resource }}
+          TC_AUTHORITY_OWNER: ${{ inputs.authority_owner }}
         run: |
           python3 scripts/run_apple_family_runtime_evidence.py \
             --build-dir build \
@@ -150,6 +163,9 @@ jobs:
             --require-metal4-tensorops
 
       - name: Collect M5 family evidence
+        env:
+          TC_HARDWARE_RESOURCE: ${{ inputs.hardware_resource }}
+          TC_AUTHORITY_OWNER: ${{ inputs.authority_owner }}
         run: |
           python3 scripts/run_apple_family_runtime_evidence.py \
             --build-dir build \

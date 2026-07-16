@@ -252,11 +252,38 @@ python3 scripts/check_apple_family_runtime_evidence.py \
   --require-chip M2 --require-clean-head --require-pass
 ```
 
-Replace `M2` with the physical chip class. M4 is a reserved resource in the
-current mesh and requires `TC_AUTHORITY_OWNER=tsotchke-chan:<run-id>`; the
-collector checks that authority immediately after host identification and
-does not execute a TensorCore GPU binary when it is absent. M5 additionally
-requires SDK 26+ and `tensorops_runtime_status=passed backend=tensorops_m5`.
+Replace `M2` with the physical chip class. The existing M4 resource in the
+current mesh is reserved, but it is not the only acceptable source of M4
+evidence. Every M4 run must declare a stable resource identifier and
+accountable owner. An
+independently supplied M4 can therefore run without touching the reserved
+machine:
+
+```sh
+cmake -S . -B build-m4-evidence -DCMAKE_BUILD_TYPE=Release
+python3 scripts/run_apple_family_runtime_evidence.py \
+  --build-dir build-m4-evidence \
+  --evidence-path build-m4-evidence/apple_family_runtime_evidence.json \
+  --expected-chip M4 \
+  --hardware-resource aws:ec2:mac-m4max \
+  --authority-owner tensorcore:aws-hardware-evidence \
+  --require-pass
+python3 scripts/check_apple_family_runtime_evidence.py \
+  build-m4-evidence/apple_family_runtime_evidence.json \
+  --require-chip M4 --require-clean-head --require-pass
+```
+
+The resource identifier is provenance, not a provider allowlist; use the
+actual provider or asset id. AWS documents a dedicated [M4 Max EC2 Mac
+offering](https://aws.amazon.com/ec2/instance-types/mac/), but any physical M4
+Mac is acceptable when the evidence contract passes.
+
+Using the reserved mesh resource still requires both
+`--hardware-resource enki:metal_m4_tsotchke_chan` and
+`--authority-owner tsotchke-chan:<run-id>`. The collector checks that
+authority immediately after host identification and does not execute a
+TensorCore GPU binary when it is absent. M5 additionally requires SDK 26+ and
+`tensorops_runtime_status=passed backend=tensorops_m5`.
 
 The default Apple suite is **31 tests** at this checkpoint: 27
 correctness/Python tests plus four native example smokes. It takes

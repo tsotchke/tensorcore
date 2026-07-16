@@ -23,6 +23,7 @@ EXPECTED = {
 }
 TESTS = ("test_device", "test_gemm_bf16", "test_gemm_i8", "test_tensorops_runtime")
 BUILD_TRACE = "build_runtime_tests"
+RESERVED_M4_RESOURCE = "enki:metal_m4_tsotchke_chan"
 DEVICE_RE = re.compile(
     r'device="([^"]+)" family=Apple(\d+).*?bf16_sg=(yes|no) '
     r'i8_sg=(yes|no) tensorops_m5=(yes|no)'
@@ -90,12 +91,23 @@ def validate(data: Any, args: argparse.Namespace) -> list[str]:
         errors.append("reservation must be an object")
         reservation = {}
     if chip == "M4":
-        if reservation.get("resource") != "enki:metal_m4_tsotchke_chan":
-            errors.append("M4 evidence must identify the reserved enki resource")
-        if not owner_authorized(reservation.get("authority_owner")):
-            errors.append("M4 evidence authority owner must use the tsotchke-chan prefix")
+        resource = reservation.get("resource")
+        scope = reservation.get("scope")
+        owner = reservation.get("authority_owner")
+        if not isinstance(resource, str) or not resource.strip():
+            errors.append("M4 evidence must identify its physical hardware resource")
+        elif resource == RESERVED_M4_RESOURCE:
+            if scope != "reserved":
+                errors.append("reserved M4 evidence must use reservation.scope=reserved")
+            if not owner_authorized(owner):
+                errors.append("reserved M4 evidence authority owner must use the tsotchke-chan prefix")
+        else:
+            if scope != "independent":
+                errors.append("non-enki M4 evidence must use reservation.scope=independent")
+            if not isinstance(owner, str) or not owner.strip():
+                errors.append("independent M4 evidence must identify an authority owner")
         if reservation.get("authorized") is not True:
-            errors.append("M4 evidence reservation must be authorized")
+            errors.append("M4 evidence hardware authority must be authorized")
 
     device = data.get("device")
     if not isinstance(device, dict):

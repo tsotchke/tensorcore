@@ -83,10 +83,14 @@ def check_policy(errors: list[str]) -> None:
         if tensorops.get(key) != expected_value:
             errors.append(f"tensorops.{key} must be {expected_value!r}")
     evidence = policy.get("evidence", {})
-    if evidence.get("m4_resource") != "enki:metal_m4_tsotchke_chan":
-        errors.append("M4 evidence must identify the reserved enki resource")
-    if evidence.get("m4_required_owner_prefix") != "tsotchke-chan":
-        errors.append("M4 evidence owner prefix must be tsotchke-chan")
+    if evidence.get("m4_reserved_resource") != "enki:metal_m4_tsotchke_chan":
+        errors.append("M4 policy must identify the reserved enki resource")
+    if evidence.get("m4_reserved_resource_required_owner_prefix") != "tsotchke-chan":
+        errors.append("reserved M4 evidence owner prefix must be tsotchke-chan")
+    if evidence.get("allow_independent_m4_resource_evidence") is not True:
+        errors.append("independently supplied M4 evidence must be allowed")
+    if evidence.get("m4_independent_resource_requires_owner") is not True:
+        errors.append("independent M4 evidence must require an accountable owner")
 
 
 def check_sources(errors: list[str]) -> None:
