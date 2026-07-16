@@ -9,6 +9,7 @@ import json
 import pathlib
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from typing import Any
 
@@ -27,6 +28,26 @@ GATE_NAMES = (
     "cross_platform_selftest",
     "documentation_truth",
 )
+REQUIRED_FUNCTION_CALLS = {
+    "scripts/topology_authority.py": {
+        "normalize_scheduler_inventory",
+        "reconcile",
+    },
+    "scripts/topology_authority_selftest.py": {
+        "cloud_payload",
+        "scheduler_payload",
+        "test_backend_conflict_fails_closed",
+    },
+    "scripts/mesh_resource_scheduler.py": {
+        "cmd_audit",
+        "infer_resource_class",
+        "validate_jobs_against_inventory",
+    },
+    "scripts/topology_scheduler_binding_selftest.py": {
+        "inventory_rows",
+        "test_signed_snapshot_binds_inventory_and_job_metadata",
+    },
+}
 
 
 def run_command(argv: list[str]) -> dict[str, Any]:
@@ -46,6 +67,36 @@ def run_command(argv: list[str]) -> dict[str, Any]:
         "output_sha256": hashlib.sha256(combined.encode("utf-8")).hexdigest(),
         "output_tail": combined[-1200:],
     }
+
+
+def read_trace(path: pathlib.Path) -> list[dict[str, Any]]:
+    events = []
+    if not path.is_file():
+        return events
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        if raw_line.strip():
+            event = json.loads(raw_line)
+            if isinstance(event, dict):
+                events.append(event)
+    return events
+
+
+def run_traced(
+    python: str,
+    trace_directory: pathlib.Path,
+    name: str,
+    script: str,
+    includes: tuple[str, ...],
+) -> dict[str, Any]:
+    trace_path = trace_directory / f"{name}.jsonl"
+    argv = [python, "scripts/run_with_function_trace.py", "--output", str(trace_path)]
+    for include in includes:
+        argv.extend(["--include", include])
+    argv.append(script)
+    result = run_command(argv)
+    result["function_events"] = read_trace(trace_path)
+    result["function_event_count"] = len(result["function_events"])
+    return result
 
 
 def git_value(*args: str) -> str:
@@ -85,24 +136,75 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     python = sys.executable
-    checks = {
-        "authority": run_command([python, "scripts/topology_authority_selftest.py"]),
-        "observation_wrapper": run_command([python, "scripts/wrap_topology_observation_selftest.py"]),
-        "scheduler_binding": run_command([python, "scripts/topology_scheduler_binding_selftest.py"]),
-        "documentation": run_command([python, "scripts/check_topology_authority_docs.py"]),
-        "documentation_links": run_command([python, "scripts/check_docs_links.py"]),
-        "inventory": run_command([python, "scripts/check_mesh_resource_inventory.py"]),
-        "jobs": run_command([python, "scripts/check_mesh_resource_jobs.py"]),
+    with tempfile.TemporaryDirectory(prefix="tensorcore-topology-trace-") as raw_trace_directory:
+        trace_directory = pathlib.Path(raw_trace_directory)
+        checks = {
+            "authority": run_traced(
+                python,
+                trace_directory,
+                "authority",
+                "scripts/topology_authority_selftest.py",
+                ("scripts/topology_authority.py", "scripts/topology_authority_selftest.py"),
+            ),
+            "observation_wrapper": run_command([python, "scripts/wrap_topology_observation_selftest.py"]),
+            "scheduler_binding": run_traced(
+                python,
+                trace_directory,
+                "scheduler-binding",
+                "scripts/topology_scheduler_binding_selftest.py",
+                (
+                    "scripts/topology_authority.py",
+                    "scripts/mesh_resource_scheduler.py",
+                    "scripts/topology_scheduler_binding_selftest.py",
+                ),
+            ),
+            "scheduler_full": run_traced(
+                python,
+                trace_directory,
+                "scheduler-full",
+                "scripts/mesh_resource_scheduler_selftest.py",
+                ("scripts/mesh_resource_scheduler.py", "scripts/mesh_resource_scheduler_selftest.py"),
+            ),
+            "documentation": run_command([python, "scripts/check_topology_authority_docs.py"]),
+            "documentation_links": run_command([python, "scripts/check_docs_links.py"]),
+            "inventory": run_command([python, "scripts/check_mesh_resource_inventory.py"]),
+            "jobs": run_command([python, "scripts/check_mesh_resource_jobs.py"]),
+        }
+        function_events_by_key: dict[tuple[str, str, int], dict[str, Any]] = {}
+        for check_name in ("authority", "scheduler_binding", "scheduler_full"):
+            for event in checks[check_name].pop("function_events"):
+                key = (str(event.get("path") or ""), str(event.get("name") or ""), int(event.get("line") or 0))
+                event["check"] = check_name
+                function_events_by_key.setdefault(key, event)
+        function_events = [function_events_by_key[key] for key in sorted(function_events_by_key)]
+    observed_calls: dict[str, set[str]] = {}
+    for event in function_events:
+        observed_calls.setdefault(str(event.get("path") or ""), set()).add(str(event.get("name") or ""))
+    missing_calls = [
+        f"{path}::{name}"
+        for path, names in sorted(REQUIRED_FUNCTION_CALLS.items())
+        for name in sorted(names)
+        if name not in observed_calls.get(path, set())
+    ]
+    checks["function_trace"] = {
+        "argv": [python, "scripts/run_with_function_trace.py", "<three selftest suites>"],
+        "returncode": 0 if not missing_calls else 1,
+        "ok": not missing_calls,
+        "output_sha256": hashlib.sha256("\n".join(missing_calls).encode("utf-8")).hexdigest(),
+        "output_tail": "all required production and test calls observed"
+        if not missing_calls
+        else "missing function calls: " + ", ".join(missing_calls),
+        "function_event_count": len(function_events),
     }
     tracked_dirty = bool(git_value("status", "--porcelain", "--untracked-files=no"))
     head = git_value("rev-parse", "HEAD")
     gate_checks = {
         "canonical_schema": ("authority", "inventory"),
         "source_coverage": ("authority", "observation_wrapper"),
-        "identity_reconciliation": ("authority",),
-        "drift_fail_closed": ("authority",),
-        "scheduler_binding": ("scheduler_binding", "inventory", "jobs"),
-        "signed_snapshot": ("authority", "scheduler_binding"),
+        "identity_reconciliation": ("authority", "function_trace"),
+        "drift_fail_closed": ("authority", "function_trace"),
+        "scheduler_binding": ("scheduler_binding", "scheduler_full", "inventory", "jobs", "function_trace"),
+        "signed_snapshot": ("authority", "scheduler_binding", "function_trace"),
         "public_redaction": ("authority", "documentation"),
         "cross_platform_selftest": ("authority", "observation_wrapper", "documentation"),
         "documentation_truth": ("documentation", "documentation_links"),
@@ -142,22 +244,34 @@ def main() -> int:
                 + ", ".join(name for name in required_checks if not checks[name]["ok"]),
             }
         )
+    for event in function_events:
+        event.update(
+            {
+                "schema": SCHEMA,
+                "timestamp": timestamp,
+                "git_head": head,
+                "git_tracked_dirty": tracked_dirty,
+            }
+        )
+        events.append(event)
     write_trace(args.trace_output, events)
-    ok = all(event["value"] == "PASS" for event in events)
+    gate_events = [event for event in events if event.get("kind") == EVENT_KIND]
+    ok = all(event["value"] == "PASS" for event in gate_events)
     report = {
         "schema": SCHEMA,
         "ok": ok,
         "git_head": head,
         "git_tracked_dirty": tracked_dirty,
         "trace_output": str(args.trace_output),
-        "passed_gates": sum(event["value"] == "PASS" for event in events),
-        "gate_count": len(events),
+        "passed_gates": sum(event["value"] == "PASS" for event in gate_events),
+        "gate_count": len(gate_events),
+        "function_event_count": len(function_events),
         "checks": checks,
     }
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
-        for event in events:
+        for event in gate_events:
             print(f"{event['value']} {event['name']}: {event['snippet']}")
         print(f"topology authority sprint {'OK' if ok else 'FAIL'}: {report['passed_gates']}/{report['gate_count']} gates")
         print(f"ICC trace: {args.trace_output}")
