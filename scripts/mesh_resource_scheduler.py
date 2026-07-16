@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import hashlib
+import hmac
 import json
 import os
 import shlex
@@ -20,6 +21,7 @@ import subprocess
 import sys
 import time
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +31,8 @@ SCHEMA = "tensorcore.mesh_resource_jobs.v1"
 SUBMIT_SCHEMA = "tensorcore.job.v1"
 INVENTORY_SCHEMA = "tensorcore.mesh_resources.v1"
 GPU_RECONCILIATION_AUDIT_SCHEMA = "tensorcore.gpu_reconciliation_audit.v1"
+TOPOLOGY_SNAPSHOT_SCHEMA = "tensorcore.topology_snapshot.v1"
+TOPOLOGY_SIGNING_KEY_ENV = "TC_TOPOLOGY_SIGNING_KEY"
 INVENTORY_STATUSES = {"active", "reserved", "blocked"}
 RESOURCE_CLASSES = {"generic", "cuda_exclusive"}
 DESIRED_STATES = {"running", "paused"}
@@ -788,6 +792,10 @@ def normalize_job(job: Any, inventory: dict[str, dict] | None = None) -> dict:
     metadata["resource"] = out["resource"]
     metadata["resource_backend"] = out["resource_backend"]
     metadata["resource_node"] = out["resource_node"]
+    if inventory_row and inventory_row.get("topology_snapshot_sha256"):
+        metadata["topology_snapshot_sha256"] = inventory_row["topology_snapshot_sha256"]
+        metadata["topology_authority_node_id"] = inventory_row.get("topology_authority_node_id")
+        metadata["topology_authority_admission"] = inventory_row.get("topology_authority_admission")
     if out.get("gpu_reconciliation_admission_args"):
         metadata["gpu_reconciliation_admission_args"] = out["gpu_reconciliation_admission_args"]
     if out.get("worker_alias"):
@@ -2115,11 +2123,187 @@ def gpu_reconciliation_gate(args: argparse.Namespace, jobs: list[dict]) -> dict:
     }
 
 
+def topology_snapshot_integrity(
+    payload: dict,
+    *,
+    require_signature: bool,
+) -> tuple[bool, str, str]:
+    integrity = payload.get("integrity")
+    if not isinstance(integrity, dict):
+        return False, "missing_integrity", ""
+    unsigned = dict(payload)
+    unsigned.pop("integrity", None)
+    encoded = canonical_json(unsigned).encode("utf-8")
+    digest = hashlib.sha256(encoded).hexdigest()
+    if not hmac.compare_digest(str(integrity.get("payload_sha256") or ""), digest):
+        return False, "digest_mismatch", digest
+    signature = integrity.get("signature")
+    if signature is None:
+        return (False, "missing_signature", digest) if require_signature else (True, "digest_valid", digest)
+    if not isinstance(signature, dict) or signature.get("algorithm") != "hmac-sha256":
+        return False, "unsupported_signature", digest
+    key = os.environ.get(TOPOLOGY_SIGNING_KEY_ENV)
+    if not key:
+        return (
+            (False, "signature_key_required", digest)
+            if require_signature
+            else (True, "digest_valid_signature_unchecked", digest)
+        )
+    expected = hmac.new(key.encode("utf-8"), encoded, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(str(signature.get("value") or ""), expected):
+        return False, "signature_mismatch", digest
+    return True, "signature_valid", digest
+
+
+def parse_topology_generated_at(value: Any) -> float:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("topology snapshot generated_at must be an RFC3339 timestamp")
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    parsed = datetime.fromisoformat(text)
+    if parsed.tzinfo is None:
+        raise ValueError("topology snapshot generated_at must include a UTC offset")
+    return parsed.astimezone(timezone.utc).timestamp()
+
+
+def topology_authority_gate(args: argparse.Namespace, inventory: dict[str, dict]) -> dict:
+    required = bool(getattr(args, "require_topology_authority", False))
+    path = getattr(args, "topology_snapshot", None)
+    require_signature = bool(getattr(args, "require_topology_signature", False))
+    if not path:
+        return {
+            "ok": not required,
+            "required": required,
+            "configured": False,
+            "reason": "snapshot_required" if required else "not_configured",
+        }
+    report: dict[str, Any] = {
+        "ok": False,
+        "required": required,
+        "configured": True,
+        "path": str(Path(path).expanduser()),
+        "signature_required": require_signature,
+        "errors": [],
+    }
+    try:
+        payload = read_json_object(path)
+    except Exception as exc:
+        report["reason"] = "snapshot_unreadable"
+        report["errors"].append(str(exc))
+        return report
+    if payload.get("schema") != TOPOLOGY_SNAPSHOT_SCHEMA:
+        report["reason"] = "invalid_schema"
+        report["errors"].append(
+            f"topology snapshot schema must be {TOPOLOGY_SNAPSHOT_SCHEMA}, got {payload.get('schema')!r}"
+        )
+        return report
+    integrity_ok, integrity_reason, digest = topology_snapshot_integrity(
+        payload,
+        require_signature=require_signature,
+    )
+    report["integrity"] = integrity_reason
+    report["snapshot_sha256"] = digest
+    if not integrity_ok:
+        report["reason"] = integrity_reason
+        report["errors"].append(f"topology snapshot integrity failed: {integrity_reason}")
+        return report
+    try:
+        age_sec = max(0.0, time.time() - parse_topology_generated_at(payload.get("generated_at")))
+    except (TypeError, ValueError) as exc:
+        report["reason"] = "invalid_generated_at"
+        report["errors"].append(str(exc))
+        return report
+    max_age_sec = float(getattr(args, "topology_max_age_sec", 300.0))
+    report["age_sec"] = age_sec
+    report["max_age_sec"] = max_age_sec
+    if age_sec > max_age_sec:
+        report["reason"] = "snapshot_stale"
+        report["errors"].append(
+            f"topology snapshot is {age_sec:.3f}s old, exceeding {max_age_sec:.3f}s"
+        )
+        return report
+    drift = payload.get("drift")
+    if not isinstance(drift, dict) or drift.get("clean") is not True:
+        report["reason"] = "snapshot_has_drift"
+        report["errors"].append("topology snapshot drift.clean must be true")
+        return report
+    raw_resources = payload.get("resources")
+    if not isinstance(raw_resources, list):
+        report["reason"] = "invalid_resources"
+        report["errors"].append("topology snapshot resources must be a list")
+        return report
+    authority_resources: dict[str, dict] = {}
+    for row in raw_resources:
+        if not isinstance(row, dict) or not isinstance(row.get("id"), str):
+            report["errors"].append("topology snapshot contains an invalid resource row")
+            continue
+        resource_id = row["id"]
+        if resource_id in authority_resources:
+            report["errors"].append(f"topology snapshot repeats resource {resource_id!r}")
+            continue
+        authority_resources[resource_id] = row
+    missing = sorted(set(inventory) - set(authority_resources))
+    extra = sorted(set(authority_resources) - set(inventory))
+    if missing:
+        report["errors"].append(f"topology snapshot is missing scheduler resources: {missing!r}")
+    if extra:
+        report["errors"].append(f"topology snapshot contains unknown scheduler resources: {extra!r}")
+    permitted_admission = {
+        "active": {"eligible"},
+        "reserved": {"reserved"},
+        "blocked": {"blocked", "quarantined"},
+    }
+    for resource_id, inventory_row in sorted(inventory.items()):
+        authority_row = authority_resources.get(resource_id)
+        if authority_row is None:
+            continue
+        for field, authority_field in (
+            ("backend", "backend"),
+            ("class", "class"),
+            ("capacity", "capacity"),
+            ("status", "scheduler_status"),
+        ):
+            expected = inventory_row.get(field, 1 if field == "capacity" else "active" if field == "status" else "")
+            actual = authority_row.get(authority_field)
+            if actual != expected:
+                report["errors"].append(
+                    f"resource {resource_id!r} {field} mismatch: inventory={expected!r} authority={actual!r}"
+                )
+        status = str(inventory_row.get("status", "active"))
+        admission = str(authority_row.get("authority_admission") or "")
+        if admission not in permitted_admission[status]:
+            report["errors"].append(
+                f"resource {resource_id!r} status={status!r} is not admitted by authority state {admission!r}"
+            )
+        inventory_row["topology_snapshot_sha256"] = digest
+        inventory_row["topology_authority_node_id"] = authority_row.get("authority_node_id")
+        inventory_row["topology_authority_admission"] = admission
+    if report["errors"]:
+        report["reason"] = "resource_binding_failed"
+        return report
+    report["ok"] = True
+    report["reason"] = "ok"
+    report["resource_count"] = len(authority_resources)
+    return report
+
+
 def schedule_once(args: argparse.Namespace) -> dict:
     arbiter_cmd = command(args.arbiter_cmd)
     if not arbiter_cmd:
         raise SystemExit("--arbiter-cmd resolved to an empty command")
     inventory = load_inventory(args.inventory_json)
+    topology_gate = topology_authority_gate(args, inventory)
+    if topology_gate.get("ok") is not True:
+        return {
+            "schema": "tensorcore.mesh_resource_scheduler.result.v1",
+            "ok": False,
+            "checked_at_unix": time.time(),
+            "dry_run": args.dry_run,
+            "topology_authority": topology_gate,
+            "results": [],
+            "errors": [{"error": "topology authority admission failed", "details": topology_gate}],
+        }
     queue_integrity = queue_integrity_gate(args)
     if queue_integrity is not None and queue_integrity.get("ok") is not True:
         return {
@@ -2173,6 +2357,7 @@ def schedule_once(args: argparse.Namespace) -> dict:
         "ok": not errors and all(row.get("ok", True) for row in results),
         "checked_at_unix": time.time(),
         "dry_run": args.dry_run,
+        "topology_authority": topology_gate,
         "gpu_reconciliation_audit": reconciliation_gate,
         "queue_event_log_integrity": queue_integrity,
         "results": results,
@@ -2398,6 +2583,9 @@ def queued_job_id_matches(row: dict, requested_id: str) -> bool:
 
 def cmd_submit(args: argparse.Namespace) -> dict:
     inventory = load_inventory(args.inventory_json)
+    topology_gate = topology_authority_gate(args, inventory)
+    if topology_gate.get("ok") is not True:
+        raise ValueError(f"topology authority admission failed: {topology_gate.get('reason')}")
     spec = read_json_object(args.job_json)
     mesh_job = submit_spec_to_mesh_job(spec)
     spec_sha256 = canonical_sha256(spec)
@@ -2414,6 +2602,7 @@ def cmd_submit(args: argparse.Namespace) -> dict:
         "job_sha256": job_sha256,
         "spec_sha256": spec_sha256,
         "source_provenance": source_provenance,
+        "topology_authority": topology_gate,
         "expanded_jobs": [job["id"] for job in expanded],
         "launch_plans": [launch_plan(job) for job in expanded],
     }
@@ -2448,6 +2637,7 @@ def cmd_submit(args: argparse.Namespace) -> dict:
 
 def cmd_status(args: argparse.Namespace) -> dict:
     inventory = load_inventory(args.inventory_json)
+    topology_gate = topology_authority_gate(args, inventory)
     queue_integrity = queue_integrity_gate(args) if args.jobs_json else None
     jobs = load_jobs(args.jobs_json, inventory=inventory) if args.jobs_json else []
     reconciliation_gate = None
@@ -2472,11 +2662,13 @@ def cmd_status(args: argparse.Namespace) -> dict:
         })
     payload = {
         "schema": "tensorcore.cluster_status.v1",
-        "ok": queue_integrity is None or queue_integrity.get("ok") is True,
+        "ok": (queue_integrity is None or queue_integrity.get("ok") is True)
+        and topology_gate.get("ok") is True,
         "checked_at_unix": time.time(),
         "resources": resources,
         "jobs": [{"id": job["id"], "resource": job["resource"], "desired_state": job["desired_state"]} for job in jobs],
         "leases": status.get("leases") or [],
+        "topology_authority": topology_gate,
     }
     if queue_integrity is not None:
         payload["queue_event_log_integrity"] = queue_integrity
@@ -2571,9 +2763,12 @@ def update_inventory_status(args: argparse.Namespace, *, drained: bool) -> dict:
 
 def cmd_audit(args: argparse.Namespace) -> dict:
     inventory = load_inventory(args.inventory_json)
+    topology_gate = topology_authority_gate(args, inventory)
     queue_integrity = queue_integrity_gate(args)
     jobs = load_jobs(args.jobs_json, inventory=inventory)
     errors: list[str] = []
+    if topology_gate.get("ok") is not True:
+        errors.append(f"topology authority admission failed: {topology_gate.get('reason')}")
     if queue_integrity is not None and queue_integrity.get("ok") is not True:
         errors.extend(str(error) for error in queue_integrity.get("errors", []))
     try:
@@ -2617,6 +2812,7 @@ def cmd_audit(args: argparse.Namespace) -> dict:
         "errors": errors,
         "job_count": len(jobs),
         "queue_event_log_integrity": queue_integrity,
+        "topology_authority": topology_gate,
         "worker_reconciliation_reports": reconciliation_reports,
     }
 
@@ -2655,6 +2851,35 @@ def run_loop(args: argparse.Namespace) -> int:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
+    def add_topology_flags(parser: argparse.ArgumentParser, *, required: bool) -> None:
+        parser.add_argument(
+            "--topology-snapshot",
+            default=os.environ.get("TC_TOPOLOGY_SNAPSHOT"),
+            help="signed tensorcore.topology_snapshot.v1 used for resource admission",
+        )
+        parser.add_argument(
+            "--topology-max-age-sec",
+            type=float,
+            default=float(os.environ.get("TC_TOPOLOGY_MAX_AGE_SEC", "300")),
+        )
+        parser.add_argument(
+            "--allow-unsigned-topology",
+            action="store_false",
+            dest="require_topology_signature",
+            help="accept digest-only topology snapshots (development only)",
+        )
+        parser.set_defaults(
+            require_topology_authority=required,
+            require_topology_signature=True,
+        )
+        if required:
+            parser.add_argument(
+                "--allow-unreconciled-topology",
+                action="store_false",
+                dest="require_topology_authority",
+                help="bypass topology authority admission (development/emergency only)",
+            )
+
     if argv and argv[0] in CONTROL_COMMANDS:
         parser = argparse.ArgumentParser(description=__doc__)
         sub = parser.add_subparsers(dest="control_command", required=True)
@@ -2670,6 +2895,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         submit.add_argument("--event-log-jsonl", default=os.environ.get("TC_SCHEDULER_EVENT_LOG_JSONL"))
         submit.add_argument("--replace", action="store_true")
         submit.add_argument("--dry-run", action="store_true")
+        add_topology_flags(submit, required=True)
         add_output_flags(submit)
 
         status = sub.add_parser("status", help="Report inventory, jobs, and arbiter leases")
@@ -2682,6 +2908,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         status.add_argument("--gpu-reconciliation-max-age-sec", type=float, default=120.0)
         status.add_argument("--timeout-sec", type=float, default=10.0)
         status.add_argument("--offline", action="store_true")
+        add_topology_flags(status, required=False)
         add_output_flags(status)
 
         cancel = sub.add_parser("cancel", help="Disable a queued job without releasing leases")
@@ -2715,6 +2942,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         audit.add_argument("--require-queue-event-log-integrity", action="store_true")
         audit.add_argument("--worker-reconciliation-json", action="append", default=[])
         audit.add_argument("--worker-reconciliation-dir", action="append", default=[])
+        add_topology_flags(audit, required=True)
         add_output_flags(audit)
 
         args = parser.parse_args(argv)
@@ -2723,6 +2951,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             and args.gpu_reconciliation_max_age_sec <= 0
         ):
             parser.error("--gpu-reconciliation-max-age-sec must be > 0")
+        if hasattr(args, "topology_max_age_sec") and args.topology_max_age_sec <= 0:
+            parser.error("--topology-max-age-sec must be > 0")
         return args
 
     parser = argparse.ArgumentParser(description=__doc__)
@@ -2749,6 +2979,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--loop", action="store_true")
     parser.add_argument("--interval-sec", type=float, default=30.0)
     parser.add_argument("--max-iterations", type=int, default=0)
+    add_topology_flags(parser, required=True)
     args = parser.parse_args(argv)
     if args.max_iterations < 0:
         parser.error("--max-iterations must be >= 0")
@@ -2764,6 +2995,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error("--unknown-lease-quarantine-age-sec must be >= 0")
     if args.max_running_per_tenant < 0:
         parser.error("--max-running-per-tenant must be >= 0")
+    if args.topology_max_age_sec <= 0:
+        parser.error("--topology-max-age-sec must be > 0")
     return args
 
 
