@@ -64,6 +64,7 @@ _tc_diloco_apply_outer
 _tc_diloco_async_commit
 _tc_diloco_async_poll
 _tc_diloco_async_wait
+_tc_diloco_capability_query
 _tc_diloco_finalize
 _tc_diloco_init
 _tc_diloco_inner_steps_completed

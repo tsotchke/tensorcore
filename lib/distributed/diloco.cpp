@@ -222,11 +222,160 @@ struct tc_diloco_ctx {
 
 namespace {
 
-constexpr uint8_t kStateMagic[8] = {'T', 'C', 'D', 'L', 'S', 'T', 'A', '1'};
-constexpr uint32_t kStateHeaderSize = 32;
-constexpr size_t kStatePayloadOffset = kStateHeaderSize;
-constexpr size_t kStateTotalSizeOffset = 16;
-constexpr size_t kStateChecksumOffset = 24;
+/* Both wire versions share one payload layout. Only the header differs, so a
+ * v1 and a v2 blob written from the same state have identical payload bytes. */
+constexpr uint8_t kStateMagicV1[8] = {'T', 'C', 'D', 'L', 'S', 'T', 'A', '1'};
+constexpr uint8_t kStateMagicV2[8] = {'T', 'C', 'D', 'L', 'S', 'T', 'A', '2'};
+constexpr uint32_t kStateHeaderSizeV1 = TC_DILOCO_STATE_V1_HEADER_SIZE;
+constexpr uint32_t kStateHeaderSizeV2 = TC_DILOCO_STATE_V2_HEADER_SIZE;
+constexpr size_t kStateDigestBytes = TC_DILOCO_STATE_V2_DIGEST_BYTES;
+constexpr size_t kStateTotalSizeOffset = 16;       /* both versions */
+constexpr size_t kStateV1ChecksumOffset = 24;
+constexpr size_t kStateV2PayloadSizeOffset = 24;
+constexpr size_t kStateV2DigestOffset = 32;
+
+/* Fixed prefix of the shared payload: config, identity, counters, async
+ * result, and the parameter count. */
+constexpr size_t kStatePayloadPrefixSize = 148;
+
+/* The headers are written field by field, so freeze the documented byte
+ * offsets here rather than trusting the write order to stay put. */
+static_assert(kStateTotalSizeOffset == sizeof(kStateMagicV1) + 4 + 4,
+              "total size follows magic, version, and header size");
+static_assert(kStateV1ChecksumOffset == kStateTotalSizeOffset + 8,
+              "v1 payload checksum follows total size");
+static_assert(kStateV1ChecksumOffset + 8 == kStateHeaderSizeV1,
+              "v1 header ends after the payload checksum");
+static_assert(kStateV2PayloadSizeOffset == kStateTotalSizeOffset + 8,
+              "v2 payload size follows total size");
+static_assert(kStateV2DigestOffset == kStateV2PayloadSizeOffset + 8,
+              "v2 payload digest follows payload size");
+static_assert(kStateV2DigestOffset + kStateDigestBytes == kStateHeaderSizeV2,
+              "v2 header ends after the payload digest");
+static_assert(sizeof(kStateMagicV1) == sizeof(kStateMagicV2),
+              "both wire versions use an 8-byte magic");
+
+bool state_version_supported(uint32_t version) {
+    return version == TC_DILOCO_STATE_ABI_VERSION_1 ||
+           version == TC_DILOCO_STATE_ABI_VERSION_2;
+}
+
+uint32_t state_header_size(uint32_t version) {
+    return version == TC_DILOCO_STATE_ABI_VERSION_2 ? kStateHeaderSizeV2
+                                                    : kStateHeaderSizeV1;
+}
+
+/* SHA-256 over the serialized payload. This is an integrity check on a
+ * caller-supplied buffer, not an authentication tag; tc_transport_auth owns
+ * keyed message authentication. */
+class Sha256 {
+public:
+    Sha256() { reset(); }
+
+    void update(const void* input, size_t bytes) {
+        const uint8_t* p = static_cast<const uint8_t*>(input);
+        total_bytes_ += bytes;
+        while (bytes > 0) {
+            const size_t n = std::min(bytes, sizeof(block_) - block_used_);
+            std::memcpy(block_ + block_used_, p, n);
+            block_used_ += n;
+            p += n;
+            bytes -= n;
+            if (block_used_ == sizeof(block_)) {
+                transform(block_);
+                block_used_ = 0;
+            }
+        }
+    }
+
+    void finish(uint8_t out[kStateDigestBytes]) {
+        const uint64_t total_bits = total_bytes_ * UINT64_C(8);
+        block_[block_used_++] = 0x80;
+        if (block_used_ > 56) {
+            std::memset(block_ + block_used_, 0, sizeof(block_) - block_used_);
+            transform(block_);
+            block_used_ = 0;
+        }
+        std::memset(block_ + block_used_, 0, 56 - block_used_);
+        for (unsigned i = 0; i < 8; ++i) {
+            block_[56 + i] = (uint8_t)(total_bits >> (56 - 8 * i));
+        }
+        transform(block_);
+        for (unsigned i = 0; i < 8; ++i) {
+            out[4 * i + 0] = (uint8_t)(state_[i] >> 24);
+            out[4 * i + 1] = (uint8_t)(state_[i] >> 16);
+            out[4 * i + 2] = (uint8_t)(state_[i] >> 8);
+            out[4 * i + 3] = (uint8_t)(state_[i]);
+        }
+    }
+
+private:
+    static uint32_t rotr32(uint32_t v, unsigned n) {
+        return (v >> n) | (v << (32 - n));
+    }
+
+    void reset() {
+        state_[0] = UINT32_C(0x6a09e667); state_[1] = UINT32_C(0xbb67ae85);
+        state_[2] = UINT32_C(0x3c6ef372); state_[3] = UINT32_C(0xa54ff53a);
+        state_[4] = UINT32_C(0x510e527f); state_[5] = UINT32_C(0x9b05688c);
+        state_[6] = UINT32_C(0x1f83d9ab); state_[7] = UINT32_C(0x5be0cd19);
+        std::memset(block_, 0, sizeof(block_));
+        block_used_ = 0;
+        total_bytes_ = 0;
+    }
+
+    void transform(const uint8_t block[64]) {
+        static constexpr uint32_t k[64] = {
+            0x428a2f98u,0x71374491u,0xb5c0fbcfu,0xe9b5dba5u,0x3956c25bu,0x59f111f1u,0x923f82a4u,0xab1c5ed5u,
+            0xd807aa98u,0x12835b01u,0x243185beu,0x550c7dc3u,0x72be5d74u,0x80deb1feu,0x9bdc06a7u,0xc19bf174u,
+            0xe49b69c1u,0xefbe4786u,0x0fc19dc6u,0x240ca1ccu,0x2de92c6fu,0x4a7484aau,0x5cb0a9dcu,0x76f988dau,
+            0x983e5152u,0xa831c66du,0xb00327c8u,0xbf597fc7u,0xc6e00bf3u,0xd5a79147u,0x06ca6351u,0x14292967u,
+            0x27b70a85u,0x2e1b2138u,0x4d2c6dfcu,0x53380d13u,0x650a7354u,0x766a0abbu,0x81c2c92eu,0x92722c85u,
+            0xa2bfe8a1u,0xa81a664bu,0xc24b8b70u,0xc76c51a3u,0xd192e819u,0xd6990624u,0xf40e3585u,0x106aa070u,
+            0x19a4c116u,0x1e376c08u,0x2748774cu,0x34b0bcb5u,0x391c0cb3u,0x4ed8aa4au,0x5b9cca4fu,0x682e6ff3u,
+            0x748f82eeu,0x78a5636fu,0x84c87814u,0x8cc70208u,0x90befffau,0xa4506cebu,0xbef9a3f7u,0xc67178f2u
+        };
+        uint32_t w[64];
+        for (unsigned i = 0; i < 16; ++i) {
+            w[i] = ((uint32_t)block[4 * i + 0] << 24) |
+                   ((uint32_t)block[4 * i + 1] << 16) |
+                   ((uint32_t)block[4 * i + 2] << 8) |
+                   ((uint32_t)block[4 * i + 3]);
+        }
+        for (unsigned i = 16; i < 64; ++i) {
+            const uint32_t s0 =
+                rotr32(w[i-15], 7) ^ rotr32(w[i-15], 18) ^ (w[i-15] >> 3);
+            const uint32_t s1 =
+                rotr32(w[i-2], 17) ^ rotr32(w[i-2], 19) ^ (w[i-2] >> 10);
+            w[i] = w[i-16] + s0 + w[i-7] + s1;
+        }
+        uint32_t a = state_[0], b = state_[1], c = state_[2], d = state_[3];
+        uint32_t e = state_[4], f = state_[5], g = state_[6], h = state_[7];
+        for (unsigned i = 0; i < 64; ++i) {
+            const uint32_t s1 = rotr32(e, 6) ^ rotr32(e, 11) ^ rotr32(e, 25);
+            const uint32_t ch = (e & f) ^ (~e & g);
+            const uint32_t t1 = h + s1 + ch + k[i] + w[i];
+            const uint32_t s0 = rotr32(a, 2) ^ rotr32(a, 13) ^ rotr32(a, 22);
+            const uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+            const uint32_t t2 = s0 + maj;
+            h = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
+        }
+        state_[0] += a; state_[1] += b; state_[2] += c; state_[3] += d;
+        state_[4] += e; state_[5] += f; state_[6] += g; state_[7] += h;
+    }
+
+    uint32_t state_[8];
+    uint8_t block_[64];
+    size_t block_used_ = 0;
+    uint64_t total_bytes_ = 0;
+};
+
+void state_payload_digest(const uint8_t* payload, size_t size,
+                          uint8_t out[kStateDigestBytes]) {
+    Sha256 hash;
+    hash.update(payload, size);
+    hash.finish(out);
+}
 
 uint32_t float_bits(float value) {
     uint32_t bits = 0;
@@ -463,7 +612,8 @@ bool add_checkpoint_vector_size(size_t& total,
         total, sizeof(uint64_t) + values.size() * sizeof(uint32_t));
 }
 
-tc_status_t state_blob_size_locked(const tc_diloco_ctx* d, size_t& out_size) {
+tc_status_t state_payload_size_locked(const tc_diloco_ctx* d,
+                                      size_t& out_size) {
     if (d->outer_state == TC_DILOCO_ASYNC_RUNNING) return TC_ERR_BUSY;
     if (d->inner_steps_since_outer < 0) return TC_ERR_INTERNAL;
     if (d->outer_state != TC_DILOCO_ASYNC_IDLE &&
@@ -493,8 +643,8 @@ tc_status_t state_blob_size_locked(const tc_diloco_ctx* d, size_t& out_size) {
         return TC_ERR_INTERNAL;
     }
 
-    /* Header plus the fixed config/identity/counter/state prefix. */
-    size_t size = kStateHeaderSize + 148;
+    /* Fixed config/identity/counter/state prefix, header excluded. */
+    size_t size = kStatePayloadPrefixSize;
     static const std::vector<float> empty;
     for (size_t i = 0; i < d->params.size(); ++i) {
         const Parameter& p = d->params[i];
@@ -529,21 +679,55 @@ tc_status_t state_blob_size_locked(const tc_diloco_ctx* d, size_t& out_size) {
     return TC_OK;
 }
 
+/* Total blob size for a requested wire version. */
+tc_status_t state_blob_size_locked(const tc_diloco_ctx* d,
+                                   uint32_t version,
+                                   size_t& out_size) {
+    if (!state_version_supported(version)) return TC_ERR_ABI_MISMATCH;
+    size_t payload_size = 0;
+    const tc_status_t status = state_payload_size_locked(d, payload_size);
+    if (status != TC_OK) return status;
+    const size_t header_size = state_header_size(version);
+    if (payload_size > std::numeric_limits<size_t>::max() - header_size) {
+        return TC_ERR_INTERNAL;
+    }
+    out_size = header_size + payload_size;
+    return TC_OK;
+}
+
 tc_status_t write_state_blob_locked(const tc_diloco_ctx* d,
+                                    uint32_t version,
                                     void* out_data,
                                     size_t out_size,
                                     size_t& out_written) {
-    size_t required_size = 0;
-    const tc_status_t size_status = state_blob_size_locked(d, required_size);
+    if (!state_version_supported(version)) return TC_ERR_ABI_MISMATCH;
+    size_t payload_size = 0;
+    const tc_status_t size_status = state_payload_size_locked(d, payload_size);
     if (size_status != TC_OK) return size_status;
+    const size_t header_size = state_header_size(version);
+    if (payload_size > std::numeric_limits<size_t>::max() - header_size) {
+        return TC_ERR_INTERNAL;
+    }
+    const size_t required_size = header_size + payload_size;
     if (!out_data || out_size < required_size) return TC_ERR_INVALID_ARG;
 
     StateWriter writer(out_data, out_size);
-    writer.raw(kStateMagic, sizeof(kStateMagic));
-    writer.u32(TC_DILOCO_STATE_ABI_VERSION_1);
-    writer.u32(kStateHeaderSize);
-    writer.u64(0); /* total size, patched below */
-    writer.u64(0); /* payload checksum, patched below */
+    if (version == TC_DILOCO_STATE_ABI_VERSION_2) {
+        static const uint8_t zero_digest[kStateDigestBytes] = {0};
+        writer.raw(kStateMagicV2, sizeof(kStateMagicV2));
+        writer.u32(TC_DILOCO_STATE_ABI_VERSION_2);
+        writer.u32(kStateHeaderSizeV2);
+        writer.u64(0); /* total size, patched below */
+        writer.u64((uint64_t)payload_size);
+        writer.raw(zero_digest, sizeof(zero_digest)); /* patched below */
+    } else {
+        writer.raw(kStateMagicV1, sizeof(kStateMagicV1));
+        writer.u32(TC_DILOCO_STATE_ABI_VERSION_1);
+        writer.u32(kStateHeaderSizeV1);
+        writer.u64(0); /* total size, patched below */
+        writer.u64(0); /* payload checksum, patched below */
+    }
+    if (!writer.ok() || writer.size() != header_size) return TC_ERR_INTERNAL;
 
     writer.u32((uint32_t)d->cfg.inner_steps);
     writer.u32(float_bits(d->cfg.outer_lr));
@@ -598,32 +782,79 @@ tc_status_t write_state_blob_locked(const tc_diloco_ctx* d,
     if (!writer.ok() || writer.size() != required_size) return TC_ERR_INTERNAL;
     uint8_t* bytes = static_cast<uint8_t*>(out_data);
     store_u64_le(bytes, kStateTotalSizeOffset, (uint64_t)required_size);
-    const uint64_t checksum = state_checksum(
-        bytes + kStatePayloadOffset, required_size - kStatePayloadOffset);
-    store_u64_le(bytes, kStateChecksumOffset, checksum);
+    if (version == TC_DILOCO_STATE_ABI_VERSION_2) {
+        state_payload_digest(bytes + header_size, payload_size,
+                             bytes + kStateV2DigestOffset);
+    } else {
+        store_u64_le(bytes, kStateV1ChecksumOffset,
+                     state_checksum(bytes + header_size, payload_size));
+    }
     out_written = required_size;
     return TC_OK;
 }
 
-bool read_state_blob(const void* data, size_t data_size, SerializedState& state) {
-    if (!data || data_size < kStateHeaderSize) return false;
-    StateReader reader(static_cast<const uint8_t*>(data), data_size);
-    uint8_t magic[sizeof(kStateMagic)]{};
-    uint32_t abi_version = 0;
-    uint32_t header_size = 0;
-    uint64_t total_size = 0;
-    uint64_t checksum = 0;
-    if (!reader.raw(magic, sizeof(magic)) ||
-        !reader.u32(abi_version) || !reader.u32(header_size) ||
-        !reader.u64(total_size) || !reader.u64(checksum) ||
-        std::memcmp(magic, kStateMagic, sizeof(magic)) != 0 ||
-        abi_version != TC_DILOCO_STATE_ABI_VERSION_1 ||
-        header_size != kStateHeaderSize || total_size != data_size ||
-        checksum != state_checksum(
-            static_cast<const uint8_t*>(data) + kStatePayloadOffset,
-            data_size - kStatePayloadOffset)) {
-        return false;
+/* Parse a blob of any wire version up to max_abi_version.
+ *
+ * Returns TC_ERR_ABI_MISMATCH when the blob announces a known but too-new
+ * version, TC_ERR_INVALID_ARG for an unrecognized magic, an inconsistent
+ * header, a digest mismatch, truncation, or trailing bytes. Nothing is
+ * interpreted until the header and payload digest both verify. */
+tc_status_t read_state_blob(const void* data, size_t data_size,
+                            uint32_t max_abi_version,
+                            SerializedState& state,
+                            uint32_t& out_abi_version) {
+    if (!data || data_size < kStateHeaderSizeV1) return TC_ERR_INVALID_ARG;
+    const uint8_t* bytes = static_cast<const uint8_t*>(data);
+
+    uint32_t blob_version = 0;
+    if (std::memcmp(bytes, kStateMagicV2, sizeof(kStateMagicV2)) == 0) {
+        blob_version = TC_DILOCO_STATE_ABI_VERSION_2;
+    } else if (std::memcmp(bytes, kStateMagicV1, sizeof(kStateMagicV1)) == 0) {
+        blob_version = TC_DILOCO_STATE_ABI_VERSION_1;
+    } else {
+        return TC_ERR_INVALID_ARG;
     }
+    if (blob_version > max_abi_version) return TC_ERR_ABI_MISMATCH;
+
+    const size_t header_size = state_header_size(blob_version);
+    if (data_size < header_size) return TC_ERR_INVALID_ARG;
+    const size_t payload_size = data_size - header_size;
+
+    StateReader reader(bytes, data_size);
+    uint8_t magic[sizeof(kStateMagicV1)]{};
+    uint32_t abi_version = 0;
+    uint32_t declared_header_size = 0;
+    uint64_t total_size = 0;
+    if (!reader.raw(magic, sizeof(magic)) || !reader.u32(abi_version) ||
+        !reader.u32(declared_header_size) || !reader.u64(total_size) ||
+        abi_version != blob_version ||
+        declared_header_size != (uint32_t)header_size ||
+        total_size != data_size) {
+        return TC_ERR_INVALID_ARG;
+    }
+
+    if (blob_version == TC_DILOCO_STATE_ABI_VERSION_2) {
+        uint64_t declared_payload_size = 0;
+        uint8_t declared_digest[kStateDigestBytes]{};
+        uint8_t actual_digest[kStateDigestBytes]{};
+        if (!reader.u64(declared_payload_size) ||
+            !reader.raw(declared_digest, sizeof(declared_digest)) ||
+            declared_payload_size != payload_size) {
+            return TC_ERR_INVALID_ARG;
+        }
+        state_payload_digest(bytes + header_size, payload_size, actual_digest);
+        if (std::memcmp(declared_digest, actual_digest,
+                        sizeof(actual_digest)) != 0) {
+            return TC_ERR_INVALID_ARG;
+        }
+    } else {
+        uint64_t checksum = 0;
+        if (!reader.u64(checksum) ||
+            checksum != state_checksum(bytes + header_size, payload_size)) {
+            return TC_ERR_INVALID_ARG;
+        }
+    }
+    out_abi_version = blob_version;
 
     uint64_t param_count = 0;
     if (!reader.u32(state.inner_steps) ||
@@ -649,14 +880,14 @@ bool read_state_blob(const void* data, size_t data_size, SerializedState& state)
         !reader.u64(state.pending_seconds) ||
         !reader.u64(state.pending_bytes) || !reader.u64(param_count) ||
         param_count > (uint64_t)std::numeric_limits<size_t>::max()) {
-        return false;
+        return TC_ERR_INVALID_ARG;
     }
 
     /* Every parameter consumes at least name/dtype/count plus seven vector
      * length fields. Bound allocation by the bytes actually present. */
     constexpr size_t kMinimumSerializedParameterBytes = 72;
     if (param_count > reader.remaining() / kMinimumSerializedParameterBytes) {
-        return false;
+        return TC_ERR_INVALID_ARG;
     }
     state.params.resize((size_t)param_count);
     for (SerializedParameter& p : state.params) {
@@ -669,10 +900,10 @@ bool read_state_blob(const void* data, size_t data_size, SerializedState& state)
             !reader.floats(p.pending_outer_momentum) ||
             !reader.floats(p.pending_error_feedback) ||
             !reader.floats(p.pending_snapshot)) {
-            return false;
+            return TC_ERR_INVALID_ARG;
         }
     }
-    return reader.at_end();
+    return reader.at_end() ? TC_OK : TC_ERR_INVALID_ARG;
 }
 
 bool state_config_matches(const tc_diloco_ctx* d, const SerializedState& s) {
@@ -1365,13 +1596,14 @@ extern "C" tc_status_t tc_diloco_state_size(
     uint32_t requested_abi_version,
     size_t* out_size) {
     if (!d || !out_size) return TC_ERR_INVALID_ARG;
-    if (requested_abi_version != TC_DILOCO_STATE_ABI_VERSION_1) {
+    if (!state_version_supported(requested_abi_version)) {
         return TC_ERR_ABI_MISMATCH;
     }
 
     std::lock_guard<std::mutex> lk(d->outer_mutex);
     size_t size = 0;
-    const tc_status_t status = state_blob_size_locked(d, size);
+    const tc_status_t status =
+        state_blob_size_locked(d, requested_abi_version, size);
     if (status != TC_OK) return status;
     *out_size = size;
     return TC_OK;
@@ -1384,14 +1616,14 @@ extern "C" tc_status_t tc_diloco_state_serialize(
     size_t out_size,
     size_t* out_written) {
     if (!d || !out_data || !out_written) return TC_ERR_INVALID_ARG;
-    if (requested_abi_version != TC_DILOCO_STATE_ABI_VERSION_1) {
+    if (!state_version_supported(requested_abi_version)) {
         return TC_ERR_ABI_MISMATCH;
     }
 
     std::lock_guard<std::mutex> lk(d->outer_mutex);
     size_t written = 0;
     const tc_status_t status = write_state_blob_locked(
-        d, out_data, out_size, written);
+        d, requested_abi_version, out_data, out_size, written);
     if (status == TC_OK) *out_written = written;
     return status;
 }
@@ -1402,7 +1634,7 @@ extern "C" tc_status_t tc_diloco_state_deserialize(
     const void* data,
     size_t data_size) {
     if (!d || !data) return TC_ERR_INVALID_ARG;
-    if (requested_abi_version != TC_DILOCO_STATE_ABI_VERSION_1) {
+    if (!state_version_supported(requested_abi_version)) {
         return TC_ERR_ABI_MISMATCH;
     }
 
@@ -1414,9 +1646,10 @@ extern "C" tc_status_t tc_diloco_state_deserialize(
 
     try {
         SerializedState saved;
-        if (!read_state_blob(data, data_size, saved)) {
-            return TC_ERR_INVALID_ARG;
-        }
+        uint32_t blob_abi_version = 0;
+        const tc_status_t parse = read_state_blob(
+            data, data_size, requested_abi_version, saved, blob_abi_version);
+        if (parse != TC_OK) return parse;
         const tc_status_t validation = validate_serialized_state(d, saved);
         if (validation != TC_OK) return validation;
 
@@ -1471,6 +1704,98 @@ extern "C" tc_status_t tc_diloco_state_deserialize(
     } catch (...) {
         return TC_ERR_INTERNAL;
     }
+}
+
+extern "C" tc_status_t tc_diloco_capability_query(
+    const tc_diloco_ctx* d,
+    uint32_t requested_abi_version,
+    tc_diloco_capabilities* out,
+    size_t out_size) {
+    if (!out) return TC_ERR_INVALID_ARG;
+    if (requested_abi_version != TC_DILOCO_CAPABILITIES_ABI_VERSION_1) {
+        return TC_ERR_ABI_MISMATCH;
+    }
+    if (out_size < TC_DILOCO_CAPABILITIES_V1_MIN_SIZE) {
+        return TC_ERR_INVALID_ARG;
+    }
+
+    /* Exactly the configurations tc_diloco_init accepts. */
+    const uint64_t optimizers_supported =
+        TC_DILOCO_OUTER_OPTIMIZER_BIT(TC_DILOCO_OUTER_SGD) |
+        TC_DILOCO_OUTER_OPTIMIZER_BIT(TC_DILOCO_OUTER_NESTEROV) |
+        TC_DILOCO_OUTER_OPTIMIZER_BIT(TC_DILOCO_OUTER_ADAM);
+    const uint64_t topk_modes =
+        TC_DILOCO_COMPRESS_BIT(TC_DILOCO_COMPRESS_TOPK_1PCT) |
+        TC_DILOCO_COMPRESS_BIT(TC_DILOCO_COMPRESS_TOPK_01PCT);
+    const uint64_t compress_supported =
+        TC_DILOCO_COMPRESS_BIT(TC_DILOCO_COMPRESS_NONE) |
+        TC_DILOCO_COMPRESS_BIT(TC_DILOCO_COMPRESS_FP16) | topk_modes;
+
+    /* Every outer optimizer keeps all of its moments in Parameter::
+     * outer_momentum (Adam packs m and v into one 2N vector) and the outer
+     * step count lives in outer_steps_total. Both are in the blob, and no
+     * outer update depends on state outside them, so all three round-trip
+     * exactly. Top-k error feedback is likewise carried per parameter. */
+    const uint64_t optimizers_serializable = optimizers_supported;
+    const uint64_t compress_serializable = compress_supported;
+
+    /* Sparse payloads require a Gloo transport and more than one rank; every
+     * other accepted mode places dense fp32 on the wire. Without a bound
+     * context we cannot promise a transport, so report the dense answer. */
+    uint64_t sparse_wire = 0;
+    uint64_t dense_fp32_wire = compress_supported;
+    if (d) {
+        std::lock_guard<std::mutex> lk(d->outer_mutex);
+        tc_dist_ctx* dist = d->dist;
+        const int world = dist ? tc_dist_world_size(dist) : 1;
+        if (dist && world > 1 && tc_dist_get_gloo_state(dist) != nullptr) {
+            sparse_wire = topk_modes;
+            dense_fp32_wire = compress_supported & ~topk_modes;
+        }
+    }
+
+    tc_diloco_capabilities capabilities{};
+    capabilities.struct_size = (uint32_t)sizeof(capabilities);
+    capabilities.abi_version = TC_DILOCO_CAPABILITIES_ABI_VERSION_1;
+    capabilities.runtime_version_major = TENSORCORE_VERSION_MAJOR;
+    capabilities.runtime_version_minor = TENSORCORE_VERSION_MINOR;
+    capabilities.runtime_version_patch = TENSORCORE_VERSION_PATCH;
+    capabilities.state_abi_version_min = TC_DILOCO_STATE_ABI_VERSION_MIN;
+    capabilities.state_abi_version_max = TC_DILOCO_STATE_ABI_VERSION_CURRENT;
+    capabilities.state_abi_version_current =
+        TC_DILOCO_STATE_ABI_VERSION_CURRENT;
+    capabilities.state_header_size =
+        state_header_size(TC_DILOCO_STATE_ABI_VERSION_CURRENT);
+    capabilities.state_payload_digest_bytes =
+        TC_DILOCO_STATE_ABI_VERSION_CURRENT == TC_DILOCO_STATE_ABI_VERSION_2
+            ? (uint32_t)kStateDigestBytes
+            : 0u;
+    capabilities.outer_optimizer_supported_mask = optimizers_supported;
+    capabilities.outer_optimizer_serializable_mask = optimizers_serializable;
+    capabilities.compress_supported_mask = compress_supported;
+    capabilities.compress_serializable_mask = compress_serializable;
+    capabilities.compress_sparse_wire_mask = sparse_wire;
+    capabilities.compress_dense_fp32_wire_mask = dense_fp32_wire;
+    capabilities.state_feature_mask =
+        TC_DILOCO_STATE_FEATURE_OUTER_ANCHOR |
+        TC_DILOCO_STATE_FEATURE_OUTER_MOMENTS |
+        TC_DILOCO_STATE_FEATURE_ERROR_FEEDBACK |
+        TC_DILOCO_STATE_FEATURE_COUNTERS |
+        TC_DILOCO_STATE_FEATURE_PENDING_ROUND |
+        TC_DILOCO_STATE_FEATURE_TOPOLOGY_EPOCH |
+        TC_DILOCO_STATE_FEATURE_MEMBERSHIP_EPOCH |
+        TC_DILOCO_STATE_FEATURE_PAYLOAD_SHA256 |
+        TC_DILOCO_STATE_FEATURE_DETERMINISTIC_LAYOUT |
+        TC_DILOCO_STATE_FEATURE_ATOMIC_RESTORE;
+    capabilities.async_overlap_supported = 1;
+    capabilities.async_state_serializable = 1;
+    /* tc_diloco_init still rejects tolerate_dropouts; elastic membership and
+     * rank recovery are not implemented. */
+    capabilities.tolerate_dropouts_supported = 0;
+
+    const size_t copy_size = std::min(out_size, sizeof(capabilities));
+    std::memcpy(out, &capabilities, copy_size);
+    return TC_OK;
 }
 
 extern "C" uint64_t tc_diloco_outer_steps_completed(const tc_diloco_ctx* d) {

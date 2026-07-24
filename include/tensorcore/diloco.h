@@ -160,9 +160,33 @@ tc_status_t tc_diloco_async_commit(tc_diloco_ctx* d);
  * Version 1 preserves anchors, optimizer moments, top-k error feedback,
  * counters/metrics, topology and membership epochs, and a READY/FAILED async
  * result. A RUNNING worker must first reach READY/FAILED; serialization returns
- * TC_ERR_BUSY while it is still executing. */
+ * TC_ERR_BUSY while it is still executing.
+ *
+ * Version 2 carries the identical payload bytes behind a wider header that adds
+ * an explicit payload size and a SHA-256 of the payload. The payload layout is
+ * byte-for-byte the same in both versions, so a v1 and a v2 blob written from
+ * the same state differ only in their headers.
+ *
+ * Blob layout, little-endian throughout:
+ *
+ *   v1 header (32 bytes)          v2 header (64 bytes)
+ *     0  magic "TCDLSTA1"           0  magic "TCDLSTA2"
+ *     8  u32 abi_version = 1        8  u32 abi_version = 2
+ *    12  u32 header_size = 32      12  u32 header_size = 64
+ *    16  u64 total_size            16  u64 total_size
+ *    24  u64 FNV-1a payload hash   24  u64 payload_size
+ *                                  32  32-byte SHA-256 of the payload
+ *
+ * Serialization is deterministic: the same DiLoCo state always produces the
+ * same bytes for a given requested version. */
 #define TC_DILOCO_STATE_ABI_VERSION_1 UINT32_C(1)
-#define TC_DILOCO_STATE_ABI_VERSION_CURRENT TC_DILOCO_STATE_ABI_VERSION_1
+#define TC_DILOCO_STATE_ABI_VERSION_2 UINT32_C(2)
+#define TC_DILOCO_STATE_ABI_VERSION_MIN TC_DILOCO_STATE_ABI_VERSION_1
+#define TC_DILOCO_STATE_ABI_VERSION_CURRENT TC_DILOCO_STATE_ABI_VERSION_2
+
+#define TC_DILOCO_STATE_V1_HEADER_SIZE UINT32_C(32)
+#define TC_DILOCO_STATE_V2_HEADER_SIZE UINT32_C(64)
+#define TC_DILOCO_STATE_V2_DIGEST_BYTES UINT32_C(32)
 
 /* Bind checkpoint state to the caller's authoritative topology epochs. Epochs
  * may be set only while the context is IDLE. A non-zero local epoch must match
@@ -174,11 +198,23 @@ tc_status_t tc_diloco_state_get_epochs(const tc_diloco_ctx* d,
                                        uint64_t* out_topology_epoch,
                                        uint64_t* out_membership_epoch);
 
-/* Query, serialize, and restore the deterministic v1 blob. Restore is atomic
- * with respect to DiLoCo-owned state: the blob is fully parsed and validated
- * against config, distributed rank/world, registered parameter names, dtypes,
- * and sizes before the live context changes. The caller must separately
- * restore each registered theta_local buffer from its model checkpoint. */
+/* Query, serialize, and restore the deterministic blob. Restore is atomic with
+ * respect to DiLoCo-owned state: the blob is fully parsed, its header and
+ * payload digest verified, and its contents validated against config,
+ * distributed rank/world, registered parameter names, dtypes, and sizes before
+ * the live context changes. A rejected blob leaves the context byte-identical
+ * to what it was. The caller must separately restore each registered
+ * theta_local buffer from its model checkpoint.
+ *
+ * For tc_diloco_state_size and tc_diloco_state_serialize, requested_abi_version
+ * selects the exact wire version to emit; an unimplemented version returns
+ * TC_ERR_ABI_MISMATCH and leaves every output untouched. Requesting
+ * TC_DILOCO_STATE_ABI_VERSION_1 keeps producing byte-identical v1 blobs.
+ *
+ * For tc_diloco_state_deserialize, requested_abi_version is the highest version
+ * the caller understands. Blobs from TC_DILOCO_STATE_ABI_VERSION_MIN through
+ * that version are accepted; a newer blob returns TC_ERR_ABI_MISMATCH rather
+ * than being partially interpreted. */
 tc_status_t tc_diloco_state_size(const tc_diloco_ctx* d,
                                  uint32_t requested_abi_version,
                                  size_t* out_size);
@@ -191,6 +227,144 @@ tc_status_t tc_diloco_state_deserialize(tc_diloco_ctx* d,
                                         uint32_t requested_abi_version,
                                         const void* data,
                                         size_t data_size);
+
+/* ------------------------------------------------------------------------
+ * Versioned DiLoCo capability query
+ *
+ * Consumers must not infer DiLoCo behavior from the package version or from
+ * the presence of a symbol. This is the authoritative, size-versioned answer
+ * to "which outer optimizers can I resume exactly", "is the top-k
+ * error-feedback residual part of the checkpoint", and "what does this
+ * compression enum actually put on the wire".
+ *
+ * struct_size comes first so the struct can grow by appending. The runtime
+ * reports the size it wrote; a caller compiled against an older header passes
+ * its own smaller out_size and receives only the prefix that fits.
+ * ------------------------------------------------------------------------ */
+
+#define TC_DILOCO_CAPABILITIES_ABI_VERSION_1 UINT32_C(1)
+#define TC_DILOCO_CAPABILITIES_ABI_VERSION_CURRENT \
+    TC_DILOCO_CAPABILITIES_ABI_VERSION_1
+
+/* Optimizer and compression masks use the enum value as the bit position, so
+ * a mask stays meaningful as new enumerators are appended. */
+#define TC_DILOCO_OUTER_OPTIMIZER_BIT(optimizer) \
+    (UINT64_C(1) << (unsigned)(optimizer))
+#define TC_DILOCO_COMPRESS_BIT(compress) \
+    (UINT64_C(1) << (unsigned)(compress))
+
+/* Which pieces of DiLoCo-owned state the serialization surface covers. */
+#define TC_DILOCO_STATE_FEATURE_OUTER_ANCHOR        (UINT64_C(1) << 0)
+#define TC_DILOCO_STATE_FEATURE_OUTER_MOMENTS       (UINT64_C(1) << 1)
+#define TC_DILOCO_STATE_FEATURE_ERROR_FEEDBACK      (UINT64_C(1) << 2)
+#define TC_DILOCO_STATE_FEATURE_COUNTERS            (UINT64_C(1) << 3)
+#define TC_DILOCO_STATE_FEATURE_PENDING_ROUND       (UINT64_C(1) << 4)
+#define TC_DILOCO_STATE_FEATURE_TOPOLOGY_EPOCH      (UINT64_C(1) << 5)
+#define TC_DILOCO_STATE_FEATURE_MEMBERSHIP_EPOCH    (UINT64_C(1) << 6)
+#define TC_DILOCO_STATE_FEATURE_PAYLOAD_SHA256      (UINT64_C(1) << 7)
+#define TC_DILOCO_STATE_FEATURE_DETERMINISTIC_LAYOUT (UINT64_C(1) << 8)
+#define TC_DILOCO_STATE_FEATURE_ATOMIC_RESTORE      (UINT64_C(1) << 9)
+
+typedef struct {
+    /* Size of the structure the runtime wrote, not the caller's buffer. */
+    uint32_t struct_size;
+    /* Capability ABI version actually written. */
+    uint32_t abi_version;
+
+    uint32_t runtime_version_major;
+    uint32_t runtime_version_minor;
+    uint32_t runtime_version_patch;
+    uint32_t reserved0;
+
+    /* Serialization wire versions this runtime implements, inclusive. */
+    uint32_t state_abi_version_min;
+    uint32_t state_abi_version_max;
+    /* Version emitted for TC_DILOCO_STATE_ABI_VERSION_CURRENT. */
+    uint32_t state_abi_version_current;
+    /* Header bytes and payload-digest bytes of state_abi_version_current. */
+    uint32_t state_header_size;
+    uint32_t state_payload_digest_bytes;
+    uint32_t reserved1;
+
+    /* Bit positions are tc_diloco_outer_optimizer_t values. "Serializable"
+     * means every moment the optimizer owns survives an export/import
+     * round-trip exactly, so resume is bit-exact. */
+    uint64_t outer_optimizer_supported_mask;
+    uint64_t outer_optimizer_serializable_mask;
+
+    /* Bit positions are tc_diloco_compress_t values. */
+    uint64_t compress_supported_mask;
+    /* Compression modes whose full residual state survives a round-trip. */
+    uint64_t compress_serializable_mask;
+    /* Modes that genuinely send a sparse payload on this context's transport.
+     * Empty when the query is not bound to a context. */
+    uint64_t compress_sparse_wire_mask;
+    /* Modes accepted by tc_diloco_init that nevertheless place dense fp32 on
+     * the wire. A consumer must not describe these as compressed transport. */
+    uint64_t compress_dense_fp32_wire_mask;
+
+    uint64_t state_feature_mask;
+
+    uint32_t async_overlap_supported;
+    uint32_t async_state_serializable;
+    uint32_t tolerate_dropouts_supported;
+    uint32_t reserved2;
+
+    /* Must be zero. Reserved for append-only ABI growth. */
+    uint64_t reserved[4];
+} tc_diloco_capabilities;
+
+/* The v1 prefix through state_feature_mask. Older v1 callers may pass exactly
+ * this size; newer runtimes copy only the prefix that fits. */
+#define TC_DILOCO_CAPABILITIES_V1_MIN_SIZE \
+    (offsetof(tc_diloco_capabilities, state_feature_mask) + \
+     sizeof(((tc_diloco_capabilities*)0)->state_feature_mask))
+
+/* Query DiLoCo capabilities.
+ *
+ * d may be NULL to obtain build-level capabilities before any context exists,
+ * which is what a consumer needs in order to reject an unsupported
+ * configuration before calling tc_diloco_init. When d is non-NULL the answer
+ * is refined by the context's bound transport, so compress_sparse_wire_mask
+ * reflects what that transport actually does.
+ *
+ * requested_abi_version must be a version implemented by the runtime; a
+ * newer/unknown version returns TC_ERR_ABI_MISMATCH without modifying out.
+ * out_size may be between TC_DILOCO_CAPABILITIES_V1_MIN_SIZE and any larger
+ * value. The runtime copies at most sizeof(tc_diloco_capabilities), leaving a
+ * newer caller's tail untouched. */
+tc_status_t tc_diloco_capability_query(const tc_diloco_ctx* d,
+                                       uint32_t requested_abi_version,
+                                       tc_diloco_capabilities* out,
+                                       size_t out_size);
+
+/* Header-only fail-closed helpers; they add no exported ABI symbol. A caller
+ * that received only the v1 minimum prefix still gets correct answers, because
+ * every field these read lives inside that prefix. */
+static inline bool tc_diloco_outer_optimizer_is_serializable(
+    const tc_diloco_capabilities* capabilities,
+    tc_diloco_outer_optimizer_t optimizer) {
+    if (capabilities == NULL || (unsigned)optimizer >= 64u) return false;
+    const uint64_t bit = TC_DILOCO_OUTER_OPTIMIZER_BIT(optimizer);
+    return (capabilities->outer_optimizer_supported_mask & bit) == bit &&
+           (capabilities->outer_optimizer_serializable_mask & bit) == bit;
+}
+
+static inline bool tc_diloco_compress_is_serializable(
+    const tc_diloco_capabilities* capabilities,
+    tc_diloco_compress_t compress) {
+    if (capabilities == NULL || (unsigned)compress >= 64u) return false;
+    const uint64_t bit = TC_DILOCO_COMPRESS_BIT(compress);
+    return (capabilities->compress_supported_mask & bit) == bit &&
+           (capabilities->compress_serializable_mask & bit) == bit;
+}
+
+static inline bool tc_diloco_state_feature_available(
+    const tc_diloco_capabilities* capabilities,
+    uint64_t feature) {
+    return capabilities != NULL && feature != 0 &&
+           (capabilities->state_feature_mask & feature) == feature;
+}
 
 /* For benchmarking + ops introspection. */
 uint64_t tc_diloco_outer_steps_completed(const tc_diloco_ctx* d);

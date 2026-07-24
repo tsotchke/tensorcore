@@ -67,7 +67,9 @@ static uint64_t available_capability_mask(void) {
                     TC_CAPABILITY_DILOCO_ASYNC_SNAPSHOT_SAFE |
                     TC_CAPABILITY_DILOCO_CHECKPOINT_RESUME |
                     TC_CAPABILITY_REMOTE_TENSOR |
-                    TC_CAPABILITY_TRANSPORT_IDENTITY_AUTH;
+                    TC_CAPABILITY_TRANSPORT_IDENTITY_AUTH |
+                    TC_CAPABILITY_DILOCO_CAPABILITY_QUERY |
+                    TC_CAPABILITY_DILOCO_STATE_ABI_V2;
 
     /* gloo_tcp.cpp provides its real socket implementation on these targets
      * and deterministic unsupported stubs elsewhere. */

@@ -53,6 +53,12 @@ extern "C" {
     (UINT64_C(1) << 9)
 #define TC_CAPABILITY_TRANSPORT_IDENTITY_AUTH \
     (UINT64_C(1) << 10)
+/* tc_diloco_capability_query is present and answers for this runtime. */
+#define TC_CAPABILITY_DILOCO_CAPABILITY_QUERY \
+    (UINT64_C(1) << 11)
+/* DiLoCo state serialization implements the SHA-256 v2 wire version. */
+#define TC_CAPABILITY_DILOCO_STATE_ABI_V2 \
+    (UINT64_C(1) << 12)
 
 #define TC_CAPABILITY_V1_KNOWN_MASK ( \
     TC_CAPABILITY_GEMM_F32 | \
