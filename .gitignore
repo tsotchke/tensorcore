@@ -27,6 +27,7 @@ compile_commands.json
 !.icc/assistant-goals.yaml
 !.icc/completion-oracles.yaml
 !.icc/modularity-justifications.json
+!.icc/patterns/
 .claude/
 .cache/
 artifacts/
