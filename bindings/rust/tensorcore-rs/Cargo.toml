@@ -1,6 +1,6 @@
 [package]
 name = "tensorcore"
-version = "0.1.22"
+version = "0.1.23"
 edition = "2021"
 description = "Safe Rust bindings to the tensorcore unified math substrate (geometric / quantum / mesh / shard ops, fp32, cross-device via libtensorcore.{dylib,so})"
 license = "MIT"

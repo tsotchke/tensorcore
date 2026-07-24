@@ -1,5 +1,103 @@
 # Changelog
 
+## v0.1.23 — DiLoCo capability query + SHA-256 state wire version
+
+Additive public surface only. Every call and wire format that existed in
+v0.1.22 behaves exactly as before, including byte-for-byte identical
+`TC_DILOCO_STATE_ABI_VERSION_1` blobs.
+
+**New: `tc_diloco_capability_query`** (`include/tensorcore/diloco.h`)
+
+```c
+tc_status_t tc_diloco_capability_query(const tc_diloco_ctx* d,
+                                       uint32_t requested_abi_version,
+                                       tc_diloco_capabilities* out,
+                                       size_t out_size);
+```
+
+The authoritative feature-test surface for DiLoCo. Consumers must not infer
+behavior from the package version or from a symbol's presence.
+
+- `tc_diloco_capabilities` is size-versioned Vulkan/Win32 style: `struct_size`
+  first, `abi_version` second, reserved words for append-only growth. The
+  runtime copies at most its own struct size, so a newer caller's tail is
+  left untouched and an older caller may pass exactly
+  `TC_DILOCO_CAPABILITIES_V1_MIN_SIZE`. An unimplemented ABI version returns
+  `TC_ERR_ABI_MISMATCH` without modifying `out`.
+- `d` may be `NULL` to obtain build-level capabilities before any context
+  exists, which is what a consumer needs to reject an unsupported
+  configuration *before* calling `tc_diloco_init`. A non-`NULL` context
+  refines the answer with its bound transport.
+- Reports the serializable outer optimizers
+  (`outer_optimizer_serializable_mask`), the serializable compression modes
+  including the top-k error-feedback residual
+  (`compress_serializable_mask`), the supported state-blob ABI window, and
+  the per-piece `state_feature_mask` (anchor, moments, error feedback,
+  counters, pending round, topology epoch, membership epoch, payload
+  SHA-256, deterministic layout, atomic restore).
+- Reports the *actual* wire format, not the requested one.
+  `compress_sparse_wire_mask` is non-empty only where the transport really
+  ships sparse `(idx, fp16)` payloads; `compress_dense_fp32_wire_mask`
+  names every mode that puts dense fp32 on the wire. `TC_DILOCO_COMPRESS_FP16`
+  is accepted by `tc_diloco_init` but is dense fp32 today, and now says so
+  rather than leaving a consumer to discover it.
+- Header-only fail-closed helpers `tc_diloco_outer_optimizer_is_serializable`,
+  `tc_diloco_compress_is_serializable`, and
+  `tc_diloco_state_feature_available` add no exported symbol and answer
+  correctly even from the v1 minimum prefix.
+- `tc_runtime_capabilities_get` gained the append-only bits
+  `TC_CAPABILITY_DILOCO_CAPABILITY_QUERY` and
+  `TC_CAPABILITY_DILOCO_STATE_ABI_V2`.
+
+**New: `TC_DILOCO_STATE_ABI_VERSION_2`**
+
+A second wire version for `tc_diloco_state_size` / `_serialize` /
+`_deserialize`, carrying the identical payload behind a wider, explicit
+header:
+
+```text
+  0  magic "TCDLSTA2"          32  32-byte SHA-256 of the payload
+  8  u32 abi_version = 2       64  payload
+ 12  u32 header_size = 64
+ 16  u64 total_size
+ 24  u64 payload_size
+```
+
+- Deterministic and byte-stable: the same DiLoCo state always serializes to
+  the same bytes, and export → import → export is bit-exact.
+- The payload layout is shared with v1, so a v1 blob and a v2 blob written
+  from one state differ only in their headers. `TC_DILOCO_STATE_V1_HEADER_SIZE`,
+  `TC_DILOCO_STATE_V2_HEADER_SIZE`, and `TC_DILOCO_STATE_V2_DIGEST_BYTES` are
+  public, and the in-tree byte offsets are frozen by `static_assert`.
+- `requested_abi_version` semantics are now explicit. For `_size` and
+  `_serialize` it selects the exact version to emit, so a v1-speaking
+  consumer keeps receiving byte-identical v1 blobs. For `_deserialize` it is
+  the highest version the caller understands: v1 blobs stay readable, and a
+  v2 blob handed to a v1-only caller returns `TC_ERR_ABI_MISMATCH` instead
+  of being partially interpreted.
+- Restore stays atomic and fails closed. The header, the declared sizes, and
+  the payload SHA-256 are all verified before anything is interpreted, and
+  the blob is validated against config, rank/world, and registered parameter
+  names/dtypes/sizes before the live context changes. Truncation, trailing
+  bytes, a corrupted byte anywhere, an unrecognized magic, a version that
+  contradicts the magic, and a lying `header_size` / `total_size` /
+  `payload_size` are each rejected with the target left byte-identical.
+
+**Tests** — `tests/test_diloco_state_abi.c` (CTest: `test_diloco_state_abi`)
+
+- Capability-query coverage: ABI mismatch, undersized struct, oversized
+  buffer tail preservation, minimum-prefix writes, unbound vs context-bound
+  answers, and fail-closed helper behavior.
+- Every serializability the mask claims is backed by a real round-trip
+  across SGD / Nesterov / Adam and none / fp16 / top-k 1% / top-k 0.1%, at
+  both wire versions, asserting bit-exact re-serialization *and* identical
+  subsequent evolution.
+- Wire-format coverage: determinism, the v1/v2 payload equivalence, header
+  field checks, and the payload digest verified against an independent
+  in-test SHA-256 that itself passes a known-answer test.
+- Negative coverage: every truncation length and every single-bit corruption
+  of a valid blob is rejected, and the target is proven unchanged afterward.
+
 ## Unreleased
 
 Heterogeneous compute substrate validated end-to-end across **two
