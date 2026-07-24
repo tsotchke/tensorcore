@@ -49,6 +49,12 @@ target_include_directories(test_diloco_checkpoint PRIVATE ${CMAKE_SOURCE_DIR}/in
 add_test(NAME test_diloco_checkpoint COMMAND test_diloco_checkpoint)
 set_tests_properties(test_diloco_checkpoint PROPERTIES TIMEOUT 60)
 
+add_executable(test_diloco_state_abi test_diloco_state_abi.c)
+target_link_libraries(test_diloco_state_abi PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
+target_include_directories(test_diloco_state_abi PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME test_diloco_state_abi COMMAND test_diloco_state_abi)
+set_tests_properties(test_diloco_state_abi PROPERTIES TIMEOUT 60)
+
 add_executable(test_transport_auth test_transport_auth.cpp)
 target_link_libraries(test_transport_auth PRIVATE
     tensorcore ${ACCELERATE_FRAMEWORK} Threads::Threads)
