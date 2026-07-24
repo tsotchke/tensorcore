@@ -227,6 +227,28 @@ $ICC_HOME/bin/icc find-dead-code --repo tensorcore --limit 20
 This is how the doc tree was ground-truthed; do it again whenever
 something significant moves.
 
+## Audit gates
+
+`.icc/patterns/` holds custom ICC `audit-patterns` YAML that encode
+lessons from real bugs, not generic lint rules. The first one,
+`no-hardcoded-topology.yaml`, forbids hardcoded hardware-topology
+constants — `#define MAX_AMX_WORKERS 8`-style caps on worker/cluster/GPU
+counts that silently waste capacity as Apple ships more P-clusters per
+Ultra/Extreme tier (this is exactly what happened to the AMX worker pool
+in `lib/ops/gemm_cpu_amx.cpp` before it was fixed to size itself from
+`tc_amx_cluster_count()`). Run every pattern file in one shot:
+
+```sh
+make icc-gates
+```
+
+which shells out to `scripts/icc_gates.sh`. It requires an existing ICC
+index for this repo (`make icc-audit` builds one) and exits non-zero the
+moment any pattern file reports a finding, printing the offending
+path:line and snippet. Add new pattern files to `.icc/patterns/` as more
+"don't reintroduce this bug" rules get identified — `icc_gates.sh` picks
+up every `*.yaml`/`*.yml` in that directory automatically.
+
 ## Code of conduct
 
 Be precise, be kind, be brief.

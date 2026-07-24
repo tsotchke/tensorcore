@@ -1,0 +1,51 @@
+# ICC audit-patterns gate: forbid hardcoded hardware-topology constants.
+#
+# Rationale: constants like `#define MAX_AMX_WORKERS 8`,
+# `MAX_GPU_COUNT 4`, `MAX_CLUSTERS 2` encode an assumption about the
+# silicon they will run on. They drift out of date as Apple ships
+# more P-clusters per Ultra/Extreme tier, as NVIDIA ships more
+# tensor cores, as the mesh adds nodes. The right shape is to
+# derive the cap at runtime via sysctl / nvidia-smi / sysfs and
+# resize the consuming data structure accordingly.
+#
+# We hit this concretely in tensorcore/lib/ops/gemm_cpu_amx.cpp: an
+# earlier revision capped the AMX worker pool at MAX_AMX_WORKERS=8,
+# sized for a 2-cluster Mac. M2 Ultra has 4 P-core clusters, so that
+# cap would have wasted half its AMX throughput once the pool actually
+# scaled to the hardware. The AMX pool now sizes itself at runtime from
+# `hw.perflevel0.physicalcpu` / `hw.perflevel0.cpusperl2` via
+# `tc_amx_cluster_count()`, with `std::vector`-backed pool storage that
+# resizes to match whatever that probe returns — no compile-time
+# ceiling to drift as Apple ships more clusters per Ultra/Extreme tier.
+#
+# Usage:
+#   icc audit-patterns --repo <repo> --pattern-file .icc/patterns/no-hardcoded-topology.yaml
+#
+# Exempt tokens (these are NOT hardware caps; each has its own scanner):
+#   MAX_*_LEN  MAX_*_SIZE  MAX_*_BYTES   — buffer / protocol sizes
+#   MAX_*_TRIES  MAX_*_RETRIES           — backoff bounds
+#   MAX_*_NAME                           — string length caps
+
+patterns:
+  - id: hardcoded_topology_cap_define
+    severity: medium
+    regex: '^\s*#\s*define\s+MAX_\w*(WORKERS|CLUSTERS|CORES|P_CORES|E_CORES|THREADS|GPUS|DEVICES|NODES|RANKS|AMX_UNITS|MPS_GPUS|TENSOR_CORES|SM_COUNT|CUDA_CORES|STREAM_PROCESSORS|MESH_NODES|ACCELERATORS|P_CLUSTERS|E_CLUSTERS)\w*\s+([2-9]|\d{2,})\b'
+    description: >
+      Hardcoded hardware-topology constant via #define. Derive at
+      runtime via sysctl / nvidia-smi / sysfs and size the consuming
+      data structure (std::vector / dynamic alloc) to match.
+
+  - id: hardcoded_topology_cap_const
+    severity: medium
+    regex: '(?:static\s+)?(?:constexpr|const)\s+(?:int|size_t|unsigned|long|uint\d+_t)\s+MAX_\w*(WORKERS|CLUSTERS|CORES|P_CORES|E_CORES|THREADS|GPUS|DEVICES|NODES|RANKS|AMX_UNITS|MPS_GPUS|TENSOR_CORES|SM_COUNT|CUDA_CORES|STREAM_PROCESSORS|MESH_NODES|ACCELERATORS|P_CLUSTERS|E_CLUSTERS)\w*\s*=\s*([2-9]|\d{2,})'
+    description: >
+      Hardcoded hardware-topology constant via constexpr/const. Same
+      remedy as the #define variant — runtime probe + dynamic sizing.
+
+  - id: hardcoded_topology_array_size
+    severity: medium
+    regex: '\b(pthread_t|dispatch_semaphore_t)\s+\w+\[([2-9]|\d{2,})\]\s*;'
+    description: >
+      Hardware-coordination array (pthread_t[], dispatch_semaphore_t[])
+      sized with a hardcoded literal. Use std::vector or dynamic-alloc
+      and size from a runtime topology probe.

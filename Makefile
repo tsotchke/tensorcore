@@ -148,3 +148,24 @@ wheel: install
 # --- Composite ------------------------------------------------------------
 
 all: build test
+
+# --- ICC audit-pattern gates ------------------------------------------------
+#
+# icc-gates runs scripts/icc_gates.sh, which replays every YAML under
+# .icc/patterns/ (currently: no-hardcoded-topology.yaml, the
+# no-hardcoded-hardware-topology-constant gate) against the ICC index and
+# fails if any pattern reports a finding. This is narrower than
+# `icc-audit` above: icc-audit re-indexes the repo and runs doc-coverage
+# plus a broad shell-hardening preset; icc-gates is just the custom
+# pattern set, meant to run fast and often (pre-commit, CI) once the
+# index already exists.
+#
+# Requires the ICC index for this repo to already exist — run `make
+# icc-audit` (or `$ICC_HOME/bin/icc index --repo tensorcore`) first if it
+# doesn't. Override the icc binary with ICC=/path/to/icc if it isn't at
+# the default baked into scripts/icc_gates.sh.
+
+.PHONY: icc-gates
+
+icc-gates:
+	scripts/icc_gates.sh
