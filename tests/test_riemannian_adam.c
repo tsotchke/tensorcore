@@ -33,7 +33,12 @@ int main(void) {
     tc_context* ctx = NULL;
     if (tc_init(&ctx) != TC_OK) return fail_("tc_init");
 
-    const int N = 8, D = 16;
+    /* enum, not const int: in C a const int is not a constant expression, so
+     * `float P_ref[N * D]` below would be a VLA -- and GCC rejects an
+     * initializer on a VLA outright ("variable-sized object may not be
+     * initialized"). Clang accepts it, which is why this compiled on macOS
+     * for as long as macOS was the only place it was ever built. */
+    enum { N = 8, D = 16 };
     const size_t bytes = (size_t)N * D * sizeof(float);
     tc_buffer *bP, *bG, *bM, *bV;
     tc_buffer_alloc(ctx, bytes, &bP);
