@@ -1483,7 +1483,23 @@ TORCH_LIBRARY_IMPL(aten, MPS, m) {
 
 TORCH_LIBRARY_IMPL(aten, AutogradCUDA, m) {
     m.impl("matmul", TORCH_FN(tc_matmul_autograd_cuda));
-    m.impl("bmm", TORCH_FN(tc_bmm_dispatch));
+    // bmm is NOT registered here, for the same reason it is not registered at
+    // AutogradCPU and addmm/baddbmm are not registered below. tc_bmm_dispatch
+    // falls through to tc_bmm_fallback whenever the bridge is off -- and
+    // g_default_matmul defaults to FALSE, so that IS the default path -- and
+    // that fallback runs at::bmm under an ExcludeDispatchKeyGuard covering
+    // AutogradCUDA and AutogradCPU, below autograd, so the result carries no
+    // grad_fn.
+    //
+    // The CPU half of this was fixed first and this one was left, which made
+    // the fix look complete while CUDA stayed broken: a qLLM geometry A/B on
+    // a Blackwell died at loss.backward() with "element 0 of tensors does not
+    // require grad" in all four arms, control included, purely because
+    // tensorcore was importable. Same defect, same file, one key apart.
+    //
+    // Unregistered, PyTorch's native autograd handles bmm. The accelerated
+    // path returns once tc_bmm_fallback builds its own autograd node instead
+    // of suppressing the key.
     // addmm/baddbmm hooks are correct for forward but their custom autograd
     // Functions don't propagate the gradient back to `weight` when the
     // dispatched mat2 is a transpose view of weight (common nn.Linear case).
