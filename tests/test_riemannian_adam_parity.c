@@ -261,13 +261,18 @@ int main(void) {
         const tc_status_t st = tc_riemannian_adam_step_poincare(
             ctx, wP, wG, wM, wV, wideN, wideD, 1.0f,
             lr, b1, b2, eps, 0.0f, 1.0f - b1, 1.0f - b2);
-        int finite_ok = (st == TC_OK);
-        for (int i = 0; i < wideN * wideD && finite_ok; ++i) {
-            if (!isfinite(WP[i]) || !isfinite(WM[i])) finite_ok = 0;
+        int nonfinite = 0;
+        for (int i = 0; i < wideN * wideD; ++i) {
+            if (!isfinite(WP[i]) || !isfinite(WM[i])) { nonfinite = 1; break; }
         }
-        printf("  %-42s %s\n", "D=1024 row finite and TC_OK",
-               finite_ok ? "OK" : "FAIL");
-        if (!finite_ok) failures = 1;
+        const int ok = (st == TC_OK) && !nonfinite;
+        /* Report the status code, not just a verdict. A bad launch config
+         * surfaces as TC_ERR_INTERNAL here, and "FAIL" alone sends you
+         * looking at the math instead of at the block size. */
+        printf("  %-42s status=%d nonfinite=%d %s\n",
+               "D=1024 row finite and TC_OK", (int)st, nonfinite,
+               ok ? "OK" : "FAIL");
+        if (!ok) failures = 1;
         tc_buffer_free(ctx, wP); tc_buffer_free(ctx, wG);
         tc_buffer_free(ctx, wM); tc_buffer_free(ctx, wV);
     }

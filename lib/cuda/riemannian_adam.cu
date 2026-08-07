@@ -51,10 +51,19 @@ constexpr float kEpsNorm  = 1e-15f;
 constexpr float kEpsAtanh = 1e-7f;
 constexpr float kMargin   = 1e-5f;
 
-/* Coordinates per thread. 8 × 1024 threads = rows up to D = 8192.
- * Every manifold factor qLLM trains is D ≤ 256, so in practice K = 1. */
+/* Coordinates per thread. 8 × 512 threads = rows up to D = 4096.
+ * Every manifold factor qLLM trains is D ≤ 256, so in practice K = 1.
+ *
+ * The block cap is 512, not the hardware's 1024, and that is a measured
+ * limit rather than a guess. These kernels hold two kMaxPerThread float
+ * arrays live across the reductions (the step vector and the retracted
+ * point), so at 1024 threads the block's register demand exceeds the 64K
+ * budget and the launch is rejected outright with
+ * cudaErrorLaunchOutOfResources -- D=1024 returned TC_ERR_INTERNAL before
+ * this cap. 512 halves the per-block demand and costs nothing for D ≤ 512,
+ * where each thread still owns exactly one coordinate. */
 constexpr int kMaxPerThread = 8;
-constexpr int kMaxBlock     = 1024;
+constexpr int kMaxBlock     = 512;
 
 constexpr int kCudaOk          = 0;
 constexpr int kCudaUnsupported = 1;
