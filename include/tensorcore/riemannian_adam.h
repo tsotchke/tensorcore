@@ -44,8 +44,12 @@
  *   - Sphere:   PT_{x→y}(m) = m − ⟨m,y⟩/(1+⟨x,y⟩)·(x+y)
  *   - Euclidean: identity (m unchanged)
  *
- * fp32 IO + fp32 accumulators throughout. v0.2 will add native Metal/CUDA
- * kernels; CPU reference unblocks the GeoRefine optimizer end-to-end now.
+ * fp32 IO + fp32 accumulators throughout.
+ *
+ * Backends: the three tc_riemannian_adam_step_* entry points dispatch to
+ * fused CUDA kernels (lib/cuda/riemannian_adam.cu) when CUDA is active and
+ * the buffers are CUDA-managed, and otherwise run the OpenMP CPU reference
+ * (lib/ops/riemannian_adam_cpu.cpp). Metal is still CPU-only.
  */
 
 #include "tensorcore/status.h"
@@ -96,6 +100,34 @@ tc_status_t tc_riemannian_adam_step_euclidean(tc_context* ctx,
                                                float eps, float weight_decay,
                                                float bias_correction1,
                                                float bias_correction2);
+
+/* ----------------------------------------------------------------------- *
+ * CPU reference paths, exposed by name.
+ *
+ * These are the implementations the dispatching entry points above fall back
+ * to. They are public for one reason: tests/test_riemannian_adam_parity.c
+ * needs to run the same inputs through CPU and CUDA in one process and
+ * compare. Toggling a backend through the environment would only prove the
+ * two runs *were configured* differently; calling both directly proves which
+ * code actually ran. Production callers should use the dispatching names.
+ * ----------------------------------------------------------------------- */
+tc_status_t tc_riemannian_adam_step_poincare_reference(
+        tc_context* ctx, tc_buffer* params, const tc_buffer* grads,
+        tc_buffer* m, tc_buffer* v, int N, int D, float c,
+        float lr, float beta1, float beta2, float eps, float weight_decay,
+        float bias_correction1, float bias_correction2);
+
+tc_status_t tc_riemannian_adam_step_sphere_reference(
+        tc_context* ctx, tc_buffer* params, const tc_buffer* grads,
+        tc_buffer* m, tc_buffer* v, int N, int D,
+        float lr, float beta1, float beta2, float eps, float weight_decay,
+        float bias_correction1, float bias_correction2);
+
+tc_status_t tc_riemannian_adam_step_euclidean_reference(
+        tc_context* ctx, tc_buffer* params, const tc_buffer* grads,
+        tc_buffer* m, tc_buffer* v, int N, int D,
+        float lr, float beta1, float beta2, float eps, float weight_decay,
+        float bias_correction1, float bias_correction2);
 
 #ifdef __cplusplus
 }

@@ -55,8 +55,19 @@ def _get_ctx():
 
 
 def _flat(t: torch.Tensor) -> Tuple[torch.Tensor, int, int]:
-    """Reshape t to (N, D). Last dim is the manifold dim."""
-    t = t.detach().to(torch.float32).contiguous()
+    """Reshape t to (N, D) as a host-resident fp32 view. Last dim is the
+    manifold dim.
+
+    The `.cpu()` is load-bearing, not defensive. `ctx.buffer_from_array`
+    takes a numpy array, and `Tensor.numpy()` raises
+
+        TypeError: can't convert cuda:0 device type tensor to numpy
+
+    so without it every CUDA parameter throws before reaching a kernel --
+    which is exactly what happened to the `tcr` arms of the geometry A/B.
+    It is a no-op for tensors already on the host.
+    """
+    t = t.detach().to(torch.float32).contiguous().cpu()
     if t.dim() < 1:
         raise ValueError("RiemannianAdam params must have at least 1 dim")
     D = int(t.shape[-1])
@@ -111,11 +122,13 @@ class RiemannianAdam(Optimizer):
                 manifold = getattr(p, "tc_manifold", ("euclidean",))
                 kind = manifold[0]
 
-                # Materialize fp32 copies for the C kernel.
+                # Materialize host-side fp32 copies for the C kernel. Every
+                # one of these must be on the host: buffer_from_array goes
+                # through numpy, which refuses CUDA tensors.
                 params_flat, N, D = _flat(p)
-                grad_flat = p.grad.detach().to(torch.float32).contiguous().view(N, D)
-                m_flat = state["exp_avg"].view(N, D)
-                v_flat = state["exp_avg_sq"].view(N, D)
+                grad_flat = p.grad.detach().to(torch.float32).contiguous().cpu().view(N, D)
+                m_flat = state["exp_avg"].detach().cpu().view(N, D)
+                v_flat = state["exp_avg_sq"].detach().cpu().view(N, D)
 
                 b_p = ctx.buffer_from_array(params_flat.numpy())
                 b_g = ctx.buffer_from_array(grad_flat.numpy())

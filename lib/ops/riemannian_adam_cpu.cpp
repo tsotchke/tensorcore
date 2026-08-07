@@ -25,6 +25,25 @@
 #include <omp.h>
 #endif
 
+#if defined(TC_ENABLE_CUDA)
+/* Fused manifold kernels in lib/cuda/riemannian_adam.cu. Hidden visibility;
+ * called from the public entry points below when CUDA is active and the
+ * buffers are CUDA-managed. Return: 0 done, 1 unsupported, -1 failed. */
+extern "C" int tc_cuda_is_active(void);
+extern "C" int tc_cuda_riemannian_adam_step_poincare(
+        void* params, const void* grads, void* m, void* v,
+        int N, int D, float c, float lr, float beta1, float beta2,
+        float eps, float weight_decay, float bc1, float bc2);
+extern "C" int tc_cuda_riemannian_adam_step_sphere(
+        void* params, const void* grads, void* m, void* v,
+        int N, int D, float lr, float beta1, float beta2,
+        float eps, float weight_decay, float bc1, float bc2);
+extern "C" int tc_cuda_riemannian_adam_step_euclidean(
+        void* params, const void* grads, void* m, void* v,
+        int N, int D, float lr, float beta1, float beta2,
+        float eps, float weight_decay, float bc1, float bc2);
+#endif
+
 namespace {
 constexpr float kEpsNorm  = 1e-15f;
 constexpr float kEpsAtanh = 1e-7f;
@@ -84,7 +103,7 @@ tc_status_t validate_quad(tc_context* ctx, tc_buffer* params,
 }
 }  // namespace
 
-extern "C" tc_status_t tc_riemannian_adam_step_poincare(
+extern "C" tc_status_t tc_riemannian_adam_step_poincare_reference(
         tc_context* ctx,
         tc_buffer* params, const tc_buffer* grads,
         tc_buffer* m, tc_buffer* v,
@@ -179,7 +198,7 @@ extern "C" tc_status_t tc_riemannian_adam_step_poincare(
     return TC_OK;
 }
 
-extern "C" tc_status_t tc_riemannian_adam_step_sphere(
+extern "C" tc_status_t tc_riemannian_adam_step_sphere_reference(
         tc_context* ctx,
         tc_buffer* params, const tc_buffer* grads,
         tc_buffer* m, tc_buffer* v,
@@ -268,7 +287,7 @@ extern "C" tc_status_t tc_riemannian_adam_step_sphere(
     return TC_OK;
 }
 
-extern "C" tc_status_t tc_riemannian_adam_step_euclidean(
+extern "C" tc_status_t tc_riemannian_adam_step_euclidean_reference(
         tc_context* ctx,
         tc_buffer* params, const tc_buffer* grads,
         tc_buffer* m, tc_buffer* v,
@@ -299,4 +318,123 @@ extern "C" tc_status_t tc_riemannian_adam_step_euclidean(
         P[i] = (P[i] - lr * weight_decay * P[i]) - lr * update;
     }
     return TC_OK;
+}
+
+/* ----------------------------------------------------------------------- *
+ * Public entry points: CUDA when the buffers are managed, otherwise the
+ * reference above.
+ *
+ * The CUDA kernels take raw pointers, and a tc_buffer on a CUDA build is
+ * cudaMallocManaged memory (lib/cuda/buffer.cpp), so tc_buffer_map hands
+ * back a pointer the device can dereference directly — no staging copy, and
+ * the same pointer the CPU reference would have used. Validation happens
+ * once, here, so both paths reject the same bad arguments.
+ * ----------------------------------------------------------------------- */
+
+#if defined(TC_ENABLE_CUDA)
+namespace {
+/* Map all four buffers and report whether the CUDA path should be tried. */
+bool cuda_ready(tc_buffer* params, const tc_buffer* grads,
+                tc_buffer* m, tc_buffer* v,
+                void** pp, void** gp, void** mp, void** vp) {
+    tc_buffer_map(params, pp);
+    tc_buffer_map((tc_buffer*)grads, gp);
+    tc_buffer_map(m, mp);
+    tc_buffer_map(v, vp);
+    return tc_cuda_is_active() != 0;
+}
+}  // namespace
+#endif
+
+extern "C" tc_status_t tc_riemannian_adam_step_poincare(
+        tc_context* ctx,
+        tc_buffer* params, const tc_buffer* grads,
+        tc_buffer* m, tc_buffer* v,
+        int N, int D, float c,
+        float lr, float beta1, float beta2,
+        float eps, float weight_decay,
+        float bias_correction1, float bias_correction2) {
+    tc_status_t s = validate_quad(ctx, params, grads, m, v, N, D);
+    if (s != TC_OK) return s;
+#if defined(TC_ENABLE_CUDA)
+    void *pp = nullptr, *gp = nullptr, *mp = nullptr, *vp = nullptr;
+    if (cuda_ready(params, grads, m, v, &pp, &gp, &mp, &vp)) {
+        const int rc = tc_cuda_riemannian_adam_step_poincare(
+            pp, gp, mp, vp, N, D, c, lr, beta1, beta2, eps, weight_decay,
+            bias_correction1, bias_correction2);
+        if (rc == 0) {
+            return tc_record_dispatch("tc_riemannian_adam_step_poincare",
+                                      TC_BACKEND_CUDA, TC_OK);
+        }
+        if (rc < 0) return TC_ERR_INTERNAL;
+    }
+#endif
+    s = tc_riemannian_adam_step_poincare_reference(
+        ctx, params, grads, m, v, N, D, c, lr, beta1, beta2, eps,
+        weight_decay, bias_correction1, bias_correction2);
+    if (s != TC_OK) return s;
+    return tc_record_dispatch("tc_riemannian_adam_step_poincare",
+                              TC_BACKEND_PORTABLE_CPU, TC_OK);
+}
+
+extern "C" tc_status_t tc_riemannian_adam_step_sphere(
+        tc_context* ctx,
+        tc_buffer* params, const tc_buffer* grads,
+        tc_buffer* m, tc_buffer* v,
+        int N, int D,
+        float lr, float beta1, float beta2,
+        float eps, float weight_decay,
+        float bias_correction1, float bias_correction2) {
+    tc_status_t s = validate_quad(ctx, params, grads, m, v, N, D);
+    if (s != TC_OK) return s;
+#if defined(TC_ENABLE_CUDA)
+    void *pp = nullptr, *gp = nullptr, *mp = nullptr, *vp = nullptr;
+    if (cuda_ready(params, grads, m, v, &pp, &gp, &mp, &vp)) {
+        const int rc = tc_cuda_riemannian_adam_step_sphere(
+            pp, gp, mp, vp, N, D, lr, beta1, beta2, eps, weight_decay,
+            bias_correction1, bias_correction2);
+        if (rc == 0) {
+            return tc_record_dispatch("tc_riemannian_adam_step_sphere",
+                                      TC_BACKEND_CUDA, TC_OK);
+        }
+        if (rc < 0) return TC_ERR_INTERNAL;
+    }
+#endif
+    s = tc_riemannian_adam_step_sphere_reference(
+        ctx, params, grads, m, v, N, D, lr, beta1, beta2, eps,
+        weight_decay, bias_correction1, bias_correction2);
+    if (s != TC_OK) return s;
+    return tc_record_dispatch("tc_riemannian_adam_step_sphere",
+                              TC_BACKEND_PORTABLE_CPU, TC_OK);
+}
+
+extern "C" tc_status_t tc_riemannian_adam_step_euclidean(
+        tc_context* ctx,
+        tc_buffer* params, const tc_buffer* grads,
+        tc_buffer* m, tc_buffer* v,
+        int N, int D,
+        float lr, float beta1, float beta2,
+        float eps, float weight_decay,
+        float bias_correction1, float bias_correction2) {
+    tc_status_t s = validate_quad(ctx, params, grads, m, v, N, D);
+    if (s != TC_OK) return s;
+#if defined(TC_ENABLE_CUDA)
+    void *pp = nullptr, *gp = nullptr, *mp = nullptr, *vp = nullptr;
+    if (cuda_ready(params, grads, m, v, &pp, &gp, &mp, &vp)) {
+        const int rc = tc_cuda_riemannian_adam_step_euclidean(
+            pp, gp, mp, vp, N, D, lr, beta1, beta2, eps, weight_decay,
+            bias_correction1, bias_correction2);
+        if (rc == 0) {
+            return tc_record_dispatch("tc_riemannian_adam_step_euclidean",
+                                      TC_BACKEND_CUDA, TC_OK);
+        }
+        if (rc < 0) return TC_ERR_INTERNAL;
+    }
+#endif
+    s = tc_riemannian_adam_step_euclidean_reference(
+        ctx, params, grads, m, v, N, D, lr, beta1, beta2, eps,
+        weight_decay, bias_correction1, bias_correction2);
+    if (s != TC_OK) return s;
+    return tc_record_dispatch("tc_riemannian_adam_step_euclidean",
+                              TC_BACKEND_PORTABLE_CPU, TC_OK);
 }

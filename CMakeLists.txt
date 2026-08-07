@@ -98,10 +98,33 @@ if(TC_ENABLE_CUDA)
     if(CUDAToolkit_FOUND AND TARGET CUDA::cudart AND TARGET CUDA::cublas)
         # Target sm_70+ so cuda_fp16.h half2 intrinsics (__hfma2/__hmul2) and
         # tensor-core mma.sync are available. Covers Volta/Turing/Ampere/
-        # Ada/Hopper. Honor user override via -DCMAKE_CUDA_ARCHITECTURES=...
+        # Ada/Hopper/Blackwell. Honor user override via
+        # -DCMAKE_CUDA_ARCHITECTURES=...
         # MUST be set before enable_language(CUDA), otherwise CMake initializes
         # it to the auto-detected lowest (often sm_52 = pre-tensor-core era).
-        set(CMAKE_CUDA_ARCHITECTURES "70;75;80;86;89;90" CACHE STRING "")
+        #
+        # Newer architectures are version-gated: naming an arch the installed
+        # nvcc has never heard of is a hard configure error, so the list has to
+        # track the toolkit rather than assume the newest.
+        set(_tc_cuda_archs 70 75 80 86 89)
+        set(_tc_cuda_newest 89)
+        if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.8")
+            list(APPEND _tc_cuda_archs 90)          # Hopper
+            set(_tc_cuda_newest 90)
+        endif()
+        if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL "12.8")
+            # Blackwell. sm_100 is GB100; sm_120 is the RTX PRO 6000 / GeForce
+            # 50 series, which is what the georefine-rtxpro boxes actually are.
+            list(APPEND _tc_cuda_archs 100 120)
+            set(_tc_cuda_newest 120)
+        endif()
+        # Emit SASS for each real arch AND PTX for the newest. Without the
+        # trailing -virtual entry the build is SASS-only, and a device newer
+        # than anything in the list fails at load with "no kernel image is
+        # available for execution on the device" rather than JIT-ing forward.
+        list(TRANSFORM _tc_cuda_archs APPEND "-real")
+        list(APPEND _tc_cuda_archs "${_tc_cuda_newest}-virtual")
+        set(CMAKE_CUDA_ARCHITECTURES "${_tc_cuda_archs}" CACHE STRING "")
         enable_language(CUDA)
         set(CMAKE_CUDA_STANDARD 17)
         set(CMAKE_CUDA_STANDARD_REQUIRED ON)
@@ -413,6 +436,7 @@ set(TC_COMMON_SOURCES
 )
 if(TC_ENABLE_CUDA)
     list(APPEND TC_COMMON_SOURCES lib/cuda/training.cu)
+    list(APPEND TC_COMMON_SOURCES lib/cuda/riemannian_adam.cu)
     # cuSPARSELt: probe for the header; if found, enable the 2:4 sparse
     # tensor-core GEMM path. Otherwise the weak-symbol dense fallback in
     # lib/ops/sparse_gemm_cpu.cpp keeps tc_sparse_24_gemm correct (just

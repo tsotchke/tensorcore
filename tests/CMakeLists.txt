@@ -382,6 +382,12 @@ target_include_directories(test_riemannian_adam PRIVATE ${CMAKE_SOURCE_DIR}/incl
 add_test(NAME test_riemannian_adam COMMAND test_riemannian_adam)
 set_tests_properties(test_riemannian_adam PROPERTIES TIMEOUT 30)
 
+add_executable(test_riemannian_adam_parity test_riemannian_adam_parity.c)
+target_link_libraries(test_riemannian_adam_parity PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
+target_include_directories(test_riemannian_adam_parity PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME test_riemannian_adam_parity COMMAND test_riemannian_adam_parity)
+set_tests_properties(test_riemannian_adam_parity PROPERTIES TIMEOUT 60)
+
 add_executable(test_sparse_24 test_sparse_24.c)
 target_link_libraries(test_sparse_24 PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
 target_include_directories(test_sparse_24 PRIVATE ${CMAKE_SOURCE_DIR}/include)
