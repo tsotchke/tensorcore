@@ -1442,7 +1442,28 @@ TORCH_LIBRARY_IMPL(aten, CPU, m) {
 
 TORCH_LIBRARY_IMPL(aten, AutogradCPU, m) {
     m.impl("matmul", TORCH_FN(tc_matmul_autograd_cpu_extended));
-    m.impl("bmm", TORCH_FN(tc_bmm_dispatch_cpu));
+    // bmm is NOT registered here, for the same reason addmm/baddbmm are not
+    // registered at AutogradCUDA below: the kernel's disabled-bridge path
+    // (tc_bmm_fallback) runs at::bmm under an ExcludeDispatchKeyGuard for
+    // AutogradCPU/AutogradCUDA, so the result carries no grad_fn.
+    //
+    // That path's comment claimed it "only happens in bridge-disabled
+    // benches; production training always runs with the bridge enabled".
+    // That premise is false: g_default_matmul defaults to FALSE, so the
+    // fallback is the DEFAULT path, and registering at an Autograd key made
+    // it the only path autograd ever sees. Measured consequence -- merely
+    //
+    //     import tensorcore_torch
+    //
+    // flipped torch.bmm(A, B).grad_fn from present to None for CPU tensors,
+    // and with it every einsum that lowers to bmm. Downstream, qLLM's
+    // sheaf-attention trainer died at loss.backward() with "element 0 of
+    // tensors does not require grad" purely because tensorcore was on
+    // PYTHONPATH -- with the bridge off and no tensorcore op requested.
+    //
+    // Unregistered, PyTorch's native autograd handles bmm correctly. The
+    // accelerated CPU bmm is reachable again once the fallback constructs
+    // its own autograd node instead of suppressing the key.
 }
 
 TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
