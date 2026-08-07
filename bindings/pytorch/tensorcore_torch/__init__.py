@@ -218,7 +218,28 @@ def _ensure_torch_backend_module() -> bool:
     return True
 
 
-_PYTORCH_BACKEND_REGISTERED = _ensure_torch_backend_module()
+# Deliberately NOT called at import. _ensure_torch_backend_module() renames
+# the PrivateUse1 backend to "tensorcore" and registers a device module, which
+# makes torch treat tensorcore as a process-wide accelerator for anyone who
+# merely has this package on PYTHONPATH. The C++ side registers the matching
+# DeviceGuardImpl, and that governs stream handling -- which torch's autograd
+# engine queries per device on every backward. Measured on a Blackwell: with
+# tensorcore importable, CUDA training died at loss.backward() with
+# "opt_ready_stream && opt_parent_stream INTERNAL ASSERT FAILED" in every arm
+# of a qLLM A/B including the control, no tensorcore op requested; the same
+# run without it trained fine.
+#
+# Call enable_device() (or any op that needs the device -- to_tensorcore,
+# set_default_matmul, the empty.* factories) to opt in.
+_PYTORCH_BACKEND_REGISTERED = False
+
+
+def _ensure_backend_registered() -> bool:
+    """Idempotent opt-in. Safe to call repeatedly."""
+    global _PYTORCH_BACKEND_REGISTERED
+    if not _PYTORCH_BACKEND_REGISTERED:
+        _PYTORCH_BACKEND_REGISTERED = _ensure_torch_backend_module()
+    return _PYTORCH_BACKEND_REGISTERED
 
 if not _PYTORCH_BACKEND_REGISTERED and _PRIVATEUSE1_FAILURE_REASON:
     import warnings
@@ -243,6 +264,7 @@ from ._C import (  # noqa: E402
     mps_dispatch_count,
     privateuse1_backend_name,
     privateuse1_hooks_registered,
+    enable_device as _c_enable_device,
     set_default_matmul,
     to_cpu,
     to_tensorcore,
@@ -260,6 +282,7 @@ __all__ = [
     "mps_dispatch_count",
     "privateuse1_backend_name",
     "privateuse1_hooks_registered",
+    "enable_device",
     "pytorch_backend_report",
     "privateuse1_registration_failure",
     "pytorch_backend_registered",
@@ -381,3 +404,15 @@ def pytorch_backend_report() -> str:
 if _torch_backend_module_registered():
     torch.tensorcore.backend_state = pytorch_backend_state
     torch.tensorcore.backend_report = pytorch_backend_report
+
+
+def enable_device() -> bool:
+    """Register the tensorcore device: torch backend module + C++ backend,
+    allocator, DeviceGuardImpl and PrivateUse1 hooks.
+
+    Opt-in by design. See the comment on _PYTORCH_BACKEND_REGISTERED: doing
+    this at import breaks CUDA autograd for every consumer on the path.
+    """
+    ok = _ensure_backend_registered()
+    _c_enable_device()
+    return ok

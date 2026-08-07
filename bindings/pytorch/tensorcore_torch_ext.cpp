@@ -1509,7 +1509,39 @@ TORCH_LIBRARY_IMPL(aten, AutogradCUDA, m) {
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    register_privateuse1_name();
+    // NOTHING is registered at import. Importing a library must not mutate
+    // global torch dispatch state for consumers that never ask for its device.
+    //
+    // register_privateuse1_name() registers a backend NAME, an allocator, a
+    // DeviceGuardImpl and PrivateUse1 hooks. Doing that on import made torch
+    // treat "tensorcore" as an accelerator process-wide, and the guard impl
+    // governs stream handling, which the autograd engine queries per device on
+    // every backward. Measured on a Blackwell: with tensorcore merely on
+    // PYTHONPATH, CUDA training died at loss.backward() with
+    //
+    //     opt_ready_stream && opt_parent_stream INTERNAL ASSERT FAILED
+    //     at torch/csrc/autograd/engine.cpp:1084
+    //
+    // in EVERY arm of a qLLM A/B including the control, with no tensorcore op
+    // requested. The identical run without those paths trained fine
+    // (loss 10.96 -> 9.95).
+    //
+    // Task #938 registered hooks at import to fix a DataLoader
+    // workers+pin_memory crash. That crash was self-inflicted: registering the
+    // backend name is what made torch route pin_memory through an accelerator
+    // that had no hooks. With nothing registered, torch uses its normal
+    // CPU/CUDA pinned path and there is no crash to fix. The hooks remain
+    // available and correct for consumers that DO opt in.
+    //
+    // Opting in: any of tc_to_tensorcore, tc_set_default_matmul,
+    // tc_empty_memory_format, tc_empty_strided or tc_privateuse1_backend_name
+    // calls register_privateuse1_name() on entry, so asking for the device
+    // still gets you a fully registered one. `enable_device()` below makes
+    // that explicit for callers who want it up front.
+    m.def("enable_device", &register_privateuse1_name,
+          "Register the tensorcore PrivateUse1 backend, allocator, device "
+          "guard and hooks. Not done at import: that mutates global torch "
+          "dispatch state for every consumer and breaks CUDA autograd.");
     m.def("matmul", &tc_matmul_fp32,
           "tc_matmul(A: Tensor[fp32|bf16, MxK], B: Tensor[fp32|bf16, KxN]) -> Tensor[MxN]");
     m.def("matmul_bf16", &tc_matmul_bf16,

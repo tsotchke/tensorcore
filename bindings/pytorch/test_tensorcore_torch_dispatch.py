@@ -64,12 +64,44 @@ class TestPrivateUse1Hooks(unittest.TestCase):
     def setUp(self):
         if _IMPORT_ERR is not None:
             self.skipTest(f"tensorcore_torch import failed: {_IMPORT_ERR}")
+        # Registration is opt-in as of the autograd-stream fix: importing this
+        # module no longer registers the PrivateUse1 backend, because doing so
+        # made torch treat tensorcore as a process-wide accelerator and broke
+        # CUDA autograd for every consumer that merely had it on PYTHONPATH
+        # ("opt_ready_stream && opt_parent_stream INTERNAL ASSERT FAILED",
+        # measured in all four arms of a qLLM A/B including the control).
+        # These tests are about the device, so they ask for it.
+        tensorcore_torch.enable_device()
 
     def test_hooks_registered(self):
         self.assertTrue(
             tensorcore_torch.privateuse1_hooks_registered(),
-            "PrivateUse1HooksInterface must be registered after bridge import",
+            "PrivateUse1HooksInterface must be registered once the device is "
+            "enabled -- Task #938's DataLoader workers+pin_memory crash",
         )
+
+    def test_import_alone_does_not_register_the_backend(self):
+        """The regression this file most needs to hold.
+
+        A library that registers a device backend on import mutates global
+        torch state for consumers that never asked for it. Run out-of-process
+        so this class's own setUp() enable_device() cannot mask it.
+        """
+        import subprocess
+        import sys as _sys
+        code = (
+            "import torch, tensorcore_torch\n"
+            "print(torch._C._get_privateuse1_backend_name())\n"
+        )
+        out = subprocess.run([_sys.executable, "-c", code],
+                             capture_output=True, text=True)
+        if out.returncode != 0:
+            self.skipTest(f"probe failed: {out.stderr.strip()[:140]}")
+        self.assertEqual(
+            out.stdout.strip(), "privateuseone",
+            "importing tensorcore_torch must NOT register the PrivateUse1 "
+            "backend -- doing so makes torch treat tensorcore as a "
+            "process-wide accelerator and breaks CUDA autograd")
 
     def test_dataloader_pin_memory_workers(self):
         """The actual repro of the trainer crash: DataLoader with workers + pin_memory.
