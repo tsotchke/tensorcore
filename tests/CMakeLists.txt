@@ -70,6 +70,34 @@ if(TC_ENABLE_METAL)
     )
 endif()
 
+# ---------------------------------------------------------------------
+# Backend-independent geometry + manifold tests.
+#
+# These are fp32 host code with no Metal or CUDA dependency, so they must
+# register on EVERY build. They are defined here, above the backend split,
+# because the non-Metal branch below ends in return() -- anything declared
+# after it is silently Apple-only. That is how these seven went unregistered
+# on every Linux/CUDA build: 30 of 53 tests ran there, and the 23 missing
+# ones included the entire manifold family. Nothing failed; they were just
+# never built, which is the quietest way for a test to stop being a test.
+# ---------------------------------------------------------------------
+set(TC_BACKEND_INDEPENDENT_TESTS
+    test_poincare
+    test_sphere
+    test_product_manifold
+    test_quantum_gates
+    test_phase_attention
+    test_riemannian_adam
+    test_riemannian_adam_parity
+)
+foreach(t IN LISTS TC_BACKEND_INDEPENDENT_TESTS)
+    add_executable(${t} ${t}.c)
+    target_link_libraries(${t} PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
+    target_include_directories(${t} PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    add_test(NAME ${t} COMMAND ${t})
+    set_tests_properties(${t} PROPERTIES TIMEOUT 60)
+endforeach()
+
 if(NOT TC_ENABLE_METAL)
     add_executable(test_portable_cpu test_portable_cpu.c)
     target_link_libraries(test_portable_cpu PRIVATE tensorcore)
@@ -330,29 +358,9 @@ set_tests_properties(test_diloco PROPERTIES TIMEOUT 60)
 
 # Poincaré ball ops on the Apple/Metal build (the CPU primitives compile + run
 # on both backends since they're fp32 host code).
-add_executable(test_poincare test_poincare.c)
-target_link_libraries(test_poincare PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
-target_include_directories(test_poincare PRIVATE ${CMAKE_SOURCE_DIR}/include)
-add_test(NAME test_poincare COMMAND test_poincare)
-set_tests_properties(test_poincare PROPERTIES TIMEOUT 30)
 
-add_executable(test_sphere test_sphere.c)
-target_link_libraries(test_sphere PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
-target_include_directories(test_sphere PRIVATE ${CMAKE_SOURCE_DIR}/include)
-add_test(NAME test_sphere COMMAND test_sphere)
-set_tests_properties(test_sphere PROPERTIES TIMEOUT 30)
 
-add_executable(test_product_manifold test_product_manifold.c)
-target_link_libraries(test_product_manifold PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
-target_include_directories(test_product_manifold PRIVATE ${CMAKE_SOURCE_DIR}/include)
-add_test(NAME test_product_manifold COMMAND test_product_manifold)
-set_tests_properties(test_product_manifold PROPERTIES TIMEOUT 30)
 
-add_executable(test_quantum_gates test_quantum_gates.c)
-target_link_libraries(test_quantum_gates PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
-target_include_directories(test_quantum_gates PRIVATE ${CMAKE_SOURCE_DIR}/include)
-add_test(NAME test_quantum_gates COMMAND test_quantum_gates)
-set_tests_properties(test_quantum_gates PROPERTIES TIMEOUT 30)
 
 # Fork-based 2-peer mesh collective: AllReduce/Broadcast/AllGather over
 # the production tc_remote_tensor_fetch transport. Bound to localhost.
@@ -370,23 +378,8 @@ target_include_directories(test_remote_shard PRIVATE ${CMAKE_SOURCE_DIR}/include
 add_test(NAME test_remote_shard COMMAND test_remote_shard)
 set_tests_properties(test_remote_shard PROPERTIES TIMEOUT 30)
 
-add_executable(test_phase_attention test_phase_attention.c)
-target_link_libraries(test_phase_attention PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
-target_include_directories(test_phase_attention PRIVATE ${CMAKE_SOURCE_DIR}/include)
-add_test(NAME test_phase_attention COMMAND test_phase_attention)
-set_tests_properties(test_phase_attention PROPERTIES TIMEOUT 30)
 
-add_executable(test_riemannian_adam test_riemannian_adam.c)
-target_link_libraries(test_riemannian_adam PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
-target_include_directories(test_riemannian_adam PRIVATE ${CMAKE_SOURCE_DIR}/include)
-add_test(NAME test_riemannian_adam COMMAND test_riemannian_adam)
-set_tests_properties(test_riemannian_adam PROPERTIES TIMEOUT 30)
 
-add_executable(test_riemannian_adam_parity test_riemannian_adam_parity.c)
-target_link_libraries(test_riemannian_adam_parity PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
-target_include_directories(test_riemannian_adam_parity PRIVATE ${CMAKE_SOURCE_DIR}/include)
-add_test(NAME test_riemannian_adam_parity COMMAND test_riemannian_adam_parity)
-set_tests_properties(test_riemannian_adam_parity PROPERTIES TIMEOUT 60)
 
 add_executable(test_sparse_24 test_sparse_24.c)
 target_link_libraries(test_sparse_24 PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
