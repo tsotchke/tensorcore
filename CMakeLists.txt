@@ -106,7 +106,14 @@ if(TC_ENABLE_CUDA)
         # Newer architectures are version-gated: naming an arch the installed
         # nvcc has never heard of is a hard configure error, so the list has to
         # track the toolkit rather than assume the newest.
-        set(_tc_cuda_archs 70 75 80 86 89)
+        # CUDA 13 removed Maxwell/Pascal/Volta; naming sm_70 there is a hard
+        # nvcc error, so the floor moves with the toolkit just as the ceiling
+        # does.
+        if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL "13.0")
+            set(_tc_cuda_archs 75 80 86 89)       # Turing and newer
+        else()
+            set(_tc_cuda_archs 70 75 80 86 89)    # Volta and newer
+        endif()
         set(_tc_cuda_newest 89)
         if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.8")
             list(APPEND _tc_cuda_archs 90)          # Hopper
