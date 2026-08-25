@@ -80,6 +80,8 @@ def args_for(
         jobs_json=str(path),
         inventory_json=str(inventory_json) if inventory_json else None,
         state_json=None,
+        reconciliation_log_jsonl=None,
+        reconciliation_history_limit=2048,
         timeout_sec=1.0,
         probe_timeout_sec=1.0,
         admission_timeout_sec=1.0,
@@ -1634,14 +1636,33 @@ def test_loop_pretty_json_emits_json() -> None:
         args.loop = True
         args.pretty_json = True
         args.max_iterations = 1
+        args.reconciliation_log_jsonl = str(pathlib.Path(tmp) / "reconciliation.jsonl")
         out = io.StringIO()
         with redirect_stdout(out):
             rc = scheduler.run_loop(args)
+        event = json.loads(pathlib.Path(args.reconciliation_log_jsonl).read_text())
     payload = json.loads(out.getvalue())
     assert rc == 0
     assert payload["iteration"] == 1
     assert payload["results"][0]["action"] == "claimed_and_launched"
     assert out.getvalue().startswith("{\n")
+    assert event["schema"] == "tensorcore.scheduler_reconciliation_event.v1"
+    assert event["runtime_status"] == "passed"
+    assert event["runtime_scheduler_mode"] == "live"
+    assert event["result_resource_count"] == 1
+    assert event["action_counts"] == {"claimed_and_launched": 1}
+
+
+def test_bounded_reconciliation_journal_keeps_latest_events() -> None:
+    scheduler = load_scheduler()
+    with tempfile.TemporaryDirectory() as tmp:
+        path = pathlib.Path(tmp) / "reconciliation.jsonl"
+        for iteration in range(5):
+            scheduler.append_bounded_jsonl(
+                path, {"iteration": iteration}, max_entries=3,
+            )
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+    assert [row["iteration"] for row in rows] == [2, 3, 4]
 
 
 def test_source_provenance_from_metadata_is_generic() -> None:
@@ -2595,6 +2616,7 @@ def main() -> int:
     test_cuda_live_adoption_records_worker_identity_in_claim()
     test_cuda_live_heartbeat_refreshes_worker_identity_metadata()
     test_loop_pretty_json_emits_json()
+    test_bounded_reconciliation_journal_keeps_latest_events()
     test_source_provenance_from_metadata_is_generic()
     test_submit_dry_run_expands_tensorcore_job_v1()
     test_control_mutation_result_requires_dry_run_echo()

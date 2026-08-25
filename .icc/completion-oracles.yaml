@@ -341,6 +341,97 @@ oracles:
         label: qLLM mesh proof used a production-eligible placement
         action: rerun_qllm_mesh_on_production_placement
 
+  - name: tensorcore-scheduler-reconciler
+    target: tensorcore-scheduler-reconciler
+    subject_model: continuously running TensorCore fleet desired-state reconciler
+    aliases:
+      - scheduler-reconciler
+      - tensorcore-fleet-scheduler
+    criteria:
+      - id: scheduler_reconciler_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: Scheduler reconciliation runtime evidence is present
+        action: run_scheduler_reconciler_evidence
+
+      - id: scheduler_reconciler_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: Scheduler reconciliation window is failure-free
+        action: fix_scheduler_reconciliation_failure
+
+      - id: scheduler_reconciler_runtime_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.tensorcore_scheduler_reconciler.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: A sustained scheduler reconciliation window passed
+        action: run_scheduler_reconciler_evidence
+
+      - id: scheduler_reconciler_live_mode
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.tensorcore_scheduler_reconciler.runtime_scheduler_mode]
+          event_values: [live]
+        severity: high
+        label: Scheduler proof used live mode rather than dry-run
+        action: run_live_scheduler_reconciler
+
+      - id: scheduler_reconciler_clean_source
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.tensorcore_scheduler_reconciler.runtime_source_status]
+          event_values: [clean]
+        severity: high
+        label: Scheduler proof binds a clean source revision
+        action: rerun_scheduler_on_clean_source
+
+      - id: scheduler_reconciler_topology_authority
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.tensorcore_scheduler_reconciler.runtime_topology_status]
+          event_values: [passed]
+        severity: high
+        label: Signed topology authority passed throughout the window
+        action: fix_scheduler_topology_authority
+
+      - id: scheduler_reconciler_queue_integrity
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.tensorcore_scheduler_reconciler.runtime_queue_integrity_status]
+          event_values: [passed]
+        severity: high
+        label: Queue event-log integrity passed throughout the window
+        action: fix_scheduler_queue_integrity
+
+      - id: scheduler_reconciler_gpu_admission
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.tensorcore_scheduler_reconciler.runtime_gpu_reconciliation_status]
+          event_values: [passed]
+        severity: high
+        label: GPU reconciliation admission passed throughout the window
+        action: fix_scheduler_gpu_reconciliation
+
+      - id: scheduler_reconciler_resource_coverage
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.tensorcore_scheduler_reconciler.runtime_resource_coverage_status]
+          event_values: [passed]
+        severity: high
+        label: Every eligible scheduler resource has a desired-state row
+        action: add_missing_scheduler_resource_rows
+
+      - id: scheduler_reconciler_sustained_window
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.tensorcore_scheduler_reconciler.runtime_sustained_window_status]
+          event_values: [passed]
+        severity: high
+        label: Consecutive reconciliation events span no daemon restart
+        action: stabilize_scheduler_reconciler
+
   - name: eshkol-bridge-runtime-evidence
     target: eshkol-bridge-runtime-evidence
     aliases:

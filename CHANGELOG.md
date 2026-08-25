@@ -23,6 +23,9 @@
   outcome.
 - Made worker identity admission reject a systemd result for any unit other
   than the exact unit requested by the scheduler.
+- Added a bounded, fsynced scheduler reconciliation journal with source,
+  topology, queue-integrity, GPU-admission, action-count, and error provenance
+  for every daemon iteration.
 
 ### Runtime capability ABI
 

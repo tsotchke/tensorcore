@@ -11,7 +11,10 @@ from pathlib import Path
 
 LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
-SKIP_PARTS = {".git", "build", ".cache", ".claude", "__pycache__"}
+SKIP_PARTS = {
+    ".git", ".scratch", ".swarm", ".worktrees", "state",
+    "build", ".cache", ".claude", "__pycache__",
+}
 
 
 def iter_markdown(root: Path) -> list[Path]:

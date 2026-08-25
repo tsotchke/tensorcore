@@ -69,12 +69,22 @@ python3 scripts/mesh_resource_scheduler.py \
   --inventory-json configs/mesh_resources.json \
   --topology-snapshot /var/lib/tensorcore/topology/private.json \
   --state-json /var/lib/tensorcore/mesh_resource_state.json \
+  --reconciliation-log-jsonl /var/lib/tensorcore/mesh_resource_reconciliation.jsonl \
+  --reconciliation-history-limit 2048 \
   --event-log-jsonl /var/lib/tensorcore/mesh_resource_queue_events.jsonl \
   --require-queue-event-log-integrity \
   --gpu-reconciliation-audit-json /var/lib/tensorcore/gpu-reconciliation-audit.json \
   --gpu-reconciliation-max-age-sec 120 \
   --loop --json
 ```
+
+The loop fsyncs a bounded `tensorcore.scheduler_reconciliation_event.v1`
+journal on every iteration. Each public-safe row records the exact source
+revision, live versus dry-run mode, topology/queue/GPU gate status, resource-set
+digest, action counts, and error count without embedding commands, paths, host
+names, or job payloads. The default 2,048-row window is long enough to prove
+sustained health while preventing an unattended daemon from growing an
+unbounded evidence file.
 
 Example operator status with the same CUDA placement gate the loop enforces:
 

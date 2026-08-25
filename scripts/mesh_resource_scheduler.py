@@ -236,6 +236,31 @@ def append_jsonl(path: str | Path | None, payload: dict) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def append_bounded_jsonl(
+    path: str | Path | None,
+    payload: dict,
+    *,
+    max_entries: int,
+) -> None:
+    if not path:
+        return
+    if max_entries < 1:
+        raise ValueError("reconciliation history limit must be >= 1")
+    append_jsonl(path, payload)
+    out = Path(path).expanduser()
+    lines = out.read_text(encoding="utf-8").splitlines()
+    if len(lines) <= max_entries:
+        return
+    tmp = out.with_name(f".{out.name}.rotate.tmp")
+    with tmp.open("w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines[-max_entries:]) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    tmp.replace(out)
 
 
 def require_queue_event_log(args: argparse.Namespace, *, command: str) -> str:
@@ -2844,6 +2869,19 @@ def cmd_audit(args: argparse.Namespace) -> dict:
 def run_loop(args: argparse.Namespace) -> int:
     iteration = 0
     all_ok = True
+    started_at_unix = time.time()
+    try:
+        source_git_head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT,
+            text=True, stderr=subprocess.DEVNULL,
+        ).strip()
+        source_git_dirty = (
+            subprocess.run(["git", "diff", "--quiet"], cwd=ROOT).returncode != 0
+            or subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=ROOT).returncode != 0
+        )
+    except Exception:
+        source_git_head = None
+        source_git_dirty = None
     try:
         while True:
             iteration += 1
@@ -2859,6 +2897,67 @@ def run_loop(args: argparse.Namespace) -> int:
                     "errors": [{"error": str(exc)}],
                 }
             payload["iteration"] = iteration
+            result_rows = payload.get("results") if isinstance(payload.get("results"), list) else []
+            action_counts: dict[str, int] = {}
+            resource_ids: set[str] = set()
+            for row in result_rows:
+                if not isinstance(row, dict):
+                    continue
+                action = str(row.get("action") or "unknown")
+                action_counts[action] = action_counts.get(action, 0) + 1
+                if row.get("resource"):
+                    resource_ids.add(str(row["resource"]))
+            topology = payload.get("topology_authority")
+            queue_integrity = payload.get("queue_event_log_integrity")
+            gpu_reconciliation = payload.get("gpu_reconciliation_audit")
+            event = {
+                "schema": "tensorcore.scheduler_reconciliation_event.v1",
+                "checked_at_unix": payload.get("checked_at_unix", time.time()),
+                "scheduler_started_at_unix": started_at_unix,
+                "iteration": iteration,
+                "runtime_status": "passed" if payload.get("ok") is True else "failed",
+                "runtime_scheduler_mode": "dry_run" if args.dry_run else "live",
+                "runtime_topology_status": (
+                    "passed" if isinstance(topology, dict) and topology.get("ok") is True
+                    else "failed"
+                ),
+                "runtime_queue_integrity_status": (
+                    "passed" if isinstance(queue_integrity, dict) and queue_integrity.get("ok") is True
+                    else "not_required" if queue_integrity is None
+                    else "failed"
+                ),
+                "runtime_gpu_reconciliation_status": (
+                    "passed" if isinstance(gpu_reconciliation, dict) and gpu_reconciliation.get("ok") is True
+                    else "not_required" if gpu_reconciliation is None
+                    else "failed"
+                ),
+                "source_git_head": source_git_head,
+                "source_git_dirty": source_git_dirty,
+                "topology_snapshot_sha256": (
+                    topology.get("snapshot_sha256") if isinstance(topology, dict) else None
+                ),
+                "topology_resource_count": (
+                    topology.get("resource_count") if isinstance(topology, dict) else None
+                ),
+                "result_resource_count": len(resource_ids),
+                "result_resource_set_sha256": hashlib.sha256(
+                    canonical_json(sorted(resource_ids)).encode("utf-8")
+                ).hexdigest(),
+                "result_count": len(result_rows),
+                "error_count": len(payload.get("errors") or []),
+                "action_counts": dict(sorted(action_counts.items())),
+            }
+            try:
+                append_bounded_jsonl(
+                    args.reconciliation_log_jsonl,
+                    event,
+                    max_entries=args.reconciliation_history_limit,
+                )
+            except Exception as exc:
+                payload["ok"] = False
+                payload.setdefault("errors", []).append({
+                    "error": f"reconciliation journal write failed: {exc}",
+                })
             all_ok = all_ok and bool(payload.get("ok"))
             if args.state_json:
                 write_json(args.state_json, payload)
@@ -2986,6 +3085,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--event-log-jsonl", default=os.environ.get("TC_SCHEDULER_EVENT_LOG_JSONL"))
     parser.add_argument("--require-queue-event-log-integrity", action="store_true")
     parser.add_argument("--state-json")
+    parser.add_argument(
+        "--reconciliation-log-jsonl",
+        default=os.environ.get("TC_SCHEDULER_RECONCILIATION_LOG_JSONL"),
+    )
+    parser.add_argument(
+        "--reconciliation-history-limit",
+        type=int,
+        default=int(os.environ.get("TC_SCHEDULER_RECONCILIATION_HISTORY_LIMIT", "2048")),
+    )
     parser.add_argument("--gpu-reconciliation-audit-json")
     parser.add_argument("--gpu-reconciliation-max-age-sec", type=float, default=120.0)
     parser.add_argument("--timeout-sec", type=float, default=10.0)
@@ -3007,6 +3115,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.max_iterations < 0:
         parser.error("--max-iterations must be >= 0")
+    if args.reconciliation_history_limit < 1:
+        parser.error("--reconciliation-history-limit must be >= 1")
     if args.gpu_reconciliation_max_age_sec <= 0:
         parser.error("--gpu-reconciliation-max-age-sec must be > 0")
     if args.post_start_timeout_sec < 0:
