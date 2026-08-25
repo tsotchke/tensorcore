@@ -1,0 +1,1065 @@
+# tensorcore — C API reference
+
+The complete public surface, grouped by header. Every symbol below appears
+in `include/tensorcore/*.h` and is part of the stable ABI. Internal helpers
+in `lib/core/internal.h` are out of scope.
+
+Every function returns `tc_status_t` unless noted. `TC_OK == 0` on success;
+negative values are errors. Use `tc_status_string(s)` to render an error.
+
+## Umbrella
+
+`include/tensorcore/tensorcore.h` includes every header below and exposes:
+
+```c
+#define TENSORCORE_VERSION_MAJOR 0
+#define TENSORCORE_VERSION_MINOR 1
+#define TENSORCORE_VERSION_PATCH 22  /* tracks include/tensorcore/tensorcore.h */
+
+const char* tc_version(void);   /* "0.1.x" */
+```
+
+The `VERSION` field in `CMakeLists.txt` is authoritative for builds and
+the `pkg-config` file; the header constants exist for downstream C code
+that wants the version at compile time. They are kept in sync at release
+time.
+
+## Status — `status.h`
+
+```c
+typedef enum {
+    TC_OK                       =   0,
+    TC_ERR_NOT_INITIALIZED      =  -1,
+    TC_ERR_ALREADY_INITIALIZED  =  -2,
+    TC_ERR_NO_DEVICE            =  -3,
+    TC_ERR_UNSUPPORTED_FAMILY   =  -4,  /* kernel needs newer Apple family */
+    TC_ERR_UNSUPPORTED_DTYPE    =  -5,
+    TC_ERR_INVALID_SHAPE        =  -6,
+    TC_ERR_INVALID_ARG          =  -7,
+    TC_ERR_ALLOC                =  -8,
+    TC_ERR_KERNEL_NOT_FOUND     =  -9,  /* metallib missing the function */
+    TC_ERR_PIPELINE             = -10,  /* MTLComputePipelineState build failed */
+    TC_ERR_DISPATCH             = -11,
+    TC_ERR_ABI_MISMATCH         = -12,
+    TC_ERR_BUSY                 = -13,
+    TC_ERR_INTERNAL             = -99,
+} tc_status_t;
+
+const char* tc_status_string(tc_status_t s);
+```
+
+## Dtype — `dtype.h`
+
+```c
+typedef enum {
+    TC_DTYPE_F16  = 0,   /* IEEE 754 binary16; simdgroup_matrix Apple7+        */
+    TC_DTYPE_BF16 = 1,   /* bfloat16; simdgroup_matrix Apple9+; FP32 fallback  */
+    TC_DTYPE_F32  = 2,   /* IEEE 754 binary32; simdgroup_matrix Apple7+        */
+    TC_DTYPE_I8   = 3,   /* int8; tested MPS/portable/CUDA/HIP paths           */
+    TC_DTYPE_I32  = 4,   /* int32; i8 accumulator or index dtype               */
+    TC_DTYPE_F64  = 5,   /* IEEE 754 binary64; emulated on GPU                 */
+    TC_DTYPE_SF64 = 6,   /* SoftFloat-64 storage (uint2)                       */
+    TC_DTYPE_DF64 = 7,   /* double-float (f32+f32 unevaluated sum)             */
+    TC_DTYPE_FP24 = 8,   /* 24-bit ML format from eshkol-platform              */
+    TC_DTYPE_FP53 = 9,   /* 53-bit format from eshkol-platform                 */
+} tc_dtype_t;
+
+static inline size_t tc_dtype_size(tc_dtype_t d);   /* bytes per element       */
+const char*           tc_dtype_name(tc_dtype_t d);  /* "F16", "BF16", ...       */
+```
+
+Ordering is fixed; new dtypes append. The high-order entries (`SF64`,
+`DF64`, `FP24`, `FP53`) are eshkol-platform precision modes that the v0.4
+consolidation moves into tensorcore proper.
+
+## Device, buffer, stream — `device.h`
+
+### Opaque handles
+
+```c
+typedef struct tc_context tc_context;   /* MTLDevice + MTLCommandQueue + caches */
+typedef struct tc_buffer  tc_buffer;    /* MTLBuffer (shared storage)           */
+typedef struct tc_stream  tc_stream;    /* command-buffer lane                  */
+```
+
+### Family classification
+
+```c
+typedef enum {
+    TC_FAMILY_UNKNOWN = 0,
+    TC_FAMILY_APPLE7  = 7,    /* M1               */
+    TC_FAMILY_APPLE8  = 8,    /* M2               */
+    TC_FAMILY_APPLE9  = 9,    /* M3/M4, A17/A18    — bf16 simdgroup_matrix */
+    TC_FAMILY_APPLE10 = 10,   /* M5                — mpp::tensor_ops      */
+    TC_FAMILY_APPLE11 = 11,   /* reserved ABI value                       */
+} tc_family_t;
+
+typedef struct {
+    tc_family_t family;
+    char        name[128];                    /* MTLDevice.name              */
+    uint64_t    max_buffer_bytes;
+    uint64_t    recommended_working_set_bytes;
+    uint32_t    max_threadgroup_memory;       /* 32 KB on M-series           */
+    uint32_t    max_threads_per_threadgroup;
+    uint32_t    thread_execution_width;       /* 32 (simdgroup width)        */
+    bool        unified_memory;
+    bool        supports_bf16_simdgroup;
+    bool        supports_i8_simdgroup;
+    bool        supports_tensorops_m5;
+    bool        supports_fp64_native;         /* false on Apple GPU           */
+} tc_device_info;
+```
+
+### Lifecycle and query
+
+```c
+tc_status_t tc_init           (tc_context** out_ctx);
+tc_status_t tc_shutdown       (tc_context*  ctx);
+tc_status_t tc_device_info_get(tc_context*  ctx, tc_device_info* out_info);
+```
+
+`tc_init` is idempotent — second call returns `TC_ERR_ALREADY_INITIALIZED`.
+
+### Buffers (unified memory)
+
+```c
+tc_status_t tc_buffer_alloc(tc_context* ctx, size_t bytes, tc_buffer** out);
+tc_status_t tc_buffer_from_ptr(tc_context* ctx, void* ptr, size_t bytes,
+                               tc_buffer** out);
+tc_status_t tc_buffer_free (tc_context* ctx, tc_buffer*  buf);
+tc_status_t tc_buffer_map  (tc_buffer*  buf, void**      out_ptr);
+size_t      tc_buffer_size (const tc_buffer* buf);
+```
+
+`tc_buffer_map` returns a CPU-addressable pointer with no copy. The buffer
+pool uses power-of-2 buckets and LIFO recycling. `tc_buffer_from_ptr`
+creates a wrapper around caller-owned memory; freeing the wrapper does not
+free the underlying allocation. Metal builds use a no-copy `MTLBuffer` view
+when the pointer and byte count satisfy Metal's page-alignment constraints;
+unaligned Metal wrappers return `TC_ERR_INVALID_ARG`.
+
+### Streams
+
+```c
+tc_status_t tc_stream_create (tc_context* ctx, tc_stream** out);
+tc_status_t tc_stream_destroy(tc_context* ctx, tc_stream*  s);
+tc_status_t tc_stream_sync   (tc_stream*  s);
+```
+
+NULL stream means "use the default stream" — sync-commit on every call.
+
+## Runtime capabilities — `capabilities.h`
+
+Downstream adapters use this size/versioned query instead of package-version
+guesses or invented weak symbols:
+
+```c
+#define TC_RUNTIME_CAPABILITIES_ABI_VERSION_CURRENT 1
+
+typedef struct {
+    uint32_t struct_size;              /* runtime's known v1 size */
+    uint32_t abi_version;              /* version actually written */
+    uint32_t runtime_version_major;
+    uint32_t runtime_version_minor;
+    uint32_t runtime_version_patch;
+    uint32_t reserved0;
+    uint64_t known_capability_mask;
+    uint64_t available_capability_mask;
+    uint64_t compiled_backend_mask;
+    uint64_t available_backend_mask;
+    uint64_t reserved[4];
+} tc_runtime_capabilities;
+
+tc_status_t tc_runtime_capabilities_get(
+    tc_context* ctx,
+    uint32_t requested_abi_version,
+    tc_runtime_capabilities* out,
+    size_t out_size);
+```
+
+A feature is supported only when its bit is present in both
+`known_capability_mask` and `available_capability_mask`. This makes unknown
+future features fail closed. The v1 known bits cover fp32 GEMM, single-rank
+and Gloo distributed execution, the implemented DiLoCo baseline, sparse Gloo
+DiLoCo, remote tensors, and four campaign features. Snapshot-safe async DiLoCo
+and versioned checkpoint/resume state are available. Elastic membership and
+actual FP16 wire packing remain known but unavailable.
+
+`compiled_backend_mask` reports code included in the binary;
+`available_backend_mask` is the subset selectable on the current context under
+the current runtime policy. A compiled CUDA or HIP backend is therefore not
+reported as available merely because its toolkit was present at build time.
+
+Callers may pass the documented v1 prefix size or a larger buffer. The runtime
+copies only the prefix it knows and leaves a newer caller's tail untouched.
+Unknown ABI versions return `TC_ERR_ABI_MISMATCH` without modifying the output.
+
+## Memory Tiering — `memory_tier.h`
+
+The memory-tier ABI lets higher-level runtimes hint which buffers should
+stay hot and which can eventually move to slower storage. The current
+runtime ships an L0-only stub baseline: hints are accepted, queried buffers
+report `TC_TIER_L0_DEVICE`, and L1-L4 hosting lands with the heterogeneous
+mesh runtime.
+
+```c
+typedef enum {
+    TC_TIER_L0_DEVICE      = 0,
+    TC_TIER_L1_HOST_RAM    = 1,
+    TC_TIER_L2_REMOTE_RAM  = 2,
+    TC_TIER_L3_LOCAL_NVME  = 3,
+    TC_TIER_L4_REMOTE_NVME = 4,
+} tc_memory_tier_t;
+
+typedef enum {
+    TC_TIER_HINT_HOT  = 0,
+    TC_TIER_HINT_WARM = 1,
+    TC_TIER_HINT_COLD = 2,
+    TC_TIER_HINT_ICE  = 3,
+} tc_tier_hint_t;
+
+tc_status_t tc_buffer_set_tier_hint(tc_buffer* b, tc_tier_hint_t hint);
+tc_status_t tc_buffer_get_tier(const tc_buffer* b,
+                               tc_memory_tier_t* out_tier);
+tc_status_t tc_buffer_promote_async(tc_buffer* b,
+                                    tc_memory_tier_t target_tier,
+                                    tc_stream* stream);
+tc_status_t tc_buffer_demote_async(tc_buffer* b,
+                                   tc_memory_tier_t target_tier,
+                                   tc_stream* stream);
+tc_status_t tc_buffer_tier_sync(tc_buffer* b);
+tc_status_t tc_memory_tier_usage(tc_context* ctx,
+                                 tc_memory_tier_t tier,
+                                 uint64_t* out_bytes_resident,
+                                 uint64_t* out_bytes_capacity);
+```
+
+## Activation Checkpointing — `checkpoint.h`
+
+The checkpoint ABI provides buffer-level hooks for frameworks that trade
+activation memory for recompute. The CPU and Metal runtimes free owned
+buffer storage on `discard`, keep the handle valid but unmapped, and
+reallocate storage before invoking the registered recompute callback on
+`realize`.
+
+```c
+typedef uint64_t tc_checkpoint_id;
+typedef tc_status_t(*tc_checkpoint_recompute_fn)(void* user_data);
+
+tc_status_t tc_checkpoint_register(tc_buffer* buf,
+                                   tc_checkpoint_recompute_fn recompute_fn,
+                                   void* user_data,
+                                   tc_checkpoint_id* out_id);
+tc_status_t tc_checkpoint_discard(tc_checkpoint_id id);
+tc_status_t tc_checkpoint_realize(tc_checkpoint_id id);
+int tc_checkpoint_is_resident(tc_checkpoint_id id);
+tc_status_t tc_checkpoint_unregister(tc_checkpoint_id id);
+uint64_t tc_checkpoint_total_bytes_discarded(void);
+uint64_t tc_checkpoint_count_resident(void);
+uint64_t tc_checkpoint_count_discarded(void);
+```
+
+## GEMM — `gemm.h`
+
+### Descriptor
+
+```c
+typedef struct {
+    int32_t   M, N, K;
+
+    tc_dtype_t a_dtype;
+    tc_dtype_t b_dtype;
+    tc_dtype_t c_dtype;
+    tc_dtype_t accum_dtype;     /* normally F32 (or I32 for I8 inputs)     */
+
+    bool transpose_a;
+    bool transpose_b;
+
+    float alpha;                /* C = alpha * A @ B + beta * C            */
+    float beta;
+
+    int32_t lda, ldb, ldc;      /* 0 → row-major contiguous default        */
+} tc_gemm_desc;
+```
+
+### Calls
+
+```c
+tc_status_t tc_gemm        (tc_context* ctx, const tc_gemm_desc* d,
+                            const tc_buffer* A, const tc_buffer* B,
+                            tc_buffer* C);
+
+tc_status_t tc_gemm_async  (tc_context* ctx, const tc_gemm_desc* d,
+                            const tc_buffer* A, const tc_buffer* B,
+                            tc_buffer* C, tc_stream* stream);
+
+typedef struct {
+    tc_gemm_desc base;
+    int32_t      batch;
+    int64_t      stride_a;
+    int64_t      stride_b;
+    int64_t      stride_c;
+} tc_gemm_batched_desc;
+
+tc_status_t tc_gemm_batched(tc_context* ctx, const tc_gemm_batched_desc* d,
+                            const tc_buffer* A, const tc_buffer* B,
+                            tc_buffer* C);
+```
+
+### Diagnostics
+
+```c
+typedef enum {
+    TC_BACKEND_NONE             = 0,
+    TC_BACKEND_SIMDGROUP_MATRIX = 1,
+    TC_BACKEND_TENSOROPS_M5     = 2,
+    TC_BACKEND_MPS              = 3,
+    TC_BACKEND_ACCELERATE_CPU   = 4,
+    TC_BACKEND_SF64_EMULATED    = 5,
+    TC_BACKEND_OZAKI_II         = 6,
+    TC_BACKEND_PORTABLE_CPU     = 7,   /* portable C CPU backend (TC_ENABLE_METAL=OFF) */
+    TC_BACKEND_METAL_COMPUTE    = 8,   /* generic Metal compute kernels */
+    TC_BACKEND_CUDA             = 9,   /* direct CUDA/cuBLAS backend */
+    TC_BACKEND_HIP              = 10,  /* chipStar/hipBLAS backend */
+} tc_backend_t;
+
+tc_backend_t tc_last_backend(void);            /* thread-local                */
+const char*  tc_backend_name(tc_backend_t b);  /* "simdgroup_matrix", ...     */
+```
+
+Use `tc_last_backend()` immediately after a compute call to learn which
+path served it. GEMM, attention, training kernels, Conv2D, quantized
+GEMV/quantization, and portable CPU implementations update the value.
+Metadata, memory-tier, checkpoint, and distributed-control calls do not.
+Set `TC_TRACE=1` before process start to print served dispatches to
+stderr as `op/status/backend` lines.
+
+See [gemm.md](gemm.md) for kernel choices, tile sizes, and env flags.
+
+## Attention — `attention.h`
+
+### Descriptor
+
+```c
+typedef struct {
+    int32_t batch;
+    int32_t heads;
+    int32_t seq_q;
+    int32_t seq_kv;
+    int32_t head_dim;          /* ≤ 128 for on-chip tile                    */
+
+    tc_dtype_t io_dtype;       /* F16 or BF16                                */
+    tc_dtype_t accum_dtype;    /* F32                                        */
+
+    float    softmax_scale;    /* commonly 1 / sqrt(head_dim)                */
+    bool     causal;
+    bool     return_lse;       /* write log-sum-exp for backward             */
+
+    int32_t  kv_heads;         /* 0 → heads (no GQA)                         */
+    int32_t  window_size;      /* 0 → no sliding window                      */
+    const float* alibi_slopes; /* NULL → no ALiBi; else host fp32 [heads]    */
+} tc_attention_desc;
+```
+
+### Calls
+
+```c
+tc_status_t tc_attention_forward      (tc_context* ctx,
+                                       const tc_attention_desc* d,
+                                       const tc_buffer* Q,
+                                       const tc_buffer* K,
+                                       const tc_buffer* V,
+                                       tc_buffer*       O,
+                                       tc_buffer*       LSE);
+
+tc_status_t tc_attention_forward_async(tc_context* ctx,
+                                       const tc_attention_desc* d,
+                                       const tc_buffer* Q,
+                                       const tc_buffer* K,
+                                       const tc_buffer* V,
+                                       tc_buffer*       O,
+                                       tc_buffer*       LSE,
+                                       tc_stream*       stream);
+
+tc_status_t tc_attention_backward     (tc_context* ctx,
+                                       const tc_attention_desc* d,
+                                       const tc_buffer* Q,
+                                       const tc_buffer* K,
+                                       const tc_buffer* V,
+                                       const tc_buffer* O,
+                                       const tc_buffer* dO,
+                                       const tc_buffer* LSE,
+                                       tc_buffer*       dQ,
+                                       tc_buffer*       dK,
+                                       tc_buffer*       dV);
+```
+
+See [attention.md](attention.md) for the FlashAttention design, the D=64 /
+D=128 kernels, causal / GQA / window / ALiBi semantics, and the backward
+pass.
+
+## Training kernels — `training.h`
+
+### RMSnorm
+
+```c
+tc_status_t tc_rmsnorm_forward (tc_context* ctx,
+                                const tc_buffer* X,       /* [N, D] fp16    */
+                                const tc_buffer* gamma,   /* [D]    fp16    */
+                                tc_buffer*       Y,       /* [N, D] fp16    */
+                                tc_buffer*       rstd_out,/* [N]    fp32    */
+                                int N, int D, float eps);
+
+tc_status_t tc_rmsnorm_backward(tc_context* ctx,
+                                const tc_buffer* X,        /* [N, D] fp16   */
+                                const tc_buffer* gamma,    /* [D]    fp16   */
+                                const tc_buffer* dY,       /* [N, D] fp16   */
+                                const tc_buffer* rstd,     /* [N]    fp32   */
+                                tc_buffer*       dX,       /* [N, D] fp16   */
+                                tc_buffer*       dgamma,   /* [D]    fp32   */
+                                int N, int D);
+```
+
+`dgamma` is **fp32** — the kernel accumulates the cross-batch sum in fp32
+for numerical stability. Allocate as `D * sizeof(float)` bytes; pass to
+`tc_adamw_step` with `grad_dtype = TC_DTYPE_F32`.
+
+### LayerNorm
+
+```c
+tc_status_t tc_layernorm_forward (tc_context* ctx,
+                                  const tc_buffer* X, const tc_buffer* gamma,
+                                  const tc_buffer* beta,
+                                  tc_buffer* Y,
+                                  tc_buffer* mean_out, tc_buffer* rstd_out,
+                                  int N, int D, float eps);
+
+tc_status_t tc_layernorm_backward(tc_context* ctx,
+                                  const tc_buffer* X, const tc_buffer* gamma,
+                                  const tc_buffer* dY,
+                                  const tc_buffer* mean, const tc_buffer* rstd,
+                                  tc_buffer* dX,
+                                  int N, int D);
+```
+
+### RoPE
+
+```c
+tc_status_t tc_rope_forward(tc_context* ctx,
+                            tc_buffer*       X,           /* [B, H, S, D] in-place */
+                            const tc_buffer* cos_t,       /* [S, D/2] fp32          */
+                            const tc_buffer* sin_t,       /* [S, D/2] fp32          */
+                            int batch, int heads, int seq, int head_dim);
+
+tc_status_t tc_rope_backward(tc_context* ctx,
+                             tc_buffer*       dX,         /* [B, H, S, D] in-place */
+                             const tc_buffer* cos_t,      /* [S, D/2] fp32          */
+                             const tc_buffer* sin_t,      /* [S, D/2] fp32          */
+                             int batch, int heads, int seq, int head_dim);
+```
+
+### SwiGLU
+
+```c
+tc_status_t tc_swiglu_forward (tc_context* ctx,
+                               const tc_buffer* gate,
+                               const tc_buffer* up,
+                               tc_buffer*       out,
+                               int n);
+
+tc_status_t tc_swiglu_backward(tc_context* ctx,
+                               const tc_buffer* gate,
+                               const tc_buffer* up,
+                               const tc_buffer* dout,
+                               tc_buffer*       dgate,
+                               tc_buffer*       dup,
+                               int n);
+```
+
+### Softmax
+
+```c
+tc_status_t tc_softmax_forward (tc_context* ctx,
+                                const tc_buffer* X, tc_buffer* Y,
+                                int N, int D);
+
+tc_status_t tc_softmax_backward(tc_context* ctx,
+                                const tc_buffer* Y, const tc_buffer* dY,
+                                tc_buffer* dX,
+                                int N, int D);
+```
+
+### Fused AdamW
+
+```c
+tc_status_t tc_adamw_step(tc_context* ctx,
+                          tc_buffer*       params_fp32,  /* in/out */
+                          tc_buffer*       m_fp32,       /* in/out */
+                          tc_buffer*       v_fp32,       /* in/out */
+                          const tc_buffer* grads,
+                          tc_dtype_t       grad_dtype,   /* F16 or F32     */
+                          int n,
+                          float lr, float beta1, float beta2, float eps,
+                          float wd, float bc1, float bc2);
+```
+
+`bc1`, `bc2` are bias corrections (`1 - beta^t`) precomputed on the host.
+
+### Fused Norm + GEMV
+
+```c
+tc_status_t tc_fused_rmsnorm_gemv(tc_context* ctx,
+                                  const tc_buffer* X,      /* [M, K] fp16 */
+                                  const tc_buffer* gamma,  /* [K]    fp16 */
+                                  const tc_buffer* W,      /* [K, N] fp16 */
+                                  tc_buffer*       Y,      /* [M, N] fp16 */
+                                  int M, int N, int K, float eps);
+
+tc_status_t tc_fused_layernorm_gemv(tc_context* ctx,
+                                    const tc_buffer* X,      /* [M, K] fp16 */
+                                    const tc_buffer* gamma,  /* [K]    fp16 */
+                                    const tc_buffer* beta,   /* [K]    fp16 */
+                                    const tc_buffer* W,      /* [K, N] fp16 */
+                                    tc_buffer*       Y,      /* [M, N] fp16 */
+                                    int M, int N, int K, float eps);
+```
+
+Inference primitive (M ≤ 4 is the design target). Eliminates the
+intermediate write-back of the normalized vector. See
+[training_kernels.md](training_kernels.md) for the kernel design.
+
+## Conv2D — `conv.h`
+
+```c
+tc_status_t tc_conv2d_forward(tc_context* ctx,
+                              const tc_buffer* X,        /* [N, IC, H, W]    fp16 */
+                              const tc_buffer* weight,   /* [OC, IC, kH, kW] fp16 */
+                              const tc_buffer* bias,     /* [OC] or NULL          */
+                              tc_buffer*       Y,        /* [N, OC, oH, oW]  fp16 */
+                              tc_buffer*       scratch_col,
+                              int batch, int in_channels, int out_channels,
+                              int H, int W, int kH, int kW,
+                              int pad_h, int pad_w,
+                              int stride_h, int stride_w,
+                              int out_H, int out_W);
+
+tc_status_t tc_conv2d_backward_input (tc_context* ctx,
+                                      const tc_buffer* dY,
+                                      const tc_buffer* weight,
+                                      tc_buffer*       dX,
+                                      tc_buffer*       scratch_col,
+                                      tc_buffer*       scratch_dX_f32,
+                                      /* same shape params as forward */ ...);
+
+tc_status_t tc_conv2d_backward_weight(tc_context* ctx,
+                                      const tc_buffer* X,
+                                      const tc_buffer* dY,
+                                      tc_buffer*       dW,
+                                      tc_buffer*       scratch_col,
+                                      /* same shape params as forward */ ...);
+```
+
+Strategy: `im2col` → `tc_gemm` → (forward outputs directly to Y;
+backward-input uses `col2im` with fp32 atomic accumulation). See
+[conv2d.md](conv2d.md) for scratch sizing.
+
+## Quantized — `quantized.h`
+
+```c
+typedef enum {
+    TC_QUANT_Q4_0 = 0,        /* 32 weights/block, fp16 scale, 4-bit GGML  */
+    TC_QUANT_Q8_0 = 1,        /* 32 weights/block, fp16 scale, int8        */
+} tc_quant_t;
+
+tc_status_t tc_quantize_weights    (tc_context* ctx,
+                                    const tc_buffer* W_fp16,
+                                    tc_buffer*       W_quant,
+                                    tc_quant_t       fmt,
+                                    int N, int K);
+
+tc_status_t tc_gemv_quantized      (tc_context* ctx,
+                                    const tc_buffer* X,
+                                    const tc_buffer* W_quant,
+                                    tc_buffer*       Y,
+                                    tc_quant_t       fmt,
+                                    int M, int N, int K);
+
+tc_status_t tc_gemv_quantized_async(tc_context* ctx,
+                                    const tc_buffer* X,
+                                    const tc_buffer* W_quant,
+                                    tc_buffer*       Y,
+                                    tc_quant_t       fmt,
+                                    int M, int N, int K,
+                                    tc_stream*       stream);
+
+tc_status_t tc_fused_rmsnorm_gemv_quantized(tc_context* ctx,
+                                            const tc_buffer* X,
+                                            const tc_buffer* gamma,
+                                            const tc_buffer* W_quant,
+                                            tc_buffer*       Y,
+                                            tc_quant_t       fmt,
+                                            int M, int N, int K,
+                                            float eps);
+
+size_t      tc_quantized_size      (tc_quant_t fmt, int N, int K);
+```
+
+`Y[M, N] = X[M, K] @ W^T` where `W` is `[N, K]` quantized. The kernel is
+tuned for M ≤ 4 (the LLM-inference path); larger M routes through
+dequant + `tc_gemm` in a future pass. See [quantized.md](quantized.md).
+
+## GGUF — `gguf.h`
+
+### Types
+
+```c
+typedef enum {
+    TC_GGUF_TYPE_F32  = 0,
+    TC_GGUF_TYPE_F16  = 1,
+    TC_GGUF_TYPE_Q4_0 = 2,
+    TC_GGUF_TYPE_Q4_1 = 3,
+    TC_GGUF_TYPE_Q8_0 = 8,
+    TC_GGUF_TYPE_BF16 = 30,
+    TC_GGUF_TYPE_UNSUPPORTED = -1,
+} tc_gguf_type_t;
+
+typedef struct tc_gguf_file        tc_gguf_file;
+typedef struct tc_gguf_loaded_model tc_gguf_loaded_model;
+
+typedef struct {
+    const char*   name;
+    int32_t       n_dims;
+    uint64_t      dims[4];
+    tc_gguf_type_t type;
+    uint64_t      offset;     /* into tensor data region                 */
+    size_t        n_bytes;
+    const void*   data;       /* mmap pointer                            */
+} tc_gguf_tensor_info;
+
+typedef struct {
+    const char*   name;
+    int32_t       n_dims;
+    uint64_t      dims[4];
+    tc_gguf_type_t type;
+    uint64_t      offset;
+    size_t        n_bytes;
+    tc_buffer*    buffer;     /* owned by the loaded model               */
+} tc_gguf_loaded_tensor_info;
+
+typedef struct {
+    int64_t context_length;
+    int64_t embedding_length;
+    int64_t feed_forward_length;
+    int64_t block_count;
+    int64_t attention_head_count;
+    int64_t attention_head_count_kv;
+    int64_t rope_dimension_count;
+    int64_t vocab_size;
+    double  rms_norm_epsilon;
+    double  rope_freq_base;
+    double  rope_freq_scale;
+} tc_gguf_llama_config;
+
+typedef struct {
+    int            N;
+    int            K;
+    tc_gguf_type_t gguf_type;
+    tc_quant_t     quant_type;
+    size_t         n_bytes;
+    tc_buffer*     buffer;
+} tc_gguf_quantized_matrix_info;
+```
+
+### File and tensor access
+
+```c
+tc_status_t tc_gguf_open    (const char* path, tc_gguf_file** out);
+void        tc_gguf_close   (tc_gguf_file* f);
+
+uint64_t    tc_gguf_tensor_count  (const tc_gguf_file* f);
+uint64_t    tc_gguf_metadata_count(const tc_gguf_file* f);
+
+tc_status_t tc_gguf_get_tensor(const tc_gguf_file* f, const char* name,
+                               tc_gguf_tensor_info* out);
+tc_status_t tc_gguf_tensor_at (const tc_gguf_file* f, uint64_t i,
+                               tc_gguf_tensor_info* out);
+```
+
+### Metadata helpers
+
+```c
+const char* tc_gguf_meta_get_str(const tc_gguf_file* f, const char* key);
+int64_t     tc_gguf_meta_get_i64(const tc_gguf_file* f, const char* key,
+                                 int64_t def);
+double      tc_gguf_meta_get_f64(const tc_gguf_file* f, const char* key,
+                                 double  def);
+
+uint64_t    tc_gguf_meta_array_count   (const tc_gguf_file* f, const char* key);
+tc_status_t tc_gguf_meta_array_get_str (const tc_gguf_file* f, const char* key,
+                                        uint64_t index,
+                                        const char** out_ptr, size_t* out_len);
+int64_t     tc_gguf_meta_array_get_i64 (const tc_gguf_file* f, const char* key,
+                                        uint64_t index, int64_t def);
+double      tc_gguf_meta_array_get_f64 (const tc_gguf_file* f, const char* key,
+                                        uint64_t index, double  def);
+
+tc_status_t tc_gguf_get_llama_config(const tc_gguf_file* f,
+                                     tc_gguf_llama_config* out);
+```
+
+### Bulk copy and matrix info
+
+```c
+tc_status_t tc_gguf_tensor_to_buffer(tc_context* ctx,
+                                     const tc_gguf_file* f,
+                                     const char* name,
+                                     tc_buffer** out_buffer);
+
+tc_status_t tc_gguf_tensor_quantized_matrix_info(
+    const tc_gguf_tensor_info*    tensor,
+    tc_gguf_quantized_matrix_info* out);
+
+tc_status_t tc_gguf_loaded_tensor_quantized_matrix_info(
+    const tc_gguf_loaded_tensor_info* tensor,
+    tc_gguf_quantized_matrix_info*    out);
+
+tc_status_t tc_gguf_load_supported_tensors(tc_context* ctx,
+                                           const tc_gguf_file* f,
+                                           tc_gguf_loaded_model** out_model);
+void        tc_gguf_loaded_model_free     (tc_context* ctx,
+                                           tc_gguf_loaded_model* model);
+
+uint64_t    tc_gguf_loaded_tensor_count        (const tc_gguf_loaded_model* m);
+uint64_t    tc_gguf_loaded_skipped_tensor_count(const tc_gguf_loaded_model* m);
+
+tc_status_t tc_gguf_loaded_tensor_at (const tc_gguf_loaded_model* m, uint64_t i,
+                                      tc_gguf_loaded_tensor_info* out);
+tc_status_t tc_gguf_loaded_get_tensor(const tc_gguf_loaded_model* m,
+                                      const char* name,
+                                      tc_gguf_loaded_tensor_info* out);
+```
+
+See [gguf.md](gguf.md) for the loading patterns and skip semantics.
+
+## Distributed — `distributed.h`
+
+### Types
+
+```c
+typedef enum {
+    TC_DIST_SINGLE = 0,    /* no-op all-reduce; world_size=1 always succeeds */
+    TC_DIST_RING   = 1,    /* TB5 ring (v0.5)                                */
+    TC_DIST_GLOO   = 2,    /* TCP baseline for Apple/portable CPU builds     */
+} tc_dist_backend_t;
+
+typedef enum {
+    TC_REDUCE_SUM = 0,
+    TC_REDUCE_AVG = 1,
+    TC_REDUCE_MAX = 2,
+    TC_REDUCE_MIN = 3,
+} tc_reduce_op_t;
+
+typedef struct tc_dist_ctx tc_dist_ctx;
+```
+
+### Calls
+
+```c
+tc_status_t tc_dist_init   (tc_context* tc,
+                            tc_dist_backend_t backend,
+                            int world_size, int rank,
+                            const char* rendezvous_url,
+                            tc_dist_ctx** out);
+
+tc_status_t tc_dist_init_authenticated(
+    tc_context* tc, tc_dist_backend_t backend,
+    int world_size, int rank, const char* rendezvous_url,
+    const char* const* rank_identities, size_t rank_identity_count,
+    const tc_transport_auth_config* auth, tc_dist_ctx** out);
+
+tc_status_t tc_dist_finalize(tc_dist_ctx* d);
+
+int tc_dist_world_size(const tc_dist_ctx* d);
+int tc_dist_rank      (const tc_dist_ctx* d);
+
+tc_status_t tc_allreduce(tc_dist_ctx* d,
+                         tc_buffer*    buf,
+                         size_t        num_elements,
+                         tc_dtype_t    dtype,
+                         tc_reduce_op_t op);
+
+tc_status_t tc_broadcast(tc_dist_ctx* d,
+                         tc_buffer*    buf,
+                         size_t        num_elements,
+                         tc_dtype_t    dtype,
+                         int           root);
+
+tc_status_t tc_allgather(tc_dist_ctx*    d,
+                         const tc_buffer* in,
+                         tc_buffer*       out,
+                         size_t           num_elements_per_rank,
+                         tc_dtype_t       dtype);
+
+tc_status_t tc_barrier  (tc_dist_ctx* d);
+```
+
+See [distributed.md](distributed.md) for the single-host ring tests,
+GLOO TCP baseline, and the v0.5 TB5 transport plan. See
+[transport_auth.md](transport_auth.md) for authenticated remote, mesh, and
+Gloo constructors, the `tc_transport_auth_config` ABI, and key rotation.
+
+## DiLoCo — `diloco.h`
+
+DiLoCo is layered above an existing `tc_dist_ctx`. The current runtime
+implements local single-rank outer steps plus dense and sparse TOPK
+multi-rank outer steps over `TC_DIST_GLOO`. Sparse TOPK
+uses `(idx, fp16)` payloads through the internal GLOO sparse all-reduce
+hook. Dropout-tolerant WAN recovery and non-shipped compression modes
+still return explicit unsupported statuses.
+
+```c
+typedef struct tc_diloco_ctx tc_diloco_ctx;
+
+typedef enum {
+    TC_DILOCO_COMPRESS_NONE = 0,
+    TC_DILOCO_COMPRESS_FP16 = 1,
+    TC_DILOCO_COMPRESS_FP8 = 2,
+    TC_DILOCO_COMPRESS_TOPK_1PCT = 3,
+    TC_DILOCO_COMPRESS_TOPK_01PCT = 4,
+    TC_DILOCO_COMPRESS_LOWRANK = 5,
+    TC_DILOCO_COMPRESS_SIGNSGD = 6,
+} tc_diloco_compress_t;
+
+typedef enum {
+    TC_DILOCO_OUTER_SGD = 0,
+    TC_DILOCO_OUTER_NESTEROV = 1,
+    TC_DILOCO_OUTER_ADAM = 2,
+} tc_diloco_outer_optimizer_t;
+
+typedef struct {
+    int inner_steps;
+    float outer_lr;
+    float outer_momentum;
+    float outer_beta2;
+    float outer_eps;
+    tc_diloco_outer_optimizer_t outer_optimizer;
+    tc_diloco_compress_t compress;
+    bool async_overlap;
+    bool tolerate_dropouts;
+} tc_diloco_config;
+
+tc_status_t tc_diloco_init(tc_dist_ctx* dist_ctx,
+                           const tc_diloco_config* cfg,
+                           tc_diloco_ctx** out);
+tc_status_t tc_diloco_finalize(tc_diloco_ctx* d);
+tc_status_t tc_diloco_add_parameter(tc_diloco_ctx* d,
+                                    const char* name,
+                                    tc_buffer* theta_local,
+                                    size_t num_elements,
+                                    tc_dtype_t dtype);
+tc_status_t tc_diloco_step(tc_diloco_ctx* d,
+                           bool* out_outer_step_pending);
+tc_status_t tc_diloco_apply_outer(tc_diloco_ctx* d);
+
+typedef enum {
+    TC_DILOCO_ASYNC_IDLE = 0,
+    TC_DILOCO_ASYNC_RUNNING = 1,
+    TC_DILOCO_ASYNC_READY = 2,
+    TC_DILOCO_ASYNC_FAILED = 3,
+} tc_diloco_async_state_t;
+
+tc_status_t tc_diloco_async_poll(const tc_diloco_ctx* d,
+                                 tc_diloco_async_state_t* out_state,
+                                 tc_status_t* out_worker_status,
+                                 uint64_t* out_round_id);
+tc_status_t tc_diloco_async_wait(tc_diloco_ctx* d);
+tc_status_t tc_diloco_async_commit(tc_diloco_ctx* d);
+
+#define TC_DILOCO_STATE_ABI_VERSION_1 1
+#define TC_DILOCO_STATE_ABI_VERSION_2 2
+#define TC_DILOCO_STATE_ABI_VERSION_CURRENT TC_DILOCO_STATE_ABI_VERSION_2
+
+tc_status_t tc_diloco_state_set_epochs(tc_diloco_ctx* d,
+                                       uint64_t topology_epoch,
+                                       uint64_t membership_epoch);
+tc_status_t tc_diloco_state_get_epochs(const tc_diloco_ctx* d,
+                                       uint64_t* out_topology_epoch,
+                                       uint64_t* out_membership_epoch);
+tc_status_t tc_diloco_state_size(const tc_diloco_ctx* d,
+                                 uint32_t requested_abi_version,
+                                 size_t* out_size);
+tc_status_t tc_diloco_state_serialize(const tc_diloco_ctx* d,
+                                      uint32_t requested_abi_version,
+                                      void* out_data,
+                                      size_t out_size,
+                                      size_t* out_written);
+tc_status_t tc_diloco_state_deserialize(tc_diloco_ctx* d,
+                                        uint32_t requested_abi_version,
+                                        const void* data,
+                                        size_t data_size);
+
+typedef struct {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    uint32_t runtime_version_major;
+    uint32_t runtime_version_minor;
+    uint32_t runtime_version_patch;
+    uint32_t reserved0;
+    uint32_t state_abi_version_min;
+    uint32_t state_abi_version_max;
+    uint32_t state_abi_version_current;
+    uint32_t state_header_size;
+    uint32_t state_payload_digest_bytes;
+    uint32_t reserved1;
+    uint64_t outer_optimizer_supported_mask;
+    uint64_t outer_optimizer_serializable_mask;
+    uint64_t compress_supported_mask;
+    uint64_t compress_serializable_mask;
+    uint64_t compress_sparse_wire_mask;
+    uint64_t compress_dense_fp32_wire_mask;
+    uint64_t state_feature_mask;
+    uint32_t async_overlap_supported;
+    uint32_t async_state_serializable;
+    uint32_t tolerate_dropouts_supported;
+    uint32_t reserved2;
+    uint64_t reserved[4];
+} tc_diloco_capabilities;
+
+tc_status_t tc_diloco_capability_query(const tc_diloco_ctx* d,
+                                       uint32_t requested_abi_version,
+                                       tc_diloco_capabilities* out,
+                                       size_t out_size);
+
+uint64_t tc_diloco_outer_steps_completed(const tc_diloco_ctx* d);
+uint64_t tc_diloco_inner_steps_completed(const tc_diloco_ctx* d);
+double tc_diloco_last_outer_step_seconds(const tc_diloco_ctx* d);
+double tc_diloco_last_outer_bytes_sent(const tc_diloco_ctx* d);
+```
+
+With `async_overlap=true`, `apply_outer` snapshots registered parameters on the
+caller thread and the worker operates only on private state. `poll` and `wait`
+observe completion or failure. `commit` is the caller-owned parameter boundary:
+it rebases local updates made after the snapshot onto the new anchor and only
+then increments the completed-round counter. A second launch before commit
+returns `TC_ERR_BUSY`. `finalize` refuses to destroy a context with an
+unacknowledged ready/failed result.
+
+The current v2 checkpoint blob preserves every DiLoCo-owned continuation
+input behind a 64-byte header with an explicit payload size and SHA-256.
+Explicit v1 requests retain the byte-identical 32-byte-header format. Both
+versions carry anchors, outer-optimizer moments, top-k error feedback,
+counters/metrics, round identity, topology/membership epochs, and READY/FAILED
+pending state. The caller restores model parameter buffers separately and
+first. Restore validates the header/digest, config, rank/world, epochs, and
+the registered parameter layout atomically. RUNNING state is not serializable
+and returns `TC_ERR_BUSY`.
+
+`tc_diloco_capability_query(NULL, ...)` reports the build-level contract; a
+bound context refines sparse-vs-dense wire masks for its transport. Its
+size-versioned output is the authoritative answer for state versions,
+serializable optimizers/compression modes, and state features.
+`tolerate_dropouts=true` remains unsupported and is rejected at initialization.
+
+See [diloco.md](diloco.md) for the algorithm, topology model, and staged
+transport work.
+
+## HIP — `hip.h`
+
+HIP/chipStar is the staged non-Apple GPU backend. Default builds export
+deterministic unsupported stubs so SDK consumers and FFI generators can bind
+the surface everywhere. Builds with `TC_ENABLE_HIP=ON` can initialize a
+chipStar runtime and route fp32 GEMM through hipBLAS as `TC_BACKEND_HIP`.
+
+```c
+typedef enum {
+    TC_HIP_VENDOR_UNKNOWN = 0,
+    TC_HIP_VENDOR_INTEL = 1,
+    TC_HIP_VENDOR_NVIDIA = 2,
+    TC_HIP_VENDOR_AMD = 3,
+    TC_HIP_VENDOR_ARM_MALI = 4,
+} tc_hip_vendor_t;
+
+typedef struct {
+    tc_hip_vendor_t vendor;
+    char device_name[128];
+    char driver_version[64];
+    char opencl_version[64];
+    uint64_t global_memory_bytes;
+    uint64_t local_memory_bytes;
+    uint32_t compute_units;
+    uint32_t max_workgroup_size;
+    uint32_t preferred_subgroup_size;
+    bool supports_fp16;
+    bool supports_fp64;
+    bool supports_int8_dot;
+    bool unified_memory;
+} tc_hip_device_info;
+
+tc_status_t tc_hip_init(tc_context* ctx);
+tc_status_t tc_hip_device_info_get(tc_context* ctx,
+                                   tc_hip_device_info* out_info);
+int tc_hip_device_count(void);
+tc_status_t tc_hip_device_at(int index, tc_hip_device_info* out_info);
+tc_status_t tc_hip_select_device(tc_context* ctx, int index);
+const char* tc_hip_last_kernel_name(void);
+```
+
+See [../lib/hip/README.md](../lib/hip/README.md) for the chipStar porting
+plan.
+
+## CUDA — `cuda.h`
+
+CUDA is the staged NVIDIA-native fast path. Default builds export
+deterministic unsupported stubs so SDK consumers and FFI generators can
+bind the surface while staying CUDA-free. Builds configured with
+`TC_ENABLE_CUDA=ON` expose device discovery and route supported
+fp32/fp16/bf16/int8 GEMM through cuBLAS by default after CUDA initialization.
+Runtime-allocated buffers use CUDA managed memory in that mode; externally
+wrapped host pointers use the staged-copy fallback. Set
+`TC_DISABLE_CUDA_GEMM=1`, `TC_CUDA_GEMM=0`, or `TC_USE_CUDA_GEMM=0` to force
+CPU fallback. CUDA builds also compile managed-memory kernels for RMSNorm
+forward/backward, LayerNorm forward/backward, RoPE forward/backward,
+SwiGLU forward/backward, softmax forward/backward, and fp32/fp16-gradient
+AdamW; host-only buffers fall back to the portable CPU implementations.
+
+```c
+typedef struct {
+    char device_name[128];
+    char compute_capability[16];
+    int major;
+    int minor;
+    uint64_t global_memory_bytes;
+    uint64_t shared_memory_per_block;
+    uint32_t multiprocessor_count;
+    uint32_t max_threads_per_block;
+    uint32_t warp_size;
+    bool supports_fp16;
+    bool supports_bf16;
+    bool supports_int8_tensor_core;
+    bool supports_tf32;
+    bool unified_memory;
+} tc_cuda_device_info;
+
+tc_status_t tc_cuda_init(tc_context* ctx);
+int tc_cuda_is_active(void);
+int tc_cuda_device_count(void);
+tc_status_t tc_cuda_device_at(int index, tc_cuda_device_info* out_info);
+tc_status_t tc_cuda_select_device(tc_context* ctx, int index);
+const char* tc_cuda_last_kernel_name(void);
+```
+
+## Notes for ABI consumers
+
+- All entry points are `extern "C"`. C++ headers reverse-include cleanly.
+- All opaque handles are pointer-stable for the lifetime of the context
+  (or the loaded model, for GGUF).
+- `tc_buffer_map` returns the same `void*` across calls for the same
+  buffer — feel free to cache it.
+- The library is thread-safe for distinct contexts; a single context may
+  be used from multiple threads provided callers serialize access to the
+  same `tc_buffer`. The pipeline cache and the buffer pool are internally
+  guarded.
+- All structs are passed by `const` pointer; do not retain pointers into
+  descriptor structs beyond the call.
+- ALiBi: `alibi_slopes` is read at the dispatch call and copied via
+  `setBytes:`; the host array does not need to outlive the call.

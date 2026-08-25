@@ -1,0 +1,22 @@
+[Unit]
+Description=Tensorcore GPU Reconciliation Audit
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=tensorcore
+Group=tensorcore
+EnvironmentFile=/etc/tensorcore/scheduler.env
+WorkingDirectory=/opt/tensorcore
+ExecStart=/usr/bin/python3 /opt/tensorcore/scripts/mesh_gpu_reconciliation_audit.py \
+  --arbiter-cmd ${TC_MESH_ARBITER_CMD} \
+  --jobs-json ${TC_SCHEDULER_JOBS_JSON} \
+  --inventory-json ${TC_SCHEDULER_INVENTORY_JSON} \
+  --reports-dir ${TC_GPU_RECONCILIATION_REPORTS_DIR} \
+  --sweep-json ${TC_GPU_RECONCILIATION_SWEEP_JSON} \
+  --audit-json ${TC_GPU_RECONCILIATION_AUDIT_JSON} \
+  --clean-reports-dir \
+  --json
+NoNewPrivileges=true
+PrivateTmp=true

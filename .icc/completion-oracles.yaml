@@ -1,0 +1,1355 @@
+oracles:
+  - name: cuda-for-apple-public-integration
+    target: cuda-for-apple-public-integration
+    aliases:
+      - cuda-for-apple
+      - tensorcore-public-integration
+      - continue Tensorcore production readiness build-out
+    criteria:
+      - id: release_smoke_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: Release smoke runtime evidence is present
+        action: run_release_smoke
+
+      - id: release_smoke_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: Release smoke is failure-free
+        action: fix_runtime_failure
+
+      - id: public_core_paths_covered
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.public_core_paths.runtime_status]
+          event_values: [passed, skipped_no_gpu]
+        severity: high
+        label: Public core runtime path coverage is explicit
+        action: extend_release_smoke_coverage
+
+      - id: packaging_and_consumers_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.packaging_and_consumers.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Wheel, editable install, CMake, and pkg-config consumers passed
+        action: fix_public_integration_smoke
+
+      - id: no_synthetic_public_prod_paths
+        no_stubbed_paths:
+          - synthetic_model_only
+        path_prefixes:
+          - include
+          - lib
+          - python/tensorcore
+        severity: high
+        label: Public production paths are not synthetic-only
+        action: wire_real_path_or_mark_fallback
+
+      - id: metal4_tensorops_compile_status_recorded
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.metal4_tensorops.runtime_compile_status]
+          event_values: [compiled, skipped_sdk_too_old]
+        severity: high
+        label: Metal 4 TensorOps compile status is explicit
+        action: emit_tensorops_compile_status
+
+      - id: metal4_tensorops_compiled_with_sdk26
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.metal4_tensorops.runtime_compile_status]
+          event_values: [compiled]
+        severity: high
+        label: Metal 4 TensorOps compiled with SDK 26 or newer
+        action: run_release_smoke_on_sdk26
+
+      - id: metal4_tensorops_runtime_covered
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.metal4_tensorops.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Metal 4 TensorOps runtime path is covered on M5
+        action: run_m5_tensorops_runtime_smoke
+
+  - name: tensorcore-production-release-closure-20260824
+    target: tensorcore-production-release-closure-20260824
+    aliases:
+      - Close TensorCore for a production release candidate
+      - tensorcore production release closure
+      - reconcile the public ABI across native exports and every first-party binding, eliminate sanitizer-visible undefined behavior, repair fail-open or stale verification gates, complete representative hardware evidence, and produce one clean production release candidate
+    criteria:
+      - id: finish_campaign_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: Commit-bound TensorCore finish-campaign evidence is present
+        action: run_tensorcore_finish_campaign_gates
+
+      - id: finish_campaign_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: TensorCore finish-campaign evidence is failure-free
+        action: fix_finish_campaign_failure
+
+      - id: finish_campaign_hard_gates
+        runtime_event:
+          event_kinds: [tensorcore_finish_gate]
+          event_values: [PASS]
+        required_names:
+          - public-contract-parity
+          - native-correctness-and-sanitizers
+          - bindings-and-packaging
+          - verification-integrity
+          - representative-hardware
+          - icc-production-readiness
+        severity: high
+        label: Every machine-readable TensorCore finish gate passes on one clean revision
+        action: close_remaining_finish_campaign_gate
+
+      - id: finish_campaign_architecture_model
+        label: The machine-checked TensorCore architecture model has no blocking invariant failure
+        kind: model_verified
+        model_name: tensorcore
+        severity: high
+        action: run_icc_architecture_verify_emit_trace
+
+      - id: finish_campaign_no_synthetic_public_paths
+        no_stubbed_paths:
+          - synthetic_model_only
+          - constant_return
+          - default_empty
+        path_prefixes:
+          - include
+          - lib
+          - python/tensorcore
+          - bindings
+        severity: high
+        label: Public production and binding paths contain no unmarked synthetic implementation
+        action: wire_real_path_or_mark_intentional_fallback
+
+  - name: pytorch-bridge-runtime-evidence
+    target: pytorch-bridge-runtime-evidence
+    aliases:
+      - pytorch-bridge
+      - tensorcore-pytorch-bridge
+    criteria:
+      - id: pytorch_bridge_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: PyTorch bridge runtime evidence is present
+        action: run_check_pytorch_bridge_runtime
+
+      - id: pytorch_bridge_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: PyTorch bridge runtime is failure-free
+        action: fix_pytorch_bridge_runtime_failure
+
+      - id: pytorch_bridge_cuda_runtime_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.pytorch_bridge_cuda.runtime_status]
+          event_values: [passed, skipped_no_gpu]
+        severity: high
+        label: PyTorch bridge CUDA runtime is covered (or explicitly skipped)
+        action: run_pytorch_bridge_smoke
+
+      - id: pytorch_bridge_matmul_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.pytorch_bridge_cuda.probes.matmul_2d.last_backend]
+          # Accept any GEMM backend tensorcore actually dispatches to:
+          #   cuda            — NVIDIA path (cosbox/GCP)
+          #   hip             — AMD path
+          #   accelerate_cpu  — Apple Accelerate framework (Mac fp32 BLAS)
+          #   cpu_blas        — Generic BLAS link (Linux OpenBLAS, etc.)
+          #   cpu_cblas       — Generic CBLAS link
+          #   portable_cpu    — Always-available fallback C++ loop (correct,
+          #                     just unaccelerated)
+          # The set covers every host where tensorcore is expected to run,
+          # while excluding "none" (which means the bridge didn't engage at all).
+          event_values: [cuda, hip, accelerate_cpu, cpu_blas, cpu_cblas, portable_cpu]
+        severity: high
+        label: aten::matmul routes through tc_gemm
+        action: rebuild_bridge_against_tc_enable_cuda
+
+      - id: pytorch_bridge_matmul_3d_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.pytorch_bridge_cuda.probes.matmul_3d_x_2d_with_grad.last_backend]
+          # Accept any GEMM backend tensorcore actually dispatches to:
+          #   cuda            — NVIDIA path (cosbox/GCP)
+          #   hip             — AMD path
+          #   accelerate_cpu  — Apple Accelerate framework (Mac fp32 BLAS)
+          #   cpu_blas        — Generic BLAS link (Linux OpenBLAS, etc.)
+          #   cpu_cblas       — Generic CBLAS link
+          #   portable_cpu    — Always-available fallback C++ loop (correct,
+          #                     just unaccelerated)
+          # The set covers every host where tensorcore is expected to run,
+          # while excluding "none" (which means the bridge didn't engage at all).
+          event_values: [cuda, hip, accelerate_cpu, cpu_blas, cpu_cblas, portable_cpu]
+        severity: high
+        label: 3-D x 2-D matmul (nn.Linear shape) routes through bridge with autograd
+        action: fix_tc_matmul_autograd_extended
+
+      - id: pytorch_bridge_bmm_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.pytorch_bridge_cuda.probes.bmm_3d_with_grad.last_backend]
+          # Accept any GEMM backend tensorcore actually dispatches to:
+          #   cuda            — NVIDIA path (cosbox/GCP)
+          #   hip             — AMD path
+          #   accelerate_cpu  — Apple Accelerate framework (Mac fp32 BLAS)
+          #   cpu_blas        — Generic BLAS link (Linux OpenBLAS, etc.)
+          #   cpu_cblas       — Generic CBLAS link
+          #   portable_cpu    — Always-available fallback C++ loop (correct,
+          #                     just unaccelerated)
+          # The set covers every host where tensorcore is expected to run,
+          # while excluding "none" (which means the bridge didn't engage at all).
+          event_values: [cuda, hip, accelerate_cpu, cpu_blas, cpu_cblas, portable_cpu]
+        severity: high
+        label: aten::bmm routes through tc_gemm (attention QK^T / attn @ V)
+        action: fix_tc_bmm_dispatch
+
+      - id: pytorch_bridge_einsum_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.pytorch_bridge_cuda.probes.einsum_attention_qkt.last_backend]
+          # Accept any GEMM backend tensorcore actually dispatches to:
+          #   cuda            — NVIDIA path (cosbox/GCP)
+          #   hip             — AMD path
+          #   accelerate_cpu  — Apple Accelerate framework (Mac fp32 BLAS)
+          #   cpu_blas        — Generic BLAS link (Linux OpenBLAS, etc.)
+          #   cpu_cblas       — Generic CBLAS link
+          #   portable_cpu    — Always-available fallback C++ loop (correct,
+          #                     just unaccelerated)
+          # The set covers every host where tensorcore is expected to run,
+          # while excluding "none" (which means the bridge didn't engage at all).
+          event_values: [cuda, hip, accelerate_cpu, cpu_blas, cpu_cblas, portable_cpu]
+        severity: high
+        label: torch.einsum 'bhid,bhjd->bhij' attention pattern routes through bridge
+        action: verify_einsum_to_bmm_decomposition
+
+  - name: eshkol-bridge-runtime-evidence
+    target: eshkol-bridge-runtime-evidence
+    aliases:
+      - exercise Eshkol bridge runtime evidence
+    criteria:
+      - id: eshkol_bridge_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: Eshkol bridge runtime evidence is present
+        action: run_eshkol_bridge_smoke
+
+      - id: eshkol_bridge_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: Eshkol bridge runtime evidence is failure-free
+        action: fix_eshkol_bridge_runtime_failure
+
+      - id: hello_tensorcore_runtime_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.hello_tensorcore_runtime.status]
+          event_values: [passed]
+        severity: high
+        label: hello_tensorcore.esk runs through tensorcore
+        action: fix_hello_tensorcore_runtime
+
+      - id: tensorcore_bridge_smoke_runtime_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.tensorcore_bridge_smoke_runtime.status]
+          event_values: [passed]
+        severity: high
+        label: tensorcore_bridge_smoke.esk runs the broader bridge surface
+        action: fix_tensorcore_bridge_runtime
+
+  - name: sparse-24-runtime-evidence
+    target: sparse-24-runtime-evidence
+    aliases:
+      - sparse-24
+      - tensorcore-sparse-24
+      - georefine-c5
+      - c5-tensorcore-sparse-24
+    criteria:
+      - id: sparse_24_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: Sparse 2:4 runtime evidence is present
+        action: run_sparse_24_runtime_evidence
+
+      - id: sparse_24_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: Sparse 2:4 runtime evidence is failure-free
+        action: fix_sparse_24_runtime_failure
+
+      - id: sparse_24_local_correctness_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.sparse_24.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Sparse 2:4 prune/check/GEMM correctness smoke passes
+        action: run_sparse_24_runtime_evidence
+
+      - id: sparse_24_k_axis_contract_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.sparse_24_k_axis_contract.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Linear-weight [N,K] K-axis 2:4 pruning contract passes
+        action: fix_sparse_24_weight_layout
+
+      - id: sparse_24_local_functions_called
+        runtime_event:
+          event_kinds: [function_called]
+          event_names:
+            - read_elem
+            - write_elem
+            - supported_dtype
+            - tc_sparse_24_prune
+            - tc_sparse_24_check
+            - tc_sparse_24_gemm
+            - tc_sparse_24_available
+            - main
+        required_names:
+          - read_elem
+          - write_elem
+          - supported_dtype
+          - tc_sparse_24_prune
+          - tc_sparse_24_check
+          - tc_sparse_24_gemm
+          - tc_sparse_24_available
+          - main
+        severity: high
+        label: Sparse 2:4 local source paths are covered by evidence
+        action: extend_sparse_24_evidence_coverage
+
+      - id: sparse_24_hardware_status_explicit
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.sparse_24_hardware.runtime_status]
+          event_values: [passed, blocked]
+        severity: medium
+        label: Hardware sparse 2:4 status is explicit
+        action: run_sparse_24_on_cusparselt_gpu
+
+      - id: sparse_24_hardware_backend_explicit
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.sparse_24_hardware.backend]
+          event_values: [cusparseLt, dense_fallback]
+        severity: medium
+        label: Hardware backend is recorded as cuSPARSELt or dense fallback
+        action: run_sparse_24_on_cusparselt_gpu
+
+  - name: geometric-ops-runtime-evidence
+    target: geometric-ops-runtime-evidence
+    aliases:
+      - geometric-ops
+      - tensorcore-geometric-substrate
+    criteria:
+      - id: geometric_ops_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: Geometric ops runtime evidence is present
+        action: run_check_geometric_ops_runtime
+
+      - id: geometric_ops_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: Geometric ops runtime is failure-free
+        action: fix_geometric_ops_runtime_failure
+
+      - id: geometric_ops_runtime_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.geometric_ops.runtime_status]
+          event_values: [passed, skipped_no_lib]
+        severity: high
+        label: Geometric ops runtime smoke is covered (or explicitly skipped)
+        action: run_geometric_ops_smoke
+
+      - id: lorentz_round_trip_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.geometric_ops.probes.lorentz_round_trip.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Lorentz hyperboloid log(exp(v)) round-trip passes
+        action: fix_lorentz_round_trip
+
+      - id: sphere_round_trip_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.geometric_ops.probes.sphere_round_trip.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Sphere log(exp(v)) round-trip + slerp midpoint pass
+        action: fix_sphere_round_trip
+
+      - id: product_manifold_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.geometric_ops.probes.product_manifold_HxSxR.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: H x S x R product manifold per-factor round-trip passes
+        action: fix_product_manifold
+
+      - id: torus_round_trip_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.geometric_ops.probes.torus_round_trip.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Flat torus log/exp round-trip with shortest-displacement convention
+        action: fix_torus_round_trip
+
+      - id: metric_tensor_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.geometric_ops.probes.metric_tensor_runtime.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Riemannian metric tensor (apply/inverse/Christoffel) round-trip passes
+        action: fix_metric_tensor_runtime
+
+      - id: geodesic_solver_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.geometric_ops.probes.geodesic_runtime.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Geodesic RK4 integrator reproduces Euclidean straight-line geodesic
+        action: fix_geodesic_runtime
+
+      - id: holonomic_gate_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.geometric_ops.probes.holonomic_runtime.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: SU(2) holonomic gate composition + Berry-phase extraction passes
+        action: fix_holonomic_runtime
+
+  - name: quantum-ops-runtime-evidence
+    target: quantum-ops-runtime-evidence
+    aliases:
+      - quantum-ops
+      - tensorcore-quantum-substrate
+    criteria:
+      - id: quantum_ops_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: Quantum gates runtime evidence is present
+        action: run_check_quantum_gates_runtime
+
+      - id: quantum_ops_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: Quantum gates runtime is failure-free
+        action: fix_quantum_gates_runtime_failure
+
+      - id: quantum_ops_runtime_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.quantum_gates.runtime_status]
+          event_values: [passed, skipped_no_lib]
+        severity: high
+        label: Quantum gates runtime smoke is covered (or skipped)
+        action: run_quantum_gates_smoke
+
+      - id: bell_state_prep_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.quantum_gates.probes.bell_state_prep.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: H_0 then CNOT_{0,1} prepares the Bell state correctly
+        action: fix_bell_state_prep
+
+      - id: four_qubit_unitarity_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.quantum_gates.probes.four_qubit_unitarity.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: 4-qubit H+CNOT+RZ circuit preserves ||state||^2 = 1
+        action: fix_quantum_unitarity
+
+      - id: controlled_rotation_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.quantum_gates.probes.crz_pi_on_plusplus.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Controlled rotation CRZ(π) on |++⟩ matches the QGTL phase pattern
+        action: fix_controlled_rotation
+
+      - id: toffoli_ccx_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.quantum_gates.probes.toffoli_ccx.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Toffoli (CCX) — 3-qubit apply path engages with permutation correctness
+        action: fix_toffoli_dispatch
+
+      - id: iswap_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.quantum_gates.probes.iswap_10_to_i01.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: ISWAP entangling 2-qubit gate routes correctly
+        action: fix_iswap_dispatch
+
+      - id: u3_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.quantum_gates.probes.u3_pi_0_0_on_zero.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: U3(θ, φ, λ) general single-qubit dispatch with 3-parameter unpack
+        action: fix_u3_dispatch
+
+      - id: zz_ising_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.quantum_gates.probes.zz_pi_on_plusplus.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: ZZ(θ) Ising rotation diagonal matches the exp(-iθ/2 Z⊗Z) spec
+        action: fix_zz_dispatch
+
+      - id: trotter_evolution_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.quantum_gates.probes.trotter_z_on_plus.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: tc_qstate_trotter_step matches the closed-form Rz evolution
+        action: fix_trotter_dispatch
+
+      - id: quantum_geometric_tensor_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.quantum_gates.probes.qgt_rz_on_plus.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: tc_quantum_geometric_tensor reproduces the Fubini-Study metric
+        action: fix_qgt
+
+      - id: density_matrix_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.quantum_gates.probes.dmstate_pure_to_mixed.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Density matrix |0⟩⟨0| → H |0⟩⟨0| H → depolarising channel pipeline
+        action: fix_dmstate_dispatch
+
+      - id: density_matrix_partial_trace_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.quantum_gates.probes.dmstate_partial_trace_bell.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Partial trace of Bell ρ over one qubit yields I/2 (maximally mixed reduction)
+        action: fix_partial_trace
+
+      - id: lie_groups_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.quantum_gates.probes.lie_su2_so3_round_trip.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: SU(2)/SO(3) exp/log + bridge round-trip (half-angle double cover)
+        action: fix_lie_groups
+
+      - id: lindblad_evolution_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.quantum_gates.probes.lindblad_amplitude_damping.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Lindblad amplitude-damping decays |1⟩⟨1| to exp(-γt) (open-systems)
+        action: fix_lindblad
+
+  - name: mesh-collective-runtime-evidence
+    target: mesh-collective-runtime-evidence
+    aliases:
+      - mesh-collective
+      - tensorcore-mesh-substrate
+    criteria:
+      - id: mesh_collective_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: Mesh collective runtime evidence is present
+        action: run_check_mesh_collective_runtime
+
+      - id: mesh_collective_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: Mesh collective runtime is failure-free
+        action: fix_mesh_collective_runtime_failure
+
+      - id: mesh_collective_runtime_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.mesh_collective.runtime_status]
+          event_values: [passed, skipped_no_binary]
+        severity: high
+        label: Mesh collective fork-based 2-peer smoke passes (or is skipped)
+        action: run_mesh_collective_smoke
+
+      - id: mesh_allreduce_sum_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.mesh_collective.probes.allreduce_sum.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: AllReduce SUM produces byte-identical reduced output
+        action: fix_mesh_allreduce_sum
+
+      - id: mesh_broadcast_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.mesh_collective.probes.broadcast.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Broadcast from rank 0 delivers byte-identical payload
+        action: fix_mesh_broadcast
+
+      - id: mesh_allgather_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.mesh_collective.probes.allgather.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: AllGather assembles all peers' slices into recv buffer
+        action: fix_mesh_allgather
+
+  - name: remote-shard-runtime-evidence
+    target: remote-shard-runtime-evidence
+    aliases:
+      - remote-shard
+      - tensorcore-shard-substrate
+    criteria:
+      - id: remote_shard_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: Remote shard runtime evidence is present
+        action: run_check_remote_shard_runtime
+
+      - id: remote_shard_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: Remote shard runtime is failure-free
+        action: fix_remote_shard_runtime_failure
+
+      - id: remote_shard_runtime_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.remote_shard.runtime_status]
+          event_values: [passed, skipped_no_binary]
+        severity: high
+        label: Remote-shard fork-based 2-peer smoke passes (or is skipped)
+        action: run_remote_shard_smoke
+
+      - id: shard_owner_balanced_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.remote_shard.probes.shard_owner_balanced.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Owner assignment is balanced block-row over N peers
+        action: fix_shard_owner_routing
+
+      - id: shard_get_full_range_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.remote_shard.probes.shard_get_full_range.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: shard_get reconstructs the full logical tensor across owners
+        action: fix_shard_get_full
+
+      - id: shard_get_cross_owner_range_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.remote_shard.probes.shard_get_cross_owner_range.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: shard_get handles a row range that crosses an owner boundary
+        action: fix_shard_get_cross_owner
+
+      - id: shard_fork_2peer_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.remote_shard.probes.fork_2peer_both_ranks_ok.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Fork-based 2-peer shard smoke has both ranks at zero fails
+        action: fix_shard_fork_2peer
+
+      - id: shard_drain_puts_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.remote_shard.probes.shard_drain_puts_applied=1.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Push protocol (publish_put + drain_puts) applies one put round-trip
+        action: fix_shard_push_protocol
+
+  - name: python-substrate-runtime-evidence
+    target: python-substrate-runtime-evidence
+    aliases:
+      - python-substrate
+      - tensorcore-python-wrappers
+    criteria:
+      - id: python_substrate_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: Python substrate runtime evidence is present
+        action: run_check_python_substrate_runtime
+
+      - id: python_substrate_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: Python substrate wrappers are failure-free
+        action: fix_python_substrate_failure
+
+      - id: python_substrate_runtime_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.python_substrate.runtime_status]
+          event_values: [passed, skipped]
+        severity: high
+        label: Python substrate end-to-end smoke passes (or is skipped)
+        action: run_python_substrate_smoke
+
+      - id: python_lorentz_wrapper_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.python_substrate.probes.lorentz_wrapper.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Lorentz wrapper round-trip via NumPy → C → NumPy passes
+        action: fix_python_lorentz_wrapper
+
+      - id: python_sphere_wrapper_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.python_substrate.probes.sphere_wrapper.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Sphere wrapper exp/log/slerp via NumPy passes
+        action: fix_python_sphere_wrapper
+
+      - id: python_torus_wrapper_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.python_substrate.probes.torus_wrapper.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Torus wrapper round-trip via NumPy passes
+        action: fix_python_torus_wrapper
+
+      - id: python_lie_groups_wrapper_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.python_substrate.probes.lie_su2_wrapper.runtime_status,
+                          checks.python_substrate.probes.lie_so3_wrapper.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: SU(2) + SO(3) Lie-group wrappers (exp/log/double-cover) pass
+        action: fix_python_lie_groups_wrapper
+
+      - id: python_quantum_state_wrapper_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.python_substrate.probes.quantum_state_wrapper.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Quantum state-vector apply wrapper passes (H on q0, prob_one)
+        action: fix_python_quantum_state_wrapper
+
+      - id: python_metric_wrapper_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.python_substrate.probes.metric_wrapper.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Metric tensor wrapper (apply/inverse/sphere stereographic) passes
+        action: fix_python_metric_wrapper
+
+      - id: python_geodesic_wrapper_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.python_substrate.probes.geodesic_wrapper.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Geodesic integrator wrapper reproduces Euclidean straight line
+        action: fix_python_geodesic_wrapper
+
+      - id: python_holonomic_wrapper_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.python_substrate.probes.holonomic_wrapper.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Holonomic gate wrapper composes + extracts Berry phase
+        action: fix_python_holonomic_wrapper
+
+      - id: python_shard_plan_wrapper_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.python_substrate.probes.shard_plan_wrapper.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Shard plan wrapper covers all rows with the balanced block-row partition
+        action: fix_python_shard_plan_wrapper
+
+      - id: python_quantum_attention_wrapper_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.python_substrate.probes.quantum_attention_wrapper.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Quantum attention wrapper (score + softmax + apply) passes
+        action: fix_python_quantum_attention_wrapper
+
+      - id: python_quantum_entanglement_wrapper_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.python_substrate.probes.quantum_entanglement_wrapper.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Entanglement entropy wrapper computes 1 bit for Bell state, 0 for product
+        action: fix_python_quantum_entanglement_wrapper
+
+  - name: rust-crate-runtime-evidence
+    target: rust-crate-runtime-evidence
+    aliases:
+      - rust-crate
+      - tensorcore-rs
+    criteria:
+      - id: rust_crate_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: tensorcore-rs runtime evidence is present
+        action: run_check_rust_crate_runtime
+
+      - id: rust_crate_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: tensorcore-rs runtime is failure-free
+        action: fix_rust_crate_failure
+
+      - id: rust_crate_runtime_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.rust_crate.runtime_status]
+          event_values: [passed, skipped]
+        severity: high
+        label: tensorcore-rs cargo test passes (or is skipped without cargo)
+        action: run_rust_crate_smoke
+
+      - id: rust_lorentz_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.rust_crate.probes.lorentz_roundtrip.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Rust Lorentz exp/log round-trip passes against libtensorcore
+        action: fix_rust_lorentz
+
+      - id: rust_sphere_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.rust_crate.probes.sphere_roundtrip_and_slerp.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Rust Sphere exp/log/slerp round-trip passes
+        action: fix_rust_sphere
+
+      - id: rust_torus_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.rust_crate.probes.torus_roundtrip.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Rust Torus exp/log round-trip passes
+        action: fix_rust_torus
+
+      - id: rust_lie_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.rust_crate.probes.su2_exp_log_roundtrip.runtime_status,
+                          checks.rust_crate.probes.so3_z_quarter_turn.runtime_status,
+                          checks.rust_crate.probes.su2_double_cover_to_so3.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Rust Lie-group wrappers (SU(2) + SO(3) + double cover) pass
+        action: fix_rust_lie
+
+      - id: rust_quantum_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.rust_crate.probes.quantum_h_on_zero_prob.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Rust quantum state-vector apply pass (H on |0⟩)
+        action: fix_rust_quantum
+
+      - id: rust_metric_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.rust_crate.probes.metric_euclidean_identity_and_inverse.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Rust metric tensor (apply + inverse) passes
+        action: fix_rust_metric
+
+      - id: rust_geodesic_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.rust_crate.probes.geodesic_euclidean_straight_line.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Rust geodesic integrator reproduces Euclidean straight line
+        action: fix_rust_geodesic
+
+      - id: rust_holonomic_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.rust_crate.probes.holonomic_single_segment_phase.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Rust holonomic gate composition + Berry phase passes
+        action: fix_rust_holonomic
+
+      - id: rust_context_lifecycle_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.rust_crate.probes.context_lifecycle.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Rust Context (tc_init/shutdown) lifecycle passes with RAII drop
+        action: fix_rust_context_lifecycle
+
+  - name: adversarial-evals-runtime-evidence
+    target: adversarial-evals-runtime-evidence
+    aliases:
+      - adversarial-evals
+      - tensorcore-adversarial-suite
+    criteria:
+      - id: adversarial_evals_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: Adversarial evals runtime evidence is present
+        action: run_adversarial_evals_suite
+
+      - id: adversarial_evals_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: Adversarial evals suite is failure-free
+        action: fix_adversarial_evals_failure
+
+      - id: adversarial_evals_suite_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.adversarial_evals_suite.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Adversarial evals suite (6 scenarios) all pass
+        action: fix_adversarial_evals_suite
+
+      - id: adversarial_dirty_worktree_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.adversarial_evals_suite.scenarios.dirty-worktree-recovery.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Dirty-worktree recovery preserves user sentinel bytes through re-index
+        action: fix_dirty_worktree_recovery
+
+      - id: adversarial_stale_artifact_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.adversarial_evals_suite.scenarios.stale-artifact-repair.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Stale-artifact repair restores clean drift state in one cycle
+        action: fix_stale_artifact_repair
+
+      - id: adversarial_qwen_degraded_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.adversarial_evals_suite.scenarios.qwen-unavailable-degraded.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Weakness-map keeps working without a reachable Qwen endpoint
+        action: fix_qwen_degraded_mode
+
+      - id: adversarial_disk_pressure_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.adversarial_evals_suite.scenarios.disk-pressure.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Smoke fails loudly + writes no artifact when output path is unwritable
+        action: fix_disk_pressure_handling
+
+      - id: adversarial_fail_gate_surface_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.adversarial_evals_suite.scenarios.fail-gate-surface.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Synthetic failure surface gets picked up by runtime-evidence in one cycle
+        action: fix_fail_gate_surfacing
+
+      - id: adversarial_new_dev_suggestions_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.adversarial_evals_suite.scenarios.new-development-suggestions.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Recommendation surface is artifact-grounded + non-fabricated
+        action: fix_new_development_suggestions
+
+  - name: swift-package-runtime-evidence
+    target: swift-package-runtime-evidence
+    aliases:
+      - swift-package
+      - tensorcore-swift
+    criteria:
+      - id: swift_package_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: TensorCore Swift package runtime evidence is present
+        action: run_check_swift_package_runtime
+
+      - id: swift_package_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: Swift XCTest run is failure-free
+        action: fix_swift_package_failure
+
+      - id: swift_package_runtime_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.swift_package.runtime_status]
+          event_values: [passed, skipped]
+        severity: high
+        label: TensorCore Swift package XCTest suite passes (or is skipped without swift)
+        action: run_swift_package_smoke
+
+      - id: swift_lorentz_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.swift_package.probes.testLorentzRoundtrip.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Swift Lorentz exp/log round-trip passes against libtensorcore
+        action: fix_swift_lorentz
+
+      - id: swift_sphere_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.swift_package.probes.testSphereSlerpHalvesGeodesic.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Swift Sphere exp/log/slerp midpoint passes
+        action: fix_swift_sphere
+
+      - id: swift_torus_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.swift_package.probes.testTorusRoundtrip.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Swift Torus exp/log round-trip passes
+        action: fix_swift_torus
+
+      - id: swift_lie_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.swift_package.probes.testSU2ExpLog.runtime_status,
+                          checks.swift_package.probes.testSO3QuarterTurn.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Swift Lie-group wrappers (SU(2) + SO(3)) pass
+        action: fix_swift_lie
+
+      - id: swift_quantum_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.swift_package.probes.testHadamardProb.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Swift quantum state-vector apply (H on |0⟩) passes
+        action: fix_swift_quantum
+
+      - id: swift_entanglement_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.swift_package.probes.testBellEntanglementEntropy.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Swift entanglement entropy = 1 bit on Bell state
+        action: fix_swift_entanglement
+
+      - id: swift_holonomic_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.swift_package.probes.testHolonomicSingleSegmentPhase.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Swift holonomic gate composition + Berry phase passes
+        action: fix_swift_holonomic
+
+      - id: swift_context_lifecycle_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.swift_package.probes.testContextLifecycle.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: Swift Context (tc_init/shutdown) lifecycle passes with RAII deinit
+        action: fix_swift_context_lifecycle
+
+  - name: wasm-bindings-runtime-evidence
+    target: wasm-bindings-runtime-evidence
+    aliases:
+      - wasm-bindings
+      - tensorcore-wasm
+    criteria:
+      - id: wasm_bindings_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: WASM bindings runtime evidence is present
+        action: run_check_wasm_bindings_runtime
+
+      - id: wasm_bindings_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: WASM bindings smoke is failure-free
+        action: fix_wasm_bindings_failure
+
+      - id: wasm_bindings_runtime_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.wasm_bindings.runtime_status]
+          event_values: [passed, skipped]
+        severity: high
+        label: WASM bindings node smoke passes (or is skipped without emscripten/node)
+        action: run_wasm_bindings_smoke
+
+      - id: wasm_lorentz_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.wasm_bindings.probes.lorentz_roundtrip.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: WASM Lorentz exp/log round-trip via JS typed-arrays passes
+        action: fix_wasm_lorentz
+
+      - id: wasm_sphere_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.wasm_bindings.probes.sphere_slerp.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: WASM Sphere slerp halves the geodesic
+        action: fix_wasm_sphere
+
+      - id: wasm_torus_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.wasm_bindings.probes.torus_roundtrip.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: WASM Torus exp/log round-trip passes
+        action: fix_wasm_torus
+
+      - id: wasm_lie_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.wasm_bindings.probes.su2_exp_log.runtime_status,
+                          checks.wasm_bindings.probes.so3_quarter_turn.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: WASM Lie-group wrappers (SU(2) + SO(3)) pass
+        action: fix_wasm_lie
+
+      - id: wasm_quantum_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.wasm_bindings.probes.quantum_hadamard_prob.runtime_status,
+                          checks.wasm_bindings.probes.quantum_overlap.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: WASM quantum state-vector apply + Born-rule overlap pass
+        action: fix_wasm_quantum
+
+      - id: wasm_entanglement_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.wasm_bindings.probes.bell_entanglement.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: WASM entanglement entropy = 1 bit on Bell state
+        action: fix_wasm_entanglement
+
+      - id: wasm_holonomic_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.wasm_bindings.probes.holonomic_phase_pi4.runtime_status,
+                          checks.wasm_bindings.probes.holonomic_closed_loop.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: WASM holonomic gate composition + Berry phase (single + closed-loop) pass
+        action: fix_wasm_holonomic
+
+  - name: doc-truth-runtime-evidence
+    target: doc-truth-runtime-evidence
+    aliases:
+      - doc-truth
+      - documentation-truth-gate
+    criteria:
+      - id: doc_truth_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: Doc-truth runtime evidence is present
+        action: run_check_doc_truth_runtime
+
+      - id: doc_truth_runtime_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.doc_truth.runtime_status]
+          event_values: [passed, skipped]
+        severity: high
+        label: Doc-truth gate passes (unsupported/unresolved/hallucination ratios under ceilings)
+        action: tighten_doc_truth_ceilings_or_fix_docs
+
+      # Per-axis ratchets — the gate is "all three under their ceiling".
+      # Tighten ceilings in check_doc_truth_runtime.py as docs improve.
+      # Today's baselines: unsupported 0.264, unresolved 0.332, halluc 0.332.
+
+  - name: tensorcore-architecture-model
+    target: tensorcore-architecture-model
+    aliases:
+      - tensorcore architecture model
+      - tensorcore manifold/optimizer invariants
+    criteria:
+      - id: architecture_model_holds
+        label: The machine-checked tensorcore architecture model holds (no blocking invariant FAIL)
+        kind: model_verified
+        model_name: tensorcore
+        severity: high
+        action: run_icc_architecture_verify_emit_trace
+
+  - name: tensorcore-public-cross-platform-release
+    target: tensorcore-public-cross-platform-release-20260715
+    aliases:
+      - tensorcore-public-cross-platform-release
+    criteria:
+      - id: public_release_platform_gates
+        runtime_event:
+          event_kinds: [public_release_gate]
+          event_values: [PASS]
+        required_names:
+          - macos_metal
+          - macos_wheel
+          - macos_sdk
+          - linux_cpu
+          - linux_sdk
+          - windows_cpu
+          - windows_sdk
+          - optional_accelerators
+          - bindings_abi
+          - release_checksums
+          - docs_security
+        severity: high
+        label: All cross-platform public release gates passed
+        action: run_cross_platform_release_sprint
+
+  - name: tensorcore-topology-authority
+    target: tensorcore-topology-authority
+    aliases:
+      - tensorcore complete topology authority
+      - mesh topology authority
+      - reconcile computer_mesh declarations, every Tailscale profile, cloud inventory, and TensorCore scheduler resources into one drift-checked accelerator topology
+    criteria:
+      - id: topology_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: Topology-authority runtime evidence is present
+        action: run_topology_authority_sprint
+
+      - id: topology_runtime_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: Topology-authority verification is failure-free
+        action: fix_topology_authority_failure
+
+      - id: topology_authority_gates
+        runtime_event:
+          event_kinds: [topology_authority_gate]
+          event_values: [PASS]
+        required_names:
+          - canonical_schema
+          - source_coverage
+          - identity_reconciliation
+          - drift_fail_closed
+          - scheduler_binding
+          - signed_snapshot
+          - public_redaction
+          - cross_platform_selftest
+          - documentation_truth
+        severity: high
+        label: Every topology-authority acceptance gate passed
+        action: run_topology_authority_sprint
+
+  - name: tensorcore-apple-family-runtime
+    target: tensorcore-apple-family-runtime
+    aliases:
+      - tensorcore apple family runtime
+      - prove Apple M4 and M5 capability selection
+      - correct Apple GPU family detection and collect physical M4 and M5 runtime evidence for integer simdgroup, bf16, tensor operations, and fallback selection
+    criteria:
+      - id: apple_family_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: Apple-family runtime evidence is present
+        action: run_apple_family_runtime_sprint
+
+      - id: apple_family_runtime_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: Apple-family verification is failure-free
+        action: fix_apple_family_runtime_failure
+
+      - id: apple_family_runtime_gates
+        runtime_event:
+          event_kinds: [apple_family_gate]
+          event_values: [PASS]
+        required_names:
+          - official_family_contract
+          - selector_selftest
+          - m2_fallback_runtime
+          - m4_runtime
+          - m5_tensorops_runtime
+          - cross_platform_selftest
+          - documentation_truth
+        severity: high
+        label: Every Apple-family acceptance gate passed on the required physical classes
+        action: run_apple_family_runtime_sprint

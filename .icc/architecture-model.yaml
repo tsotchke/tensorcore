@@ -1,0 +1,245 @@
+version: 1
+name: tensorcore
+repo: tensorcore
+description: >
+  Machine-checked architecture model for the TensorCore 0.1.23 release
+  boundary. It captures the public ABI, backend selection, distributed trust
+  boundary, state compatibility, optimizer and TensorOps dispatch, packaging,
+  and fail-closed privacy gates. C/C++ authority checks use ICC's indexed
+  source with grep fallback where a language AST is unavailable; every result
+  reports its fidelity.
+
+components:
+  - id: public_api
+    role: contract
+    description: Versioned C ABI and the export manifest consumed by bindings.
+    modules:
+      - include/tensorcore/**
+      - cmake/tensorcore.exports
+    entry_points:
+      - {path: include/tensorcore/device.h, symbol: tc_init}
+      - {path: include/tensorcore/capabilities.h, symbol: tc_runtime_capabilities_get}
+
+  - id: runtime_core
+    role: runtime
+    description: Device discovery, context lifecycle, buffers, and pipeline cache.
+    modules:
+      - lib/core/**
+    entry_points:
+      - {path: lib/core/device.mm, symbol: tc_init}
+
+  - id: operations
+    role: compute
+    description: GEMM, attention, convolution, training, quantized, and fallback operations.
+    modules:
+      - lib/ops/**
+      - lib/fallback/**
+      - lib/cuda/**
+      - lib/hip/**
+      - kernels/**
+
+  - id: distributed
+    role: transport
+    description: Authenticated remote tensors, collectives, checkpoints, and DiLoCo state.
+    modules:
+      - lib/distributed/**
+    entry_points:
+      - {path: lib/distributed/remote_tensor.cpp, symbol: tc_remote_init_authenticated}
+      - {path: lib/distributed/diloco.cpp, symbol: tc_diloco_state_serialize}
+
+  - id: bindings
+    role: binding
+    description: First-party language surfaces that mirror or consume the public ABI.
+    modules:
+      - python/tensorcore/**
+      - bindings/**
+
+  - id: release
+    role: release
+    description: Reproducible builds, packages, evidence, documentation, and privacy policy.
+    modules:
+      - scripts/release_smoke.sh
+      - scripts/check_release_*.py
+      - .github/workflows/release.yml
+      - docs/releases/**
+
+dataflows:
+  - id: api_to_bindings
+    producer: public_api
+    consumer: bindings
+    produces: [public_symbols, constants, layouts]
+    consumes: [public_symbols, constants, layouts]
+    key_space: {kind: other, identifier: public C symbol name}
+
+  - id: runtime_to_operations
+    producer: runtime_core
+    consumer: operations
+    produces: [device_context, buffers, streams]
+    consumes: [device_context, buffers, streams]
+    key_space: {kind: state_key, identifier: tc_context}
+
+  - id: runtime_to_distributed
+    producer: runtime_core
+    consumer: distributed
+    produces: [buffers, status_contract]
+    consumes: [buffers, status_contract]
+    key_space: {kind: state_key, identifier: tc_status_t}
+
+  - id: implementation_to_release
+    producer: operations
+    consumer: release
+    produces: [native_library, backend_evidence]
+    consumes: [native_library, backend_evidence]
+    key_space: {kind: artifact_path, identifier: release artifact basename}
+
+capabilities:
+  - id: riemannian_optimizer
+    feature: Riemannian Adam optimizer step
+    entry_points:
+      - {path: lib/ops/riemannian_adam_cpu.cpp, symbol: tc_riemannian_adam_step_poincare}
+    dependencies: [operations]
+
+  - id: metal_runtime
+    feature: Apple Metal execution with a relocatable metallib
+    entry_points:
+      - {path: lib/core/device.mm, symbol: tc_init}
+    arming:
+      kind: config_key
+      path: CMakeLists.txt
+      pattern: TC_ENABLE_METAL
+    dependencies: [runtime_core, operations]
+    dependency_constructor: load_metallib
+    dependency_paths: [lib/core/device.mm]
+
+  - id: authenticated_remote_tensor
+    feature: Application-authenticated remote tensor transport
+    entry_points:
+      - {path: lib/distributed/remote_tensor.cpp, symbol: tc_remote_init_authenticated}
+    arming:
+      kind: config_key
+      path: lib/distributed/remote_tensor.cpp
+      pattern: auth_keyring
+    dependencies: [distributed]
+    dependency_constructor: server_handshake|client_handshake
+    dependency_paths: [lib/distributed/remote_tensor.cpp]
+
+invariants:
+  - id: INV-riemannian-adam-decl-def-coverage
+    kind: key-space-equality
+    incident: optimizer-variant-declared-not-implemented
+    severity: high
+    description: >
+      Riemannian Adam variants declared in the public header must equal the
+      variants defined by the portable CPU implementation.
+    sites:
+      - id: declared
+        path: include/tensorcore/riemannian_adam.h
+        key_pattern: '(tc_riemannian_adam_step_[a-z]+)'
+      - id: defined
+        path: lib/ops/riemannian_adam_cpu.cpp
+        key_pattern: '(tc_riemannian_adam_step_[a-z]+)'
+
+  - id: INV-tensorops-gemm-dtype-authority
+    kind: authority
+    incident: gemm-kernel-dtype-assumed
+    severity: high
+    description: TensorOps kernel selection must derive from the requested A dtype.
+    config:
+      name: a_dtype
+      path: lib/tensorops/tensorops_select.c
+      symbol: tc_tensorops_gemm_kernel_name
+    decision:
+      path: lib/tensorops/tensorops_select.c
+      symbol: tc_tensorops_gemm_kernel_name
+      var: kernel
+
+  - id: INV-riemannian-optimizer-exercised
+    kind: exercise
+    incident: dormant-riemannian-optimizer
+    severity: low
+    description: The release must carry recent runtime evidence for Riemannian Adam.
+    capability: riemannian_optimizer
+    window_days: 60
+    evidence:
+      trace_name_pattern: 'riemannian|adam|optimizer'
+
+  - id: INV-public-export-python-keyspace
+    kind: key-space-equality
+    incident: public-abi-binding-drift
+    severity: critical
+    description: >
+      The native export manifest and Python ctypes binding must name exactly
+      the same public C functions.
+    sites:
+      - id: native_exports
+        path: cmake/tensorcore.exports
+        key_pattern: '_(tc_[A-Za-z0-9_]+)'
+      - id: python_ctypes
+        path: python/tensorcore/__init__.py
+        key_pattern: '_lib\.(tc_[A-Za-z0-9_]+)'
+
+  - id: INV-metal-metallib-reachable
+    kind: dependency-presence
+    incident: installed-or-static-consumer-cannot-find-metallib
+    severity: critical
+    description: An armed Metal runtime must resolve and load its metallib.
+    capability: metal_runtime
+
+  - id: INV-cuda-architecture-authority
+    kind: authority
+    incident: toolkit-incompatible-or-pre-tensor-core-default-architecture
+    severity: critical
+    description: >
+      CUDA configuration must make CMAKE_CUDA_ARCHITECTURES an explicit
+      decision derived from the toolkit-gated architecture policy.
+    config:
+      name: CMAKE_CUDA_ARCHITECTURES
+      path: CMakeLists.txt
+    decision:
+      path: CMakeLists.txt
+      var: CMAKE_CUDA_ARCHITECTURES
+
+  - id: INV-diloco-state-version-authority
+    kind: authority
+    incident: native-and-binding-state-version-drift
+    severity: critical
+    description: State serialization must derive its wire format from the requested ABI version.
+    config:
+      name: requested_abi_version
+      path: lib/distributed/diloco.cpp
+      symbol: tc_diloco_state_serialize
+    decision:
+      path: lib/distributed/diloco.cpp
+      symbol: tc_diloco_state_serialize
+      var: status
+
+  - id: INV-remote-auth-handshake-reachable
+    kind: dependency-presence
+    incident: configured-transport-auth-never-enforced
+    severity: critical
+    description: An authenticated remote-tensor path must invoke a peer handshake.
+    capability: authenticated_remote_tensor
+
+  - id: INV-publication-history-privacy-authority
+    kind: authority
+    incident: cleaned-head-published-with-private-reachable-history
+    severity: critical
+    description: The publication workflow must invoke the history-aware release privacy gate.
+    config:
+      name: check_release_privacy
+      path: .github/workflows/release.yml
+    decision:
+      path: .github/workflows/release.yml
+      var: release-policy
+
+  - id: INV-release-artifact-privacy-authority
+    kind: authority
+    incident: absolute-build-path-embedded-in-public-binary-or-evidence
+    severity: critical
+    description: Release smoke must scan produced packages and evidence for private data.
+    config:
+      name: check_release_artifact_privacy
+      path: scripts/release_smoke.sh
+    decision:
+      path: scripts/release_smoke.sh
+      var: RELEASE_SMOKE_STATUS

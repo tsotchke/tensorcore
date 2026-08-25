@@ -1,0 +1,84 @@
+;;
+;; sphere.esk — Eshkol bindings for tensorcore's round n-sphere ops.
+;;
+;; S^n_r = { x ∈ R^{n+1} | <x, x> = r² }, Euclidean inner product.
+;; Same raw-vector ABI as lorentz.esk: float* + size_t, no buffers.
+;; Use this for one-off math (slerp interpolation, single geodesic),
+;; or as the inner kernel for batched / product-manifold wrappers.
+;;
+;; Module: eshkol.sphere — Eshkol-native bindings for tensorcore's
+;; round n-sphere ops (inner, project, exp/log/distance, parallel
+;; transport, slerp).
+(provide tc-sphere-inner
+         tc-sphere-project
+         tc-sphere-tangent-project
+         tc-sphere-inner-product
+         tc-sphere-add
+         tc-sphere-scale
+         tc-sphere-exp
+         tc-sphere-log
+         tc-sphere-distance
+         tc-sphere-parallel-transport
+         tc-sphere-slerp)
+
+(extern f32 __tc-sphere-inner
+        ptr ptr u64
+        :real tc_sphere_inner)
+
+(extern void __tc-sphere-project
+        ptr u64 f32
+        :real tc_sphere_project)
+
+(extern void __tc-sphere-tangent-project
+        ptr ptr u64
+        :real tc_sphere_tangent_project)
+
+(extern f32 __tc-sphere-inner-product
+        ptr ptr ptr u64
+        :real tc_sphere_inner_product)
+
+(extern void __tc-sphere-add
+        ptr ptr ptr ptr u64
+        :real tc_sphere_add)
+
+(extern void __tc-sphere-scale
+        ptr f32 ptr u64
+        :real tc_sphere_scale)
+
+(extern void __tc-sphere-exp
+        ptr ptr ptr u64 f32
+        :real tc_sphere_exp)
+
+(extern void __tc-sphere-log
+        ptr ptr ptr u64 f32
+        :real tc_sphere_log)
+
+(extern f32 __tc-sphere-distance
+        ptr ptr u64 f32
+        :real tc_sphere_distance)
+
+(extern void __tc-sphere-parallel-transport
+        ptr ptr ptr ptr u64 f32
+        :real tc_sphere_parallel_transport)
+
+(extern void __tc-sphere-slerp
+        ptr ptr f32 ptr u64 f32
+        :real tc_sphere_slerp)
+
+(define (tc-sphere-inner a b n) (__tc-sphere-inner a b n))
+(define (tc-sphere-project x n r) (__tc-sphere-project x n (exact->inexact r)))
+(define (tc-sphere-tangent-project base v n) (__tc-sphere-tangent-project base v n))
+(define (tc-sphere-inner-product base u v n) (__tc-sphere-inner-product base u v n))
+(define (tc-sphere-add base tx ty out n) (__tc-sphere-add base tx ty out n))
+(define (tc-sphere-scale tangent s out n)
+  (__tc-sphere-scale tangent (exact->inexact s) out n))
+(define (tc-sphere-exp base tangent point n r)
+  (__tc-sphere-exp base tangent point n (exact->inexact r)))
+(define (tc-sphere-log base point tangent n r)
+  (__tc-sphere-log base point tangent n (exact->inexact r)))
+(define (tc-sphere-distance p q n r)
+  (__tc-sphere-distance p q n (exact->inexact r)))
+(define (tc-sphere-parallel-transport from to tangent out n r)
+  (__tc-sphere-parallel-transport from to tangent out n (exact->inexact r)))
+(define (tc-sphere-slerp p q t out n r)
+  (__tc-sphere-slerp p q (exact->inexact t) out n (exact->inexact r)))

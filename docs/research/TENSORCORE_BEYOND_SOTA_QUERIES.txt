@@ -1,0 +1,11 @@
+GPU kernel pipeline algorithm co-design asymmetric tensor core Blackwell attention 2024 2025 2026
+FP4 NVFP4 MXFP8 block scaled tensor operations quantized LLM inference quality 2024 2025 2026
+Apple Metal 4 MTLTensor Metal Performance Primitives low precision tensor operations 2025 2026
+AMD ROCm hipBLASLt Composable Kernel matrix core autotuning RCCL 2024 2025 2026
+heterogeneous accelerator kernel compiler autotuning CUDA Metal ROCm CPU 2024 2025 2026
+mixture of experts expert parallel all-to-all low latency communication DeepEP 2024 2025 2026
+disaggregated LLM inference prefill decode KV cache routing transfer Mooncake 2024 2025 2026
+topology aware collective communication GPU NIC RDMA NCCL NVSHMEM 2024 2025 2026
+dynamic accelerator resource allocation device health topology scheduling 2024 2025 2026
+distributed accelerator workload identity attestation mutual TLS SPIFFE 2024 2025 2026
+reproducible end-to-end LLM inference benchmark latency throughput quality energy 2024 2025 2026

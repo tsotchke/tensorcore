@@ -1,0 +1,141 @@
+goals:
+  - id: tensorcore-full-capability-remote-transport-20260713
+    task_id: tensorcore-full-capability-remote-transport-20260713
+    status: verified
+    priority: high
+    title: Harden the remote tensor transport
+    goal: make remote tensor paging memory-safe, concurrency-safe, lifecycle-safe, and explicit about its trust boundary
+    reason: every distributed inference and mesh-collective path inherits the transport's framing, pointer-lifetime, and shutdown guarantees
+    tags: [campaign, distributed, transport, security]
+
+  - id: tensorcore-production-release-closure-20260824
+    task_id: tensorcore-production-release-closure-20260824
+    priority: high
+    title: Close TensorCore for a production release candidate
+    goal: reconcile the public ABI across native exports and every first-party binding, eliminate sanitizer-visible undefined behavior, repair fail-open or stale verification gates, and produce one clean commit with complete local and representative-hardware evidence
+    reason: the 2026-08-24 ICC-backed audit proved the native runtime and packaging are broadly healthy but found release-blocking ABI v2 drift, missing macOS and Windows exports, invalid-enum undefined behavior, cross-optimizer diagnostic attribution, and broken evidence fixtures
+    depends_on: [tensorcore-full-capability-remote-transport-20260713, tensorcore-topology-authority, tensorcore-transport-identity-auth]
+    tags: [campaign, release, abi, sanitizers, bindings, evidence-integrity]
+
+  - id: tensorcore-beyond-sota-research-20260714
+    task_id: tensorcore-beyond-sota-research-20260714
+    priority: high
+    title: Operate the Beyond-SOTA research observatory
+    goal: continuously refresh primary-source frontier evidence and convert it into falsifiable, same-system benchmark gates for TensorCore and the complete compute topology
+    reason: kernel microbenchmarks, projections, and partial fleet coverage cannot establish a system-level frontier without current comparators, quality controls, topology manifests, and reproducible end-to-end evidence
+    tags: [campaign, research, sota, benchmarks, topology, evidence]
+
+  - id: tensorcore-topology-authority
+    task_id: tensorcore-topology-authority
+    priority: high
+    title: Reconcile the complete compute topology
+    goal: reconcile computer_mesh declarations, every Tailscale profile, cloud inventory, and TensorCore scheduler resources into one drift-checked accelerator topology
+    reason: TensorCore currently schedules only a subset of the declared and live machines, so capability claims do not cover the actual fleet
+    depends_on: [tensorcore-full-capability-remote-transport-20260713]
+    tags: [campaign, computer-mesh, tailscale, topology, inventory]
+
+  - id: tensorcore-transport-identity-auth
+    task_id: tensorcore-transport-identity-auth
+    priority: high
+    title: Authenticate distributed transport peers
+    goal: add versioned peer authentication, identity binding, key rotation, and negative-path evidence to remote tensor and GLOO transport deployment
+    reason: Tailscale encryption and ACLs are the present trust boundary, but fleet-wide activation requires an application identity contract and explicit mixed-version failure behavior
+    depends_on: [tensorcore-full-capability-remote-transport-20260713]
+    tags: [campaign, distributed, security, authentication, tailscale]
+
+  - id: tensorcore-scheduler-reconciler
+    task_id: tensorcore-scheduler-reconciler
+    priority: high
+    title: Operate every compute resource through the scheduler
+    goal: implement continuous desired-state reconciliation, health, lease recovery, and policy admission for every eligible accelerator represented by the authoritative topology
+    reason: static paused job definitions and host-local leases do not constitute an operating fleet control plane
+    depends_on: [tensorcore-topology-authority, tensorcore-transport-identity-auth]
+    tags: [campaign, scheduler, leases, reconciliation, operations]
+
+  - id: tensorcore-qllm-native-dispatch
+    task_id: tensorcore-qllm-native-dispatch
+    priority: high
+    title: Prove the qLLM-owned TensorCore dispatch adapter
+    goal: publish a stable TensorCore runtime capability ABI and have semiclassical_qllm own, compile, and link its AUTO-dispatch adapter, with checkpoint-resume and cross-node runtime evidence
+    reason: qLLM's dirty working tree now contains its owned optional adapter, CMake integration, persistent buffers, and a linked smoke; it must consume TensorCore capability ABI v1 and finish checkpoint-resume plus cross-node runtime evidence
+    depends_on: [tensorcore-scheduler-reconciler]
+    tags: [campaign, qllm, adapter-owner-qllm, dispatch, integration]
+
+  - id: tensorcore-decentralized-training-frontier
+    task_id: tensorcore-decentralized-training-frontier
+    priority: high
+    title: Harden the implemented DiLoCo runtime
+    goal: make TensorCore DiLoCo snapshot-safe, resumable, explicit about supported compression and dropout semantics, and proven under multi-rank churn without regressing the existing sparse Gloo implementation
+    reason: dense and sparse multi-rank DiLoCo already work, but FP16 is dense FP32 on wire, several enum modes are unsupported, dropout recovery is staged, and async mode lacks immutable snapshots and error propagation
+    depends_on: [tensorcore-topology-authority, tensorcore-transport-identity-auth]
+    tags: [campaign, decentralized-training, diloco, checkpoint, failure-recovery]
+
+  - id: qgtl-tensorcore-decentralized-policy-adapter
+    task_id: qgtl-tensorcore-decentralized-policy-adapter
+    priority: high
+    title: Connect QGTL training-island policy to TensorCore
+    goal: preserve QGTL's implemented island, merge, adapter-accounting, and recovery evidence policy while QGTL owns the adapter that drives TensorCore DiLoCo and records runtime-derived evidence
+    reason: QGTL already validates decentralized-training policy objects, but its DiLoCo merge rule does not call TensorCore and checkpoint recovery evidence is dry-run only
+    depends_on: [tensorcore-decentralized-training-frontier]
+    tags: [campaign, decentralized-training, adapter-owner-qgtl, qgtl, policy]
+
+  - id: qllm-tensorcore-decentralized-training-adapter
+    task_id: qllm-tensorcore-decentralized-training-adapter
+    priority: high
+    title: Train qLLM through TensorCore DiLoCo
+    goal: implement the qLLM-owned distributed trainer that maps real qLLM parameters, optimizer, sampler, and checkpoint lineage to TensorCore DiLoCo and proves heterogeneous loss reduction and resume
+    reason: qLLM documents a distributed_trainer module that is absent, so the existing TensorCore training primitive is not yet exercised by a real qLLM workload
+    depends_on: [tensorcore-decentralized-training-frontier, tensorcore-qllm-native-dispatch]
+    tags: [campaign, decentralized-training, adapter-owner-qllm, qllm, checkpoint]
+
+  - id: computer-mesh-decentralized-training-control-plane
+    task_id: computer-mesh-decentralized-training-control-plane
+    priority: high
+    title: Operate decentralized training across the complete mesh
+    goal: make computer_mesh place, admit, lease, observe, recover, and topology-route TensorCore decentralized jobs across every eligible declared and Tailscale-observed node
+    reason: fixed cross-host evidence exists, but the complete live topology is not continuously reconciled into a failure-aware decentralized-training control plane
+    depends_on: [tensorcore-scheduler-reconciler, qgtl-tensorcore-decentralized-policy-adapter, qllm-tensorcore-decentralized-training-adapter]
+    tags: [campaign, decentralized-training, computer-mesh, topology, reconciliation]
+
+  - id: tensorcore-apple-family-runtime
+    task_id: tensorcore-apple-family-runtime
+    priority: high
+    title: Prove Apple M4 and M5 capability selection
+    goal: correct Apple GPU family detection and collect physical M4 and M5 runtime evidence for integer simdgroup, bf16, tensor operations, and fallback selection
+    reason: preprocessor checks currently suppress newer enum-family branches, and M5 capability still lacks physical runtime proof
+    depends_on: [tensorcore-topology-authority]
+    tags: [campaign, apple, metal, m4, m5, runtime-evidence]
+
+  - id: tensorcore-backend-hardware-proof
+    task_id: tensorcore-backend-hardware-proof
+    priority: high
+    title: Prove every backend on representative hardware
+    goal: run drift-checked build, correctness, sparse, quantized, and performance evidence on representative Metal, CUDA Blackwell, CUDA Ampere, Jetson, HIP, and CPU nodes
+    reason: compiled fallbacks and local emulation are not proof that each fleet backend reaches its intended hardware path
+    depends_on: [tensorcore-scheduler-reconciler, tensorcore-apple-family-runtime]
+    tags: [campaign, cuda, blackwell, metal, hip, sparse, runtime-evidence]
+
+  - id: tensorcore-distributed-topology-scale
+    task_id: tensorcore-distributed-topology-scale
+    priority: high
+    title: Scale collectives to the real topology
+    goal: add reconnect semantics, bounded collective state reclamation, concurrent collective ordering, and topology-aware non-centralized collectives with multi-node fault evidence
+    reason: centralized rank-zero collection, lifetime snapshot accumulation, and one-shot peer connections do not scale to the complete mesh
+    depends_on: [tensorcore-topology-authority, tensorcore-transport-identity-auth, tensorcore-scheduler-reconciler]
+    tags: [campaign, distributed, collectives, resilience, scalability]
+
+  - id: tensorcore-fleet-acceptance
+    task_id: tensorcore-fleet-acceptance
+    priority: high
+    title: Certify fleet-wide TensorCore capability
+    goal: publish a reproducible fleet acceptance matrix whose live evidence proves scheduling, dispatch, correctness, recovery, and performance across every eligible topology class
+    reason: the campaign is complete only when capability is demonstrated end to end on the system, not inferred from local builds or declarations
+    depends_on:
+      - tensorcore-qllm-native-dispatch
+      - tensorcore-decentralized-training-frontier
+      - qgtl-tensorcore-decentralized-policy-adapter
+      - qllm-tensorcore-decentralized-training-adapter
+      - computer-mesh-decentralized-training-control-plane
+      - tensorcore-backend-hardware-proof
+      - tensorcore-distributed-topology-scale
+    tags: [campaign, acceptance, release, topology, evidence]

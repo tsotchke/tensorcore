@@ -1,0 +1,47 @@
+name: SDK26 Compile Evidence
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  metal4-sdk26-compile:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Version consistency
+        run: scripts/check_version_consistency.sh
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          xcrun --show-sdk-version
+
+      - name: Prepare release Python
+        run: |
+          python3 -m venv "$RUNNER_TEMP/tensorcore-sdk26-venv"
+          "$RUNNER_TEMP/tensorcore-sdk26-venv/bin/python" -m pip install --upgrade pip setuptools wheel
+
+      - name: Release smoke with SDK26 Metal4 compile evidence
+        env:
+          PYTHON_BIN: ${{ runner.temp }}/tensorcore-sdk26-venv/bin/python
+          PREFIX: ${{ runner.temp }}/tensorcore-native-sdk
+          WHEEL_DIR: ${{ runner.temp }}/tensorcore-sdk26-wheels
+          TENSORCORE_RELEASE_SMOKE_EVIDENCE_PATH: build/release_smoke_runtime_evidence.json
+        run: scripts/release_smoke.sh
+
+      - name: Check SDK26 compile evidence
+        run: python3 scripts/check_release_evidence.py build/release_smoke_runtime_evidence.json --require-metal4-compile
+
+      - name: Upload SDK26 compile evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: tensorcore-sdk26-compile-evidence
+          path: build/release_smoke_runtime_evidence.json
+          if-no-files-found: error

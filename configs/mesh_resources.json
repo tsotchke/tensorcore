@@ -1,0 +1,147 @@
+{
+  "schema": "tensorcore.mesh_resources.v1",
+  "resources": [
+    {
+      "id": "atlas:metal_m2ultra",
+      "node": "atlas",
+      "backend": "metal",
+      "class": "metal-large-unified",
+      "capacity": 1,
+      "memory_gib": 192,
+      "gpu_cores": 76,
+      "status": "active",
+      "control_plane": "tensorcore_scheduler",
+      "general_queue_eligible": true,
+      "description": "Atlas M2 Ultra Metal slot for validation, evaluation, generation support, and Tensorcore Metal workloads that do not need the CUDA artifact lane."
+    },
+    {
+      "id": "enki:metal_m4_tsotchke_chan",
+      "node": "enki",
+      "backend": "metal",
+      "class": "metal-reserved",
+      "capacity": 1,
+      "memory_gib": 16,
+      "gpu_cores": 10,
+      "status": "reserved",
+      "control_plane": "reserved",
+      "general_queue_eligible": false,
+      "reserved_for": [
+        "tsotchke-chan",
+        "tsotchke-chan:*"
+      ],
+      "description": "Enki M4 Metal is reserved for Tsotchke-chan and must not receive general mesh jobs."
+    },
+    {
+      "id": "cosbox:cuda3090",
+      "node": "cosbox",
+      "backend": "cuda",
+      "class": "cuda-training",
+      "worker_alias": "gpu:cosbox:0",
+      "capacity": 1,
+      "memory_gib": 24,
+      "status": "active",
+      "control_plane": "tensorcore_scheduler",
+      "general_queue_eligible": true,
+      "gpu_reconciliation": {
+        "enabled": true,
+        "poll_host": "cosbox",
+        "allow_process_regex": [
+          "steamwebhelper$",
+          "/opt/google/chrome/chrome"
+        ],
+        "allowed_process_max_memory_mib": 256
+      },
+      "description": "Primary RTX 3090 artifact lane for GeoRefine/qLLM exclusive CUDA jobs."
+    },
+    {
+      "id": "old-donkey:cuda3050",
+      "node": "old-donkey",
+      "backend": "cuda",
+      "class": "cuda-low-vram",
+      "worker_alias": "gpu:old-donkey:0",
+      "capacity": 1,
+      "status": "active",
+      "control_plane": "tensorcore_scheduler",
+      "general_queue_eligible": true,
+      "gpu_reconciliation": {
+        "enabled": true,
+        "poll_host": "old-donkey",
+        "allow_process_regex": [],
+        "allowed_process_max_memory_mib": 64
+      },
+      "description": "Low-VRAM CUDA lane for qLLM teacher-logit precompute and small shard jobs."
+    },
+    {
+      "id": "jack-blupc:cuda3060",
+      "node": "jack-blupc",
+      "backend": "cuda",
+      "class": "cuda-small-auxiliary",
+      "worker_alias": "gpu:jack-blupc:0",
+      "capacity": 1,
+      "memory_gib": 12,
+      "status": "blocked",
+      "control_plane": "blocked",
+      "general_queue_eligible": false,
+      "blocked_reason": "computer_mesh retired the physical Jack CUDA host; its replacement is the old-donkey win11 guest, which has no NVIDIA GPU passthrough",
+      "gpu_reconciliation": {
+        "enabled": false,
+        "reason": "retired physical worker; retain diagnostics only until a declared Windows CUDA host is provisioned"
+      },
+      "cuda_probe_cmd": [
+        "python3",
+        "scripts/check_windows_cuda_resource_admission.py",
+        "--target",
+        "jack-blupc",
+        "--resource",
+        "jack-blupc:cuda3060",
+        "--require-toolchain",
+        "--json"
+      ],
+      "description": "Retired RTX 3060 lane retained as blocked historical inventory. It must not be scheduled unless a declared Windows CUDA host with real GPU passthrough replaces it."
+    },
+    {
+      "id": "atlas:qwen_gen",
+      "node": "atlas",
+      "backend": "service",
+      "class": "llm-generation",
+      "capacity": 1,
+      "status": "active",
+      "control_plane": "direct_lease",
+      "general_queue_eligible": true,
+      "description": "Atlas Qwen generation service slot."
+    },
+    {
+      "id": "atlas:validation",
+      "node": "atlas",
+      "backend": "service",
+      "class": "validation",
+      "capacity": 1,
+      "status": "active",
+      "control_plane": "tensorcore_scheduler",
+      "general_queue_eligible": true,
+      "description": "Atlas validation-only slot for checks that should not contend with the CUDA artifact lane."
+    },
+    {
+      "id": "old-donkey:kimi_openai",
+      "node": "old-donkey",
+      "backend": "service",
+      "class": "llm-generation",
+      "capacity": 1,
+      "status": "active",
+      "control_plane": "direct_lease",
+      "general_queue_eligible": true,
+      "description": "Old-donkey Kimi OpenAI-compatible service slot."
+    },
+    {
+      "id": "old-donkey:kimi_native",
+      "node": "old-donkey",
+      "backend": "service",
+      "class": "llm-generation",
+      "capacity": 1,
+      "status": "active",
+      "control_plane": "direct_lease",
+      "general_queue_eligible": true,
+      "description": "Old-donkey native Kimi runtime slot."
+    }
+  ]
+}

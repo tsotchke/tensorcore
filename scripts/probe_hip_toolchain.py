@@ -1,0 +1,608 @@
+#!/usr/bin/env python3
+"""Probe chipStar/HIP + OpenCL/SPIR-V toolchain readiness.
+
+The probe is intentionally diagnostic: it never installs anything and it does
+not require tensorcore to build. It records the tools and CMake packages a host
+needs before scripts/ci_hip_smoke.sh can graduate from "not built" to real
+HIP/chipStar runtime evidence.
+"""
+
+from __future__ import annotations
+
+import argparse
+import ctypes.util
+import json
+import os
+import pathlib
+import platform
+import shutil
+import subprocess
+import sys
+from typing import Any
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+VERSION_TIMEOUT_SEC = 8
+TOOL_ALIASES = {
+    "llvm-spirv": ["llvm-spirv", "llvm-spirv-19", "llvm-spirv-20"],
+    "spirv-val": ["spirv-val", "spirv-val-19", "spirv-val-20"],
+}
+DIAGNOSTIC_READY = "ready"
+DIAGNOSTIC_RUNTIME_ONLY_NO_HIPBLAS = "runtime_only_no_hipblas"
+DIAGNOSTIC_NO_HIP_ROCM = "no_hip_rocm"
+DIAGNOSTIC_BLOCKED = "diagnostic_blocked"
+
+
+def git_value(root: pathlib.Path, *args: str) -> str | None:
+    try:
+        return subprocess.check_output(
+            ["git", *args],
+            cwd=root,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return None
+
+
+def truthy(value: str | None) -> bool:
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def falsy(value: str | None) -> bool:
+    return str(value).strip().lower() in ("0", "false", "no", "off")
+
+
+def root_file_value(root: pathlib.Path, name: str) -> str | None:
+    try:
+        return (root / name).read_text(encoding="utf-8").strip()
+    except Exception:
+        return None
+
+
+def source_git_head(root: pathlib.Path) -> str | None:
+    return (
+        os.environ.get("TENSORCORE_SOURCE_GIT_HEAD")
+        or root_file_value(root, ".tensorcore_source_head")
+        or git_value(root, "rev-parse", "HEAD")
+    )
+
+
+def source_git_dirty(root: pathlib.Path) -> bool | None:
+    override = os.environ.get("TENSORCORE_SOURCE_GIT_DIRTY")
+    if override is not None:
+        if truthy(override):
+            return True
+        if falsy(override):
+            return False
+        return None
+
+    marker = root_file_value(root, ".tensorcore_source_dirty")
+    if marker is not None:
+        if truthy(marker):
+            return True
+        if falsy(marker):
+            return False
+
+    dirty = git_value(root, "status", "--short")
+    if dirty is not None:
+        return bool(dirty)
+    return None
+
+
+def split_env_paths(value: str | None) -> list[str]:
+    if not value:
+        return []
+    sep = ";" if ";" in value else os.pathsep
+    return [part for part in value.split(sep) if part]
+
+
+def normalize_paths(paths: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in paths:
+        try:
+            resolved = str(pathlib.Path(item).expanduser().resolve())
+        except Exception:
+            resolved = item
+        if resolved not in seen:
+            seen.add(resolved)
+            out.append(resolved)
+    return out
+
+
+def candidate_prefixes() -> list[str]:
+    prefixes: list[str] = []
+    for name in ("TC_HIP_PREFIX", "CHIPSTAR_HOME", "HIP_PATH", "ROCM_PATH"):
+        value = os.environ.get(name)
+        if value:
+            prefixes.append(value)
+    prefixes.extend(split_env_paths(os.environ.get("CMAKE_PREFIX_PATH")))
+    home = os.environ.get("HOME")
+    if home:
+        prefixes.append(str(pathlib.Path(home) / "chipstar-install"))
+    prefixes.extend(["/opt/chipstar", "/opt/rocm", "/usr/local", "/usr"])
+    return normalize_paths(prefixes)
+
+
+def find_tool(name: str, prefixes: list[str]) -> str | None:
+    aliases = TOOL_ALIASES.get(name, [name])
+    for alias in aliases:
+        found = shutil.which(alias)
+        if found:
+            return found
+    for prefix in prefixes:
+        root = pathlib.Path(prefix)
+        for alias in aliases:
+            suffixes = [("bin", alias), ("llvm", "bin", alias)]
+            for parts in suffixes:
+                candidate = root.joinpath(*parts)
+                if candidate.exists() and os.access(candidate, os.X_OK):
+                    return str(candidate)
+    return None
+
+
+def command_version(path: str | None, args: list[str]) -> dict[str, Any]:
+    if not path:
+        return {
+            "path": None,
+            "available": False,
+            "returncode": None,
+            "version": None,
+        }
+    try:
+        result = subprocess.run(
+            [path, *args],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=VERSION_TIMEOUT_SEC,
+        )
+        output = "\n".join(result.stdout.strip().splitlines()[:12])
+        return {
+            "path": path,
+            "available": result.returncode == 0,
+            "returncode": result.returncode,
+            "version": output,
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "path": path,
+            "available": False,
+            "returncode": None,
+            "version": "version command timed out",
+        }
+    except OSError as exc:
+        return {
+            "path": path,
+            "available": False,
+            "returncode": None,
+            "version": str(exc),
+        }
+
+
+def command_output(path: str | None, args: list[str], max_lines: int = 240) -> dict[str, Any]:
+    if not path:
+        return {
+            "available": False,
+            "returncode": None,
+            "output": None,
+        }
+    try:
+        result = subprocess.run(
+            [path, *args],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=VERSION_TIMEOUT_SEC,
+        )
+        output = "\n".join(result.stdout.strip().splitlines()[:max_lines])
+        return {
+            "available": result.returncode == 0,
+            "returncode": result.returncode,
+            "output": output,
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "available": False,
+            "returncode": None,
+            "output": "command timed out",
+        }
+    except OSError as exc:
+        return {
+            "available": False,
+            "returncode": None,
+            "output": str(exc),
+        }
+
+
+def collect_tools(prefixes: list[str]) -> dict[str, Any]:
+    commands = {
+        "cmake": ["--version"],
+        "hipcc": ["--version"],
+        "clang": ["--version"],
+        "clang++": ["--version"],
+        "llvm-spirv": ["--version"],
+        "spirv-val": ["--version"],
+        "clinfo": ["-l"],
+    }
+    return {
+        name: command_version(find_tool(name, prefixes), args)
+        for name, args in commands.items()
+    }
+
+
+def parse_clinfo_devices(output: str | None) -> list[dict[str, Any]]:
+    if not output:
+        return []
+
+    devices: list[dict[str, Any]] = []
+    platform: str | None = None
+    current: dict[str, Any] | None = None
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("Platform Name"):
+            platform = line.split("Platform Name", 1)[1].strip()
+            if current is not None and "platform" not in current:
+                current["platform"] = platform
+            continue
+        if line.startswith("Device Name"):
+            if current is not None:
+                devices.append(current)
+            current = {
+                "platform": platform,
+                "name": line.split("Device Name", 1)[1].strip(),
+                "type": None,
+                "il_version": None,
+                "extensions": "",
+                "spirv_capable": False,
+            }
+            continue
+        if current is None:
+            continue
+        if line.startswith("Device Type"):
+            current["type"] = line.split("Device Type", 1)[1].strip()
+        elif line.startswith("IL version"):
+            current["il_version"] = line.split("IL version", 1)[1].strip()
+        elif (
+            line.startswith("Device Extensions")
+            and not line.startswith("Device Extensions with Version")
+        ):
+            current["extensions"] = " ".join(
+                part for part in (
+                    current.get("extensions"),
+                    line.split("Device Extensions", 1)[1].strip(),
+                ) if part
+            )
+
+    if current is not None:
+        devices.append(current)
+
+    for device in devices:
+        haystack = " ".join(
+            str(device.get(key) or "")
+            for key in ("il_version", "extensions")
+        ).lower()
+        device["spirv_capable"] = (
+            "spir-v" in haystack
+            or "spirv" in haystack
+            or "cl_khr_il_program" in haystack
+        )
+    return devices
+
+
+def has_gpu_spirv_device(devices: list[dict[str, Any]]) -> bool:
+    for device in devices:
+        if "gpu" in str(device.get("type") or "").lower() and device.get("spirv_capable"):
+            return True
+    return False
+
+
+def cmake_search_roots(prefix: pathlib.Path) -> list[pathlib.Path]:
+    roots = [
+        prefix / "lib" / "cmake",
+        prefix / "lib64" / "cmake",
+        prefix / "share" / "cmake",
+        prefix / "share",
+    ]
+    return [root for root in roots if root.is_dir()]
+
+
+def find_cmake_configs(prefixes: list[str], needles: tuple[str, ...]) -> list[str]:
+    found: list[str] = []
+    seen: set[str] = set()
+    package_terms = {
+        needle.replace("config", "").replace("-config", "").replace("-", "")
+        for needle in needles
+    }
+    for prefix in prefixes:
+        root = pathlib.Path(prefix)
+        if not root.is_dir():
+            continue
+        for search_root in cmake_search_roots(root):
+            try:
+                children = list(search_root.iterdir())
+            except OSError:
+                continue
+            candidates: list[pathlib.Path] = []
+            for child in children:
+                name = child.name.lower().replace("-", "")
+                if any(term and term in name for term in package_terms):
+                    candidates.append(child)
+            matches: list[pathlib.Path] = []
+            for candidate in candidates:
+                if candidate.is_file():
+                    matches.append(candidate)
+                    continue
+                try:
+                    matches.extend(candidate.rglob("*Config.cmake"))
+                    matches.extend(candidate.rglob("*-config.cmake"))
+                except OSError:
+                    continue
+            for path in matches:
+                lowered = path.name.lower()
+                if any(needle in lowered for needle in needles):
+                    resolved = str(path.resolve())
+                    if resolved not in seen:
+                        seen.add(resolved)
+                        found.append(resolved)
+    return found
+
+
+def collect_cmake_packages(prefixes: list[str]) -> dict[str, list[str]]:
+    return {
+        "hip": find_cmake_configs(prefixes, ("hipconfig", "hip-config")),
+        "hipblas": find_cmake_configs(prefixes, ("hipblasconfig", "hipblas-config")),
+    }
+
+
+def hip_rocm_install_markers(
+    prefixes: list[str],
+    tools: dict[str, Any],
+    packages: dict[str, list[str]],
+) -> list[str]:
+    markers: list[str] = []
+    seen: set[str] = set()
+
+    def add(marker: str) -> None:
+        if marker not in seen:
+            seen.add(marker)
+            markers.append(marker)
+
+    for name in ("TC_HIP_PREFIX", "CHIPSTAR_HOME", "HIP_PATH", "ROCM_PATH"):
+        if os.environ.get(name):
+            add(f"env:{name}")
+
+    for path in split_env_paths(os.environ.get("CMAKE_PREFIX_PATH")):
+        parts = [part.lower() for part in pathlib.PurePath(path).parts]
+        if any(
+            "chipstar" in part
+            or "rocm" in part
+            or part in {"hip", "hipblas"}
+            or part.startswith(("hip-", "hip_", "hipblas-", "hipblas_"))
+            for part in parts
+        ):
+            add("env:CMAKE_PREFIX_PATH")
+            break
+
+    if tools.get("hipcc", {}).get("path"):
+        add("tool:hipcc")
+
+    for name in ("hip", "hipblas"):
+        if packages.get(name):
+            add(f"cmake_package:{name}")
+
+    for prefix in prefixes:
+        root = pathlib.Path(prefix)
+        if not root.exists():
+            continue
+        lowered = str(root).lower()
+        if "chipstar" in lowered or "rocm" in lowered:
+            add(f"prefix:{root}")
+            continue
+        if (root / "bin" / "hipcc").exists():
+            add(f"prefix:{root}")
+            continue
+        if any(
+            path.exists()
+            for path in (
+                root / "lib" / "cmake" / "hip",
+                root / "lib64" / "cmake" / "hip",
+                root / "share" / "cmake" / "hip",
+                root / "share" / "hip",
+            )
+        ):
+            add(f"prefix:{root}")
+
+    return markers
+
+
+def readiness_diagnostic_class(status: str, install_markers: list[str]) -> str:
+    if status == "ready_for_hip_gemm":
+        return DIAGNOSTIC_READY
+    if status == "runtime_only_no_hipblas":
+        return DIAGNOSTIC_RUNTIME_ONLY_NO_HIPBLAS
+    if install_markers:
+        return DIAGNOSTIC_BLOCKED
+    return DIAGNOSTIC_NO_HIP_ROCM
+
+
+def collect_runtime(tools: dict[str, Any]) -> dict[str, Any]:
+    icd_candidates = [
+        pathlib.Path("/etc/OpenCL/vendors"),
+        pathlib.Path("/usr/share/OpenCL/vendors"),
+        pathlib.Path("/usr/local/etc/OpenCL/vendors"),
+    ]
+    icd_files: list[str] = []
+    for directory in icd_candidates:
+        if not directory.is_dir():
+            continue
+        try:
+            icd_files.extend(str(path) for path in sorted(directory.glob("*.icd")))
+        except OSError:
+            pass
+
+    opencl_library = ctypes.util.find_library("OpenCL")
+    level_zero_library = (
+        ctypes.util.find_library("ze_loader")
+        or ctypes.util.find_library("ze_loader.so")
+        or ctypes.util.find_library("ze_loader.dll")
+    )
+
+    clinfo = tools.get("clinfo", {})
+    clinfo_full = command_output(clinfo.get("path"), [], max_lines=1200)
+    opencl_devices = parse_clinfo_devices(clinfo_full.get("output"))
+    gpu_spirv_device = has_gpu_spirv_device(opencl_devices)
+    return {
+        "opencl_library": opencl_library,
+        "opencl_icd_files": icd_files,
+        "level_zero_library": level_zero_library,
+        "clinfo_available": bool(clinfo.get("path")),
+        "clinfo_devices": clinfo.get("version") if clinfo.get("available") else None,
+        "opencl_devices": opencl_devices,
+        "gpu_spirv_device": gpu_spirv_device,
+    }
+
+
+def path_hints(prefixes: list[str]) -> list[str]:
+    hints: list[str] = []
+    preferred = os.environ.get("TC_HIP_PREFIX")
+    if not preferred:
+        for prefix in prefixes:
+            root = pathlib.Path(prefix)
+            if (root / "bin" / "hipcc").exists() or "chipstar" in root.name.lower():
+                preferred = prefix
+                break
+    if preferred:
+        hints.append(f"export TC_HIP_PREFIX={preferred}")
+        hints.append(f"export PATH={preferred}/bin:$PATH")
+        hints.append(f"export CMAKE_PREFIX_PATH={preferred}:$CMAKE_PREFIX_PATH")
+        lib = pathlib.Path(preferred) / "lib"
+        if lib.exists():
+            hints.append(f"export LD_LIBRARY_PATH={lib}:$LD_LIBRARY_PATH")
+    else:
+        hints.append("set TC_HIP_PREFIX to the chipStar install prefix")
+    return hints
+
+
+def collect_evidence(root: str | pathlib.Path = ROOT) -> dict[str, Any]:
+    source_root = pathlib.Path(root).expanduser().resolve()
+    prefixes = candidate_prefixes()
+    tools = collect_tools(prefixes)
+    packages = collect_cmake_packages(prefixes)
+    runtime = collect_runtime(tools)
+
+    gpu_spirv_runtime = bool(runtime["gpu_spirv_device"] or runtime["level_zero_library"])
+    readiness = {
+        "hip_runtime_config": bool(packages["hip"]),
+        "hipcc": bool(tools["hipcc"].get("path")),
+        "spirv_translator": bool(tools["llvm-spirv"].get("path")),
+        "opencl_or_level_zero": bool(
+            runtime["opencl_library"]
+            or runtime["opencl_icd_files"]
+            or runtime["level_zero_library"]
+        ),
+        "gpu_spirv_runtime": gpu_spirv_runtime,
+        "hipblas_config": bool(packages["hipblas"]),
+    }
+    missing: list[str] = []
+    if not readiness["hip_runtime_config"]:
+        missing.append("hip CMake config")
+    if not readiness["hipcc"]:
+        missing.append("hipcc")
+    if not readiness["spirv_translator"]:
+        missing.append("llvm-spirv")
+    if not readiness["opencl_or_level_zero"]:
+        missing.append("OpenCL or Level Zero runtime")
+    elif not readiness["gpu_spirv_runtime"]:
+        missing.append("SPIR-V-capable GPU OpenCL or Level Zero runtime")
+    if not readiness["hipblas_config"]:
+        missing.append("hipBLAS CMake config")
+
+    if not missing:
+        status = "ready_for_hip_gemm"
+    elif all(readiness[key] for key in ("hip_runtime_config", "hipcc", "spirv_translator", "gpu_spirv_runtime")):
+        status = "runtime_only_no_hipblas"
+    else:
+        status = "missing_requirements"
+    install_markers = hip_rocm_install_markers(prefixes, tools, packages)
+
+    return {
+        "schema_version": 1,
+        "git_head": source_git_head(source_root),
+        "git_dirty": source_git_dirty(source_root),
+        "platform": {
+            "system": platform.system(),
+            "machine": platform.machine(),
+            "release": platform.release(),
+        },
+        "environment": {
+            "TC_HIP_PREFIX": os.environ.get("TC_HIP_PREFIX"),
+            "CHIPSTAR_HOME": os.environ.get("CHIPSTAR_HOME"),
+            "HIP_PATH": os.environ.get("HIP_PATH"),
+            "ROCM_PATH": os.environ.get("ROCM_PATH"),
+            "CMAKE_PREFIX_PATH": os.environ.get("CMAKE_PREFIX_PATH"),
+        },
+        "prefixes": prefixes,
+        "tools": tools,
+        "cmake_packages": packages,
+        "runtime": runtime,
+        "readiness": {
+            **readiness,
+            "status": status,
+            "diagnostic_class": readiness_diagnostic_class(status, install_markers),
+            "install_markers": install_markers,
+            "missing": missing,
+        },
+        "path_hints": path_hints(prefixes),
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--json", type=pathlib.Path, help="Write evidence JSON here")
+    parser.add_argument("--require-build-toolchain", action="store_true")
+    parser.add_argument("--require-spirv-runtime", action="store_true")
+    parser.add_argument("--require-hipblas", action="store_true")
+    parser.add_argument("--require-ready", action="store_true")
+    args = parser.parse_args()
+
+    evidence = collect_evidence()
+    if args.json:
+        args.json.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    readiness = evidence["readiness"]
+    print(
+        "HIP toolchain probe: "
+        f"status={readiness['status']} missing={','.join(readiness['missing']) or 'none'}"
+    )
+    for hint in evidence["path_hints"]:
+        print(f"hint: {hint}")
+
+    errors: list[str] = []
+    if args.require_build_toolchain and not (
+        readiness["hip_runtime_config"] and readiness["hipcc"]
+    ):
+        errors.append("--require-build-toolchain needs hip CMake config and hipcc")
+    if args.require_spirv_runtime and not (
+        readiness["spirv_translator"] and readiness["gpu_spirv_runtime"]
+    ):
+        errors.append(
+            "--require-spirv-runtime needs llvm-spirv and a "
+            "SPIR-V-capable GPU OpenCL/Level Zero runtime"
+        )
+    if args.require_hipblas and not readiness["hipblas_config"]:
+        errors.append("--require-hipblas needs hipBLAS CMake config")
+    if args.require_ready and readiness["status"] != "ready_for_hip_gemm":
+        errors.append("--require-ready needs ready_for_hip_gemm")
+    if errors:
+        for error in errors:
+            print(f"HIP toolchain probe failed: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

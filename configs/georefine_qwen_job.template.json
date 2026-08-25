@@ -1,0 +1,154 @@
+{
+  "schema": "tensorcore.job.v1",
+  "id": "georefine-qwen-rank-probe",
+  "owner": "georefine:qwen-rank-probe",
+  "tenant": "georefine",
+  "priority": 100,
+  "ttl_sec": 21600,
+  "resources": {
+    "selector": {
+      "backend": "cuda",
+      "class": "cuda-training",
+      "min_memory_gib": 20
+    },
+    "resource_class": "cuda_exclusive",
+    "exclusive": true
+  },
+  "command": {
+    "argv": [
+      "python3",
+      "scripts/start_georefine_qwen_rank_probe.py",
+      "--target",
+      "{node}",
+      "--resource",
+      "{resource}",
+      "--worker-resource",
+      "{worker_alias}",
+      "--authority-lease-id",
+      "{lease_id}",
+      "--authority-owner",
+      "{authority_owner}",
+      "--run-dir",
+      "{run_dir}",
+      "--compression-ratio",
+      "0.70",
+      "--target-kl",
+      "0.80",
+      "--max-size-ratio",
+      "0.30",
+      "--target-kl-kd-steps",
+      "2048",
+      "--quality-floor",
+      "0.05",
+      "--json"
+    ],
+    "env": {
+      "TC_GEOREFINE_CAL_TEXT": "REPLACE_WITH_CALIBRATION_TEXT_PATH",
+      "TC_GEOREFINE_DEVICE": "cuda",
+      "TC_GEOREFINE_DTYPE": "auto",
+      "TC_GEOREFINE_EVAL_TEXT": "REPLACE_WITH_EVAL_TEXT_PATH",
+      "TC_GEOREFINE_EVIDENCE_ROOT": "REPLACE_WITH_TRUSTED_EVIDENCE_ROOT",
+      "TC_GEOREFINE_MODEL": "Qwen/Qwen3.5-0.8B",
+      "TC_GEOREFINE_QLLM_REPO_DIR": "REPLACE_WITH_QGTL_OR_SUBSTRATE_TOOLS_CHECKOUT",
+      "TC_GEOREFINE_REF": "master",
+      "TC_GEOREFINE_REPO_DIR": "REPLACE_WITH_GEOREFINE_CHECKOUT",
+      "TC_GEOREFINE_REPO_URL": "REPLACE_WITH_GEOREFINE_GIT_URL",
+      "TC_GEOREFINE_RUN_TARGET": "qwen-cr070-rank-search"
+    }
+  },
+  "probe": [
+    "ssh",
+    "{node}",
+    "cd ~/src/tensorcore && python3 scripts/check_georefine_qwen_live.py --run-dir {run_dir} --json"
+  ],
+  "completion": [
+    "ssh",
+    "{node}",
+    "cd ~/src/tensorcore && python3 scripts/check_georefine_qwen_artifact.py {run_dir} --max-size-ratio 0.30 --max-ppl-delta 0.05 --max-target-kl 0.80"
+  ],
+  "admission": [
+    "ssh",
+    "{node}",
+    "cd ~/src/tensorcore && python3 scripts/check_cuda_resource_admission.py --resource {resource} {gpu_reconciliation_admission_args} --json"
+  ],
+  "preflight": [
+    "python3",
+    "scripts/start_georefine_qwen_rank_probe.py",
+    "--target",
+    "{node}",
+    "--resource",
+    "{resource}",
+    "--worker-resource",
+    "{worker_alias}",
+    "--authority-lease-id",
+    "{lease_id}",
+    "--authority-owner",
+    "{authority_owner}",
+    "--run-dir",
+    "{run_dir}",
+    "--compression-ratio",
+    "0.70",
+    "--target-kl",
+    "0.80",
+    "--max-size-ratio",
+    "0.30",
+    "--target-kl-kd-steps",
+    "2048",
+    "--quality-floor",
+    "0.05",
+    "--json",
+    "--preflight-only"
+  ],
+  "post_start_probe": [
+    "ssh",
+    "{node}",
+    "cd ~/src/tensorcore && python3 scripts/check_georefine_qwen_live.py --run-dir {run_dir} --json"
+  ],
+  "worker_identity": [
+    "ssh",
+    "{node}",
+    "cd ~/src/tensorcore && python3 scripts/mesh_worker_identity.py --resource {resource} --unit tensorcore-georefine-{lease_id}.service --artifact-dir {run_dir} --match-regex 'run-georefine-qwen|experiments\\.georefine\\.m2_compress' --require-active-unit --require-matching-process --require-matched-cuda --json"
+  ],
+  "artifact": {
+    "root": "REPLACE_WITH_TRUSTED_EVIDENCE_ROOT",
+    "evidence_path": "REPLACE_WITH_TRUSTED_EVIDENCE_ROOT/georefine-qwen-rank-probe.scheduler.json"
+  },
+  "preemption_policy": {
+    "mode": "non_preemptible",
+    "emergency_override_requires_reason": true
+  },
+  "quality_gates": [
+    {
+      "name": "size_ratio",
+      "max": 0.30
+    },
+    {
+      "name": "ppl_delta",
+      "max": 0.05
+    },
+    {
+      "name": "target_kl",
+      "max": 0.80
+    },
+    {
+      "name": "quality_gate",
+      "passed": true
+    },
+    {
+      "name": "lossless_audit",
+      "passed": true
+    },
+    {
+      "name": "reload_smoke",
+      "passed": true
+    }
+  ],
+  "metadata": {
+    "project": "georefine",
+    "require_run_intent": true,
+    "run_dir": "REPLACE_WITH_RUN_DIR",
+    "scheduler_contract": "tensorcore_job_v1_cuda_exclusive_trusted_artifact",
+    "service": "qwen-rank-probe",
+    "target": "qwen-cr070-rank-search"
+  }
+}

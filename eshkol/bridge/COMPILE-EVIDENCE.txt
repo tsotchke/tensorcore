@@ -1,0 +1,1 @@
+Bridge compile-verified 2026-05-20T04:48:36Z against eshkol-platform headers + LLVM /opt/homebrew/opt/llvm/include/llvm/IR/LLVMContext.h

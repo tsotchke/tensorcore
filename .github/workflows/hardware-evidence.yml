@@ -1,0 +1,193 @@
+name: Hardware Evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      require_metal4_tensorops:
+        description: "Fail unless SDK26+ Metal 4 TensorOps compiles and runs on M5+"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      hardware_resource:
+        description: "Stable physical resource id; required for M4 (for example aws:ec2:mac-m4max or enki:metal_m4_tsotchke_chan)"
+        required: false
+        default: ""
+        type: string
+      authority_owner:
+        description: "Accountable resource owner; reserved enki M4 runs require tsotchke-chan:<run-id>"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  hardware-runner-preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Probe hardware runner registration
+        env:
+          GH_TOKEN: ${{ secrets.TC_RUNNER_READ_TOKEN || github.token }}
+          REQUIRE_METAL4_TENSOROPS: ${{ inputs.require_metal4_tensorops }}
+        run: |
+          set +e
+          mkdir -p build
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runners" \
+            > build/hardware_runner_api.json \
+            2> build/hardware_runner_api.err
+          api_rc=$?
+          python3 scripts/hardware_runner_preflight.py \
+            --api-json build/hardware_runner_api.json \
+            --api-error build/hardware_runner_api.err \
+            --api-rc "$api_rc" \
+            --output build/hardware_runner_preflight.json \
+            --summary "$GITHUB_STEP_SUMMARY" \
+            --repository "$GITHUB_REPOSITORY" \
+            --head-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --workflow "$GITHUB_WORKFLOW" \
+            --require-metal4-tensorops "$REQUIRE_METAL4_TENSOROPS"
+
+      - name: Upload runner preflight
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: tensorcore-hardware-runner-preflight
+          path: |
+            build/hardware_runner_preflight.json
+            build/hardware_runner_api.json
+            build/hardware_runner_api.err
+          if-no-files-found: error
+
+  apple-gpu-release-smoke:
+    if: ${{ inputs.require_metal4_tensorops != 'true' }}
+    needs: hardware-runner-preflight
+    runs-on: [self-hosted, macOS, ARM64]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Version consistency
+        run: scripts/check_version_consistency.sh
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          xcrun --show-sdk-version
+          system_profiler SPDisplaysDataType || true
+
+      - name: Release smoke with required Metal GPU
+        env:
+          BUILD_DIR: build
+          REQUIRE_GPU: "1"
+        run: |
+          scripts/release_smoke.sh
+
+      - name: Check runtime evidence
+        run: |
+          python3 scripts/check_release_evidence.py build/release_smoke_runtime_evidence.json --require-gpu
+
+      - name: Collect Apple family evidence
+        env:
+          TC_HARDWARE_RESOURCE: ${{ inputs.hardware_resource }}
+          TC_AUTHORITY_OWNER: ${{ inputs.authority_owner }}
+        run: |
+          python3 scripts/run_apple_family_runtime_evidence.py \
+            --build-dir build \
+            --evidence-path build/apple_family_runtime_evidence.json \
+            --require-pass
+          python3 scripts/check_apple_family_runtime_evidence.py \
+            build/apple_family_runtime_evidence.json \
+            --git-head "$GITHUB_SHA" \
+            --require-clean-head \
+            --require-pass
+
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: tensorcore-hardware-evidence
+          path: |
+            build/release_smoke_runtime_evidence.json
+            build/apple_family_runtime_evidence.json
+            build/release_smoke_device.log
+            build/Testing/Temporary/LastTest.log
+          if-no-files-found: error
+
+  m5-tensorops-release-smoke:
+    if: ${{ inputs.require_metal4_tensorops == 'true' }}
+    needs: hardware-runner-preflight
+    runs-on: [self-hosted, macOS, ARM64, m5, sdk26, metal4-tensorops]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Version consistency
+        run: scripts/check_version_consistency.sh
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          xcrun --show-sdk-version
+          system_profiler SPDisplaysDataType || true
+
+      - name: M5 TensorOps runner preflight
+        env:
+          BUILD_DIR: build
+        run: |
+          python3 scripts/m5_tensorops_runner_preflight.py \
+            --build-dir "$BUILD_DIR" \
+            --output "$BUILD_DIR/m5_tensorops_runner_preflight.json"
+
+      - name: Release smoke with required Metal GPU
+        env:
+          BUILD_DIR: build
+          REQUIRE_GPU: "1"
+          REQUIRE_METAL4_TENSOROPS: "1"
+        run: |
+          scripts/run_m5_tensorops_runtime_smoke.sh
+
+      - name: Check runtime evidence
+        run: |
+          python3 scripts/check_release_evidence.py \
+            build/release_smoke_runtime_evidence.json \
+            --require-gpu \
+            --require-metal4-tensorops
+
+      - name: Collect M5 family evidence
+        env:
+          TC_HARDWARE_RESOURCE: ${{ inputs.hardware_resource }}
+          TC_AUTHORITY_OWNER: ${{ inputs.authority_owner }}
+        run: |
+          python3 scripts/run_apple_family_runtime_evidence.py \
+            --build-dir build \
+            --evidence-path build/apple_family_runtime_evidence.json \
+            --expected-chip M5 \
+            --require-pass
+          python3 scripts/check_apple_family_runtime_evidence.py \
+            build/apple_family_runtime_evidence.json \
+            --git-head "$GITHUB_SHA" \
+            --require-chip M5 \
+            --require-clean-head \
+            --require-pass
+
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: tensorcore-hardware-evidence
+          path: |
+            build/m5_tensorops_runner_preflight.json
+            build/release_smoke_runtime_evidence.json
+            build/apple_family_runtime_evidence.json
+            build/release_smoke_device.log
+            build/Testing/Temporary/LastTest.log
+          if-no-files-found: error

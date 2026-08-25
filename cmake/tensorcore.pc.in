@@ -1,0 +1,11 @@
+prefix=${pcfiledir}/../..
+exec_prefix=${prefix}
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+
+Name: tensorcore
+Description: Cross-platform tensor compute runtime with Metal, CUDA, HIP, and portable CPU backends
+Version: @PROJECT_VERSION@
+Cflags: -I${includedir}
+Libs: -L${libdir} -ltensorcore
+Libs.private: @TC_PC_PRIVATE_LIBS@

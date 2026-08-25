@@ -1,0 +1,188 @@
+# tests/
+
+44 default CTest entries cover the native library surface: 39 native
+correctness/lifecycle tests, the Python binding smoke, and four executable example
+smokes in the Metal build. The portable
+CPU-only build registers `test_portable_cpu.c`, `test_conv2d.c`,
+`test_training_kernels.c`, `test_e2e_training.c`, `test_diloco.c`,
+`test_diloco_async.c`, `test_diloco_async_failure_fork.c`,
+`test_sparse_compress.c`, `test_gloo_fork.c`, and `test_gloo_ring_fork.c`,
+plus `test_checkpoint.c` and the DiLoCo-over-GLOO fork tests. Non-Metal
+builds also register the backend-independent legacy remote/mesh tests and
+`example_training_step` when `TC_BUILD_EXAMPLES=ON`.
+On Windows, the portable suite registers `test_dist_remote_local`, which
+launches two `test_dist_remote.exe` ranks over loopback to cover the
+Winsock-backed GLOO TCP path without relying on `fork()`.
+Each native test is a single `.c` file (or `.mm` for the buffer pool,
+which needs ObjC++).
+Numerical tests compare against an fp64 CPU reference or a bit-exact CPU
+oracle and pass the tolerances documented in
+[../docs/numerics.md](../docs/numerics.md).
+
+```sh
+ctest --test-dir build --output-on-failure   # 43 default Apple tests
+```
+
+Runs in ~5-15s on M2 Ultra.
+
+With `TC_ENABLE_METAL=OFF`, `test_portable_cpu.c` covers the portable
+buffer/device path plus padded f32/f16 GEMM, batched GEMM, i8 GEMM,
+quantized GEMV, `TC_DIST_SINGLE` collectives, memory-tier and
+checkpoint baseline APIs, HIP/CUDA inactive diagnostics, local DiLoCo, and
+the localhost GLOO TCP collective and DiLoCo-over-GLOO smokes. The
+portable build also runs Conv2D, training-kernel correctness, end-to-end
+training convergence, DiLoCo, sparse-compression, broker GLOO TCP, opt-in
+ring GLOO TCP, activation checkpointing, DiLoCo-over-GLOO, sparse TOPK
+DiLoCo-over-GLOO, and, when examples are enabled, the native training-step
+example.
+`scripts/ci_portable_cpu.sh` adds installed SDK consumer checks plus
+subprocess smokes for the opt-in AVX2, NEON, and AMX GEMM environment
+variants, including an AVX2 serial override via `TC_AVX2_THREADS=1`.
+The throughput-specific AVX2 OpenMP path is measured by the shared-runtime
+`bench_gemm_shared` target rather than the static CTest binaries, keeping
+the static SDK archive free of an OpenMP link dependency.
+Direct AMX C regressions for the raw tile kernel and edge-tile
+alpha/beta wrapper are compiled in portable CPU builds and skip unless
+`TC_RUN_AMX_GEMM_TEST=1` is set; the safe `test_amx_probe` metadata/stub
+regression runs unconditionally and does not execute raw AMX instructions.
+
+## Test inventory
+
+| # | Test | Coverage |
+|---:|---|---|
+| 1 | `test_device.c` | `tc_init`, `tc_shutdown`, `tc_device_info_get`; basic buffer alloc/free/map |
+| 2 | `test_gemm_f16.c` | fp16 GEMM at multiple shapes vs fp64 reference (rms_scaled ≤ 5e-3) |
+| 3 | `test_gemm_f32.c` | fp32 GEMM **bit-exact** vs `cblas_sgemm` |
+| 4 | `test_gemm_bf16.c` | bf16 GEMM; native on Apple9+, fp32-cast fallback on Apple7..8 |
+| 5 | `test_gemm_i8.c` | int8 GEMM; public MPS fallback on every Apple family; bit-exact exercised matrices |
+| 6 | `test_attention_correctness.c` | FlashAttention forward: causal, GQA (3 cases), sliding window, ALiBi |
+| 7 | `test_attention_backward.c` | FlashAttention backward at D=64 and D=128 vs numerical-differences reference |
+| 8 | `test_training_kernels.c` | RMSnorm fwd+bwd, LayerNorm fwd+bwd, RoPE fwd+bwd, SwiGLU fwd+bwd, softmax fwd+bwd, AdamW |
+| 9 | `test_transformer_block.c` | Full forward + backward of one Llama-style block at small shapes |
+| 10 | `test_e2e_training.c` | A few iterations of forward + backward + AdamW; checks parameter convergence |
+| 11 | `test_conv2d.c` | Conv2D forward + dInput + dWeight (multi-batch validated) |
+| 12 | `test_distributed_ring.c` | Single-host ring all-reduce via threads — bit-exact across 4 ranks × 1024 fp32 |
+| 13 | `test_quantized.c` | Q4_0 sync + async, Q4_0 tail N, Q8_0 GPU quantize + GEMV, invalid-quant sizing |
+| 14 | `test_fused_norm_gemv.c` | fused RMSNorm/LayerNorm GEMV against separate norm-forward + `tc_gemm` paths |
+| 15 | `test_distributed_ring_fork.c` | Ring all-reduce via `fork()` + socketpairs — **same transport pattern** v0.5 TB5 will use |
+| 16 | `test_gguf.c` | Synthetic GGUF round-trip, metadata, bulk load, skip-unsupported count, Q4 GEMV from GGUF |
+| 17 | `test_tensorops_select.c` | M5 TensorOps dtype × accum selector (works without M5 hardware) |
+| 18 | `test_tensorops_runtime.c` | TensorOps runtime path coverage (skips politely on non-M5) |
+| 19 | `test_diloco.c` | Local/single-rank DiLoCo outer steps, counters, and unsupported multi-rank guards |
+| 19a | `test_diloco_async.c` | Immutable async snapshots, private pre-commit state, overlap rebase, round IDs, counters, and finalize refusal |
+| 19b | `test_diloco_async_failure_fork.c` | Injected Gloo peer loss; observable/durable worker error, failed-state checkpoint restore, unchanged live parameters, and failed-round accounting |
+| 19c | `test_diloco_checkpoint.c` | Versioned deterministic state, Nesterov/top-k and Adam exact continuation, READY async restore, epoch/config/corruption rejection, and fail-closed reserved modes |
+| 19d | `test_transport_auth.cpp` | RFC HMAC known-answer gate; remote/mesh/Gloo mutual identity and rank binding; wrong-key, expected-identity, legacy-mix, captured-hello/final-proof replay rejection; live and overlap key rotation; authenticated direct ring |
+| 20 | `test_poincare.c` | Poincaré-ball distance, maps, transport, projection, and Möbius operations |
+| 21 | `test_sphere.c` | Spherical-manifold distance, maps, transport, and projection operations |
+| 22 | `test_product_manifold.c` | Product-manifold composition, weighted metrics, maps, and transport |
+| 23 | `test_quantum_gates.c` | Complex quantum-gate primitives and state evolution correctness |
+| 24 | `test_mesh_collective.c` | Two-rank remote-tensor AllReduce, Broadcast, and AllGather over loopback |
+| 25 | `test_remote_shard.c` | Owner-routed remote shard get/put, full and cross-owner ranges, and shutdown synchronization |
+| 26 | `test_phase_attention.c` | Phase-aware attention CPU primitive correctness and validation paths |
+| 27 | `test_riemannian_adam.c` | Riemannian Adam updates and manifold projection behavior |
+| 28 | `test_sparse_24.c` | Structured 2:4 sparse packing, dispatch, fallback, and runtime evidence paths |
+| 29 | `test_remote_tensor_fork.c` | 23.6 MiB remote tensor correctness, sustained throughput, and name-miss framing |
+| 30 | `test_remote_tensor_adversarial.cpp` | Exact binds, offset rejection, concurrent framing, unregister lifetime barrier, and bounded shutdown |
+| 31 | `test_sparse_compress.c` | DiLoCo top-k sparse compression pack/unpack accuracy and merge behavior |
+| 32 | `test_gloo_fork.c` | Four forked ranks over broker GLOO TCP; IPv4 and bracketed IPv6 rendezvous, fp32/fp16 allreduce, broadcast, allgather, barrier |
+| 33 | `test_diloco_gloo_fork.c` | Multi-rank DiLoCo over GLOO with forked localhost ranks |
+| 34 | `test_diloco_sparse_fork.c` | TOPK sparse DiLoCo over GLOO; validates sparse wire-byte reduction |
+| 35 | `test_gloo_ring_fork.c` | Four forked ranks with `TC_GLOO_RING=1`; IPv4/bracketed-IPv6 direct TCP ring fp32 SUM plus forced-unreachable broker fallback |
+| 36 | `test_checkpoint.c` | CPU/Metal discard/realize checkpoint lifecycle with handle-preserving storage detach |
+| 37 | `test_checkpoint_concurrency.cpp` | Concurrent checkpoint realize/discard lifecycle and handle synchronization |
+| 38 | `test_buffer_pool.mm` | LIFO recycling, bucket size classes, concurrent allocate/free |
+| 39 | `python_basic` | The Python binding's `tests/test_basic.py` — full ABI surface exercised from ctypes |
+| 40 | `example_decode_step` | Native decode-step smoke using the installed C ABI |
+| 41 | `example_training_step` | Native training-step smoke using the installed C ABI |
+| 42 | `example_mesh_training_demo` | Single-rank mesh training demo smoke: RMSNorm, GEMM, softmax+CE, AdamW, DiLoCo outer sync |
+| 43 | `example_mesh_training_demo_checkpoint` | Same mesh training demo with `X_norm` activation discard/realize around the backward GEMM |
+
+## Tolerances
+
+All tests use the `rms_scaled` error metric:
+
+```
+rms_scaled = ||Y - Y_ref|| / (||Y_ref|| + ε)
+```
+
+per [../docs/numerics.md](../docs/numerics.md). Bit-exact tests are
+called out specifically (fp32 GEMM, int8 GEMM with i32 accum, ring
+all-reduce).
+
+## Skip semantics
+
+Each test can skip itself politely if the runtime can't exercise the
+path:
+
+- **No real GPU** (paravirtual runner): all GPU-only tests skip with a
+  printed "no Metal device" message; only the no-device subset runs.
+- **Apple7..8 + bf16**: was pre-v0.1.3 skipped; now runs via the
+  fp32-cast fallback path. Passes everywhere.
+- **Apple7..9 + int8**: was pre-v0.1.3 skipped; now runs via fp32-widen
+  fallback. Bit-exact everywhere.
+- **Apple7..10 + Metal 4 TensorOps**: `test_tensorops_runtime` skips
+  with a "TensorOps not available" message; `test_tensorops_select`
+  always runs (selector logic is host-side).
+- **No Python or NumPy installed**: `python_basic` is excluded from
+  CTest at configure time.
+
+`scripts/ci_macos_test.sh` runs the no-device / paravirtual subset on
+CI runners that don't expose a real Metal device.
+
+## Numerical references
+
+Tests build their references in fp64 on the CPU, then compare against
+the fp16 / bf16 / int8 GPU output. This is **not** comparing GPU vs CPU
+of the same dtype — it's comparing GPU low-precision vs CPU high-
+precision, which is what catches accumulation bugs and dtype mistakes.
+
+The Q4_0 reference is special: the kernel and the CPU reference both
+dequantize the same blocks the same way, so the comparison validates the
+GEMV path against a naive dequant-then-multiply. Quantization itself
+isn't tested here — see `tests/test_quantized.c::test_quantize_q4_0`
+for that.
+
+## Adding a test
+
+See [../CONTRIBUTING.md § Adding a kernel](../CONTRIBUTING.md#adding-a-kernel)
+step 5-6. Pattern:
+
+```c
+/* tests/test_<group>.c */
+#include "tensorcore/tensorcore.h"
+#include <stdio.h>
+
+int main(void) {
+    tc_context* ctx;
+    tc_init(&ctx);
+
+    /* 1. Allocate inputs */
+    /* 2. Initialize with a fixed seed (`srand(seed)`) */
+    /* 3. Compute reference on host in fp64 */
+    /* 4. Compute on GPU via tc_<op> */
+    /* 5. Compute rms_scaled error */
+    /* 6. Assert below tolerance */
+
+    tc_shutdown(ctx);
+    return 0;
+}
+```
+
+Register in `tests/CMakeLists.txt`:
+
+```cmake
+add_executable(test_mything test_mything.c)
+target_link_libraries(test_mything PRIVATE tensorcore)
+target_include_directories(test_mything PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME test_mything COMMAND test_mything)
+```
+
+## See also
+
+- [../docs/numerics.md](../docs/numerics.md) — the tolerance contract
+  every test enforces.
+- [../docs/codebase_audit.md](../docs/codebase_audit.md) — ICC's view
+  of test coverage.
+- [../scripts/ci_macos_test.sh](../scripts/ci_macos_test.sh) — what the
+  CI does on a real-vs-paravirtual GPU.

@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tensorcore-apple"
+version = "0.1.23"
+description = "CUDA-equivalent tensor-core acceleration layer for Apple Silicon"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name = "tensorcore contributors" },
+]
+keywords = [
+    "apple-silicon",
+    "metal",
+    "machine-learning",
+    "gpu",
+    "tensorcore",
+    "cuda-alternative",
+    "flash-attention",
+    "gemm",
+    "gguf",
+    "llm-inference",
+    "mixed-precision",
+    "simdgroup-matrix",
+    "tensor-ops",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: C",
+    "Programming Language :: C++",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = []
+
+[project.optional-dependencies]
+test = ["numpy>=1.24"]
+
+[project.urls]
+Homepage      = "https://github.com/tsotchke/tensorcore"
+Repository    = "https://github.com/tsotchke/tensorcore"
+Documentation = "https://github.com/tsotchke/tensorcore/blob/master/docs/README.md"
+Changelog     = "https://github.com/tsotchke/tensorcore/blob/master/CHANGELOG.md"
+Roadmap       = "https://github.com/tsotchke/tensorcore/blob/master/ROADMAP.md"
+Issues        = "https://github.com/tsotchke/tensorcore/issues"
+Security      = "https://github.com/tsotchke/tensorcore/blob/master/SECURITY.md"
+
+[tool.setuptools]
+package-dir = { "" = "python" }
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["python"]
+include = ["tensorcore*"]
+exclude = ["tests*"]
+
+[tool.setuptools.package-data]
+tensorcore = ["libtensorcore.dylib", "libtensorcore.so", "tensorcore.dll", "tensorcore.metallib"]

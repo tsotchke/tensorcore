@@ -1,0 +1,842 @@
+#!/usr/bin/env python3
+"""Selftests for mesh resource config validators."""
+
+from __future__ import annotations
+
+import copy
+import importlib.machinery
+import importlib.util
+import pathlib
+from types import ModuleType
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+def load_script(name: str, path: pathlib.Path) -> ModuleType:
+    loader = importlib.machinery.SourceFileLoader(name, str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_jobs_reject_private_remote_wrappers() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_checked_in_command(
+        errors,
+        "job 'bad'",
+        "start_cmd",
+        ["ssh", "cosbox", "cd /tmp && /srv/tensorcore/.local/bin/start-georefine"],
+    )
+    assert any("private wrapper path" in error for error in errors)
+
+
+def test_jobs_reject_host_local_run_scripts() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_checked_in_command(
+        errors,
+        "job 'bad'",
+        "start_cmd",
+        ["ssh", "old-donkey", "/data/qllm/runs/start_olddonkey_precompute_chain.sh"],
+    )
+    assert any("host-local script" in error for error in errors)
+
+
+def test_jobs_reject_missing_repo_paths_inside_remote_strings() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_checked_in_command(
+        errors,
+        "job 'bad'",
+        "admission_cmd",
+        ["ssh", "cosbox", "cd ~/src/tensorcore && python3 scripts/does_not_exist.py --json"],
+    )
+    assert any("missing repo path" in error for error in errors)
+
+
+def test_jobs_allow_repo_local_helpers() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_checked_in_command(
+        errors,
+        "job 'good'",
+        "admission_cmd",
+        ["python3", "scripts/check_windows_cuda_resource_admission.py", "--json"],
+    )
+    assert errors == []
+
+
+def test_paused_launchable_jobs_require_preflight() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_job_policy(
+        errors,
+        {
+            "id": "paused-launchable",
+            "desired_state": "paused",
+            "start_cmd": ["python3", "scripts/start_windows_cuda_smoke.py"],
+            "metadata": {"scheduler_pause_reason": "waiting for durable launch path"},
+        },
+    )
+    assert any("requires preflight_cmd" in error for error in errors)
+
+
+def test_paused_jobs_require_pause_reason() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_job_policy(
+        errors,
+        {
+            "id": "paused-lane",
+            "desired_state": "paused",
+            "metadata": {},
+        },
+    )
+    assert any("scheduler_pause_reason" in error for error in errors)
+
+
+def test_cancelled_disabled_jobs_do_not_require_preflight() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_job_policy(
+        errors,
+        {
+            "id": "cancelled-georefine",
+            "enabled": False,
+            "desired_state": "paused",
+            "start_cmd": ["python3", "scripts/start_georefine_qwen_rank_probe.py", "--json"],
+            "metadata": {
+                "cancel_reason": "operator_cancelled",
+                "cancelled_at_unix": 1779870797.0,
+                "scheduler_contract": "tensorcore_job_v1_cuda_exclusive_trusted_artifact",
+            },
+        },
+    )
+    assert errors == []
+
+
+def test_disabled_jobs_require_cancel_metadata() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_job_policy(
+        errors,
+        {
+            "id": "disabled-without-audit",
+            "enabled": False,
+            "desired_state": "paused",
+            "metadata": {},
+        },
+    )
+    assert any("metadata.cancel_reason" in error for error in errors)
+    assert any("metadata.cancelled_at_unix" in error for error in errors)
+
+
+def test_running_jobs_reject_host_local_systemd_starts() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_job_policy(
+        errors,
+        {
+            "id": "systemd-hidden-launcher",
+            "desired_state": "running",
+            "start_cmd": ["ssh", "cosbox", "systemctl --user start qllm-phase1.service"],
+            "metadata": {},
+        },
+    )
+    assert any("host-local systemd unit" in error for error in errors)
+
+
+def test_running_jobs_reject_legacy_georefine_direct_starter() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_job_policy(
+        errors,
+        {
+            "id": "legacy-georefine",
+            "desired_state": "running",
+            "start_cmd": ["python3", "scripts/start_georefine_qwen_cr025.py", "--json"],
+            "metadata": {},
+        },
+    )
+    assert any("legacy direct GeoRefine starter" in error for error in errors)
+
+
+def test_tensorcore_job_v1_georefine_contract_requires_approved_starter() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_job_policy(
+        errors,
+        {
+            "id": "bad-georefine-v1",
+            "desired_state": "running",
+            "start_cmd": ["python3", "scripts/start_georefine_qwen_cr025.py", "--json"],
+            "metadata": {
+                "scheduler_contract": "tensorcore_job_v1_cuda_exclusive_trusted_artifact",
+            },
+        },
+    )
+    assert any("start_georefine_qwen_rank_probe.py" in error for error in errors)
+    assert any("start_georefine_qllm_native_probe.py" in error for error in errors)
+
+
+def test_tensorcore_job_v1_georefine_contract_accepts_native_qllm_starter() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_job_policy(
+        errors,
+        {
+            "id": "native-georefine-v1",
+            "desired_state": "running",
+            "start_cmd": ["python3", "scripts/start_georefine_qllm_native_probe.py", "--json"],
+            "metadata": {
+                "scheduler_contract": "tensorcore_job_v1_cuda_exclusive_trusted_artifact",
+            },
+        },
+    )
+    assert errors == []
+
+
+def georefine_template() -> dict:
+    required_env = {
+        "TC_GEOREFINE_CAL_TEXT": "REPLACE_WITH_CALIBRATION_TEXT_PATH",
+        "TC_GEOREFINE_DEVICE": "cuda",
+        "TC_GEOREFINE_DTYPE": "auto",
+        "TC_GEOREFINE_EVAL_TEXT": "REPLACE_WITH_EVAL_TEXT_PATH",
+        "TC_GEOREFINE_EVIDENCE_ROOT": "REPLACE_WITH_TRUSTED_EVIDENCE_ROOT",
+        "TC_GEOREFINE_MODEL": "Qwen/Qwen3.5-0.8B",
+        "TC_GEOREFINE_QLLM_REPO_DIR": "REPLACE_WITH_QGTL_OR_SUBSTRATE_TOOLS_CHECKOUT",
+        "TC_GEOREFINE_REF": "master",
+        "TC_GEOREFINE_REPO_DIR": "REPLACE_WITH_GEOREFINE_CHECKOUT",
+        "TC_GEOREFINE_REPO_URL": "REPLACE_WITH_GEOREFINE_GIT_URL",
+        "TC_GEOREFINE_RUN_TARGET": "qwen-cr070-rank-search",
+    }
+    launcher = [
+        "python3",
+        "scripts/start_georefine_qwen_rank_probe.py",
+        "--target",
+        "{node}",
+        "--resource",
+        "{resource}",
+        "--worker-resource",
+        "{worker_alias}",
+        "--authority-lease-id",
+        "{lease_id}",
+        "--authority-owner",
+        "{authority_owner}",
+        "--run-dir",
+        "{run_dir}",
+        "--json",
+    ]
+    return {
+        "schema": "tensorcore.job.v1",
+        "id": "georefine-qwen-rank-probe",
+        "owner": "georefine:qwen-rank-probe",
+        "tenant": "georefine",
+        "resources": {
+            "selector": {"backend": "cuda", "class": "cuda-training"},
+            "resource_class": "cuda_exclusive",
+            "exclusive": True,
+        },
+        "command": {"argv": launcher, "env": required_env},
+        "probe": ["ssh", "{node}", "check --run-dir {run_dir}"],
+        "completion": ["ssh", "{node}", "complete --run-dir {run_dir}"],
+        "admission": [
+            "ssh",
+            "{node}",
+            "admit --resource {resource} {gpu_reconciliation_admission_args}",
+        ],
+        "preflight": [*launcher, "--preflight-only"],
+        "post_start_probe": ["ssh", "{node}", "live --run-dir {run_dir}"],
+        "worker_identity": ["ssh", "{node}", "identity --resource {resource} --artifact-dir {run_dir}"],
+        "artifact": {
+            "root": "REPLACE_WITH_TRUSTED_EVIDENCE_ROOT",
+            "evidence_path": "REPLACE_WITH_TRUSTED_EVIDENCE_ROOT/georefine.scheduler.json",
+        },
+        "metadata": {
+            "project": "georefine",
+            "require_run_intent": True,
+            "run_dir": "REPLACE_WITH_RUN_DIR",
+            "scheduler_contract": "tensorcore_job_v1_cuda_exclusive_trusted_artifact",
+            "service": "qwen-rank-probe",
+        },
+    }
+
+
+def test_georefine_template_policy_accepts_generic_selector_template() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_georefine_template_policy(errors, georefine_template(), owner="template")
+    assert errors == []
+
+
+def test_georefine_template_policy_rejects_rendered_cosbox_template() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    template = georefine_template()
+    template["id"] = "georefine-qwen-rank-probe-cosbox"
+    template["sync_id"] = "georefine-qwen-rank-probe-cosbox"
+    template["desired_state"] = "paused"
+    template["resources"] = {"resource": "cosbox:cuda3090", "resource_class": "cuda_exclusive"}
+    template["command"] = copy.deepcopy(template["command"])
+    template["command"]["argv"] = [
+        "python3",
+        "scripts/start_georefine_qwen_rank_probe.py",
+        "--target",
+        "cosbox",
+        "--resource",
+        "{authority_resource}",
+        "--worker-resource",
+        "gpu:cosbox:0",
+        "--run-dir",
+        "/srv/tensorcore/.local/share/georefine_trusted/runs/qwen_rank_probe_cosbox",
+    ]
+    errors: list[str] = []
+    jobs.validate_georefine_template_policy(errors, template, owner="template")
+    assert any("resources.selector" in error for error in errors)
+    assert any("command.argv must pass --target {node}" in error for error in errors)
+    assert any("hardcoded host/path literal" in error for error in errors)
+
+
+def test_georefine_template_policy_requires_reconciliation_admission_placeholder() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    template = georefine_template()
+    template["admission"] = ["ssh", "{node}", "admit --resource {resource}"]
+    errors: list[str] = []
+    jobs.validate_georefine_template_policy(errors, template, owner="template")
+    assert any("gpu_reconciliation_admission_args" in error for error in errors)
+
+
+def cuda_smoke_template() -> dict:
+    remote = "cd ~/src/tensorcore && python3 scripts/check_cuda_smoke_evidence.py /tmp/cuda-smoke.json --json"
+    return {
+        "schema": "tensorcore.job.v1",
+        "id": "tensorcore-cuda-smoke-kernel-proof",
+        "owner": "tensorcore:cuda-smoke",
+        "tenant": "tensorcore",
+        "resources": {
+            "selector": {"backend": "cuda", "class": "cuda-training"},
+            "resource_class": "cuda_exclusive",
+            "exclusive": True,
+        },
+        "command": {"argv": ["ssh", "{node}", "cd ~/src/tensorcore && scripts/ci_cuda_smoke.sh"]},
+        "probe": ["ssh", "{node}", remote],
+        "completion": ["ssh", "{node}", remote],
+        "admission": [
+            "ssh",
+            "{node}",
+            "admit --resource {resource} {gpu_reconciliation_admission_args}",
+        ],
+        "post_start_probe": ["ssh", "{node}", remote],
+        "worker_identity": ["ssh", "{node}", "identity --resource {resource}"],
+        "metadata": {
+            "project": "tensorcore",
+            "require_run_intent": True,
+            "scheduler_contract": "tensorcore_job_v1_cuda_smoke_kernel_proof",
+            "service": "cuda-smoke",
+        },
+    }
+
+
+def test_cuda_smoke_template_policy_accepts_generic_selector_template() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_cuda_smoke_template_policy(errors, cuda_smoke_template(), owner="template")
+    assert errors == []
+
+
+def test_cuda_smoke_template_policy_rejects_hardcoded_admission_allowlist() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    template = cuda_smoke_template()
+    template["admission"] = [
+        "ssh",
+        "{node}",
+        "admit --resource {resource} --allow-process-regex steamwebhelper$",
+    ]
+    errors: list[str] = []
+    jobs.validate_cuda_smoke_template_policy(errors, template, owner="template")
+    assert any("gpu_reconciliation_admission_args" in error for error in errors)
+    assert any("hardcoded host/process literal" in error for error in errors)
+
+
+def test_cuda_smoke_template_policy_rejects_rendered_host_template() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    template = cuda_smoke_template()
+    template["id"] = "tensorcore-cuda-smoke-kernel-proof-cosbox"
+    template["sync_id"] = "tensorcore-cuda-smoke-kernel-proof-cosbox"
+    template["resources"] = {"resource": "cosbox:cuda3090", "resource_class": "cuda_exclusive"}
+    template["command"] = copy.deepcopy(template["command"])
+    template["command"]["argv"] = ["ssh", "cosbox", "cd ~/src/tensorcore && scripts/ci_cuda_smoke.sh"]
+    errors: list[str] = []
+    jobs.validate_cuda_smoke_template_policy(errors, template, owner="template")
+    assert any("resources.selector" in error for error in errors)
+    assert any("must use {node}" in error for error in errors)
+    assert any("hardcoded host/process literal" in error for error in errors)
+
+
+def qllm_phase1_cached_job(**overrides: object) -> dict:
+    row = {
+        "id": "qllm-phase1",
+        "desired_state": "paused",
+        "start_cmd": [
+            "python3",
+            "./scripts/start_qllm_phase1_cached.py",
+            "--target",
+            "cosbox",
+            "--json",
+        ],
+        "preflight_cmd": [
+            "python3",
+            "./scripts/start_qllm_phase1_cached.py",
+            "--target",
+            "cosbox",
+            "--preflight-only",
+            "--json",
+        ],
+        "probe_cmd": [
+            "ssh",
+            "cosbox",
+            "cd /srv/tensorcore/projects/semiclassical_qllm && python3 scripts/check_qllm_training_run.py /srv/tensorcore/.local/share/qllm_trusted/runs/phase1 --require-live --json",
+        ],
+        "post_start_probe_cmd": [
+            "ssh",
+            "cosbox",
+            "cd /srv/tensorcore/projects/semiclassical_qllm && python3 scripts/check_qllm_training_run.py /srv/tensorcore/.local/share/qllm_trusted/runs/phase1 --require-live --json",
+        ],
+        "completion_cmd": [
+            "ssh",
+            "cosbox",
+            "cd /srv/tensorcore/projects/semiclassical_qllm && python3 scripts/check_qllm_training_run.py /srv/tensorcore/.local/share/qllm_trusted/runs/phase1 --require-complete --json",
+        ],
+        "worker_identity_cmd": [
+            "ssh",
+            "cosbox",
+            "cd ~/src/tensorcore && python3 scripts/mesh_worker_identity.py --resource cosbox:cuda3090 --require-matched-cuda --json",
+        ],
+        "artifact_root": "/srv/tensorcore/.local/share/qllm_trusted/evidence",
+        "metadata": {
+            "scheduler_contract": "tensorcore_job_v1_qllm_phase1_cached",
+            "scheduler_pause_reason": "operator-started proof run",
+            "trusted_evidence_root": "/srv/tensorcore/.local/share/qllm_trusted/evidence",
+        },
+    }
+    row.update(overrides)
+    return row
+
+
+def test_tensorcore_job_v1_qllm_contract_requires_phase1_starter() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_job_policy(
+        errors,
+        qllm_phase1_cached_job(start_cmd=["python3", "scripts/start_windows_cuda_smoke.py", "--json"]),
+    )
+    assert any("start_qllm_phase1_cached.py" in error for error in errors)
+
+
+def test_tensorcore_job_v1_qllm_contract_requires_completion_checker() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_job_policy(
+        errors,
+        qllm_phase1_cached_job(completion_cmd=["python3", "scripts/check_windows_cuda_smoke_artifact.py", "--json"]),
+    )
+    assert any("check_qllm_training_run.py" in error for error in errors)
+
+
+def test_tensorcore_job_v1_qllm_contract_rejects_bytehole_evidence_root() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    row = qllm_phase1_cached_job(artifact_root="/srv/tensorcore/bytehole/qllm/evidence")
+    row["metadata"]["trusted_evidence_root"] = "/srv/tensorcore/bytehole/qllm/evidence"
+    jobs.validate_job_policy(errors, row)
+    assert any("trusted evidence root" in error for error in errors)
+
+
+def test_tensorcore_job_v1_qllm_contract_passes_policy() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_job_policy(errors, qllm_phase1_cached_job())
+    assert errors == []
+
+
+def test_cuda_inventory_requires_gpu_reconciliation_policy() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_gpu_reconciliation_policy(
+        errors,
+        "cosbox:cuda3090",
+        {
+            "id": "cosbox:cuda3090",
+            "backend": "cuda",
+            "status": "active",
+            "control_plane": "tensorcore_scheduler",
+        },
+    )
+    assert any("requires gpu_reconciliation policy" in error for error in errors)
+
+
+def test_cuda_inventory_accepts_enabled_gpu_reconciliation_policy() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_gpu_reconciliation_policy(
+        errors,
+        "cosbox:cuda3090",
+        {
+            "id": "cosbox:cuda3090",
+            "backend": "cuda",
+            "status": "active",
+            "control_plane": "tensorcore_scheduler",
+            "gpu_reconciliation": {
+                "enabled": True,
+                "poll_host": "cosbox",
+                "allow_process_regex": ["steamwebhelper$"],
+                "allowed_process_max_memory_mib": 64,
+            },
+        },
+    )
+    assert errors == []
+
+
+def test_cuda_inventory_disabled_gpu_reconciliation_requires_reason() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_gpu_reconciliation_policy(
+        errors,
+        "jack-blupc:cuda3060",
+        {
+            "id": "jack-blupc:cuda3060",
+            "backend": "cuda",
+            "status": "active",
+            "control_plane": "tensorcore_scheduler",
+            "gpu_reconciliation": {"enabled": False},
+        },
+    )
+    assert any("requires reason" in error for error in errors)
+
+
+def cuda_reconciliation_inventory() -> dict[str, dict]:
+    return {
+        "cosbox:cuda3090": {
+            "id": "cosbox:cuda3090",
+            "backend": "cuda",
+            "status": "active",
+            "control_plane": "tensorcore_scheduler",
+            "gpu_reconciliation": {
+                "enabled": True,
+                "poll_host": "cosbox",
+                "allow_process_regex": ["steamwebhelper$", "/opt/google/chrome/chrome"],
+                "allowed_process_max_memory_mib": 256,
+            },
+        },
+    }
+
+
+def test_cuda_job_admission_must_mirror_reconciliation_allowlist() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_admission_matches_gpu_reconciliation(
+        errors,
+        {
+            "id": "qllm-phase1",
+            "resource": "cosbox:cuda3090",
+            "resource_class": "cuda_exclusive",
+            "admission_cmd": [
+                "ssh",
+                "cosbox",
+                (
+                    "cd ~/src/tensorcore && python3 scripts/check_cuda_resource_admission.py "
+                    "--resource cosbox:cuda3090 --allow-process-regex steamwebhelper$ "
+                    "--allowed-process-max-memory-mib 16 --json"
+                ),
+            ],
+        },
+        cuda_reconciliation_inventory(),
+    )
+    assert any("gpu_reconciliation.allow_process_regex" in error for error in errors)
+    assert any("gpu_reconciliation.allowed_process_max_memory_mib=256" in error for error in errors)
+
+
+def test_cuda_job_admission_placeholder_matching_reconciliation_passes() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_admission_matches_gpu_reconciliation(
+        errors,
+        {
+            "id": "qllm-phase1",
+            "resource": "cosbox:cuda3090",
+            "resource_class": "cuda_exclusive",
+            "admission_cmd": [
+                "ssh",
+                "cosbox",
+                (
+                    "cd ~/src/tensorcore && python3 scripts/check_cuda_resource_admission.py "
+                    "--resource cosbox:cuda3090 {gpu_reconciliation_admission_args} --json"
+                ),
+            ],
+            "metadata": {
+                "gpu_reconciliation_admission_args": (
+                    "--allow-process-regex 'steamwebhelper$' "
+                    "--allow-process-regex /opt/google/chrome/chrome "
+                    "--allowed-process-max-memory-mib 256"
+                ),
+            },
+        },
+        cuda_reconciliation_inventory(),
+    )
+    assert errors == []
+
+
+def test_preflight_commands_must_emit_json() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_job_policy(
+        errors,
+        {
+            "id": "paused-preflight-no-json",
+            "desired_state": "paused",
+            "preflight_cmd": ["python3", "scripts/check_windows_persistent_launch.py"],
+            "metadata": {"scheduler_pause_reason": "waiting for durable launch path"},
+        },
+    )
+    assert any("must emit JSON" in error for error in errors)
+
+
+def test_git_access_preflight_requires_resource() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_job_policy(
+        errors,
+        {
+            "id": "paused-git-preflight",
+            "desired_state": "paused",
+            "preflight_cmd": [
+                "python3",
+                "scripts/check_mesh_git_access.py",
+                "--target",
+                "cosbox",
+                "--repo-url",
+                "git@example.com:repo.git",
+                "--json",
+            ],
+            "metadata": {"scheduler_pause_reason": "waiting for git access"},
+        },
+    )
+    assert any("must pass --resource" in error for error in errors)
+
+
+def test_paused_launchable_job_with_preflight_passes_policy() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_job_policy(
+        errors,
+        {
+            "id": "paused-good",
+            "desired_state": "paused",
+            "start_cmd": ["python3", "scripts/start_windows_cuda_smoke.py"],
+            "preflight_cmd": ["python3", "scripts/check_windows_persistent_launch.py", "--json"],
+            "metadata": {"scheduler_pause_reason": "waiting for durable launch path"},
+        },
+    )
+    assert errors == []
+
+
+def windows_scheduled_smoke_job(**overrides: object) -> dict:
+    row = {
+        "id": "windows-smoke",
+        "desired_state": "paused",
+        "start_cmd": [
+            "python3",
+            "scripts/start_windows_cuda_smoke.py",
+            "--duration-sec",
+            "3",
+            "--json",
+        ],
+        "preflight_cmd": ["python3", "scripts/check_windows_persistent_launch.py", "--json"],
+        "probe_cmd": [
+            "python3",
+            "scripts/check_windows_cuda_smoke_artifact.py",
+            "--require-live",
+            "--json",
+        ],
+        "post_start_probe_cmd": [
+            "python3",
+            "scripts/check_windows_cuda_smoke_artifact.py",
+            "--require-live-or-complete",
+            "--json",
+        ],
+        "completion_cmd": [
+            "python3",
+            "scripts/check_windows_cuda_smoke_artifact.py",
+            "--require-complete",
+            "--json",
+        ],
+        "metadata": {
+            "scheduler_contract": "windows_cuda_scheduled_smoke",
+            "scheduler_pause_reason": "waiting for durable launch path",
+        },
+    }
+    row.update(overrides)
+    return row
+
+
+def test_windows_scheduled_smoke_rejects_foreground_start() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_job_policy(
+        errors,
+        {
+            **windows_scheduled_smoke_job(),
+            "start_cmd": [
+                "python3",
+                "scripts/start_windows_cuda_smoke.py",
+                "--duration-sec",
+                "3",
+                "--foreground",
+            ],
+        },
+    )
+    assert any("must not use --foreground" in error for error in errors)
+
+
+def test_windows_scheduled_smoke_requires_persistent_preflight() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_job_policy(
+        errors,
+        {
+            **windows_scheduled_smoke_job(),
+            "preflight_cmd": ["python3", "scripts/check_windows_cuda_resource_admission.py", "--json"],
+        },
+    )
+    assert any("check_windows_persistent_launch.py" in error for error in errors)
+
+
+def test_windows_scheduled_smoke_requires_live_or_complete_post_start() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_job_policy(
+        errors,
+        {
+            **windows_scheduled_smoke_job(),
+            "post_start_probe_cmd": [
+                "python3",
+                "scripts/check_windows_cuda_smoke_artifact.py",
+                "--require-complete",
+                "--json",
+            ],
+        },
+    )
+    assert any("post_start_probe_cmd must accept live or completed" in error for error in errors)
+
+
+def test_windows_scheduled_smoke_probe_must_not_accept_completed_artifacts() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_job_policy(
+        errors,
+        {
+            **windows_scheduled_smoke_job(),
+            "probe_cmd": [
+                "python3",
+                "scripts/check_windows_cuda_smoke_artifact.py",
+                "--require-live-or-complete",
+                "--json",
+            ],
+        },
+    )
+    assert any("must not treat completed artifacts as live" in error for error in errors)
+
+
+def test_windows_scheduled_smoke_rejects_long_duration() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_job_policy(
+        errors,
+        {
+            **windows_scheduled_smoke_job(),
+            "start_cmd": [
+                "python3",
+                "scripts/start_windows_cuda_smoke.py",
+                "--duration-sec",
+                "30",
+            ],
+        },
+    )
+    assert any("duration must be <=" in error for error in errors)
+
+
+def test_windows_scheduled_smoke_contract_passes_policy() -> None:
+    jobs = load_script("check_mesh_resource_jobs_under_test", ROOT / "scripts" / "check_mesh_resource_jobs.py")
+    errors: list[str] = []
+    jobs.validate_job_policy(
+        errors,
+        {
+            **windows_scheduled_smoke_job(),
+        },
+    )
+    assert errors == []
+
+
+def test_inventory_rejects_missing_repo_paths() -> None:
+    inventory = load_script(
+        "check_mesh_resource_inventory_under_test",
+        ROOT / "scripts" / "check_mesh_resource_inventory.py",
+    )
+    errors: list[str] = []
+    inventory.validate_checked_in_command(
+        errors,
+        "node:gpu",
+        "cuda_probe_cmd",
+        ["python3", "scripts/does_not_exist.py"],
+    )
+    assert any("missing repo path" in error for error in errors)
+
+
+def main() -> int:
+    test_jobs_reject_private_remote_wrappers()
+    test_jobs_reject_host_local_run_scripts()
+    test_jobs_reject_missing_repo_paths_inside_remote_strings()
+    test_jobs_allow_repo_local_helpers()
+    test_paused_launchable_jobs_require_preflight()
+    test_paused_jobs_require_pause_reason()
+    test_cancelled_disabled_jobs_do_not_require_preflight()
+    test_disabled_jobs_require_cancel_metadata()
+    test_running_jobs_reject_host_local_systemd_starts()
+    test_running_jobs_reject_legacy_georefine_direct_starter()
+    test_tensorcore_job_v1_georefine_contract_requires_approved_starter()
+    test_tensorcore_job_v1_georefine_contract_accepts_native_qllm_starter()
+    test_georefine_template_policy_accepts_generic_selector_template()
+    test_georefine_template_policy_rejects_rendered_cosbox_template()
+    test_georefine_template_policy_requires_reconciliation_admission_placeholder()
+    test_cuda_smoke_template_policy_accepts_generic_selector_template()
+    test_cuda_smoke_template_policy_rejects_hardcoded_admission_allowlist()
+    test_cuda_smoke_template_policy_rejects_rendered_host_template()
+    test_tensorcore_job_v1_qllm_contract_requires_phase1_starter()
+    test_tensorcore_job_v1_qllm_contract_requires_completion_checker()
+    test_tensorcore_job_v1_qllm_contract_rejects_bytehole_evidence_root()
+    test_tensorcore_job_v1_qllm_contract_passes_policy()
+    test_cuda_inventory_requires_gpu_reconciliation_policy()
+    test_cuda_inventory_accepts_enabled_gpu_reconciliation_policy()
+    test_cuda_inventory_disabled_gpu_reconciliation_requires_reason()
+    test_cuda_job_admission_must_mirror_reconciliation_allowlist()
+    test_cuda_job_admission_placeholder_matching_reconciliation_passes()
+    test_preflight_commands_must_emit_json()
+    test_git_access_preflight_requires_resource()
+    test_paused_launchable_job_with_preflight_passes_policy()
+    test_windows_scheduled_smoke_rejects_foreground_start()
+    test_windows_scheduled_smoke_requires_persistent_preflight()
+    test_windows_scheduled_smoke_requires_live_or_complete_post_start()
+    test_windows_scheduled_smoke_probe_must_not_accept_completed_artifacts()
+    test_windows_scheduled_smoke_rejects_long_duration()
+    test_windows_scheduled_smoke_contract_passes_policy()
+    test_inventory_rejects_missing_repo_paths()
+    print("mesh resource config validator selftest OK")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

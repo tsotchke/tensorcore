@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0",
+  "thresholds": {
+    "max_file_lines": 2000
+  },
+  "justifications": [
+    {
+      "path": "python/tensorcore/__init__.py",
+      "status": "compatibility_facade",
+      "task_id": "python-binding-module-split",
+      "reason": "The Python binding remains a single-file compatibility facade because release packaging, source-tree imports, and ABI guard scripts currently copy or inspect python/tensorcore/__init__.py as the cohesive ctypes mirror of the public C ABI.",
+      "mitigation": "Keep new native entry points covered by the FFI, constants, ABI-layout, and smoke checks, then split declarations and wrapper groups into focused modules behind the same package facade once the release wheel copy path and guard scripts consume that module boundary."
+    },
+    {
+      "path": "scripts/mesh_resource_scheduler.py",
+      "status": "campaign_closure",
+      "task_id": "tensorcore-production-release-closure-20260824",
+      "reason": "The scheduler is temporarily the cohesive operational transaction boundary for queue integrity, topology authority, admission, leases, placement, launch, identity, and reconciliation. Splitting it before those fail-closed contracts share a stable internal result schema would create multiple authorities during production closure.",
+      "mitigation": "Keep every state transition covered by mesh_resource_scheduler_selftest.py during Wave 1. After the release closure, extract schema/topology validation, queue-event integrity, and placement into focused modules behind one scheduler CLI, with the existing selftest corpus run before and after each extraction."
+    },
+    {
+      "path": "scripts/mesh_resource_scheduler_selftest.py",
+      "status": "campaign_closure",
+      "task_id": "tensorcore-production-release-closure-20260824",
+      "reason": "The scheduler regression corpus is a temporary co-location of cross-cutting transactions whose setup and failure assertions share one in-process fixture. It remains cohesive while the scheduler contract is being made fail-closed so test discovery cannot silently omit a split module.",
+      "mitigation": "Maintain full-file execution in CI and preserve the 61-script aggregate gate. Once scheduler modules stabilize, split the corpus by queue integrity, placement, admission, lifecycle, and reconciliation while retaining a manifest test that proves every partition is executed."
+    }
+  ]
+}

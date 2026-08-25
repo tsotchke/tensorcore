@@ -1,0 +1,58 @@
+;;
+;; riemannian_adam.esk — Eshkol bindings for the RiemannianAdam optimizer.
+;;
+;; Three per-manifold variants (matching GeoRefine's geometric_lm.py):
+;;
+;;   tc-riemannian-adam-step-poincare   : Poincaré ball with curvature c
+;;   tc-riemannian-adam-step-sphere     : unit sphere
+;;   tc-riemannian-adam-step-euclidean  : standard AdamW (c=0 / R^D)
+;;
+;; Each step fuses:
+;;   - tangent-space projection of the Euclidean gradient
+;;   - Adam moment updates (m, v) with bias correction
+;;   - decoupled (AdamW-style) weight decay
+;;   - exp-map retraction back onto the manifold
+;;   - parallel transport of the first moment to the new tangent space
+;;
+;; Inputs are fp32 [N, D] buffers; bc1, bc2 are caller-computed
+;; (1 − βᵗ) bias corrections, matching tc-adamw-step.
+;;
+;; Module: eshkol.riemannian_adam — RiemannianAdam optimizer steps
+;; per manifold (Poincaré ball, sphere, Euclidean). Dispatches into
+;; lib/ops/riemannian_adam_cpu.cpp.
+(provide tc-riemannian-adam-step-poincare
+         tc-riemannian-adam-step-sphere
+         tc-riemannian-adam-step-euclidean)
+
+(extern i32 __tc-riemannian-adam-step-poincare
+        ptr ptr ptr ptr ptr i32 i32 double double double double double double double double
+        :real tc_eshkol_riemannian_adam_step_poincare)
+
+(extern i32 __tc-riemannian-adam-step-sphere
+        ptr ptr ptr ptr ptr i32 i32 double double double double double double double
+        :real tc_eshkol_riemannian_adam_step_sphere)
+
+(extern i32 __tc-riemannian-adam-step-euclidean
+        ptr ptr ptr ptr ptr i32 i32 double double double double double double double
+        :real tc_eshkol_riemannian_adam_step_euclidean)
+
+(define (tc-riemannian-adam-step-poincare ctx params grads m v N D c
+                                          lr beta1 beta2 eps wd bc1 bc2)
+  (__tc-riemannian-adam-step-poincare ctx params grads m v N D
+    (exact->inexact c) (exact->inexact lr) (exact->inexact beta1)
+    (exact->inexact beta2) (exact->inexact eps) (exact->inexact wd)
+    (exact->inexact bc1) (exact->inexact bc2)))
+
+(define (tc-riemannian-adam-step-sphere ctx params grads m v N D
+                                        lr beta1 beta2 eps wd bc1 bc2)
+  (__tc-riemannian-adam-step-sphere ctx params grads m v N D
+    (exact->inexact lr) (exact->inexact beta1) (exact->inexact beta2)
+    (exact->inexact eps) (exact->inexact wd)
+    (exact->inexact bc1) (exact->inexact bc2)))
+
+(define (tc-riemannian-adam-step-euclidean ctx params grads m v N D
+                                           lr beta1 beta2 eps wd bc1 bc2)
+  (__tc-riemannian-adam-step-euclidean ctx params grads m v N D
+    (exact->inexact lr) (exact->inexact beta1) (exact->inexact beta2)
+    (exact->inexact eps) (exact->inexact wd)
+    (exact->inexact bc1) (exact->inexact bc2)))

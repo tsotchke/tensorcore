@@ -1,0 +1,349 @@
+#!/usr/bin/env python3
+"""Compare public C struct layout against the Python ctypes declarations."""
+
+from __future__ import annotations
+
+import ctypes
+import os
+import pathlib
+import subprocess
+import sys
+import tempfile
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+SOURCE = r'''
+#include <stddef.h>
+#include <stdio.h>
+#include "tensorcore/tensorcore.h"
+
+#define SIZE(type) printf("sizeof." #type "=%zu\n", sizeof(type))
+#define FIELD(type, field) printf("offsetof." #type "." #field "=%zu\n", offsetof(type, field))
+
+int main(void) {
+    SIZE(tc_device_info);
+    FIELD(tc_device_info, family);
+    FIELD(tc_device_info, name);
+    FIELD(tc_device_info, max_buffer_bytes);
+    FIELD(tc_device_info, recommended_working_set_bytes);
+    FIELD(tc_device_info, max_threadgroup_memory);
+    FIELD(tc_device_info, max_threads_per_threadgroup);
+    FIELD(tc_device_info, thread_execution_width);
+    FIELD(tc_device_info, unified_memory);
+    FIELD(tc_device_info, supports_bf16_simdgroup);
+    FIELD(tc_device_info, supports_i8_simdgroup);
+    FIELD(tc_device_info, supports_tensorops_m5);
+    FIELD(tc_device_info, supports_fp64_native);
+
+    SIZE(tc_runtime_capabilities);
+    FIELD(tc_runtime_capabilities, struct_size);
+    FIELD(tc_runtime_capabilities, abi_version);
+    FIELD(tc_runtime_capabilities, runtime_version_major);
+    FIELD(tc_runtime_capabilities, runtime_version_minor);
+    FIELD(tc_runtime_capabilities, runtime_version_patch);
+    FIELD(tc_runtime_capabilities, reserved0);
+    FIELD(tc_runtime_capabilities, known_capability_mask);
+    FIELD(tc_runtime_capabilities, available_capability_mask);
+    FIELD(tc_runtime_capabilities, compiled_backend_mask);
+    FIELD(tc_runtime_capabilities, available_backend_mask);
+    FIELD(tc_runtime_capabilities, reserved);
+
+    SIZE(tc_transport_auth_key);
+    FIELD(tc_transport_auth_key, identity);
+    FIELD(tc_transport_auth_key, key_id);
+    FIELD(tc_transport_auth_key, secret);
+    FIELD(tc_transport_auth_key, secret_bytes);
+
+    SIZE(tc_transport_auth_config);
+    FIELD(tc_transport_auth_config, abi_version);
+    FIELD(tc_transport_auth_config, local_identity);
+    FIELD(tc_transport_auth_config, active_key_id);
+    FIELD(tc_transport_auth_config, keys);
+    FIELD(tc_transport_auth_config, key_count);
+
+    SIZE(tc_gemm_desc);
+    FIELD(tc_gemm_desc, M);
+    FIELD(tc_gemm_desc, N);
+    FIELD(tc_gemm_desc, K);
+    FIELD(tc_gemm_desc, a_dtype);
+    FIELD(tc_gemm_desc, b_dtype);
+    FIELD(tc_gemm_desc, c_dtype);
+    FIELD(tc_gemm_desc, accum_dtype);
+    FIELD(tc_gemm_desc, transpose_a);
+    FIELD(tc_gemm_desc, transpose_b);
+    FIELD(tc_gemm_desc, alpha);
+    FIELD(tc_gemm_desc, beta);
+    FIELD(tc_gemm_desc, lda);
+    FIELD(tc_gemm_desc, ldb);
+    FIELD(tc_gemm_desc, ldc);
+
+    SIZE(tc_gemm_batched_desc);
+    FIELD(tc_gemm_batched_desc, base);
+    FIELD(tc_gemm_batched_desc, batch);
+    FIELD(tc_gemm_batched_desc, stride_a);
+    FIELD(tc_gemm_batched_desc, stride_b);
+    FIELD(tc_gemm_batched_desc, stride_c);
+
+    SIZE(tc_attention_desc);
+    FIELD(tc_attention_desc, batch);
+    FIELD(tc_attention_desc, heads);
+    FIELD(tc_attention_desc, seq_q);
+    FIELD(tc_attention_desc, seq_kv);
+    FIELD(tc_attention_desc, head_dim);
+    FIELD(tc_attention_desc, io_dtype);
+    FIELD(tc_attention_desc, accum_dtype);
+    FIELD(tc_attention_desc, softmax_scale);
+    FIELD(tc_attention_desc, causal);
+    FIELD(tc_attention_desc, return_lse);
+    FIELD(tc_attention_desc, kv_heads);
+    FIELD(tc_attention_desc, window_size);
+    FIELD(tc_attention_desc, alibi_slopes);
+
+    SIZE(tc_hip_device_info);
+    FIELD(tc_hip_device_info, vendor);
+    FIELD(tc_hip_device_info, device_name);
+    FIELD(tc_hip_device_info, driver_version);
+    FIELD(tc_hip_device_info, opencl_version);
+    FIELD(tc_hip_device_info, global_memory_bytes);
+    FIELD(tc_hip_device_info, local_memory_bytes);
+    FIELD(tc_hip_device_info, compute_units);
+    FIELD(tc_hip_device_info, max_workgroup_size);
+    FIELD(tc_hip_device_info, preferred_subgroup_size);
+    FIELD(tc_hip_device_info, supports_fp16);
+    FIELD(tc_hip_device_info, supports_fp64);
+    FIELD(tc_hip_device_info, supports_int8_dot);
+    FIELD(tc_hip_device_info, unified_memory);
+
+    SIZE(tc_cuda_device_info);
+    FIELD(tc_cuda_device_info, device_name);
+    FIELD(tc_cuda_device_info, compute_capability);
+    FIELD(tc_cuda_device_info, major);
+    FIELD(tc_cuda_device_info, minor);
+    FIELD(tc_cuda_device_info, global_memory_bytes);
+    FIELD(tc_cuda_device_info, shared_memory_per_block);
+    FIELD(tc_cuda_device_info, multiprocessor_count);
+    FIELD(tc_cuda_device_info, max_threads_per_block);
+    FIELD(tc_cuda_device_info, warp_size);
+    FIELD(tc_cuda_device_info, supports_fp16);
+    FIELD(tc_cuda_device_info, supports_bf16);
+    FIELD(tc_cuda_device_info, supports_int8_tensor_core);
+    FIELD(tc_cuda_device_info, supports_tf32);
+    FIELD(tc_cuda_device_info, unified_memory);
+
+    SIZE(tc_diloco_config);
+    FIELD(tc_diloco_config, inner_steps);
+    FIELD(tc_diloco_config, outer_lr);
+    FIELD(tc_diloco_config, outer_momentum);
+    FIELD(tc_diloco_config, outer_beta2);
+    FIELD(tc_diloco_config, outer_eps);
+    FIELD(tc_diloco_config, outer_optimizer);
+    FIELD(tc_diloco_config, compress);
+    FIELD(tc_diloco_config, async_overlap);
+    FIELD(tc_diloco_config, tolerate_dropouts);
+
+    SIZE(tc_diloco_capabilities);
+    FIELD(tc_diloco_capabilities, struct_size);
+    FIELD(tc_diloco_capabilities, abi_version);
+    FIELD(tc_diloco_capabilities, runtime_version_major);
+    FIELD(tc_diloco_capabilities, runtime_version_minor);
+    FIELD(tc_diloco_capabilities, runtime_version_patch);
+    FIELD(tc_diloco_capabilities, reserved0);
+    FIELD(tc_diloco_capabilities, state_abi_version_min);
+    FIELD(tc_diloco_capabilities, state_abi_version_max);
+    FIELD(tc_diloco_capabilities, state_abi_version_current);
+    FIELD(tc_diloco_capabilities, state_header_size);
+    FIELD(tc_diloco_capabilities, state_payload_digest_bytes);
+    FIELD(tc_diloco_capabilities, reserved1);
+    FIELD(tc_diloco_capabilities, outer_optimizer_supported_mask);
+    FIELD(tc_diloco_capabilities, outer_optimizer_serializable_mask);
+    FIELD(tc_diloco_capabilities, compress_supported_mask);
+    FIELD(tc_diloco_capabilities, compress_serializable_mask);
+    FIELD(tc_diloco_capabilities, compress_sparse_wire_mask);
+    FIELD(tc_diloco_capabilities, compress_dense_fp32_wire_mask);
+    FIELD(tc_diloco_capabilities, state_feature_mask);
+    FIELD(tc_diloco_capabilities, async_overlap_supported);
+    FIELD(tc_diloco_capabilities, async_state_serializable);
+    FIELD(tc_diloco_capabilities, tolerate_dropouts_supported);
+    FIELD(tc_diloco_capabilities, reserved2);
+    FIELD(tc_diloco_capabilities, reserved);
+
+    SIZE(tc_gguf_tensor_info);
+    FIELD(tc_gguf_tensor_info, name);
+    FIELD(tc_gguf_tensor_info, n_dims);
+    FIELD(tc_gguf_tensor_info, dims);
+    FIELD(tc_gguf_tensor_info, type);
+    FIELD(tc_gguf_tensor_info, offset);
+    FIELD(tc_gguf_tensor_info, n_bytes);
+    FIELD(tc_gguf_tensor_info, data);
+
+    SIZE(tc_gguf_loaded_tensor_info);
+    FIELD(tc_gguf_loaded_tensor_info, name);
+    FIELD(tc_gguf_loaded_tensor_info, n_dims);
+    FIELD(tc_gguf_loaded_tensor_info, dims);
+    FIELD(tc_gguf_loaded_tensor_info, type);
+    FIELD(tc_gguf_loaded_tensor_info, offset);
+    FIELD(tc_gguf_loaded_tensor_info, n_bytes);
+    FIELD(tc_gguf_loaded_tensor_info, buffer);
+
+    SIZE(tc_gguf_llama_config);
+    FIELD(tc_gguf_llama_config, context_length);
+    FIELD(tc_gguf_llama_config, embedding_length);
+    FIELD(tc_gguf_llama_config, feed_forward_length);
+    FIELD(tc_gguf_llama_config, block_count);
+    FIELD(tc_gguf_llama_config, attention_head_count);
+    FIELD(tc_gguf_llama_config, attention_head_count_kv);
+    FIELD(tc_gguf_llama_config, rope_dimension_count);
+    FIELD(tc_gguf_llama_config, vocab_size);
+    FIELD(tc_gguf_llama_config, rms_norm_epsilon);
+    FIELD(tc_gguf_llama_config, rope_freq_base);
+    FIELD(tc_gguf_llama_config, rope_freq_scale);
+
+    SIZE(tc_gguf_quantized_matrix_info);
+    FIELD(tc_gguf_quantized_matrix_info, N);
+    FIELD(tc_gguf_quantized_matrix_info, K);
+    FIELD(tc_gguf_quantized_matrix_info, gguf_type);
+    FIELD(tc_gguf_quantized_matrix_info, quant_type);
+    FIELD(tc_gguf_quantized_matrix_info, n_bytes);
+    FIELD(tc_gguf_quantized_matrix_info, buffer);
+    return 0;
+}
+'''
+
+
+def c_layout() -> dict[str, int]:
+    cc = os.environ.get("CC", "cc")
+    with tempfile.TemporaryDirectory(prefix="tensorcore-abi-layout.") as tmp:
+        tmp_path = pathlib.Path(tmp)
+        source = tmp_path / "layout.c"
+        exe = tmp_path / "layout"
+        source.write_text(SOURCE, encoding="utf-8")
+        subprocess.run(
+            [cc, "-std=c11", "-I", str(ROOT / "include"), str(source), "-o", str(exe)],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        output = subprocess.check_output([str(exe)], text=True)
+
+    layout: dict[str, int] = {}
+    for line in output.splitlines():
+        key, value = line.split("=", 1)
+        layout[key] = int(value)
+    return layout
+
+
+def python_layout() -> dict[str, int]:
+    sys.path.insert(0, str(ROOT / "python"))
+    import tensorcore as tc
+
+    specs = {
+        "tc_device_info": (tc.TCDeviceInfo, [
+            "family", "name", "max_buffer_bytes", "recommended_working_set_bytes",
+            "max_threadgroup_memory", "max_threads_per_threadgroup",
+            "thread_execution_width", "unified_memory", "supports_bf16_simdgroup",
+            "supports_i8_simdgroup", "supports_tensorops_m5", "supports_fp64_native",
+        ]),
+        "tc_runtime_capabilities": (tc.TCRuntimeCapabilities, [
+            "struct_size", "abi_version", "runtime_version_major",
+            "runtime_version_minor", "runtime_version_patch", "reserved0",
+            "known_capability_mask", "available_capability_mask",
+            "compiled_backend_mask", "available_backend_mask", "reserved",
+        ]),
+        "tc_transport_auth_key": (tc.TCTransportAuthKey, [
+            "identity", "key_id", "secret", "secret_bytes",
+        ]),
+        "tc_transport_auth_config": (tc.TCTransportAuthConfig, [
+            "abi_version", "local_identity", "active_key_id", "keys",
+            "key_count",
+        ]),
+        "tc_gemm_desc": (tc.TCGemmDesc, [
+            "M", "N", "K", "a_dtype", "b_dtype", "c_dtype", "accum_dtype",
+            "transpose_a", "transpose_b", "alpha", "beta", "lda", "ldb", "ldc",
+        ]),
+        "tc_gemm_batched_desc": (tc.TCGemmBatchedDesc, [
+            "base", "batch", "stride_a", "stride_b", "stride_c",
+        ]),
+        "tc_attention_desc": (tc.TCAttentionDesc, [
+            "batch", "heads", "seq_q", "seq_kv", "head_dim", "io_dtype",
+            "accum_dtype", "softmax_scale", "causal", "return_lse",
+            "kv_heads", "window_size", "alibi_slopes",
+        ]),
+        "tc_hip_device_info": (tc.TCHipDeviceInfo, [
+            "vendor", "device_name", "driver_version", "opencl_version",
+            "global_memory_bytes", "local_memory_bytes", "compute_units",
+            "max_workgroup_size", "preferred_subgroup_size", "supports_fp16",
+            "supports_fp64", "supports_int8_dot", "unified_memory",
+        ]),
+        "tc_cuda_device_info": (tc.TCCudaDeviceInfo, [
+            "device_name", "compute_capability", "major", "minor",
+            "global_memory_bytes", "shared_memory_per_block",
+            "multiprocessor_count", "max_threads_per_block", "warp_size",
+            "supports_fp16", "supports_bf16", "supports_int8_tensor_core",
+            "supports_tf32", "unified_memory",
+        ]),
+        "tc_diloco_config": (tc.TCDiLoCoConfig, [
+            "inner_steps", "outer_lr", "outer_momentum", "outer_beta2",
+            "outer_eps", "outer_optimizer", "compress", "async_overlap",
+            "tolerate_dropouts",
+        ]),
+        "tc_diloco_capabilities": (tc.TCDiLoCoCapabilities, [
+            "struct_size", "abi_version", "runtime_version_major",
+            "runtime_version_minor", "runtime_version_patch", "reserved0",
+            "state_abi_version_min", "state_abi_version_max",
+            "state_abi_version_current", "state_header_size",
+            "state_payload_digest_bytes", "reserved1",
+            "outer_optimizer_supported_mask", "outer_optimizer_serializable_mask",
+            "compress_supported_mask", "compress_serializable_mask",
+            "compress_sparse_wire_mask", "compress_dense_fp32_wire_mask",
+            "state_feature_mask", "async_overlap_supported",
+            "async_state_serializable", "tolerate_dropouts_supported",
+            "reserved2", "reserved",
+        ]),
+        "tc_gguf_tensor_info": (tc.TCGGufTensorInfo, [
+            "name", "n_dims", "dims", "type", "offset", "n_bytes", "data",
+        ]),
+        "tc_gguf_loaded_tensor_info": (tc.TCGGufLoadedTensorInfo, [
+            "name", "n_dims", "dims", "type", "offset", "n_bytes", "buffer",
+        ]),
+        "tc_gguf_llama_config": (tc.TCGGufLlamaConfig, [
+            "context_length", "embedding_length", "feed_forward_length", "block_count",
+            "attention_head_count", "attention_head_count_kv", "rope_dimension_count",
+            "vocab_size", "rms_norm_epsilon", "rope_freq_base", "rope_freq_scale",
+        ]),
+        "tc_gguf_quantized_matrix_info": (tc.TCGGufQuantizedMatrixInfo, [
+            "N", "K", "gguf_type", "quant_type", "n_bytes", "buffer",
+        ]),
+    }
+
+    layout: dict[str, int] = {}
+    for c_name, (py_type, fields) in specs.items():
+        layout[f"sizeof.{c_name}"] = ctypes.sizeof(py_type)
+        for field in fields:
+            layout[f"offsetof.{c_name}.{field}"] = getattr(py_type, field).offset
+    return layout
+
+
+def main() -> int:
+    expected = c_layout()
+    actual = python_layout()
+    mismatches = []
+
+    for key in sorted(set(expected) | set(actual)):
+        c_value = expected.get(key)
+        py_value = actual.get(key)
+        if c_value != py_value:
+            mismatches.append(f"{key}: C={c_value} Python={py_value}")
+
+    if mismatches:
+        print("Python ctypes ABI layout mismatch:", file=sys.stderr)
+        for mismatch in mismatches:
+            print(f"  {mismatch}", file=sys.stderr)
+        return 1
+
+    print(f"python ABI layout OK: {len(expected)} checks")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

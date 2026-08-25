@@ -1,0 +1,346 @@
+# tensorcore
+
+**A cross-platform tensor runtime, with Metal as its flagship backend.**
+
+`tensorcore` is the missing software layer that turns the matrix units on
+M-series GPUs into a training-grade foundation. It does for Metal what
+cuBLAS + cuDNN + CUTLASS + NCCL + ggml-quants combined do for CUDA: one
+hardware-aware library and one C ABI. Version 0.1.23 is release-qualified on
+Apple Metal, portable macOS/Linux/Windows CPU targets, Jetson CUDA 11.4, and
+Blackwell CUDA 13. M5/Metal 4 and HIP source paths remain experimental until
+physical runtime evidence exists.
+
+## Release status — 0.1.23
+
+| Surface | Qualification |
+|---|---|
+| Apple Metal | Full 53-test representative M2 Ultra run |
+| Portable CPU | arm64 local suite plus Windows x64/MSVC build, tests, install, and Python DLL smoke |
+| NVIDIA CUDA | Jetson `sm_72` and RTX PRO 6000 Blackwell `sm_120`; explicit CUDA backend/kernel evidence |
+| DiLoCo | Capability discovery, deterministic v1/v2 state, SHA-256 v2 integrity, mixed-version tests |
+| Bindings | Python, Rust, Swift, WebAssembly, PyTorch, Eshkol, C, C++, CMake, and pkg-config contracts |
+| Not qualified | Physical M5 TensorOps, HIP/chipStar, Ampere release evidence, Windows CUDA |
+
+See **[the complete 0.1.23 release notes](docs/releases/0.1.23.md)** for the
+support matrix, ABI changes, upgrade guidance, artifacts, evidence, and known
+limitations. “Implemented” is not treated as “supported” without a qualifying
+runtime receipt.
+
+```
+                          ┌──────────────────────┐
+                          │   tensorcore         │
+                          │   ─ tc_gemm          │  ← cuBLAS
+                          │   ─ tc_attention_*   │  ← cuDNN attention
+                          │   ─ tc_conv2d_*      │  ← cuDNN conv
+                          │   ─ tc_rmsnorm / RoPE│  ← cuDNN norms
+                          │   ─ tc_swiglu / softmax / AdamW
+                          │   ─ tc_gemv_quantized│  ← ggml Q4_0 / Q8_0
+                          │   ─ tc_gguf_*        │  ← GGUF v3 reader
+                          │   ─ tc_allreduce / broadcast / allgather
+                          │                       ─ NCCL primitives
+                          └──────────┬───────────┘
+                                     │
+                          ┌──────────▼───────────┐
+                          │  Apple GPU            │
+                          │  ─ simdgroup_matrix   │  (M1+)
+                          │  ─ mpp::tensor_ops    │  (M5+)
+                          └───────────────────────┘
+```
+
+## The thesis
+
+NVIDIA's moat in AI is **software stack maturity × silicon × interconnect**.
+Two of those three are pure software. Apple has the silicon: per-watt
+inference that NVIDIA can't match without changing chips, and unified
+memory that removes the entire host/device transfer problem class. What
+Apple is missing is the *cuBLAS-grade kernel library on top of Metal*.
+
+`tensorcore` is the bet that closing that software gap completely changes
+the economics for any team training models that fit in ≤32 Macs of unified
+memory.
+
+For the direct mapping of every CUDA primitive to its tensorcore
+equivalent, see **[docs/cuda_comparison.md](docs/cuda_comparison.md)**.
+
+## What v0.1.23 ships (Metal measurements on M2 Ultra)
+
+| Component | Status | Numbers |
+|---|---|---|
+| `tc_gemm` fp32 | bit-exact vs Accelerate | 2.46 TFLOPS @ 4096³ |
+| `tc_gemm` fp16 (Apple7+) | scaled-RMS err ≤ 5e-3 vs ref | **17.88 TFLOPS @ 4096³ (~66% of peak)** |
+| `tc_gemm` bf16 (Apple9+ native, Apple7..8 fallback) | scaled-RMS ≤ 3e-3 | correctness verified |
+| `tc_gemm` int8 (public MPS fallback on Apple GPUs) | bit-exact i32 results in the tested matrix suite | correctness verified |
+| `tc_gemm_*_128` 128×128 tile | env-flag opt-in | regresses v0.1; v0.2 retunes |
+| `tc_attention_forward` fp16 D=64, causal/GQA/window/ALiBi | scaled-RMS ≤ 1e-3 | 7.07 TFLOPS @ B=1, H=32, S=4096 |
+| `tc_attention_forward` fp16 D=128 | correctness verified | bench harness v0.2 |
+| `tc_attention_backward` fp16 D=64/D=128 | scaled-RMS ≤ 3e-3 | LSE-saved scheme |
+| Q4_0 / Q8_0 quantized GEMV plus GPU quantize | bit-exact vs dequant ref | 7B decode harness |
+| Q4_0 async-stream batched GEMV | ~79% of LPDDR5 peak bw | **186 tok/s, 632 GB/s @ synthetic 7B decode** |
+| RMSnorm / LayerNorm / RoPE / SwiGLU / softmax / AdamW | Metal, portable CPU, and CUDA managed-memory kernels | C tests + Python smoke |
+| Fused RMSnorm/LayerNorm+GEMV | inference projection primitives | correctness vs separate paths |
+| Conv2D fwd + backward (im2col + GEMM) | scaled-RMS ≤ 1e-3 | multi-batch validated |
+| GGUF reader | v3 metadata, tensors, bulk copy, Q4/Q8 descriptors | synthetic + Q4 GEMV end-to-end |
+| Python ctypes binding | full ABI surface, NumPy interop | covered by CTest `python_basic` |
+| Distributed (single-host ring + portable GLOO TCP) | bit-exact local ranks | thread, fork, and TCP transports |
+| MPS + Accelerate fallback | wired, exercised by dispatch | — |
+| **Portable CPU backend** | builds on Linux / Intel-Mac with `TC_ENABLE_METAL=OFF`; covers buffers, streams, GEMM, attention/training/conv, GGUF, `TC_DIST_SINGLE`, GLOO TCP, DiLoCo, and sparse compression. | for non-Apple mesh workers |
+| CTest suite | all applicable tests pass on Metal and portable CPU builds | `ctest --test-dir build` |
+| CMake / pkg-config / Python install | `tensorcore::tensorcore[_shared]`, `tensorcore.pc` | out-of-tree consumers tested on macOS, Linux, and Windows |
+
+## Public C ABI — `include/tensorcore/*.h`
+
+A stable C ABI you can read end-to-end in an afternoon. Thirty-seven public
+headers including the umbrella. Grouped:
+
+- **Lifecycle:** `tc_init`, `tc_shutdown`, `tc_device_info_get`,
+  `tc_buffer_alloc`/`_free`/`_map`/`_size`, `tc_stream_create`/`_destroy`/`_sync`.
+- **GEMM:** `tc_gemm`, `tc_gemm_async`, `tc_gemm_batched` (fp16, bf16, fp32,
+  int8). Diagnostics: `tc_last_backend`, `tc_backend_name`.
+- **Attention:** `tc_attention_forward`/`_async`, `tc_attention_backward`.
+  Causal, GQA, sliding window, ALiBi, LSE save — all via the same descriptor.
+- **Training kernels:** `tc_rmsnorm_*`, `tc_layernorm_*`, `tc_rope_forward`,
+  `tc_swiglu_*`, `tc_softmax_*`, `tc_adamw_step`,
+  `tc_fused_rmsnorm_gemv`, `tc_fused_layernorm_gemv`.
+- **Conv2D:** `tc_conv2d_forward`, `tc_conv2d_backward_input`,
+  `tc_conv2d_backward_weight`.
+- **Quantized:** `tc_quantize_weights`, `tc_gemv_quantized`/`_async`,
+  `tc_quantized_size`.
+- **GGUF:** `tc_gguf_open`/`_close`, metadata getters, tensor iteration,
+  `tc_gguf_load_supported_tensors`, matrix descriptor helpers,
+  `tc_gguf_get_llama_config`.
+- **Distributed:** `tc_dist_init`/`_finalize`, authenticated Gloo/remote/mesh
+  constructors, `tc_allreduce`, `tc_broadcast`, `tc_allgather`, `tc_barrier`.
+
+Complete reference: **[docs/api_reference.md](docs/api_reference.md)**.
+
+## Apple GPU family gating
+
+| Family | Chips | Native MMA dtypes | TensorOps M5 |
+|---|---|---|---|
+| Apple7 | M1 | fp16, fp32 | — |
+| Apple8 | M2 | fp16, fp32 | — |
+| Apple9 | M3, M4, A17/A18 | + bf16 | — |
+| Apple10 | M5 | fp16, bf16, fp32 | Experimental; SDK 26.0+ and physical M5 evidence required |
+| Apple11 | reserved ABI value | — | — |
+
+bf16 falls back on Apple7..8. Integer GEMM uses the tested MPS path on
+every Apple family because public MSL exposes no integer
+`simdgroup_matrix` element type. One library binary; no per-chip
+builds. See **[docs/family_gating.md](docs/family_gating.md)**.
+
+## Where it slots in
+
+```
+                          ┌──────────────────┐
+                          │   eshkol         │  (compiler/runtime)
+                          └────────┬─────────┘
+                                   │ FFI bridge (opt-in)
+                ┌──────────────────┼──────────────────┐
+                │                  │                  │
+   ┌────────────▼────────┐ ┌───────▼────────┐ ┌───────▼─────────┐
+   │ eshkol-platform     │ │ qgt            │ │ semiclassical   │
+   │ (Metal stub now)    │ │ (45 kernels)   │ │ _qllm           │
+   └────────────┬────────┘ └───────┬────────┘ └───────┬─────────┘
+                │                  │                  │
+                └──────────────────┼──────────────────┘
+                                   │
+                          ┌────────▼─────────┐
+                          │   tensorcore     │  ← THIS
+                          └────────┬─────────┘
+                                   │  Metal API
+                          ┌────────▼─────────┐
+                          │  Apple GPU       │
+                          └──────────────────┘
+```
+
+After [ROADMAP.md](ROADMAP.md) §v0.4, the three sibling projects retire
+their bespoke Metal backends and consume one shared kernel library. The
+SF64 / Ozaki-II / FP24 / FP53 precision modes that today live inside
+`eshkol-platform/lib/backend/gpu/gpu_memory.mm` move into tensorcore as
+named dtypes.
+
+## Build
+
+```sh
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+
+ctest --test-dir build --output-on-failure
+./build/bench/bench_gemm                             # TFLOPS sweep
+./build/bench/bench_attention                        # FlashAttention TFLOPS
+./build/bench/bench_inference_7b                     # Q4_0 7B decode harness
+./build/examples/hello_gemm                          # minimal C usage
+./build/examples/gguf_inspect model.gguf             # inspect a GGUF file
+./build/examples/gguf_inspect model.gguf --load-supported
+./build/examples/mesh_training_demo --inner 2 --outer 1
+./build/examples/mesh_training_demo --inner 2 --outer 1 --checkpoint
+```
+
+On M3 Max, fp16 simdgroup_matrix GEMM should land within ~10% of MLX's
+hand-tuned kernels (the v0.2 target). On M2 Ultra you should see
+~17 TFLOPS at 4096³.
+
+`bench_gemm` prints the median TFLOPS and the backend that served each
+call. If you don't see `simdgroup_matrix`, see
+**[docs/troubleshooting.md](docs/troubleshooting.md)**.
+
+## Install and link
+
+```sh
+cmake --install build --prefix /opt/tensorcore
+```
+
+The install carries all public headers, both libraries (static + shared), a
+CMake package config, and a pkg-config file. Metal builds additionally carry
+`tensorcore.metallib`:
+
+```cmake
+find_package(tensorcore CONFIG REQUIRED)
+target_link_libraries(my_app PRIVATE tensorcore::tensorcore_shared)
+```
+
+```sh
+export PKG_CONFIG_PATH=/opt/tensorcore/lib/pkgconfig
+cc main.c $(pkg-config --cflags --libs tensorcore) -o my_app
+```
+
+Python:
+
+```sh
+python3 -m pip install -e . --no-build-isolation
+# Contributors running the full Python correctness suite:
+python3 -m pip install -e '.[test]' --no-build-isolation
+export TENSORCORE_LIB=/opt/tensorcore/lib/libtensorcore.dylib
+python3 -c 'import tensorcore as tc; print(tc.version())'
+```
+
+The published Python wheel remains the Apple/Metal distribution. Native SDK
+archives are emitted for macOS and Linux as `.tar.gz` files and Windows as a
+`.zip`; all three contain the same C ABI and relocatable CMake package.
+
+Windows portable CPU builds use the checked-in PowerShell gate:
+
+```powershell
+./scripts/ci_windows_cpu.ps1
+```
+
+Complete integration guide: **[docs/integrating_tensorcore.md](docs/integrating_tensorcore.md)**.
+For a copyable out-of-tree project, see
+**[examples/native_sdk_consumer](examples/native_sdk_consumer)**.
+
+## Layout
+
+```
+tensorcore/
+├── include/tensorcore/   ← Public C ABI headers (stable across versions)
+├── lib/
+│   ├── core/             ← Device init, pipeline cache, buffer pool, autotune
+│   ├── ops/              ← gemm.mm, attention.mm, training.mm, conv.mm, quantized.mm
+│   ├── fallback/         ← MPS + Accelerate paths
+│   ├── tensorops/        ← Metal 4 / M5 TensorOps (SDK-gated)
+│   ├── distributed/      ← Single-host ring, portable GLOO TCP, TB5 stubs
+│   ├── io/               ← GGUF v3 reader
+│   └── c_api/            ← ABI shims
+├── kernels/metal/        ← .metal sources → default.metallib
+├── cmake/                ← compile_metallib.cmake, tensorcoreConfig.cmake.in, .pc.in
+├── tests/                ← CTest correctness, ABI, Python, and CPU-portability tests
+├── bench/                ← TFLOPS / tok/s harness
+├── examples/             ← hello_gemm, gguf_inspect, decode/training demos
+├── eshkol/               ← .esk bindings + FFI bridge for the Eshkol toolchain
+│                            (see [eshkol/bridge/INTEGRATION.md](eshkol/bridge/INTEGRATION.md)
+│                            for the drop-in steps)
+├── python/               ← ctypes Python binding (full ABI surface)
+└── docs/                 ← Architecture, API reference, ROADMAP, integration guides
+```
+
+## What's next (v0.2)
+
+- **Physical M5/Metal 4 qualification** on a clean release revision.
+- **HIP/chipStar and Ampere qualification** on declared, non-shared runners.
+- **20+ TFLOPS fp16 4096³ on M2 Ultra** via double-buffered K-loads + 128×128
+  tile retune.
+- **FlashAttention parity with MFA** (Br=64 for D=128 on Apple9+, K-block
+  early-exit pruning, split-K).
+- **Full mixed-precision training loop test** (small transformer block,
+  matched against PyTorch-MPS gradients).
+- **Broader CUDA mixed-precision training evidence across full transformer
+  loops and multi-host mesh runs.**
+- **M ≥ 4 quantized GEMV** so prefill works at scale.
+
+The honest "compete-with-NVIDIA" picture, the per-watt advantage, and the
+silicon-bound vs software-bound axes are all in
+**[ROADMAP.md](ROADMAP.md)**.
+
+## Documentation
+
+- **[0.1.23 release notes](docs/releases/0.1.23.md)** — qualified platform
+  matrix, ABI changes, upgrade instructions, artifacts, and limitations.
+- **[Public release privacy](docs/release_privacy.md)** — prohibited machine
+  and network data, safe placeholders, CI gate, and Git-history policy.
+- **[Full-capability campaign](docs/tensorcore_full_capability_campaign.md)** —
+  ICC-driven cross-repository ownership, decentralized-training baseline,
+  dependency waves, and fleet acceptance gates.
+- **[Beyond-SOTA research campaign](docs/research/TENSORCORE_BEYOND_SOTA_CAMPAIGN_2026-07-14.md)** —
+  primary-source comparators and falsifiable same-system frontier gates.
+- **[docs/](docs/)** — full documentation tree (architecture, API per
+  header, CUDA comparison, dtypes, every kernel area, GGUF, Python,
+  benchmarks, troubleshooting, ICC-grounded codebase audit).
+- **[ONBOARDING.md](ONBOARDING.md)** — 30-second tour for a new contributor.
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** — how to add a kernel, add a
+  backend target, run the suites.
+- **[ROADMAP.md](ROADMAP.md)** — what's next and how confident we are.
+- **[CHANGELOG.md](CHANGELOG.md)** — what's already shipped, per
+  checkpoint.
+- **[SECURITY.md](SECURITY.md)** — threat model, supported versions,
+  how to report a vulnerability.
+- **[examples/README.md](examples/README.md)** — what each compilable
+  example (`hello_gemm`, `gguf_inspect`, `decode_step`, `training_step`,
+  `mesh_training_demo`) demonstrates.
+- **[tests/README.md](tests/README.md)** — what each default and
+  portable-CPU correctness test covers and the tolerance it enforces.
+- **[bench/README.md](bench/README.md)** — what each bench measures
+  (GEMM TFLOPS sweep, FlashAttention TFLOPS, 7B Q4_0 decode latency).
+
+### Cross-project substrate
+
+- **[docs/unified_substrate_roadmap.md](docs/unified_substrate_roadmap.md)** —
+  the coverage matrix showing which geometric / quantum / mesh ops
+  tensorcore exposes to the sibling projects (qLLM, Noesis,
+  tsotchke-chan, QGTL, moonlab) and what's still on the runway.
+- **[docs/cross_device_perf.md](docs/cross_device_perf.md)** —
+  measured GEMM / RMSnorm / SwiGLU / FlashAttention numbers on
+  M2 Ultra vs RTX 3090, plus remote-fetch transport ceilings.
+- **[bindings/rust/tensorcore-rs/README.md](bindings/rust/tensorcore-rs/README.md)**
+  — safe Rust wrapper around `libtensorcore.{dylib,so}` for
+  Rust-side consumers (12 cargo integration tests, all PASS).
+- **[bindings/swift/TensorCore/README.md](bindings/swift/TensorCore/README.md)**
+  — Swift Package Manager wrapper for Apple-platform consumers
+  (macOS / iOS / visionOS; 12 XCTest cases all PASS).
+- **[bindings/wasm/README.md](bindings/wasm/README.md)** —
+  Emscripten-built WebAssembly module for moonlab's browser-side
+  demo gallery (10 node smoke probes, all PASS).
+- **[evals/README.md](evals/README.md)** — adversarial operational
+  evals (dirty-worktree-recovery, stale-artifact-repair,
+  qwen-unavailable-degraded-mode, disk-pressure, fail-gate-surface,
+  new-development-suggestions; all 6 PASS).
+
+### ICC-grounded audits
+
+- **[docs/icc_audit_2026-06-27.md](docs/icc_audit_2026-06-27.md)** —
+  **current** ICC audit (post all-tiers sweep). 129/130 oracle
+  criteria PASS across 13 oracles; 6 language bindings; 0 contract
+  gaps; 0 audit-pattern findings; 0 orphan docs.
+- **[docs/icc_audit_2026-06-26.md](docs/icc_audit_2026-06-26.md)** —
+  prior audit (post-Phase-5; 91/92 PASS across 9 oracles).
+- **[docs/icc_audit_2026-06-25.md](docs/icc_audit_2026-06-25.md)** —
+  earlier audit (Phase 4 baseline), kept for trail / diff comparison.
+
+### Distributed inference notes
+
+- **[docs/kimi_10gbe_procurement.md](docs/kimi_10gbe_procurement.md)**
+  — 10 GbE NIC / cable procurement plan that lifts the per-link
+  ceiling above the 240 MB/s local-disk floor.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

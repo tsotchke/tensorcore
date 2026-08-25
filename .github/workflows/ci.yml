@@ -1,0 +1,308 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  topology-authority-portable:
+    name: topology-authority (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Portable topology authority and observation envelopes
+        run: |
+          python scripts/topology_authority_selftest.py
+          python scripts/wrap_topology_observation_selftest.py
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Documentation links
+        run: python3 scripts/check_docs_links.py
+
+      - name: Public release privacy
+        run: |
+          python3 scripts/check_release_privacy_selftest.py
+          python3 scripts/check_release_privacy.py
+          python3 scripts/check_release_artifact_privacy_selftest.py
+
+      - name: Release evidence checker fixtures
+        run: |
+          python3 scripts/check_release_evidence_selftest.py
+          python3 scripts/check_finish_campaign_evidence_selftest.py
+
+      - name: Live mesh training evidence checker fixtures
+        run: python3 scripts/check_live_mesh_training_evidence_selftest.py
+
+      - name: PyTorch smoke evidence checker fixtures
+        run: python3 scripts/check_pytorch_smoke_evidence_selftest.py
+
+      - name: Fallback runtime evidence checker fixtures
+        run: python3 scripts/check_fallback_runtime_evidence_selftest.py
+
+      - name: Eshkol bridge evidence checker fixtures
+        run: python3 scripts/check_eshkol_tensorcore_bridge_evidence_selftest.py
+
+      - name: Metallib build-rule evidence checker fixtures
+        run: python3 scripts/check_metallib_build_rule_evidence_selftest.py
+
+      - name: Python packaging evidence checker fixtures
+        run: python3 scripts/check_python_packaging_evidence_selftest.py
+
+      - name: Distributed runtime evidence checker fixtures
+        run: python3 scripts/check_distributed_runtime_evidence_selftest.py
+
+      - name: AMX and bench runtime evidence checker fixtures
+        run: python3 scripts/check_amx_bench_evidence_selftest.py
+
+      - name: CPU ops runtime evidence checker fixtures
+        run: python3 scripts/check_cpu_ops_runtime_evidence_selftest.py
+
+      - name: Metal ops runtime evidence checker fixtures
+        run: python3 scripts/check_metal_ops_runtime_evidence_selftest.py
+
+      - name: Apple family runtime evidence checker fixtures
+        run: |
+          python3 scripts/check_apple_family_runtime_evidence_selftest.py
+          python3 scripts/run_apple_family_evidence_handoff_selftest.py
+          python3 scripts/intake_apple_family_runtime_evidence_selftest.py
+          python3 scripts/check_apple_family_docs.py
+
+      - name: Quantized and GGUF runtime evidence checker fixtures
+        run: python3 scripts/check_quantized_gguf_runtime_evidence_selftest.py
+
+      - name: Windows host smoke evidence checker fixtures
+        run: python3 scripts/check_windows_host_smoke_evidence_selftest.py
+
+      - name: Windows CUDA probe evidence checker fixtures
+        run: python3 scripts/check_windows_cuda_probe_evidence_selftest.py
+
+      - name: CUDA smoke evidence checker fixtures
+        run: python3 scripts/check_cuda_smoke_evidence_selftest.py
+
+      - name: HIP toolchain probe fixtures
+        run: python3 scripts/probe_hip_toolchain_selftest.py
+
+      - name: HIP toolchain evidence checker fixtures
+        run: python3 scripts/check_hip_toolchain_evidence_selftest.py
+
+      - name: HIP smoke evidence checker fixtures
+        run: python3 scripts/check_hip_smoke_evidence_selftest.py
+
+      - name: Operational evidence checker fixtures
+        run: |
+          python3 scripts/check_operational_evidence_selftest.py
+          python3 scripts/check_mesh_resource_preflight_evidence_selftest.py
+          python3 scripts/check_windows_cuda_scheduled_smoke_evidence_selftest.py
+
+      - name: Hardware runner preflight fixtures
+        run: |
+          python3 scripts/hardware_runner_preflight_selftest.py
+          python3 scripts/check_hardware_runner_preflight_selftest.py
+          python3 scripts/m5_tensorops_runner_preflight_selftest.py
+          python3 scripts/check_m5_tensorops_runner_preflight_selftest.py
+          python3 scripts/fetch_m5_tensorops_runtime_evidence_selftest.py
+
+      - name: Mesh resource scheduler fixtures
+        run: |
+          python3 scripts/mesh_resource_scheduler_selftest.py
+          python3 scripts/topology_scheduler_binding_selftest.py
+
+      - name: Topology authority documentation contract
+        run: |
+          python3 scripts/check_topology_authority_docs.py
+          python3 scripts/check_topology_authority_sprint.py \
+            --trace-output "$RUNNER_TEMP/topology-authority-gates.jsonl" \
+            --require-tracked-clean
+
+      - name: Mesh resource inventory fixtures
+        run: |
+          python3 scripts/mesh_arbiter_with_inventory_selftest.py
+          python3 scripts/mesh_deploy_git_checkout_selftest.py
+          python3 scripts/check_mesh_git_access_selftest.py
+          python3 scripts/check_mesh_resource_preflights_selftest.py
+          python3 scripts/check_mesh_resource_config_selftest.py
+          python3 scripts/check_georefine_qwen_live_selftest.py
+          python3 scripts/check_georefine_qwen_artifact_selftest.py
+          python3 scripts/start_georefine_qwen_cr025_selftest.py
+          python3 scripts/start_georefine_qwen_rank_probe_selftest.py
+          python3 scripts/start_qllm_olddonkey_precompute_chain_selftest.py
+          python3 scripts/check_mesh_resource_inventory.py
+          python3 scripts/check_mesh_resource_jobs.py
+          python3 scripts/mesh_system_audit_selftest.py
+
+      - name: Live mesh launcher shell syntax
+        run: bash -n scripts/run_live_mesh_smoke.sh scripts/run_live_mesh_training_demo.sh scripts/run_windows_cuda_probe.sh scripts/run_windows_host_smoke.sh
+
+      - name: CUDA resource admission fixtures
+        run: |
+          python3 scripts/check_cuda_resource_admission_selftest.py
+          python3 scripts/check_windows_cuda_resource_admission_selftest.py
+          python3 scripts/check_windows_persistent_launch_selftest.py
+          python3 scripts/check_windows_cuda_smoke_artifact_selftest.py
+          python3 scripts/start_windows_cuda_smoke_selftest.py
+
+      - name: Mesh worker identity fixtures
+        run: |
+          python3 scripts/mesh_worker_identity_selftest.py
+          python3 scripts/mesh_cuda_worker_identity_selftest.py
+          python3 scripts/mesh_windows_worker_identity_selftest.py
+          python3 scripts/mesh_worker_gpu_snapshot_selftest.py
+          python3 scripts/mesh_worker_gpu_reconcile_sweep_selftest.py
+          python3 scripts/mesh_gpu_reconciliation_audit_selftest.py
+          python3 scripts/remote_tsotchke_arbiter_selftest.py
+
+  portable-cpu:
+    name: portable-cpu (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Version consistency
+        run: scripts/check_version_consistency.sh
+
+      - name: CPU backend build, tests, and install consumer
+        run: scripts/ci_portable_cpu.sh
+
+      - name: Portable CPU native SDK archive
+        run: |
+          archive="$(OUT_DIR="$RUNNER_TEMP" scripts/create_native_sdk_archive.sh \
+            "$RUNNER_TEMP/tensorcore-portable-cpu-install")"
+          scripts/check_native_sdk_archive.sh "$archive"
+
+  portable-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Windows portable CPU build and smoke
+        shell: pwsh
+        run: >
+          ./scripts/ci_windows_cpu.ps1
+          -BuildDir "$env:RUNNER_TEMP/tensorcore-build"
+          -Prefix "$env:RUNNER_TEMP/tensorcore-install"
+
+      - name: Windows native SDK archive
+        shell: pwsh
+        run: |
+          $Archive = ./scripts/create_native_sdk_archive.ps1 `
+            -Prefix "$env:RUNNER_TEMP/tensorcore-install" `
+            -OutDir "$env:RUNNER_TEMP"
+          ./scripts/check_native_sdk_archive.ps1 -Archive $Archive
+
+  build-and-test:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Version consistency
+        run: scripts/check_version_consistency.sh
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          xcrun --show-sdk-version
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Public export surface
+        run: scripts/check_public_exports.sh
+
+      - name: Public headers
+        run: scripts/check_public_headers.sh
+
+      - name: Python FFI surface
+        run: python3 scripts/check_python_ffi_surface.py
+
+      - name: Python constants
+        run: python3 scripts/check_python_constants.py
+
+      - name: Python ABI layout
+        run: TENSORCORE_LIB="$PWD/build/libtensorcore.dylib" python3 scripts/check_python_abi_layout.py
+
+      - name: Hardware-aware tests
+        run: scripts/ci_macos_test.sh
+      - name: Install smoke
+        run: |
+          cmake --install build --prefix "$RUNNER_TEMP/tensorcore-install"
+          cmake --find-package \
+            -DNAME=tensorcore \
+            -DCOMPILER_ID=AppleClang \
+            -DLANGUAGE=C \
+            -DMODE=EXIST \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/tensorcore-install"
+          if command -v pkg-config >/dev/null 2>&1; then
+            PKG_CONFIG_PATH="$RUNNER_TEMP/tensorcore-install/lib/pkgconfig" \
+              pkg-config --modversion tensorcore
+          else
+            echo "pkg-config not found; skipping pkg-config smoke."
+          fi
+          archive="$(OUT_DIR="$RUNNER_TEMP" scripts/create_native_sdk_archive.sh "$RUNNER_TEMP/tensorcore-install")"
+          scripts/check_native_sdk_archive.sh "$archive"
+      - name: Python package smoke
+        run: scripts/ci_python_smoke.sh
+
+  build-macos-15:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6
+      - name: Version consistency
+        run: scripts/check_version_consistency.sh
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build -j
+      - name: Public export surface
+        run: scripts/check_public_exports.sh
+      - name: Public headers
+        run: scripts/check_public_headers.sh
+      - name: Python FFI surface
+        run: python3 scripts/check_python_ffi_surface.py
+      - name: Python constants
+        run: python3 scripts/check_python_constants.py
+      - name: Python ABI layout
+        run: TENSORCORE_LIB="$PWD/build/libtensorcore.dylib" python3 scripts/check_python_abi_layout.py
+      - name: Hardware-aware tests
+        run: scripts/ci_macos_test.sh
+      - name: Install smoke
+        run: |
+          cmake --install build --prefix "$RUNNER_TEMP/tensorcore-install"
+          cmake --find-package \
+            -DNAME=tensorcore \
+            -DCOMPILER_ID=AppleClang \
+            -DLANGUAGE=C \
+            -DMODE=EXIST \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/tensorcore-install"
+          if command -v pkg-config >/dev/null 2>&1; then
+            PKG_CONFIG_PATH="$RUNNER_TEMP/tensorcore-install/lib/pkgconfig" \
+              pkg-config --modversion tensorcore
+          else
+            echo "pkg-config not found; skipping pkg-config smoke."
+          fi
+          archive="$(OUT_DIR="$RUNNER_TEMP" scripts/create_native_sdk_archive.sh "$RUNNER_TEMP/tensorcore-install")"
+          scripts/check_native_sdk_archive.sh "$archive"
+      - name: Python package smoke
+        run: scripts/ci_python_smoke.sh

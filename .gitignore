@@ -1,0 +1,47 @@
+# Build outputs
+build/
+build-*/
+*.o
+*.a
+*.dylib
+*.metallib
+*.air
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+DartConfiguration.tcl
+compile_commands.json
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Tooling caches
+.icc/*
+!.icc/assistant-goals.yaml
+!.icc/completion-oracles.yaml
+!.icc/modularity-justifications.json
+!.icc/patterns/
+.claude/
+.cache/
+artifacts/
+*.json.lock
+configs/*.bak_*
+
+# Autotune cache
+.tensorcore/
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# .swarm/runtime/ holds local-only build/smoke evidence; per QGTL operating model
+.swarm/runtime/
