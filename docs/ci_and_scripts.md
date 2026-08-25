@@ -282,6 +282,11 @@ script force-builds `tensorcore_torch` against
   snapshot: registered runtime shim, generated tensor helpers, matmul
   extension loaded, and host-memory allocator/storage/factory kernels marked
   `available`
+- the AMP hook, package policy, backend state, and human-readable report agree
+  on the supported autocast dtypes (`torch.float32`, `torch.bfloat16`)
+- `tensorcore_torch.execution_state()` records bounded, queryable proof of
+  native backend engagement and binding transport for autograd GEMM,
+  RMSNorm, FlashAttention, phase attention, sparse GEMM, and Riemannian Adam
 - `tensorcore_torch.matmul_eligibility()` exposes the dispatcher gate used
   by the opt-in `torch.matmul` hook, including explicit fallback reasons for
   dtype, rank, and shape mismatches
@@ -291,16 +296,16 @@ script force-builds `tensorcore_torch` against
 
 If PyTorch is not importable, the script skips by default. Set
 `REQUIRE_PYTORCH=1` to make that a hard failure.
-Set `TENSORCORE_PYTORCH_SMOKE_EVIDENCE_PATH=/tmp/pytorch.json` to emit a
+Set `TENSORCORE_PYTORCH_SMOKE_EVIDENCE_PATH=.scratch/pytorch.json` to emit a
 machine-readable node-health artifact with the skip/pass status, torch
-version, backend state, matmul checks, direct device-allocation status, and
-ICC-readable function coverage for the Python shim plus native extension
-dispatch paths.
+version, backend state, operation execution ledger, matmul checks, direct
+device-allocation status, and ICC-readable function coverage for the Python
+shim plus native extension dispatch paths.
 Validate it with:
 
 ```sh
-python3 scripts/check_pytorch_smoke_evidence.py /tmp/pytorch.json
-python3 scripts/check_pytorch_smoke_evidence.py /tmp/pytorch.json \
+python3 scripts/check_pytorch_smoke_evidence.py .scratch/pytorch.json
+python3 scripts/check_pytorch_smoke_evidence.py .scratch/pytorch.json \
   --require-pytorch --require-backend-allocation --require-clean-head
 ```
 
@@ -308,7 +313,9 @@ Run locally:
 
 ```sh
 cmake --build build-portable-cpu-current --parallel
-REQUIRE_PYTORCH=1 REQUIRE_PYTORCH_BACKEND=1 scripts/ci_pytorch_smoke.sh
+REQUIRE_PYTORCH=1 REQUIRE_PYTORCH_BACKEND=1 \
+TENSORCORE_PYTORCH_SMOKE_EVIDENCE_PATH=.scratch/pytorch.json \
+scripts/ci_pytorch_smoke.sh
 ```
 
 ### `run_fallback_runtime_smoke.py`
@@ -1548,7 +1555,7 @@ The deep smoke. ~1284 lines. Runs *everything*:
 
 1. Build with `-DCMAKE_BUILD_TYPE=Release`.
 2. Full `ctest` (gated by `REQUIRE_GPU` for hardware-only tests).
-3. Install to a temp prefix.
+3. Install to a durable repository-local scratch prefix.
 4. Build native SDK archive + verify it via the consumer test.
 5. Build the wheel into a temp dir + reinstall + smoke-test against the
    wheel.
@@ -1569,8 +1576,9 @@ Env knobs:
 | `REQUIRE_GPU` | `0` | Fail if no real GPU is exposed. CI uses `1` on self-hosted runners, `0` on macos-14 / macos-15. |
 | `REQUIRE_METAL4_TENSOROPS` | `0` | Additionally fail if the M5 TensorOps path isn't taken. Hardware-evidence workflow opt-in. |
 | `BUILD_DIR` | `$ROOT/build` | Override the build directory. |
-| `PREFIX` | `/private/tmp/tensorcore-install` | Where to install the native artifacts. |
-| `PY_PREFIX`, `WHEEL_DIR`, `WHEEL_PREFIX` | per-invocation temp dirs | Wheel build/install paths. |
+| `TENSORCORE_RELEASE_SCRATCH_ROOT` | `$ROOT/.scratch/release-smoke` | Durable root for generated release-smoke workspaces. |
+| `PREFIX` | `$TENSORCORE_RELEASE_SCRATCH_ROOT/install` | Where to install the native artifacts. |
+| `PY_PREFIX`, `WHEEL_DIR`, `WHEEL_PREFIX` | per-invocation directories below the scratch root | Wheel build/install paths. |
 | `TENSORCORE_RELEASE_SMOKE_EVIDENCE_PATH` | `$BUILD_DIR/release_smoke_runtime_evidence.json` | Set empty to disable evidence emission. |
 
 Run locally:
@@ -1594,7 +1602,7 @@ workflow will pass too.
 | Validate the dylib export list matches the headers | `scripts/check_public_exports.sh` |
 | Validate the Python binding hasn't drifted | `scripts/check_python_{ffi_surface,abi_layout,constants}.py` |
 | Build and verify a native SDK tarball | `scripts/create_native_sdk_archive.sh && scripts/check_native_sdk_archive.sh` |
-| Run the CI Python smoke locally | `cmake --install build --prefix /tmp/tensorcore-install && scripts/ci_python_smoke.sh` |
+| Run the CI Python smoke locally | `cmake --install build --prefix .scratch/release-smoke/install && scripts/ci_python_smoke.sh` |
 | Emit ICC-readable fallback runtime evidence | `python3 scripts/run_fallback_runtime_smoke.py --require-pass` |
 | Prove the Metal library build rule | `python3 scripts/run_metallib_build_rule_evidence.py --require-pass` |
 | Prove Python native packaging paths | `python3 scripts/run_python_packaging_evidence.py --require-pass` |

@@ -170,7 +170,7 @@ oracles:
           #                     just unaccelerated)
           # The set covers every host where tensorcore is expected to run,
           # while excluding "none" (which means the bridge didn't engage at all).
-          event_values: [cuda, hip, accelerate_cpu, cpu_blas, cpu_cblas, portable_cpu]
+          event_values: [cuda, hip, tensorops_m5, simdgroup_matrix, mps, accelerate_cpu, cpu_blas, cpu_cblas, portable_cpu]
         severity: high
         label: aten::matmul routes through tc_gemm
         action: rebuild_bridge_against_tc_enable_cuda
@@ -189,7 +189,7 @@ oracles:
           #                     just unaccelerated)
           # The set covers every host where tensorcore is expected to run,
           # while excluding "none" (which means the bridge didn't engage at all).
-          event_values: [cuda, hip, accelerate_cpu, cpu_blas, cpu_cblas, portable_cpu]
+          event_values: [cuda, hip, tensorops_m5, simdgroup_matrix, mps, accelerate_cpu, cpu_blas, cpu_cblas, portable_cpu]
         severity: high
         label: 3-D x 2-D matmul (nn.Linear shape) routes through bridge with autograd
         action: fix_tc_matmul_autograd_extended
@@ -208,7 +208,7 @@ oracles:
           #                     just unaccelerated)
           # The set covers every host where tensorcore is expected to run,
           # while excluding "none" (which means the bridge didn't engage at all).
-          event_values: [cuda, hip, accelerate_cpu, cpu_blas, cpu_cblas, portable_cpu]
+          event_values: [cuda, hip, tensorops_m5, simdgroup_matrix, mps, accelerate_cpu, cpu_blas, cpu_cblas, portable_cpu]
         severity: high
         label: aten::bmm routes through tc_gemm (attention QK^T / attn @ V)
         action: fix_tc_bmm_dispatch
@@ -227,7 +227,7 @@ oracles:
           #                     just unaccelerated)
           # The set covers every host where tensorcore is expected to run,
           # while excluding "none" (which means the bridge didn't engage at all).
-          event_values: [cuda, hip, accelerate_cpu, cpu_blas, cpu_cblas, portable_cpu]
+          event_values: [cuda, hip, tensorops_m5, simdgroup_matrix, mps, accelerate_cpu, cpu_blas, cpu_cblas, portable_cpu]
         severity: high
         label: torch.einsum 'bhid,bhjd->bhij' attention pattern routes through bridge
         action: verify_einsum_to_bmm_decomposition

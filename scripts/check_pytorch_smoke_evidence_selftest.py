@@ -51,6 +51,31 @@ def passed_evidence() -> dict[str, Any]:
             "amp_supported_dtypes": ["torch.float32", "torch.bfloat16"],
         },
         "backend_report": "tensorcore PyTorch backend: registered=True",
+        "execution_state": {
+            "schema_version": 1,
+            "sequence": 12,
+            "total_dispatches": 12,
+            "counts": {"gemm:forward:portable_cpu": 12},
+            "last": {
+                "sequence": 12,
+                "operation": "riemannian_adam",
+                "backend": "portable_cpu",
+            },
+            "last_by_operation": {
+                operation: {
+                    "operation": operation,
+                    "phase": "forward",
+                    "backend": "portable_cpu",
+                    "input_devices": ["cpu"],
+                    "transport": "buffer_copy",
+                    "zero_copy": False,
+                }
+                for operation in (
+                    "flash_attention", "gemm", "phase_attention_combine",
+                    "riemannian_adam", "rmsnorm", "sparse_24_gemm",
+                )
+            },
+        },
         "matmul": {
             "fp32_eligibility_reason": "eligible",
             "fp32_backend": "portable_cpu",
@@ -80,9 +105,41 @@ def passed_evidence() -> dict[str, Any]:
                     "_new_backend_module": {"start_line": 77, "executed_lines": [77]},
                     "_ensure_generated_methods": {"start_line": 160, "executed_lines": [160]},
                     "_ensure_torch_backend_module": {"start_line": 169, "executed_lines": [169]},
+                    "pytorch_amp_supported_dtypes": {"start_line": 20, "executed_lines": [20]},
                     "pytorch_backend_registered": {"start_line": 222, "executed_lines": [222]},
                     "pytorch_backend_state": {"start_line": 227, "executed_lines": [227]},
                     "pytorch_backend_report": {"start_line": 302, "executed_lines": [302]},
+                },
+            },
+            "bindings/pytorch/tensorcore_torch/execution.py": {
+                "functions": {
+                    "execution_state": {"start_line": 68, "executed_lines": [68]},
+                    "record_execution": {"start_line": 27, "executed_lines": [27]},
+                    "reset_execution_state": {"start_line": 84, "executed_lines": [84]},
+                },
+            },
+            "bindings/pytorch/tensorcore_torch/autograd_ops.py": {
+                "functions": {
+                    "_record": {"start_line": 66, "executed_lines": [66]},
+                    "flash_attention": {"start_line": 353, "executed_lines": [353]},
+                    "gemm": {"start_line": 442, "executed_lines": [442]},
+                    "rmsnorm": {"start_line": 188, "executed_lines": [188]},
+                },
+            },
+            "bindings/pytorch/tensorcore_torch/phase_attention.py": {
+                "functions": {
+                    "phase_attention_combine": {"start_line": 65, "executed_lines": [65]},
+                },
+            },
+            "bindings/pytorch/tensorcore_torch/sparse_24.py": {
+                "functions": {
+                    "prune_2_4": {"start_line": 78, "executed_lines": [78]},
+                    "sparse_gemm": {"start_line": 122, "executed_lines": [122]},
+                },
+            },
+            "bindings/pytorch/tensorcore_torch/riemannian_adam.py": {
+                "functions": {
+                    "_step_serialized": {"start_line": 150, "executed_lines": [150]},
                 },
             },
             "bindings/pytorch/tensorcore_torch_ext.cpp": {
@@ -126,6 +183,7 @@ def skipped_evidence() -> dict[str, Any]:
         "tensorcore_lib_dir": "/tmp/tensorcore",
         "backend_state": None,
         "backend_report": None,
+        "execution_state": None,
         "matmul": {},
         "direct_device_allocation": {
             "available": False,
@@ -185,6 +243,26 @@ def main() -> int:
     bad_matmul = copy.deepcopy(good)
     bad_matmul["matmul"]["bf16_checked"] = False
     assert_fails(bad_matmul, "bf16_checked must be true")
+
+    bad_amp = copy.deepcopy(good)
+    bad_amp["backend_state"]["amp_supported_dtypes"] = ["torch.float32"]
+    assert_fails(bad_amp, "AMP dtype policy")
+
+    missing_execution = copy.deepcopy(good)
+    del missing_execution["execution_state"]["last_by_operation"]["flash_attention"]
+    assert_fails(missing_execution, "execution_state is missing operations")
+
+    implicit_backend = copy.deepcopy(good)
+    implicit_backend["execution_state"]["last_by_operation"]["gemm"]["backend"] = "none"
+    assert_fails(implicit_backend, "gemm lacks an explicit engaged backend")
+
+    bad_counts = copy.deepcopy(good)
+    bad_counts["execution_state"]["counts"] = {"gemm:forward:portable_cpu": 11}
+    assert_fails(bad_counts, "execution_state.counts must sum to total_dispatches")
+
+    stale_last = copy.deepcopy(good)
+    stale_last["execution_state"]["last"]["sequence"] = 11
+    assert_fails(stale_last, "execution_state.last must be the latest dispatch")
 
     bad_allocation = copy.deepcopy(good)
     bad_allocation["direct_device_allocation"]["available"] = False

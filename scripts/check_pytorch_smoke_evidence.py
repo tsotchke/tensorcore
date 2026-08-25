@@ -27,9 +27,31 @@ REQUIRED_FUNCTIONS = {
         "_new_backend_module",
         "_ensure_generated_methods",
         "_ensure_torch_backend_module",
+        "pytorch_amp_supported_dtypes",
         "pytorch_backend_registered",
         "pytorch_backend_state",
         "pytorch_backend_report",
+    },
+    "bindings/pytorch/tensorcore_torch/execution.py": {
+        "execution_state",
+        "record_execution",
+        "reset_execution_state",
+    },
+    "bindings/pytorch/tensorcore_torch/autograd_ops.py": {
+        "_record",
+        "flash_attention",
+        "gemm",
+        "rmsnorm",
+    },
+    "bindings/pytorch/tensorcore_torch/phase_attention.py": {
+        "phase_attention_combine",
+    },
+    "bindings/pytorch/tensorcore_torch/sparse_24.py": {
+        "prune_2_4",
+        "sparse_gemm",
+    },
+    "bindings/pytorch/tensorcore_torch/riemannian_adam.py": {
+        "_step_serialized",
     },
     "bindings/pytorch/tensorcore_torch_ext.cpp": {
         "register_tensorcore_allocator",
@@ -158,6 +180,8 @@ def main() -> int:
             return fail("PrivateUse1 tensor helper methods must be generated")
         if state.get("matmul_extension_loaded") is not True:
             return fail("matmul extension must be loaded")
+        if state.get("amp_supported_dtypes") != ["torch.float32", "torch.bfloat16"]:
+            return fail("AMP dtype policy must be [torch.float32, torch.bfloat16]")
         probe = state.get("matmul_dispatch_probe")
         if not isinstance(probe, dict) or probe.get("reason") != "eligible":
             return fail("matmul dispatch probe must report eligible")
@@ -190,6 +214,36 @@ def main() -> int:
             for key in ("privateuse1_matmul_checked", "device_roundtrip_checked"):
                 if matmul.get(key) is not True:
                     return fail(f"{key} must be true when allocation is available")
+        execution = evidence.get("execution_state")
+        if not isinstance(execution, dict) or execution.get("schema_version") != 1:
+            return fail("passed evidence must include execution_state schema v1")
+        total_dispatches = int(execution.get("total_dispatches") or 0)
+        if total_dispatches < 10:
+            return fail("execution_state must prove at least ten native dispatches")
+        if execution.get("sequence") != total_dispatches:
+            return fail("execution_state.sequence must equal total_dispatches")
+        counts = execution.get("counts")
+        if not isinstance(counts, dict) or sum(counts.values()) != total_dispatches:
+            return fail("execution_state.counts must sum to total_dispatches")
+        last = execution.get("last")
+        if not isinstance(last, dict) or last.get("sequence") != total_dispatches:
+            return fail("execution_state.last must be the latest dispatch")
+        by_operation = execution.get("last_by_operation")
+        if not isinstance(by_operation, dict):
+            return fail("execution_state.last_by_operation must be an object")
+        required_operations = {
+            "flash_attention", "gemm", "phase_attention_combine",
+            "riemannian_adam", "rmsnorm", "sparse_24_gemm",
+        }
+        missing_operations = sorted(required_operations - set(by_operation))
+        if missing_operations:
+            return fail(f"execution_state is missing operations: {missing_operations!r}")
+        for operation in sorted(required_operations):
+            row = by_operation[operation]
+            if not isinstance(row, dict) or row.get("backend") in (None, "", "none", "?"):
+                return fail(f"{operation} lacks an explicit engaged backend")
+            if row.get("transport") not in ("buffer_copy", "zero_copy"):
+                return fail(f"{operation} lacks an explicit binding transport")
         coverage_error = check_function_coverage(evidence)
         if coverage_error is not None:
             return fail(coverage_error)

@@ -36,6 +36,8 @@ from typing import Optional
 
 import torch
 
+from .execution import record_execution
+
 try:
     import tensorcore as _tc
 except ImportError as exc:  # pragma: no cover
@@ -45,9 +47,9 @@ except ImportError as exc:  # pragma: no cover
 
 
 _TC_DTYPE = {
-    torch.float32: 0,   # TC_DTYPE_F32
-    torch.float16: 2,   # TC_DTYPE_F16
-    torch.bfloat16: 1,  # TC_DTYPE_BF16
+    torch.float16: _tc.TC_DTYPE_F16,
+    torch.bfloat16: _tc.TC_DTYPE_BF16,
+    torch.float32: _tc.TC_DTYPE_F32,
 }
 
 
@@ -70,6 +72,27 @@ def _dtype_code(t: torch.Tensor) -> int:
     return _TC_DTYPE[t.dtype]
 
 
+def _storage_array(t: torch.Tensor):
+    """Expose CPU tensor storage to NumPy without changing BF16 bits."""
+    if t.device.type != "cpu":
+        raise ValueError(f"sparse_24 currently requires CPU tensors; got {t.device}")
+    contiguous = t.detach().contiguous()
+    if contiguous.dtype == torch.bfloat16:
+        return contiguous.view(torch.uint16).numpy()
+    return contiguous.numpy()
+
+
+def _buffer_tensor(buf, shape, dtype: torch.dtype) -> torch.Tensor:
+    """Copy a native buffer into a CPU tensor, preserving BF16 storage."""
+    import numpy as np
+
+    if dtype == torch.bfloat16:
+        raw = buf.to_numpy(shape, np.uint16)
+        return torch.from_numpy(raw).view(torch.bfloat16).clone()
+    np_dtype = {torch.float32: np.float32, torch.float16: np.float16}[dtype]
+    return torch.from_numpy(buf.to_numpy(shape, np_dtype)).clone()
+
+
 def tensor_core_available() -> bool:
     """True iff the runtime has cusparseLt + Ampere+ hardware (real 2× speedup)."""
     return _tc.sparse_24_available()
@@ -90,19 +113,15 @@ def prune_2_4(W: torch.Tensor) -> torch.Tensor:
     rows = int(flat.numel() // flat.shape[-1])
     cols = int(flat.shape[-1])
     arr = flat.view(rows, cols)
-    arr_np = arr.numpy()
+    arr_np = _storage_array(arr)
     buf = ctx.buffer_from_array(arr_np)
     _tc.sparse_24_prune(ctx, buf, _dtype_code(flat), rows, cols)
+    record_execution(
+        "sparse_24_prune", "forward", _tc.last_backend_name(),
+        input_devices=[W.device.type], transport="buffer_copy",
+    )
     # Read back into the original tensor (in-place).
-    import numpy as np
-    np_dtype = {0: np.float32, 1: np.float32, 2: np.float16}[_dtype_code(flat)]
-    if W.dtype == torch.bfloat16:
-        # numpy lacks native bf16; round-trip through fp32 then convert back.
-        new_arr = buf.to_numpy((rows, cols), np.float32)
-        W.copy_(torch.from_numpy(new_arr).view_as(W).to(W.dtype))
-    else:
-        new_arr = buf.to_numpy((rows, cols), np_dtype)
-        W.copy_(torch.from_numpy(new_arr).view_as(W).to(W.dtype))
+    W.copy_(_buffer_tensor(buf, (rows, cols), W.dtype).view_as(W))
     return W
 
 
@@ -112,11 +131,16 @@ def is_2_4(W: torch.Tensor) -> bool:
     if W.dim() < 2 or W.shape[-1] % 4 != 0:
         return False
     flat = W.detach().contiguous().view(-1, W.shape[-1])
-    arr = flat.numpy() if W.dtype != torch.bfloat16 else flat.to(torch.float32).numpy()
+    arr = _storage_array(flat)
     buf = ctx.buffer_from_array(arr)
-    dtype_code = _dtype_code(flat) if W.dtype != torch.bfloat16 else _TC_DTYPE[torch.float32]
-    return _tc.sparse_24_check(ctx, buf, dtype_code,
-                                int(flat.shape[0]), int(flat.shape[1]))
+    result = _tc.sparse_24_check(ctx, buf, _dtype_code(flat),
+                                 int(flat.shape[0]), int(flat.shape[1]))
+    if result:
+        record_execution(
+            "sparse_24_check", "validation", _tc.last_backend_name(),
+            input_devices=[W.device.type], transport="buffer_copy",
+        )
+    return result
 
 
 def sparse_gemm(A: torch.Tensor, B: torch.Tensor,
@@ -141,20 +165,22 @@ def sparse_gemm(A: torch.Tensor, B: torch.Tensor,
     B_c = B.detach().contiguous()
     out_c = out.detach().contiguous()
 
-    bA = ctx.buffer_from_array(A_c.numpy())
-    bB = ctx.buffer_from_array(B_c.numpy())
-    bC = ctx.buffer_from_array(out_c.numpy()) if beta != 0.0 else _tc.Buffer(
+    bA = ctx.buffer_from_array(_storage_array(A_c))
+    bB = ctx.buffer_from_array(_storage_array(B_c))
+    bC = ctx.buffer_from_array(_storage_array(out_c)) if beta != 0.0 else _tc.Buffer(
         ctx, nbytes=M * N * out_c.element_size())
 
     _tc.sparse_24_gemm(ctx, bA, bB, bC, M, N, K,
                         _dtype_code(A), _dtype_code(B), _dtype_code(out),
                         alpha, beta)
+    record_execution(
+        "sparse_24_gemm", "forward", _tc.last_backend_name(),
+        input_devices=[A.device.type, B.device.type],
+        transport="buffer_copy",
+        fallback_reason=None if tensor_core_available() else "dense_fallback",
+    )
 
-    import numpy as np
-    np_dtype = {torch.float32: np.float32, torch.float16: np.float16,
-                torch.bfloat16: np.float32}[out.dtype]
-    arr = bC.to_numpy((M, N), np_dtype)
-    return torch.from_numpy(arr).clone().to(out.dtype)
+    return _buffer_tensor(bC, (M, N), out.dtype)
 
 
 def sparse_linear(x: torch.Tensor, weight: torch.Tensor,

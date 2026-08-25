@@ -252,33 +252,33 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ctest --test-dir build --output-on-failure
 
-# 2. Install to a temp prefix
-cmake --install build --prefix /tmp/tensorcore-install
+# 2. Install to a durable repository-local scratch prefix
+cmake --install build --prefix .scratch/release-smoke/install
 
 # 3. Full smoke (REQUIRE_GPU=1 if on M-series hardware)
 REQUIRE_GPU=1 scripts/release_smoke.sh
 
 # 4. Build the wheel
-python3 -m venv /tmp/tc-wheel-venv
-source /tmp/tc-wheel-venv/bin/activate
+python3 -m venv .scratch/tc-wheel-venv
+source .scratch/tc-wheel-venv/bin/activate
 pip install --upgrade pip setuptools wheel numpy
-mkdir -p /tmp/tc-wheel-out
-TENSORCORE_NATIVE_DIR=/tmp/tensorcore-install/lib \
-    python -m pip wheel . --no-build-isolation -w /tmp/tc-wheel-out
+mkdir -p .scratch/tc-wheel-out
+TENSORCORE_NATIVE_DIR=.scratch/release-smoke/install/lib \
+    python -m pip wheel . --no-build-isolation -w .scratch/tc-wheel-out
 
 # 5. Verify the wheel
-python -m pip install /tmp/tc-wheel-out/tensorcore_apple-*.whl \
+python -m pip install .scratch/tc-wheel-out/tensorcore_apple-*.whl \
     --force-reinstall --no-deps
 TENSORCORE_LIB= TC_METALLIB= python -c \
     "import tensorcore as tc; print(tc.version())"
 
 # 6. Build and validate the host native SDK archive
-scripts/create_native_sdk_archive.sh /tmp/tensorcore-install
+scripts/create_native_sdk_archive.sh .scratch/release-smoke/install
 scripts/check_native_sdk_archive.sh \
-    /tmp/tensorcore-native-sdk-X.Y.Z-macos-arm64.tar.gz
+    .scratch/release-artifacts/tensorcore-native-sdk-X.Y.Z-macos-arm64.tar.gz
 python3 scripts/check_release_artifact_privacy.py \
-    /tmp/tc-wheel-out/tensorcore_apple-*.whl \
-    /tmp/tensorcore-native-sdk-X.Y.Z-macos-arm64.tar.gz
+    .scratch/tc-wheel-out/tensorcore_apple-*.whl \
+    .scratch/release-artifacts/tensorcore-native-sdk-X.Y.Z-macos-arm64.tar.gz
 ```
 
 On Linux, the same commands produce a `linux-ARCH.tar.gz`. On Windows:

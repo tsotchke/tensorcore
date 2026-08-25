@@ -3,9 +3,9 @@
 
 Probes:
   - import tensorcore_torch
-  - cuda_bridge_available()
-  - matmul + bmm forward+backward on CUDA (when available)
-  - bit-exact / TF32-tolerance vs native cuBLAS
+  - CUDA bridge availability
+  - matmul + bmm forward/backward on CUDA or the selected host runtime
+  - native-PyTorch numerical parity and explicit TensorCore backend engagement
 
 Writes a JSON document keyed under `checks.pytorch_bridge_cuda.*` that the
 ICC oracle in `.icc/completion-oracles.yaml` consumes. On hosts without
@@ -95,9 +95,11 @@ def main() -> int:
     except ImportError as exc:
         return _fail(out_path, f"tensorcore_torch import failed: {exc}")
 
-    # The bridge runs on CPU too — tc_gemm dispatches to Accelerate/cBLAS
-    # there. The ICC oracle accepts last_backend ∈ {cuda, cpu_blas, cpu_cblas},
-    # so run probes on whatever device is available, recording the path.
+    # CPU PyTorch tensors can still dispatch through a Metal TensorCore context:
+    # the bridge stages them in runtime-owned buffers and tc_gemm selects MPS,
+    # simdgroup_matrix, TensorOps, Accelerate, or the portable host backend.
+    # Run probes on whatever PyTorch device is available and require one of the
+    # explicit TensorCore backend names for that host.
     if torch.cuda.is_available() and tct.cuda_bridge_available():
         device = "cuda"
         accept_backends = ("cuda",)
@@ -108,11 +110,18 @@ def main() -> int:
             "(libtensorcore likely built without TC_ENABLE_CUDA)",
         )
     else:
-        # CPU-only host: probes still engage the bridge through tc_gemm CPU
-        # backend (Accelerate on Apple, OpenBLAS on Linux). Oracle accepts
-        # cpu_blas / cpu_cblas — both valid CPU GEMM paths.
+        # Host tensors still engage tc_gemm. On Apple, the runtime may select a
+        # Metal backend; Linux hosts use BLAS or the portable CPU fallback.
         device = "cpu"
-        accept_backends = ("cpu_blas", "cpu_cblas", "portable_cpu")
+        accept_backends = (
+            "tensorops_m5",
+            "simdgroup_matrix",
+            "mps",
+            "accelerate_cpu",
+            "cpu_blas",
+            "cpu_cblas",
+            "portable_cpu",
+        )
 
     # Probe results — every value must be a {"passed": ...} dict so the
     # `all_passed` reduction at the bottom of main() works correctly.

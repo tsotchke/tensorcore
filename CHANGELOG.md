@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### PyTorch execution contract
+
+- Added a bounded process-local execution ledger for TensorCore-backed
+  PyTorch operations. It records the operation phase, engaged native backend,
+  source device class, buffer-copy versus zero-copy transport, and intentional
+  fallback reason without retaining tensors, pointers, shapes, paths, or user
+  data.
+- Unified the AMP dtype policy across the PrivateUse1 hook, package API,
+  structured backend state, human-readable report, runtime smoke, and evidence
+  validator.
+- Extended PyTorch runtime evidence to exercise forward/backward GEMM,
+  RMSNorm, FlashAttention, phase attention, structured-sparse GEMM, and
+  Riemannian Adam and to reject missing/implicit backend engagement.
+
 ## v0.1.23 — DiLoCo capability query + SHA-256 state wire version
 
 Additive public surface only. Every call and wire format that existed in

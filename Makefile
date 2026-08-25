@@ -6,8 +6,10 @@
 
 BUILD_DIR ?= build
 BUILD_TYPE ?= Release
-INSTALL_PREFIX ?= /tmp/tensorcore-install
-WHEEL_DIR ?= /tmp/tc-wheel-out
+SCRATCH_DIR ?= .scratch/dev
+INSTALL_PREFIX ?= $(SCRATCH_DIR)/install
+WHEEL_DIR ?= $(SCRATCH_DIR)/wheel-out
+WHEEL_VENV ?= $(SCRATCH_DIR)/wheel-venv
 JOBS ?= 8
 
 PYTHON ?= python3
@@ -50,7 +52,7 @@ help:
 	@echo ""
 	@echo "Variables (override on command line):"
 	@echo "  BUILD_DIR=$(BUILD_DIR)  BUILD_TYPE=$(BUILD_TYPE)  JOBS=$(JOBS)"
-	@echo "  INSTALL_PREFIX=$(INSTALL_PREFIX)  WHEEL_DIR=$(WHEEL_DIR)  PYTHON=$(PYTHON)"
+	@echo "  INSTALL_PREFIX=$(INSTALL_PREFIX)  WHEEL_DIR=$(WHEEL_DIR)  WHEEL_VENV=$(WHEEL_VENV)"
 
 # --- Build ----------------------------------------------------------------
 
@@ -133,10 +135,10 @@ install: build
 
 wheel: install
 	@mkdir -p $(WHEEL_DIR)
-	@if [ ! -d /tmp/tc-wheel-venv ]; then \
-	  $(PYTHON) -m venv /tmp/tc-wheel-venv; \
+	@if [ ! -d $(WHEEL_VENV) ]; then \
+	  $(PYTHON) -m venv $(WHEEL_VENV); \
 	fi
-	. /tmp/tc-wheel-venv/bin/activate && \
+	. $(WHEEL_VENV)/bin/activate && \
 	  $(PYTHON) -m pip install --upgrade pip setuptools wheel >/dev/null && \
 	  TENSORCORE_NATIVE_DIR=$(INSTALL_PREFIX)/lib $(PYTHON) -m pip wheel . \
 	    --no-build-isolation -w $(WHEEL_DIR) && \

@@ -34,6 +34,8 @@ from typing import Iterable, Optional, Tuple
 import torch
 from torch.optim.optimizer import Optimizer
 
+from .execution import record_execution
+
 try:
     import tensorcore as _tc
 except ImportError as exc:  # pragma: no cover
@@ -260,6 +262,19 @@ class RiemannianAdam(Optimizer):
                         lr, b1, b2, eps, wd, bc1, bc2)
                 else:
                     raise ValueError(f"unknown tc_manifold kind: {kind!r}")
+
+                fallback_reason = None
+                if p.is_cuda and not zero_copy:
+                    fallback_reason = "cuda_zero_copy_unavailable"
+                record_execution(
+                    "riemannian_adam",
+                    kind,
+                    _tc.last_backend_name(),
+                    input_devices=[p.device.type],
+                    transport="zero_copy" if zero_copy else "buffer_copy",
+                    zero_copy=zero_copy,
+                    fallback_reason=fallback_reason,
+                )
 
                 if zero_copy:
                     continue   # kernels wrote through the tensors' own memory

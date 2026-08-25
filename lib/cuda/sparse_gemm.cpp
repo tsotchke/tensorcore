@@ -174,7 +174,8 @@ extern "C" tc_status_t tc_sparse_24_gemm(tc_context* ctx,
     cusparseLtMatDescriptorDestroy(&matB);
     cusparseLtMatDescriptorDestroy(&matC);
 
-    return (mm_status == CUSPARSE_STATUS_SUCCESS) ? TC_OK : TC_ERR_INTERNAL;
+    if (mm_status != CUSPARSE_STATUS_SUCCESS) return TC_ERR_INTERNAL;
+    return tc_record_dispatch("tc_sparse_24_gemm", TC_BACKEND_CUDA, TC_OK);
 }
 
 extern "C" int tc_sparse_24_available(void) {

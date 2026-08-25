@@ -132,6 +132,129 @@ class TestPrivateUse1Hooks(unittest.TestCase):
         self.assertEqual(xb.shape, (2, 16))
         self.assertEqual(yb.shape, (2,))
 
+    def test_amp_policy_is_consumed_by_state_and_report(self):
+        expected = [torch.float32, torch.bfloat16]
+        self.assertEqual(tensorcore_torch.pytorch_amp_supported_dtypes(), expected)
+        self.assertEqual(torch.tensorcore.get_amp_supported_dtype(), expected)
+        state = tensorcore_torch.pytorch_backend_state()
+        self.assertEqual(
+            state["amp_supported_dtypes"],
+            ["torch.float32", "torch.bfloat16"],
+        )
+        self.assertIn("amp=torch.float32,torch.bfloat16", tensorcore_torch.pytorch_backend_report())
+
+
+class TestExecutionLedger(unittest.TestCase):
+    def setUp(self):
+        if _IMPORT_ERR is not None:
+            self.skipTest(f"tensorcore_torch import failed: {_IMPORT_ERR}")
+        tensorcore_torch.reset_execution_state()
+
+    def tearDown(self):
+        if tensorcore_torch is not None:
+            tensorcore_torch.reset_execution_state()
+
+    def test_records_bounded_public_safe_dispatch_metadata(self):
+        from tensorcore_torch.execution import record_execution
+
+        record_execution(
+            "gemm", "forward", "portable_cpu",
+            input_devices=["cpu", "cpu"],
+            transport="buffer_copy",
+        )
+        state = tensorcore_torch.execution_state()
+        self.assertEqual(state["schema_version"], 1)
+        self.assertEqual(state["total_dispatches"], 1)
+        self.assertEqual(state["counts"], {"gemm:forward:portable_cpu": 1})
+        self.assertEqual(
+            state["last"],
+            {
+                "sequence": 1,
+                "operation": "gemm",
+                "phase": "forward",
+                "backend": "portable_cpu",
+                "input_devices": ["cpu"],
+                "transport": "buffer_copy",
+                "zero_copy": False,
+            },
+        )
+        # Snapshots must not expose mutable internal state.
+        state["last"]["backend"] = "tampered"
+        self.assertEqual(
+            tensorcore_torch.execution_state()["last"]["backend"],
+            "portable_cpu",
+        )
+
+    def test_redacts_unsafe_labels_and_bounds_cardinality(self):
+        import json
+        from tensorcore_torch.execution import record_execution
+
+        record_execution(
+            "unsafe/path", "forward path", "backend/path",
+            input_devices=["cpu/path"], transport="copy/path",
+            fallback_reason="reason/path",
+        )
+        for index in range(200):
+            record_execution(
+                f"operation_{index}", "forward", "portable_cpu",
+                input_devices=["cpu"], transport="buffer_copy",
+            )
+        state = tensorcore_torch.execution_state()
+        serialized = json.dumps(state, sort_keys=True)
+        self.assertNotIn("unsafe/path", serialized)
+        self.assertNotIn("reason/path", serialized)
+        self.assertLessEqual(len(state["last_by_operation"]), 128)
+        self.assertLessEqual(len(state["counts"]), 512)
+        self.assertEqual(state["total_dispatches"], 201)
+
+
+class TestSparse24ABI(unittest.TestCase):
+    def setUp(self):
+        if _IMPORT_ERR is not None:
+            self.skipTest(f"tensorcore_torch import failed: {_IMPORT_ERR}")
+
+    def test_torch_dtypes_match_native_abi(self):
+        import tensorcore as tc
+        from tensorcore_torch import sparse_24
+
+        expected = {
+            torch.float16: tc.TC_DTYPE_F16,
+            torch.bfloat16: tc.TC_DTYPE_BF16,
+            torch.float32: tc.TC_DTYPE_F32,
+        }
+        for dtype, native_code in expected.items():
+            with self.subTest(dtype=dtype):
+                self.assertEqual(
+                    sparse_24._dtype_code(torch.empty(1, dtype=dtype)),
+                    native_code,
+                )
+
+    def test_prune_and_gemm_roundtrip_all_supported_dtypes(self):
+        from tensorcore_torch import sparse_24
+
+        weight_values = [
+            [1.0, -4.0, 2.0, 3.0],
+            [-2.0, 0.5, 5.0, 1.0],
+            [3.0, 1.0, -1.0, 6.0],
+            [0.25, -3.0, 4.0, 2.0],
+        ]
+        input_values = [
+            [1.0, 2.0, -1.0, 0.5],
+            [-2.0, 1.0, 3.0, 1.0],
+        ]
+        for dtype in (torch.float16, torch.bfloat16, torch.float32):
+            with self.subTest(dtype=dtype):
+                weight = torch.tensor(weight_values, dtype=dtype)
+                sparse_24.prune_2_4(weight)
+                self.assertTrue(sparse_24.is_2_4(weight))
+                matrix = weight.t().contiguous()
+                inputs = torch.tensor(input_values, dtype=dtype)
+                actual = sparse_24.sparse_gemm(inputs, matrix)
+                expected = inputs @ matrix
+                torch.testing.assert_close(
+                    actual.float(), expected.float(), rtol=1e-2, atol=1e-2,
+                )
+
 
 class TestMPSDispatch(unittest.TestCase):
     """Task #936 — tc_mps_gemm dispatch from aten::matmul on MPS."""

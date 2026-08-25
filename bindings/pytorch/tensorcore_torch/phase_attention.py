@@ -37,6 +37,8 @@ from typing import Optional
 
 import torch
 
+from .execution import record_execution
+
 try:
     import tensorcore as _tc
 except ImportError as exc:  # pragma: no cover
@@ -73,6 +75,9 @@ def phase_attention_combine(inner_products: torch.Tensor,
     All [N_pairs, M] / [M] tensors must be fp32 (or convertible). The
     C kernel does the per-pair Σ_m w_m·ip_m·cos(Δφ_m+γ_m)·exp(−λ_m·d_m).
     """
+    source_devices = [tensor.device.type for tensor in (
+        inner_products, phase_diffs, distances, weights, gammas, lambdas
+    )]
     ctx = _get_ctx()
     import numpy as np
     ip = _f32(inner_products)
@@ -93,6 +98,10 @@ def phase_attention_combine(inner_products: torch.Tensor,
     b_l = ctx.buffer_from_array(l.numpy())
     b_out = _tc.Buffer(ctx, nbytes=N * 4)
     _tc.phase_attention_combine(ctx, b_ip, b_pd, b_dd, b_w, b_g, b_l, b_out, N, M)
+    record_execution(
+        "phase_attention_combine", "forward", _tc.last_backend_name(),
+        input_devices=source_devices, transport="buffer_copy",
+    )
     return torch.from_numpy(b_out.to_numpy((N,), np.float32)).clone()
 
 
@@ -103,6 +112,11 @@ def born_rule_output(h_amp: torch.Tensor,
 
     s_amp / e_amp may be None to omit those terms (ablation-friendly).
     """
+    source_devices = [h_amp.device.type]
+    if s_amp is not None:
+        source_devices.append(s_amp.device.type)
+    if e_amp is not None:
+        source_devices.append(e_amp.device.type)
     ctx = _get_ctx()
     import numpy as np
     h = _f32(h_amp)
@@ -122,6 +136,10 @@ def born_rule_output(h_amp: torch.Tensor,
     b_e = ctx.buffer_from_array(e_flat.numpy()) if e_flat is not None else None
     b_p = _tc.Buffer(ctx, nbytes=N * V * 4)
     _tc.born_rule_output(ctx, b_h, b_s, b_e, b_p, N, V)
+    record_execution(
+        "born_rule_output", "forward", _tc.last_backend_name(),
+        input_devices=source_devices, transport="buffer_copy",
+    )
     arr = b_p.to_numpy((N, V), np.float32)
     return torch.from_numpy(arr).clone().view(shape)
 

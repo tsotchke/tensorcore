@@ -20,8 +20,16 @@ from typing import Any, Dict, List, Optional
 
 import torch
 
+from .execution import execution_state, reset_execution_state
+
 _BACKEND_NAME = "tensorcore"
 _DEFAULT_PRIVATEUSE1_NAME = "privateuseone"
+_AMP_SUPPORTED_DTYPES = (torch.float32, torch.bfloat16)
+
+
+def pytorch_amp_supported_dtypes() -> List[torch.dtype]:
+    """Return the dtypes accepted by PyTorch autocast for this backend."""
+    return list(_AMP_SUPPORTED_DTYPES)
 
 
 def _privateuse1_backend_name() -> Optional[str]:
@@ -149,7 +157,7 @@ def _new_backend_module() -> types.ModuleType:
             raise TypeError("new_state must be a torch.Tensor")
 
     def get_amp_supported_dtype() -> List[torch.dtype]:
-        return [torch.float32, torch.bfloat16]
+        return pytorch_amp_supported_dtypes()
 
     def supports_device_allocation() -> bool:
         return True
@@ -186,6 +194,8 @@ def _new_backend_module() -> types.ModuleType:
     module.supports_device_allocation = supports_device_allocation
     module.backend_state = backend_state
     module.backend_report = backend_report
+    module.execution_state = execution_state
+    module.reset_execution_state = reset_execution_state
     return module
 
 
@@ -283,11 +293,14 @@ __all__ = [
     "privateuse1_backend_name",
     "privateuse1_hooks_registered",
     "enable_device",
+    "execution_state",
+    "pytorch_amp_supported_dtypes",
     "pytorch_backend_report",
     "privateuse1_registration_failure",
     "pytorch_backend_registered",
     "pytorch_backend_state",
     "set_default_matmul",
+    "reset_execution_state",
     "to_cpu",
     "to_tensorcore",
 ]
@@ -322,7 +335,7 @@ def pytorch_backend_state() -> Dict[str, Any]:
     is_available = False
     device_count = 0
     current_device: Optional[int] = None
-    amp_supported_dtypes: List[str] = []
+    amp_supported_dtypes = [str(dtype) for dtype in pytorch_amp_supported_dtypes()]
     matmul_dispatch_probe: Dict[str, Any] = {
         "eligible": False,
         "reason": "unprobed",
@@ -352,7 +365,6 @@ def pytorch_backend_state() -> Dict[str, Any]:
             device_count = 0
             current_device = None
             supports_device_allocation = False
-            amp_supported_dtypes = []
             matmul_dispatch_probe = {
                 "eligible": False,
                 "reason": "probe_error",
@@ -398,12 +410,15 @@ def pytorch_backend_report() -> str:
         f"matmul_extension={state['matmul_extension_loaded']} "
         f"default_matmul={state['default_matmul_enabled']} "
         f"last_backend={state['last_backend_name']}"
+        f" amp={','.join(state['amp_supported_dtypes'])}"
     )
 
 
 if _torch_backend_module_registered():
     torch.tensorcore.backend_state = pytorch_backend_state
     torch.tensorcore.backend_report = pytorch_backend_report
+    torch.tensorcore.execution_state = execution_state
+    torch.tensorcore.reset_execution_state = reset_execution_state
 
 
 def enable_device() -> bool:

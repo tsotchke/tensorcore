@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PREFIX="${1:-${PREFIX:-/private/tmp/tensorcore-install}}"
-OUT_DIR="${OUT_DIR:-${RUNNER_TEMP:-/tmp}}"
+PREFIX="${1:-${PREFIX:-$ROOT/.scratch/release-smoke/install}}"
+OUT_DIR="${OUT_DIR:-${RUNNER_TEMP:-$ROOT/.scratch/release-artifacts}}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 if [ ! -d "$PREFIX" ]; then

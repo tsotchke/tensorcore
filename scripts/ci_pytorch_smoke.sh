@@ -38,19 +38,47 @@ def git_value(*args):
         return None
 
 
-dirty = git_value("status", "--short")
+def git_dirty():
+    try:
+        subprocess.check_call(
+            ["git", "diff", "--quiet"], cwd=os.environ["TC_ROOT"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        subprocess.check_call(
+            ["git", "diff", "--cached", "--quiet"], cwd=os.environ["TC_ROOT"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        return False
+    except subprocess.CalledProcessError:
+        return True
+    except Exception:
+        return None
+
+
+def public_lib_dir(value):
+    if not value:
+        return None
+    try:
+        return pathlib.Path(value).resolve().relative_to(
+            pathlib.Path(os.environ["TC_ROOT"]).resolve()
+        ).as_posix()
+    except (OSError, ValueError):
+        return "external"
+
+
 evidence = {
     "schema_version": 1,
     "git_head": git_value("rev-parse", "HEAD"),
-    "git_dirty": bool(dirty),
+    "git_dirty": git_dirty(),
     "require_pytorch": os.environ.get("TC_PYTORCH_REQUIRE") == "1",
     "require_pytorch_backend": os.environ.get("TC_PYTORCH_BACKEND_REQUIRE") == "1",
     "runtime_status": os.environ["TC_PYTORCH_STATUS"],
     "message": os.environ["TC_PYTORCH_MESSAGE"],
     "torch_version": None,
-    "tensorcore_lib_dir": os.environ.get("TC_PYTORCH_LIB_DIR"),
+    "tensorcore_lib_dir": public_lib_dir(os.environ.get("TC_PYTORCH_LIB_DIR")),
     "backend_state": None,
     "backend_report": None,
+    "execution_state": None,
     "matmul": {},
     "direct_device_allocation": {
         "available": False,
@@ -122,20 +150,48 @@ def git_value(*args):
         return None
 
 
+def git_dirty():
+    try:
+        subprocess.check_call(
+            ["git", "diff", "--quiet"], cwd=os.environ["TC_ROOT"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        subprocess.check_call(
+            ["git", "diff", "--cached", "--quiet"], cwd=os.environ["TC_ROOT"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        return False
+    except subprocess.CalledProcessError:
+        return True
+    except Exception:
+        return None
+
+
+def public_lib_dir(value):
+    if not value:
+        return None
+    try:
+        return pathlib.Path(value).resolve().relative_to(
+            pathlib.Path(os.environ["TC_ROOT"]).resolve()
+        ).as_posix()
+    except (OSError, ValueError):
+        return "external"
+
+
 def base_evidence():
-    dirty = git_value("status", "--short")
     return {
         "schema_version": 1,
         "git_head": git_value("rev-parse", "HEAD"),
-        "git_dirty": bool(dirty),
+        "git_dirty": git_dirty(),
         "require_pytorch": os.environ.get("REQUIRE_PYTORCH") == "1",
         "require_pytorch_backend": os.environ.get("REQUIRE_PYTORCH_BACKEND") == "1",
         "runtime_status": "not_run",
         "message": None,
         "torch_version": getattr(torch, "__version__", None),
-        "tensorcore_lib_dir": os.environ.get("TENSORCORE_LIB_DIR"),
+        "tensorcore_lib_dir": public_lib_dir(os.environ.get("TENSORCORE_LIB_DIR")),
         "backend_state": None,
         "backend_report": None,
+        "execution_state": None,
         "matmul": {},
         "files": {},
         "direct_device_allocation": {
@@ -209,9 +265,31 @@ def pytorch_coverage_files():
             "_new_backend_module",
             "_ensure_generated_methods",
             "_ensure_torch_backend_module",
+            "pytorch_amp_supported_dtypes",
             "pytorch_backend_registered",
             "pytorch_backend_state",
             "pytorch_backend_report",
+        ],
+        "bindings/pytorch/tensorcore_torch/execution.py": [
+            "execution_state",
+            "record_execution",
+            "reset_execution_state",
+        ],
+        "bindings/pytorch/tensorcore_torch/autograd_ops.py": [
+            "_record",
+            "flash_attention",
+            "gemm",
+            "rmsnorm",
+        ],
+        "bindings/pytorch/tensorcore_torch/phase_attention.py": [
+            "phase_attention_combine",
+        ],
+        "bindings/pytorch/tensorcore_torch/sparse_24.py": [
+            "prune_2_4",
+            "sparse_gemm",
+        ],
+        "bindings/pytorch/tensorcore_torch/riemannian_adam.py": [
+            "_step_serialized",
         ],
         "bindings/pytorch/tensorcore_torch_ext.cpp": [
             "register_tensorcore_allocator",
@@ -265,7 +343,12 @@ if not ctx:
 import tensorcore_torch as tct
 
 if not tct.pytorch_backend_registered():
-    raise AssertionError("tensorcore_torch did not register the PyTorch PrivateUse1 backend module")
+    if not tct.enable_device():
+        raise AssertionError(
+            "tensorcore_torch.enable_device() did not register the explicit "
+            "PyTorch PrivateUse1 backend: "
+            f"{tct.privateuse1_registration_failure()}"
+        )
 if not hasattr(torch, "tensorcore"):
     raise AssertionError("torch.tensorcore runtime module is not registered")
 if sys.modules.get("torch.tensorcore") is not torch.tensorcore:
@@ -313,6 +396,13 @@ if state.get("matmul_extension_loaded") is not True:
 probe = state.get("matmul_dispatch_probe")
 if not isinstance(probe, dict) or probe.get("reason") != "eligible":
     raise AssertionError(f"backend state dispatch probe mismatch: {state}")
+expected_amp = ["torch.float32", "torch.bfloat16"]
+if state.get("amp_supported_dtypes") != expected_amp:
+    raise AssertionError(f"backend AMP policy mismatch: {state}")
+if [str(dtype) for dtype in tct.pytorch_amp_supported_dtypes()] != expected_amp:
+    raise AssertionError("package AMP policy does not match backend state")
+if [str(dtype) for dtype in torch.tensorcore.get_amp_supported_dtype()] != expected_amp:
+    raise AssertionError("torch.tensorcore AMP hook does not match package policy")
 if torch.tensorcore.backend_state() != state:
     raise AssertionError("torch.tensorcore.backend_state does not match package state")
 report = tct.pytorch_backend_report()
@@ -361,9 +451,11 @@ if tct.matmul_eligibility(torch.randn(2, 3, 1), torch.randn(3, 2)).get("reason")
     raise AssertionError("matmul_eligibility did not report rank_mismatch")
 out = tct.matmul(A, B)
 assert_close(out, expected)
-if tct.last_backend_name() != "portable_cpu":
-    raise AssertionError(f"unexpected backend after fp32 matmul: {tct.last_backend_name()}")
 fp32_backend = tct.last_backend_name()
+if fp32_backend not in {
+        "portable_cpu", "mps", "accelerate_cpu", "simdgroup_matrix",
+        "metal_compute", "tensorops_m5", "cuda", "hip"}:
+    raise AssertionError(f"unexpected backend after fp32 matmul: {fp32_backend}")
 
 A_nc = torch.randn(3, 8, dtype=torch.float32)[:, ::2]
 B_nc = torch.randn(10, 4, dtype=torch.float32).t()
@@ -425,6 +517,86 @@ finally:
 if tct.privateuse1_backend_name() != "tensorcore":
     raise AssertionError("PrivateUse1 backend name mismatch")
 
+# Exercise the high-value Python autograd/operator surface and require the
+# bounded execution ledger to name the native backend and binding transport.
+tct.reset_execution_state()
+from tensorcore_torch import autograd_ops as tcops
+from tensorcore_torch import phase_attention as tc_phase
+from tensorcore_torch import sparse_24 as tc_sparse
+from tensorcore_torch.riemannian_adam import RiemannianAdam
+
+gemm_a = torch.randn(4, 4, dtype=torch.float16, requires_grad=True)
+gemm_b = torch.randn(4, 4, dtype=torch.float16, requires_grad=True)
+tcops.gemm(gemm_a, gemm_b).float().sum().backward()
+if gemm_a.grad is None or gemm_b.grad is None:
+    raise AssertionError("tensorcore autograd GEMM did not produce both gradients")
+
+norm_x = torch.randn(2, 8, dtype=torch.float16, requires_grad=True)
+norm_gamma = torch.ones(8, dtype=torch.float16, requires_grad=True)
+norm_y, _norm_rstd = tcops.rmsnorm(norm_x, norm_gamma)
+norm_y.float().sum().backward()
+if norm_x.grad is None or norm_gamma.grad is None:
+    raise AssertionError("tensorcore RMSNorm did not produce gradients")
+
+q = torch.randn(1, 1, 4, 64, dtype=torch.float16, requires_grad=True)
+k = torch.randn(1, 1, 4, 64, dtype=torch.float16, requires_grad=True)
+v = torch.randn(1, 1, 4, 64, dtype=torch.float16, requires_grad=True)
+attn_out, _attn_lse = tcops.flash_attention(q, k, v, causal=True)
+attn_out.float().sum().backward()
+if q.grad is None or k.grad is None or v.grad is None:
+    raise AssertionError("tensorcore FlashAttention did not produce Q/K/V gradients")
+
+phase_scores = tc_phase.phase_attention_combine(
+    torch.ones((2, 2), dtype=torch.float32),
+    torch.zeros((2, 2), dtype=torch.float32),
+    torch.zeros((2, 2), dtype=torch.float32),
+    torch.ones(2, dtype=torch.float32),
+    torch.zeros(2, dtype=torch.float32),
+    torch.ones(2, dtype=torch.float32),
+)
+if phase_scores.shape != (2,) or not torch.isfinite(phase_scores).all():
+    raise AssertionError("tensorcore phase attention returned invalid scores")
+
+sparse_weight = tc_sparse.prune_2_4(torch.randn(4, 4, dtype=torch.float32))
+if not tc_sparse.is_2_4(sparse_weight):
+    raise AssertionError("tensorcore sparse pruning did not produce a 2:4 matrix")
+sparse_b = sparse_weight.t().contiguous()
+sparse_a = torch.randn(4, 4, dtype=torch.float32)
+sparse_out = tc_sparse.sparse_gemm(sparse_a, sparse_b)
+assert_close(sparse_out, sparse_a @ sparse_b, rtol=1e-4, atol=1e-4)
+
+riemann_param = torch.nn.Parameter(torch.tensor([[0.1, 0.0]], dtype=torch.float32))
+riemann_param.tc_manifold = ("poincare", 1.0)
+riemann_param.grad = torch.full_like(riemann_param, 0.01)
+RiemannianAdam([riemann_param], lr=1e-3).step()
+
+execution_state = tct.execution_state()
+execution_total = execution_state["total_dispatches"]
+if execution_state["sequence"] != execution_total:
+    raise AssertionError(
+        "execution ledger sequence does not match total dispatches: "
+        f"{execution_state['sequence']} != {execution_total}"
+    )
+if sum(execution_state["counts"].values()) != execution_total:
+    raise AssertionError("execution ledger counts do not sum to total dispatches")
+if execution_state["last"] is None:
+    raise AssertionError("execution ledger lacks the last successful dispatch")
+if execution_state["last"].get("sequence") != execution_total:
+    raise AssertionError("execution ledger last dispatch is not the latest sequence")
+required_operations = {
+    "flash_attention", "gemm", "phase_attention_combine",
+    "riemannian_adam", "rmsnorm", "sparse_24_gemm",
+}
+missing_operations = required_operations - set(execution_state["last_by_operation"])
+if missing_operations:
+    raise AssertionError(f"execution ledger missing operations: {sorted(missing_operations)}")
+for operation in sorted(required_operations):
+    row = execution_state["last_by_operation"][operation]
+    if row.get("backend") in (None, "", "none", "?"):
+        raise AssertionError(f"execution ledger lacks backend for {operation}: {row}")
+    if row.get("transport") not in ("buffer_copy", "zero_copy"):
+        raise AssertionError(f"execution ledger lacks transport for {operation}: {row}")
+
 backend_required = os.environ.get("REQUIRE_PYTORCH_BACKEND") == "1"
 try:
     allocated = torch.empty((1,), device="tensorcore")
@@ -448,6 +620,7 @@ evidence.update({
     "message": "tensorcore PyTorch bridge smoke OK",
     "backend_state": state,
     "backend_report": report,
+    "execution_state": execution_state,
     "matmul": {
         "fp32_eligibility_reason": elig.get("reason"),
         "fp32_backend": fp32_backend,

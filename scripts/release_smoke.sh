@@ -3,18 +3,21 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-"$ROOT/build"}"
-PREFIX="${PREFIX:-/private/tmp/tensorcore-install}"
+SCRATCH_ROOT="${TENSORCORE_RELEASE_SCRATCH_ROOT:-"$ROOT/.scratch/release-smoke"}"
+mkdir -p "$SCRATCH_ROOT"
+PREFIX="${PREFIX:-"$SCRATCH_ROOT/install"}"
 # Set TENSORCORE_RELEASE_SMOKE_EVIDENCE_PATH= to disable evidence output.
 RELEASE_SMOKE_EVIDENCE_PATH="${TENSORCORE_RELEASE_SMOKE_EVIDENCE_PATH-"$BUILD_DIR/release_smoke_runtime_evidence.json"}"
 if [ -z "${PY_PREFIX:-}" ]; then
-    PY_PREFIX="$(mktemp -d /private/tmp/tensorcore-py-install.XXXXXX)"
+    PY_PREFIX="$(mktemp -d "$SCRATCH_ROOT/python-install.XXXXXX")"
 fi
 if [ -z "${WHEEL_DIR:-}" ]; then
-    WHEEL_DIR="$(mktemp -d /private/tmp/tensorcore-wheels.XXXXXX)"
+    WHEEL_DIR="$(mktemp -d "$SCRATCH_ROOT/wheels.XXXXXX")"
 fi
 if [ -z "${WHEEL_PREFIX:-}" ]; then
-    WHEEL_PREFIX="$(mktemp -d /private/tmp/tensorcore-wheel-install.XXXXXX)"
+    WHEEL_PREFIX="$(mktemp -d "$SCRATCH_ROOT/wheel-install.XXXXXX")"
 fi
+export TENSORCORE_RELEASE_SCRATCH_ROOT="$SCRATCH_ROOT"
 REQUIRE_GPU="${REQUIRE_GPU:-0}"
 REQUIRE_METAL4_TENSOROPS="${REQUIRE_METAL4_TENSOROPS:-0}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
@@ -1074,7 +1077,10 @@ import tempfile
 
 root = pathlib.Path(sys.argv[1])
 dylib = pathlib.Path(sys.argv[2])
-tmp = pathlib.Path(tempfile.mkdtemp(prefix="tensorcore-loader.", dir="/private/tmp"))
+tmp = pathlib.Path(tempfile.mkdtemp(
+    prefix="tensorcore-loader.",
+    dir=os.environ["TENSORCORE_RELEASE_SCRATCH_ROOT"],
+))
 try:
     pkg = tmp / "tensorcore"
     pkg.mkdir()
@@ -1142,6 +1148,7 @@ if missing:
     raise SystemExit(f"wheel missing native artifacts: {missing}")
 PY
 "$PYTHON_BIN" - "$WHEEL_PATH" "$EXPECTED_VERSION" <<'PY'
+import os
 import pathlib
 import re
 import subprocess
@@ -1206,7 +1213,10 @@ expected = sys.argv[2]
 major, minor, _patch = expected.split(".", 2)
 expected_compat = f"{major}.{minor}.0"
 platform = wheel_path.name[:-4].split("-")[-1]
-with tempfile.TemporaryDirectory(prefix="tensorcore-wheel-native.", dir="/private/tmp") as td:
+with tempfile.TemporaryDirectory(
+    prefix="tensorcore-wheel-native.",
+    dir=os.environ["TENSORCORE_RELEASE_SCRATCH_ROOT"],
+) as td:
     with zipfile.ZipFile(wheel_path) as zf:
         members = [
             name for name in zf.namelist()
@@ -1311,7 +1321,7 @@ fi
 
 echo "[tensorcore] out-of-tree CMake consumer"
 RELEASE_SMOKE_PHASE="cmake_consumer"
-CONSUMER_DIR="$(mktemp -d /private/tmp/tensorcore-consumer.XXXXXX)"
+CONSUMER_DIR="$(mktemp -d "$SCRATCH_ROOT/consumer.XXXXXX")"
 CONSUMER_SRC="$ROOT/examples/native_sdk_consumer"
 cmake -S "$CONSUMER_SRC" -B "$CONSUMER_DIR/build" \
     -DCMAKE_PREFIX_PATH="$PREFIX"

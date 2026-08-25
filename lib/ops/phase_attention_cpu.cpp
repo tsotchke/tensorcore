@@ -90,7 +90,8 @@ extern "C" tc_status_t tc_phase_attention_combine(tc_context* ctx,
         }
         out[n] = acc;
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_phase_attention_combine",
+                              TC_BACKEND_PORTABLE_CPU, TC_OK);
 }
 
 extern "C" tc_status_t tc_born_rule_output(tc_context* ctx,
@@ -140,5 +141,6 @@ extern "C" tc_status_t tc_born_rule_output(tc_context* ctx,
         const float inv = (Z > (double)kBornEps) ? (float)(1.0 / Z) : 0.0f;
         for (int v = 0; v < V; ++v) Pr[v] *= inv;
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_born_rule_output",
+                              TC_BACKEND_PORTABLE_CPU, TC_OK);
 }

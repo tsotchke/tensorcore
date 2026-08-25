@@ -255,7 +255,7 @@ For Python development, point your IDE at `python/tensorcore/__init__.py`
 The deepest pre-release check. ~30 seconds on M2 Ultra:
 
 ```sh
-cmake --install build --prefix /tmp/tensorcore-install
+cmake --install build --prefix .scratch/release-smoke/install
 REQUIRE_GPU=1 scripts/release_smoke.sh
 ```
 
@@ -304,7 +304,7 @@ make hello         # ./build/examples/hello_gemm
 make decode        # ./build/examples/decode_step
 make train         # ./build/examples/training_step
 make smoke         # release_smoke.sh with REQUIRE_GPU=1
-make install       # cmake --install to /tmp/tensorcore-install
+make install       # cmake --install to .scratch/dev/install
 make wheel         # build + install + reimport the wheel
 make check-version # version triple consistency
 make docs-check    # docs/ link integrity
@@ -331,6 +331,11 @@ See `make help` for the full menu.
   `torch.tensorcore.backend_state()` to inspect that capability state from
   training/deployment scripts; `tensorcore_torch.matmul_eligibility()`
   reports the exact dispatcher reason for tensorcore versus ATen fallback.
+  `tensorcore_torch.execution_state()` reports which native backend served
+  each high-value operation, whether the binding copied buffers or used
+  zero-copy memory, and any intentional fallback reason. The AMP policy is
+  available through `tensorcore_torch.pytorch_amp_supported_dtypes()` and
+  `torch.tensorcore.get_amp_supported_dtype()`.
   When PyTorch is installed, run
   `REQUIRE_PYTORCH=1 REQUIRE_PYTORCH_BACKEND=1 scripts/ci_pytorch_smoke.sh`
   to force-build the bridge and validate fp32/bf16, empty matmul,

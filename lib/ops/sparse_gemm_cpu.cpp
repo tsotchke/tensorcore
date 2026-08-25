@@ -113,7 +113,8 @@ extern "C" tc_status_t tc_sparse_24_prune(tc_context* ctx,
             write_elem(p, base + min2, dtype, 0.0f);
         }
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_sparse_24_prune",
+                              TC_BACKEND_PORTABLE_CPU, TC_OK);
 }
 
 extern "C" tc_status_t tc_sparse_24_check(tc_context* ctx,
@@ -138,7 +139,8 @@ extern "C" tc_status_t tc_sparse_24_check(tc_context* ctx,
             if (nz > 2) return TC_ERR_INVALID_ARG;
         }
     }
-    return TC_OK;
+    return tc_record_dispatch("tc_sparse_24_check",
+                              TC_BACKEND_PORTABLE_CPU, TC_OK);
 }
 
 /* Weak default — the CUDA backend will override this when cusparseLt is

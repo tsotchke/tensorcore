@@ -7,11 +7,12 @@ AND backward — without changing the model's shape language.
 The bridge wraps the existing ctypes layer in `python/tensorcore` rather
 than rebuilding the C extension. Each Function:
 
-  1. Makes inputs contiguous (tensorcore expects row-major) on the right device.
-  2. Wraps the tensor's data_ptr() as a tc_buffer via tc_buffer_from_ptr —
-     no data copy; the tc_buffer doesn't own the storage.
-  3. Calls the tc_*_forward / tc_*_backward kernel.
-  4. Returns torch tensors that share the same storage.
+  1. Makes inputs contiguous (tensorcore expects row-major) and stages them in
+     host memory when they originate on CUDA or MPS.
+  2. Copies inputs into runtime-owned tc_buffer storage so every native backend
+     receives the memory class it expects.
+  3. Calls the tc_*_forward / tc_*_backward kernel and records its backend.
+  4. Copies results back into PyTorch-owned tensors on the caller's device.
 
 GeometricLM usage:
 
@@ -39,6 +40,8 @@ from typing import Tuple
 
 import torch
 
+from .execution import record_execution as _record_execution
+
 try:
     import tensorcore as _tc
 except ImportError as exc:  # pragma: no cover — surface a clearer error
@@ -53,6 +56,21 @@ except ImportError as exc:  # pragma: no cover — surface a clearer error
 
 _ctx_lock = threading.Lock()
 _ctx = None
+
+
+def _device_types(*tensors: torch.Tensor) -> list[str]:
+    return [tensor.device.type for tensor in tensors if isinstance(tensor, torch.Tensor)]
+
+
+def _record(operation: str, phase: str, devices: list[str]) -> None:
+    _record_execution(
+        operation,
+        phase,
+        _tc.last_backend_name(),
+        input_devices=devices,
+        transport="buffer_copy",
+        zero_copy=False,
+    )
 
 
 def _get_ctx():
@@ -135,6 +153,7 @@ def _alloc_tc(ctx, nbytes: int):
 class _RMSNormFn(torch.autograd.Function):
     @staticmethod
     def forward(ctx_ag, x: torch.Tensor, gamma: torch.Tensor, eps: float):
+        source_devices = _device_types(x, gamma)
         ctx = _get_ctx()
         x = _contig(x, torch.float16)
         gamma = _contig(gamma, torch.float16)
@@ -154,6 +173,7 @@ class _RMSNormFn(torch.autograd.Function):
         bY = _alloc_tc(ctx, y_flat_template.numel() * y_flat_template.element_size())
         bR = _alloc_tc(ctx, rstd_template.numel() * rstd_template.element_size())
         _tc.rmsnorm_forward(ctx, bX, bG, bY, bR, N, D, eps)
+        _record("rmsnorm", "forward", source_devices)
 
         y_flat = _from_tc(bY, y_flat_template)
         rstd = _from_tc(bR, rstd_template)
@@ -164,6 +184,7 @@ class _RMSNormFn(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx_ag, dy: torch.Tensor, _drstd):
+        source_devices = _device_types(dy)
         ctx = _get_ctx()
         x_flat, gamma, rstd = ctx_ag.saved_tensors
         dy = _contig(dy, torch.float16).view_as(x_flat)
@@ -179,6 +200,7 @@ class _RMSNormFn(torch.autograd.Function):
         bDX = _alloc_tc(ctx, dx_template.numel() * dx_template.element_size())
         bDg = _to_tc(ctx, dgamma_template)
         _tc.rmsnorm_backward(ctx, bX, bG, bDY, bR, bDX, bDg, N, D)
+        _record("rmsnorm", "backward", source_devices)
 
         dx_flat = _from_tc(bDX, dx_template)
         dgamma = _from_tc(bDg, dgamma_template)
@@ -199,6 +221,7 @@ def rmsnorm(x: torch.Tensor, gamma: torch.Tensor, eps: float = 1e-5) -> Tuple[to
 class _LayerNormFn(torch.autograd.Function):
     @staticmethod
     def forward(ctx_ag, x, gamma, beta, eps: float):
+        source_devices = _device_types(x, gamma, beta)
         ctx = _get_ctx()
         x = _contig(x, torch.float16)
         gamma = _contig(gamma, torch.float16)
@@ -218,6 +241,7 @@ class _LayerNormFn(torch.autograd.Function):
         bM = _alloc_tc(ctx, mean_template.numel() * mean_template.element_size())
         bR = _alloc_tc(ctx, rstd_template.numel() * rstd_template.element_size())
         _tc.layernorm_forward(ctx, bX, bG, bB, bY, bM, bR, N, D, eps)
+        _record("layernorm", "forward", source_devices)
         y_flat = _from_tc(bY, y_template)
         mean = _from_tc(bM, mean_template)
         rstd = _from_tc(bR, rstd_template)
@@ -228,6 +252,7 @@ class _LayerNormFn(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx_ag, dy, _dmean, _drstd):
+        source_devices = _device_types(dy)
         ctx = _get_ctx()
         x_flat, gamma, mean, rstd = ctx_ag.saved_tensors
         dy = _contig(dy, torch.float16).view_as(x_flat)
@@ -238,6 +263,7 @@ class _LayerNormFn(torch.autograd.Function):
         bM = _to_tc(ctx, mean); bR = _to_tc(ctx, rstd)
         bDX = _alloc_tc(ctx, dx_template.numel() * dx_template.element_size())
         _tc.layernorm_backward(ctx, bX, bG, bDY, bM, bR, bDX, N, D)
+        _record("layernorm", "backward", source_devices)
         dx_flat = _from_tc(bDX, dx_template)
         # Note: tc_layernorm_backward computes dX only; dgamma/dbeta accumulators
         # would need separate kernels (CPU impl does dX only too — see
@@ -258,6 +284,7 @@ def layernorm(x, gamma, beta, eps: float = 1e-5):
 class _SwiGLUFn(torch.autograd.Function):
     @staticmethod
     def forward(ctx_ag, gate, up):
+        source_devices = _device_types(gate, up)
         ctx = _get_ctx()
         gate = _contig(gate, torch.float16)
         up = _contig(up, torch.float16)
@@ -268,12 +295,14 @@ class _SwiGLUFn(torch.autograd.Function):
         bG = _to_tc(ctx, gate); bU = _to_tc(ctx, up)
         bO = _alloc_tc(ctx, out_template.numel() * out_template.element_size())
         _tc.swiglu_forward(ctx, bG, bU, bO, n)
+        _record("swiglu", "forward", source_devices)
         out = _from_tc(bO, out_template)
         ctx_ag.save_for_backward(gate, up)
         return out
 
     @staticmethod
     def backward(ctx_ag, dout):
+        source_devices = _device_types(dout)
         ctx = _get_ctx()
         gate, up = ctx_ag.saved_tensors
         dout = _contig(dout, torch.float16).view_as(gate)
@@ -283,6 +312,7 @@ class _SwiGLUFn(torch.autograd.Function):
         bDG = _alloc_tc(ctx, dgate_template.numel() * dgate_template.element_size())
         bDU = _alloc_tc(ctx, dup_template.numel() * dup_template.element_size())
         _tc.swiglu_backward(ctx, bG, bU, bDO, bDG, bDU, n)
+        _record("swiglu", "backward", source_devices)
         dgate = _from_tc(bDG, dgate_template); dup = _from_tc(bDU, dup_template)
         return dgate, dup
 
@@ -298,6 +328,7 @@ class _FlashAttentionFn(torch.autograd.Function):
     @staticmethod
     def forward(ctx_ag, q, k, v, causal: bool, softmax_scale: float | None,
                 kv_heads: int):
+        source_devices = _device_types(q, k, v)
         ctx = _get_ctx()
         # [B, H, S, D] fp16
         q = _contig(q, torch.float16)
@@ -319,6 +350,7 @@ class _FlashAttentionFn(torch.autograd.Function):
             causal=causal, return_lse=True,
             softmax_scale=softmax_scale, kv_heads=int(kv_heads or H),
         )
+        _record("flash_attention", "forward", source_devices)
         out = _from_tc(bO, out_template)
         lse = _from_tc(bL, lse_template)
 
@@ -330,6 +362,7 @@ class _FlashAttentionFn(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx_ag, do, _dlse):
+        source_devices = _device_types(do)
         ctx = _get_ctx()
         q, k, v, out, lse = ctx_ag.saved_tensors
         B, H, Sq, Skv, D, causal, scale, kv_heads = ctx_ag.shape_meta
@@ -346,6 +379,7 @@ class _FlashAttentionFn(torch.autograd.Function):
             B, H, Sq, Skv, D,
             causal=causal, softmax_scale=scale, kv_heads=kv_heads,
         )
+        _record("flash_attention", "backward", source_devices)
         dq = _from_tc(bDQ, dq_t); dk = _from_tc(bDK, dk_t); dv = _from_tc(bDV, dv_t)
         return dq, dk, dv, None, None, None
 
@@ -375,6 +409,7 @@ class _GemmFn(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx_ag, a: torch.Tensor, b: torch.Tensor):
+        source_devices = _device_types(a, b)
         ctx = _get_ctx()
         a = _contig(a, torch.float16)
         b = _contig(b, torch.float16)
@@ -390,6 +425,7 @@ class _GemmFn(torch.autograd.Function):
         bA = _to_tc(ctx, a); bB = _to_tc(ctx, b)
         bC = _alloc_tc(ctx, c_template.numel() * c_template.element_size())
         _tc.gemm(ctx, bA, bB, bC, M, N, K, dtype="f16", accum="f32")
+        _record("gemm", "forward", source_devices)
         out = _from_tc(bC, c_template)
 
         ctx_ag.save_for_backward(a, b)
@@ -398,6 +434,7 @@ class _GemmFn(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx_ag, dout: torch.Tensor):
+        source_devices = _device_types(dout)
         ctx = _get_ctx()
         a, b = ctx_ag.saved_tensors
         M, N, K = ctx_ag.shape_meta
@@ -415,6 +452,7 @@ class _GemmFn(torch.autograd.Function):
             bDA = _alloc_tc(ctx, da_template.numel() * da_template.element_size())
             _tc.gemm(ctx, bDC, bB, bDA, M, K, N,
                      dtype="f16", accum="f32", transpose_b=True)
+            _record("gemm", "backward_input", source_devices)
             da = _from_tc(bDA, da_template)
 
         if ctx_ag.needs_input_grad[1]:
@@ -424,6 +462,7 @@ class _GemmFn(torch.autograd.Function):
             bDB = _alloc_tc(ctx, db_template.numel() * db_template.element_size())
             _tc.gemm(ctx, bA, bDC, bDB, K, N, M,
                      dtype="f16", accum="f32", transpose_a=True)
+            _record("gemm", "backward_weight", source_devices)
             db = _from_tc(bDB, db_template)
 
         return da, db
