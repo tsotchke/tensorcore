@@ -31,6 +31,9 @@
   drifting static registry; claims outside that inventory fail closed.
 - Added 0600 topology signing-key file support for production services, while
   retaining the direct secret environment variable for compatibility.
+- Added a scheduler-scoped topology declaration projection that requires every
+  scheduler node while excluding unrelated retired declarations and explicitly
+  accounting for accelerator instances in the current cloud observation.
 
 ### Runtime capability ABI
 

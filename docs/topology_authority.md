@@ -74,10 +74,23 @@ export TC_TOPOLOGY_SIGNING_KEY_FILE="$TC_TOPOLOGY_STATE/signing.key"
 Generate the private scheduler artifact and the separately signed public
 artifact:
 
+For scheduler deployment, first project the broader computer-mesh declaration
+registry to scheduler nodes plus accelerator instances present in the current
+cloud observation. This prevents unrelated retired cloud declarations from
+blocking the scheduler while still failing if any scheduler node is undeclared:
+
+```sh
+python3 scripts/project_scheduler_topology_declarations.py \
+  --nodes-json "$HOME/Desktop/computer_mesh/nodes.json" \
+  --scheduler-inventory configs/mesh_resources.json \
+  --cloud-observation "$TC_TOPOLOGY_STATE/observations/gcp.json" \
+  --output "$TC_TOPOLOGY_STATE/observations/scheduler-declarations.json"
+```
+
 ```sh
 python3 scripts/topology_authority.py reconcile \
   --policy configs/topology_authority.json \
-  --declarations computer_mesh="$HOME/Desktop/computer_mesh/nodes.json" \
+  --declarations computer_mesh="$TC_TOPOLOGY_STATE/observations/scheduler-declarations.json" \
   --tailscale-profile mesh="$TC_TOPOLOGY_STATE/observations/tailscale-mesh.json" \
   --tailscale-profile personal="$TC_TOPOLOGY_STATE/observations/tailscale-personal.json" \
   --cloud-inventory gcp="$TC_TOPOLOGY_STATE/observations/gcp.json" \

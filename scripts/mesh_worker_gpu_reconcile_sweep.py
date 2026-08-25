@@ -194,6 +194,8 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
         include_blocked=args.include_blocked,
         resource_filter=set(args.resource or []),
     )
+    if args.reports_dir:
+        args.reports_dir.mkdir(parents=True, exist_ok=True)
     try:
         status = arbiter_status(args)
     except Exception as exc:

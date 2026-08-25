@@ -158,6 +158,27 @@ def test_sweep_fails_unmanaged_unleased_cuda() -> None:
     assert payload["reports"][0]["reason"] == "stale_unknown_unleased_cuda"
 
 
+def test_zero_resource_sweep_creates_empty_reports_dir() -> None:
+    mod = load_script()
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        inventory_path = write_json(root / "inventory.json", inventory([]))
+        status_path = write_json(root / "status.json", {"leases": []})
+        reports_dir = root / "reports"
+        payload = mod.build_payload(
+            args_for(
+                root,
+                inventory_path=inventory_path,
+                status_path=status_path,
+                snapshot_dir=root / "snapshots",
+                reports_dir=reports_dir,
+            )
+        )
+        assert reports_dir.is_dir()
+    assert payload["ok"] is True
+    assert payload["resource_count"] == 0
+
+
 def test_sweep_skips_disabled_reconciliation_resource() -> None:
     mod = load_script()
     with tempfile.TemporaryDirectory() as tmp:
@@ -206,6 +227,7 @@ def test_sweep_reports_missing_arbiter_as_structured_failure() -> None:
 def main() -> int:
     test_sweep_allows_inventory_desktop_allowlist_and_writes_reports()
     test_sweep_fails_unmanaged_unleased_cuda()
+    test_zero_resource_sweep_creates_empty_reports_dir()
     test_sweep_skips_disabled_reconciliation_resource()
     test_sweep_reports_missing_arbiter_as_structured_failure()
     print("mesh worker GPU reconciliation sweep selftest OK")
