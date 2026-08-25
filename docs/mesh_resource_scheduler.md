@@ -54,8 +54,9 @@ hashes do not match the append-only submit/cancel log.
 
 Production loops, submissions, and audits also require the signed topology
 authority artifact described in [topology_authority.md](topology_authority.md).
-Set `TC_TOPOLOGY_SNAPSHOT`, `TC_TOPOLOGY_MAX_AGE_SEC`, and
-`TC_TOPOLOGY_SIGNING_KEY`, or pass `--topology-snapshot` explicitly. The
+Set `TC_TOPOLOGY_SNAPSHOT`, `TC_TOPOLOGY_MAX_AGE_SEC`, and a 0600
+`TC_TOPOLOGY_SIGNING_KEY_FILE` (or the direct secret environment variable),
+or pass `--topology-snapshot` explicitly. The
 scheduler rejects stale, tampered, drifted, incomplete, or unadmitted resource
 bindings before it contacts the arbiter. Dry-run commands may omit the artifact;
 `--allow-unreconciled-topology` and `--allow-unsigned-topology` are explicit
@@ -152,6 +153,12 @@ explicit override and produce untrusted artifacts.
 
 The scheduler uses the Tsotchke arbiter as the lease backend. Its policy is
 conservative:
+
+`scripts/inventory_tsotchke_arbiter.py` is the production adapter between the
+two ownership domains. It injects TensorCore's validated inventory into each
+arbiter invocation, so status includes unleased resources and capacity cannot
+drift from scheduler policy; it also rejects claims for resources absent from
+that inventory. The arbiter continues to own lease durability and fencing.
 
 - Live work is never killed for priority alone.
 - Jobs may target one resource, an explicit `resources` list, or an inventory

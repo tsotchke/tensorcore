@@ -35,7 +35,7 @@ REQUIRED_TEXT = {
     "configs/tensorcore-scheduler.env.example": (
         "TC_TOPOLOGY_SNAPSHOT=",
         "TC_TOPOLOGY_MAX_AGE_SEC=300",
-        "TC_TOPOLOGY_SIGNING_KEY=",
+        "TC_TOPOLOGY_SIGNING_KEY_FILE=",
     ),
     ".github/workflows/ci.yml": (
         "topology-authority-portable:",

@@ -26,6 +26,11 @@
 - Added a bounded, fsynced scheduler reconciliation journal with source,
   topology, queue-integrity, GPU-admission, action-count, and error provenance
   for every daemon iteration.
+- Added an inventory-backed arbiter adapter so unleased resources and capacity
+  come from TensorCore's authoritative scheduler inventory instead of a
+  drifting static registry; claims outside that inventory fail closed.
+- Added 0600 topology signing-key file support for production services, while
+  retaining the direct secret environment variable for compatibility.
 
 ### Runtime capability ABI
 

@@ -33,6 +33,7 @@ INVENTORY_SCHEMA = "tensorcore.mesh_resources.v1"
 GPU_RECONCILIATION_AUDIT_SCHEMA = "tensorcore.gpu_reconciliation_audit.v1"
 TOPOLOGY_SNAPSHOT_SCHEMA = "tensorcore.topology_snapshot.v1"
 TOPOLOGY_SIGNING_KEY_ENV = "TC_TOPOLOGY_SIGNING_KEY"
+TOPOLOGY_SIGNING_KEY_FILE_ENV = "TC_TOPOLOGY_SIGNING_KEY_FILE"
 INVENTORY_STATUSES = {"active", "reserved", "blocked"}
 RESOURCE_CLASSES = {"generic", "cuda_exclusive"}
 DESIRED_STATES = {"running", "paused"}
@@ -2168,6 +2169,16 @@ def topology_snapshot_integrity(
     if not isinstance(signature, dict) or signature.get("algorithm") != "hmac-sha256":
         return False, "unsupported_signature", digest
     key = os.environ.get(TOPOLOGY_SIGNING_KEY_ENV)
+    if not key:
+        raw_path = os.environ.get(TOPOLOGY_SIGNING_KEY_FILE_ENV, "").strip()
+        if raw_path:
+            try:
+                key_path = Path(raw_path).expanduser()
+                if key_path.stat().st_mode & 0o077:
+                    return False, "signature_key_file_permissions", digest
+                key = key_path.read_text(encoding="utf-8").strip()
+            except OSError:
+                return False, "signature_key_file_unreadable", digest
     if not key:
         return (
             (False, "signature_key_required", digest)

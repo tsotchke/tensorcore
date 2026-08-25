@@ -68,7 +68,7 @@ Set a deployment secret in the operator and scheduler environments. The value
 must not be committed or written to the public snapshot:
 
 ```sh
-export TC_TOPOLOGY_SIGNING_KEY='deployment-secret-from-your-secret-store'
+export TC_TOPOLOGY_SIGNING_KEY_FILE="$TC_TOPOLOGY_STATE/signing.key"
 ```
 
 Generate the private scheduler artifact and the separately signed public
@@ -114,7 +114,7 @@ snapshot by default. Configure:
 ```sh
 export TC_TOPOLOGY_SNAPSHOT="$TC_TOPOLOGY_STATE/private.json"
 export TC_TOPOLOGY_MAX_AGE_SEC=300
-export TC_TOPOLOGY_SIGNING_KEY='deployment-secret-from-your-secret-store'
+export TC_TOPOLOGY_SIGNING_KEY_FILE="$TC_TOPOLOGY_STATE/signing.key"
 ```
 
 The scheduler verifies all of the following before probing, claiming, or

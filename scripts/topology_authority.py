@@ -864,7 +864,21 @@ def parse_source_paths(values: list[str], *, option: str) -> list[tuple[str, Pat
 
 def signing_key_from_policy(policy: dict[str, Any]) -> str | None:
     variable = str(policy.get("integrity", {}).get("signature_key_environment") or "")
-    return os.environ.get(variable) if variable else None
+    if not variable:
+        return None
+    direct = os.environ.get(variable)
+    if direct:
+        return direct
+    raw_path = os.environ.get(f"{variable}_FILE", "").strip()
+    if not raw_path:
+        return None
+    path = Path(raw_path).expanduser()
+    if path.stat().st_mode & 0o077:
+        raise TopologyError(f"{variable}_FILE must not be group/world accessible")
+    value = path.read_text(encoding="utf-8").strip()
+    if not value:
+        raise TopologyError(f"{variable}_FILE is empty")
+    return value
 
 
 def emit_trace(path: str | Path, snapshot: dict[str, Any], public: dict[str, Any], *, signed: bool) -> None:

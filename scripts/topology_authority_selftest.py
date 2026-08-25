@@ -319,8 +319,12 @@ def test_cli_round_trip(mod: ModuleType, policy: dict[str, Any]) -> None:
         private_path = directory / "private.json"
         public_path = directory / "public.json"
         trace_path = directory / "trace.jsonl"
+        key_path = directory / "topology-signing.key"
+        key_path.write_text("cli-selftest-key\n", encoding="utf-8")
+        key_path.chmod(0o600)
         env = dict(os.environ)
-        env["TC_TOPOLOGY_SIGNING_KEY"] = "cli-selftest-key"
+        env.pop("TC_TOPOLOGY_SIGNING_KEY", None)
+        env["TC_TOPOLOGY_SIGNING_KEY_FILE"] = str(key_path)
         proc = subprocess.run(
             [
                 sys.executable,
