@@ -2773,6 +2773,18 @@ def update_inventory_status(args: argparse.Namespace, *, drained: bool) -> dict:
     }
 
 
+def validate_control_result(args: argparse.Namespace, payload: dict) -> None:
+    """Fail closed when a mutating control command misreports dry-run state."""
+    if args.control_command not in {"submit", "cancel", "drain", "undrain"}:
+        return
+    expected = bool(args.dry_run)
+    if payload.get("dry_run") is not expected:
+        raise RuntimeError(
+            f"{args.control_command} result dry_run mismatch: "
+            f"expected {expected}, got {payload.get('dry_run')!r}"
+        )
+
+
 def cmd_audit(args: argparse.Namespace) -> dict:
     inventory = load_inventory(args.inventory_json)
     topology_gate = topology_authority_gate(args, inventory)
@@ -3030,6 +3042,7 @@ def main(argv: list[str] | None = None) -> int:
                 payload = cmd_audit(args)
             else:
                 raise RuntimeError(f"unhandled control command {args.control_command!r}")
+            validate_control_result(args, payload)
         except Exception as exc:
             payload = {
                 "schema": "tensorcore.cluster_command.result.v1",

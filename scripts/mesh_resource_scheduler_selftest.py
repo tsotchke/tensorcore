@@ -1751,6 +1751,18 @@ def test_submit_dry_run_expands_tensorcore_job_v1() -> None:
     assert plan["quality_gates"] == [{"name": "size_ratio", "max": 0.30}]
 
 
+def test_control_mutation_result_requires_dry_run_echo() -> None:
+    scheduler = load_scheduler()
+    args = argparse.Namespace(control_command="drain", dry_run=True)
+    scheduler.validate_control_result(args, {"dry_run": True})
+    try:
+        scheduler.validate_control_result(args, {"dry_run": False})
+    except RuntimeError as exc:
+        assert "dry_run mismatch" in str(exc)
+    else:
+        raise AssertionError("control mutation result accepted a mismatched dry_run flag")
+
+
 def test_submit_dry_run_renders_gpu_reconciliation_admission_args() -> None:
     scheduler = load_scheduler()
     with tempfile.TemporaryDirectory() as tmp:
@@ -2585,6 +2597,7 @@ def main() -> int:
     test_loop_pretty_json_emits_json()
     test_source_provenance_from_metadata_is_generic()
     test_submit_dry_run_expands_tensorcore_job_v1()
+    test_control_mutation_result_requires_dry_run_echo()
     test_submit_dry_run_renders_gpu_reconciliation_admission_args()
     test_submit_writes_queue_and_cancel_pauses_job()
     test_queue_event_integrity_detects_out_of_band_queue_edit()

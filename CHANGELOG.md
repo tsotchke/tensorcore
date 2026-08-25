@@ -16,6 +16,14 @@
   RMSNorm, FlashAttention, phase attention, structured-sparse GEMM, and
   Riemannian Adam and to reject missing/implicit backend engagement.
 
+### Control-plane hardening
+
+- Made scheduler mutation commands fail closed when their result does not
+  echo the requested dry-run mode, preventing an ambiguous write/no-write
+  outcome.
+- Made worker identity admission reject a systemd result for any unit other
+  than the exact unit requested by the scheduler.
+
 ## v0.1.23 — DiLoCo capability query + SHA-256 state wire version
 
 Additive public surface only. Every call and wire format that existed in

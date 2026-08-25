@@ -186,6 +186,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     matched_cuda_pids = sorted(set(cuda_pids).intersection(worker_candidate_pids))
     ok = True
     reasons = []
+    if args.unit and (not unit or unit.get("unit") != args.unit):
+        ok = False
+        reasons.append("unit_identity_mismatch")
     if args.require_active_unit:
         if not unit or unit.get("ActiveState") != "active":
             ok = False

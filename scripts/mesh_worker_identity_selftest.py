@@ -109,11 +109,28 @@ def test_required_unit_failure_blocks() -> None:
     assert payload["reason"] == "unit_not_active"
 
 
+def test_unit_identity_mismatch_blocks() -> None:
+    mod = load_module()
+    mod.process_rows = lambda timeout: []
+    mod.cuda_apps = lambda nvidia_smi, timeout: {"ok": True, "rc": 0, "apps": []}
+    mod.systemd_unit_status = lambda unit, timeout: {
+        "unit": "different.service",
+        "ok": True,
+        "ActiveState": "active",
+        "MainPID": 1234,
+    }
+    args = mod.parse_args(["--unit", "qllm.service", "--require-active-unit"])
+    payload = mod.build_payload(args)
+    assert payload["ok"] is False
+    assert payload["reason"] == "unit_identity_mismatch"
+
+
 def main() -> int:
     test_cuda_csv_parse()
     test_matching_process_and_cuda_requirement_pass()
     test_matched_cuda_requirement_blocks_unrelated_cuda()
     test_required_unit_failure_blocks()
+    test_unit_identity_mismatch_blocks()
     print("mesh worker identity selftest OK")
     return 0
 
