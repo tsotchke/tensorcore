@@ -232,6 +232,115 @@ oracles:
         label: torch.einsum 'bhid,bhjd->bhij' attention pattern routes through bridge
         action: verify_einsum_to_bmm_decomposition
 
+  - name: tensorcore-qllm-native-dispatch
+    target: tensorcore-qllm-native-dispatch
+    subject_model: qLLM-owned linked adapter plus production cross-node checkpoint-resume campaign
+    aliases:
+      - qllm-tensorcore-dispatch
+      - qllm-native-dispatch
+    criteria:
+      - id: qllm_dispatch_runtime_evidence
+        runtime_check: runtime_evidence_present
+        severity: high
+        label: qLLM/TensorCore runtime evidence is present
+        action: run_qllm_tensorcore_dispatch_evidence
+
+      - id: qllm_dispatch_failure_free
+        runtime_check: failure_free
+        severity: high
+        label: qLLM/TensorCore runtime evidence is failure-free
+        action: fix_qllm_tensorcore_dispatch_failure
+
+      - id: qllm_dispatch_runtime_passed
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.qllm_tensorcore_dispatch.runtime_status]
+          event_values: [passed]
+        severity: high
+        label: qLLM's linked TensorCore adapter passed
+        action: run_qllm_tensorcore_dispatch_evidence
+
+      - id: qllm_dispatch_capability_abi_v1
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.qllm_tensorcore_dispatch.runtime_capability_abi]
+          event_values: [v1]
+        severity: high
+        label: qLLM consumes TensorCore runtime capability ABI v1
+        action: consume_tensorcore_capability_abi_v1
+
+      - id: qllm_dispatch_auto_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.qllm_tensorcore_dispatch.runtime_auto_dispatch_status]
+          event_values: [tensorcore]
+        severity: high
+        label: qLLM AUTO dispatch engages TensorCore without fallback
+        action: fix_qllm_auto_tensorcore_dispatch
+
+      - id: qllm_dispatch_four_dtype_smoke
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.qllm_tensorcore_dispatch.runtime_four_dtype_smoke_status]
+          event_values: [passed]
+        severity: high
+        label: qLLM's linked F32/F16/BF16/I8 smoke passed
+        action: run_qllm_tensorcore_four_dtype_smoke
+
+      - id: qllm_dispatch_clean_tensorcore_source
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.qllm_tensorcore_dispatch.runtime_tensorcore_source_status]
+          event_values: [clean]
+        severity: high
+        label: TensorCore dispatch evidence comes from a clean source revision
+        action: rerun_qllm_dispatch_on_clean_tensorcore
+
+      - id: qllm_dispatch_clean_qllm_source
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [checks.qllm_tensorcore_dispatch.runtime_qllm_source_status]
+          event_values: [clean]
+        severity: high
+        label: qLLM dispatch evidence comes from a clean source revision
+        action: rerun_qllm_dispatch_on_clean_qllm
+
+      - id: qllm_cross_node_mesh_passed
+        runtime_event:
+          event_kinds: [completion_condition]
+          event_names: [completion_condition.status]
+          event_values: [PASS]
+        severity: high
+        label: qLLM cross-node TensorCore mesh validation passed
+        action: run_qllm_cross_node_mesh_campaign
+
+      - id: qllm_cross_node_gloo_engaged
+        runtime_event:
+          event_kinds: [runtime_backend]
+          event_names: [runtime_backend.dist_backend]
+          event_values: [gloo]
+        severity: high
+        label: qLLM cross-node evidence used TensorCore public Gloo
+        action: run_qllm_cross_node_mesh_campaign
+
+      - id: qllm_checkpoint_resume_exact
+        runtime_event:
+          event_kinds: [resume]
+          event_names: [runtime_backend.exact_resume_supported]
+          event_values: [true]
+        severity: high
+        label: qLLM checkpoint resume is exact under the runtime capability contract
+        action: fix_qllm_checkpoint_resume
+
+      - id: qllm_mesh_production_placement
+        runtime_event:
+          event_kinds: [completion_condition]
+          event_names: [completion_condition.production_campaign]
+          event_values: [true]
+        severity: high
+        label: qLLM mesh proof used a production-eligible placement
+        action: rerun_qllm_mesh_on_production_placement
+
   - name: eshkol-bridge-runtime-evidence
     target: eshkol-bridge-runtime-evidence
     aliases:

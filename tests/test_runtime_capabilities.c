@@ -54,6 +54,14 @@ int main(void) {
         rc |= fail("the portable public fp32 GEMM path is unavailable");
     }
     if (!tc_runtime_capability_available(
+            &capabilities, TC_CAPABILITY_GEMM_F16) ||
+        !tc_runtime_capability_available(
+            &capabilities, TC_CAPABILITY_GEMM_BF16) ||
+        !tc_runtime_capability_available(
+            &capabilities, TC_CAPABILITY_GEMM_I8)) {
+        rc |= fail("a public production GEMM dtype is unavailable");
+    }
+    if (!tc_runtime_capability_available(
             &capabilities, TC_CAPABILITY_DISTRIBUTED_SINGLE)) {
         rc |= fail("the single-rank distributed path is unavailable");
     }

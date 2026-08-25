@@ -62,6 +62,9 @@ static uint64_t available_backend_mask(const tc_device_info& info) {
 
 static uint64_t available_capability_mask(void) {
     uint64_t mask = TC_CAPABILITY_GEMM_F32 |
+                    TC_CAPABILITY_GEMM_F16 |
+                    TC_CAPABILITY_GEMM_BF16 |
+                    TC_CAPABILITY_GEMM_I8 |
                     TC_CAPABILITY_DISTRIBUTED_SINGLE |
                     TC_CAPABILITY_DILOCO |
                     TC_CAPABILITY_DILOCO_ASYNC_SNAPSHOT_SAFE |

@@ -24,6 +24,13 @@
 - Made worker identity admission reject a systemd result for any unit other
   than the exact unit requested by the scheduler.
 
+### Runtime capability ABI
+
+- Extended runtime capability ABI v1 append-only with explicit F16, BF16, and
+  I8 GEMM bits. Downstream adapters can now gate every supported production
+  GEMM dtype without inferring support from symbols, versions, or backend
+  names.
+
 ## v0.1.23 — DiLoCo capability query + SHA-256 state wire version
 
 Additive public surface only. Every call and wire format that existed in

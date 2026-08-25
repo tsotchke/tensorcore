@@ -59,6 +59,14 @@ extern "C" {
 /* DiLoCo state serialization implements the SHA-256 v2 wire version. */
 #define TC_CAPABILITY_DILOCO_STATE_ABI_V2 \
     (UINT64_C(1) << 12)
+/* Public GEMM dtype contracts. These bits mean tc_gemm can execute the dtype
+ * combination correctly on this context, including an intentional fallback. */
+#define TC_CAPABILITY_GEMM_F16 \
+    (UINT64_C(1) << 13)
+#define TC_CAPABILITY_GEMM_BF16 \
+    (UINT64_C(1) << 14)
+#define TC_CAPABILITY_GEMM_I8 \
+    (UINT64_C(1) << 15)
 
 #define TC_CAPABILITY_V1_KNOWN_MASK ( \
     TC_CAPABILITY_GEMM_F32 | \
@@ -73,7 +81,10 @@ extern "C" {
     TC_CAPABILITY_DILOCO_FP16_WIRE | \
     TC_CAPABILITY_TRANSPORT_IDENTITY_AUTH | \
     TC_CAPABILITY_DILOCO_CAPABILITY_QUERY | \
-    TC_CAPABILITY_DILOCO_STATE_ABI_V2)
+    TC_CAPABILITY_DILOCO_STATE_ABI_V2 | \
+    TC_CAPABILITY_GEMM_F16 | \
+    TC_CAPABILITY_GEMM_BF16 | \
+    TC_CAPABILITY_GEMM_I8)
 
 /* Backend masks use tc_backend_t values as stable bit positions. */
 #define TC_BACKEND_MASK_SIMDGROUP_MATRIX \

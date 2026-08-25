@@ -183,6 +183,15 @@ fn diloco_capability_contract_defaults_to_state_v2() {
 }
 
 #[test]
+fn runtime_gemm_dtype_capability_bits_are_distinct() {
+    let mask = tensorcore::ffi::TC_CAPABILITY_GEMM_F32
+        | tensorcore::ffi::TC_CAPABILITY_GEMM_F16
+        | tensorcore::ffi::TC_CAPABILITY_GEMM_BF16
+        | tensorcore::ffi::TC_CAPABILITY_GEMM_I8;
+    assert_eq!(mask.count_ones(), 4);
+}
+
+#[test]
 fn version_is_non_empty() {
     let v = tensorcore::version();
     assert!(!v.is_empty(), "version() returned empty string");
