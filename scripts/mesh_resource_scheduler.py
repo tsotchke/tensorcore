@@ -38,7 +38,7 @@ INVENTORY_STATUSES = {"active", "reserved", "blocked"}
 RESOURCE_CLASSES = {"generic", "cuda_exclusive"}
 DESIRED_STATES = {"running", "paused"}
 ROOT = Path(__file__).resolve().parents[1]
-CONTROL_COMMANDS = {"submit", "status", "cancel", "drain", "undrain", "audit"}
+CONTROL_COMMANDS = {"bootstrap", "submit", "status", "cancel", "drain", "undrain", "audit"}
 UNRESOLVED_START_TEMPLATES = (
     "{lease_id}",
     "{authority_resource}",
@@ -327,12 +327,12 @@ def queue_event_integrity(
         event_jobs_json = event.get("jobs_json")
         if isinstance(event_jobs_json, str) and event_jobs_json != queue_path_str:
             continue
-        if event.get("event") == "submit":
+        if event.get("event") in {"bootstrap", "submit"}:
             job_id = event.get("job_id")
             job_sha256 = event.get("job_sha256")
             if isinstance(job_id, str) and isinstance(job_sha256, str):
                 latest[job_id] = {
-                    "event": "submit",
+                    "event": str(event.get("event")),
                     "job_sha256": job_sha256,
                     "created_at_unix": event.get("created_at_unix"),
                 }
@@ -2683,6 +2683,49 @@ def cmd_submit(args: argparse.Namespace) -> dict:
     return payload
 
 
+def cmd_bootstrap(args: argparse.Namespace) -> dict:
+    """Bind a pre-existing queue to a new append-only event log."""
+    queue_path = Path(args.jobs_json).expanduser()
+    event_path = Path(args.event_log_jsonl).expanduser()
+    doc = load_jobs_doc(queue_path)
+    rows = doc.get("jobs") if isinstance(doc.get("jobs"), list) else []
+    events = [
+        {
+            "schema": "tensorcore.scheduler_queue_event.v1",
+            "event": "bootstrap",
+            "created_at_unix": time.time(),
+            "jobs_json": str(queue_path),
+            "job_id": str(row["id"]),
+            "job_sha256": canonical_sha256(row),
+            "reason": args.reason,
+            "queue_lock": str(queue_lock_path(queue_path)),
+        }
+        for row in rows
+        if isinstance(row, dict) and isinstance(row.get("id"), str)
+    ]
+    if len(events) != len(rows):
+        raise ValueError("bootstrap queue contains an invalid job row")
+    payload = {
+        "schema": "tensorcore.cluster_bootstrap.result.v1",
+        "ok": True,
+        "checked_at_unix": time.time(),
+        "dry_run": args.dry_run,
+        "job_count": len(rows),
+        "event_count": len(events),
+    }
+    if args.dry_run:
+        return payload
+    with locked_queue(queue_path):
+        existing, errors = load_queue_events(event_path)
+        if errors and event_path.exists():
+            raise ValueError(f"bootstrap event log is unreadable: {errors[0]}")
+        if existing:
+            raise ValueError("bootstrap requires an empty event log")
+        for event in events:
+            append_jsonl(event_path, event)
+    return payload
+
+
 def cmd_status(args: argparse.Namespace) -> dict:
     inventory = load_inventory(args.inventory_json)
     topology_gate = topology_authority_gate(args, inventory)
@@ -2811,7 +2854,7 @@ def update_inventory_status(args: argparse.Namespace, *, drained: bool) -> dict:
 
 def validate_control_result(args: argparse.Namespace, payload: dict) -> None:
     """Fail closed when a mutating control command misreports dry-run state."""
-    if args.control_command not in {"submit", "cancel", "drain", "undrain"}:
+    if args.control_command not in {"bootstrap", "submit", "cancel", "drain", "undrain"}:
         return
     expected = bool(args.dry_run)
     if payload.get("dry_run") is not expected:
@@ -3022,6 +3065,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             p.add_argument("--json", action="store_true")
             p.add_argument("--pretty-json", action="store_true")
 
+        bootstrap = sub.add_parser(
+            "bootstrap", help="Bind an existing desired-state queue to an empty event log",
+        )
+        bootstrap.add_argument("--jobs-json", required=True)
+        bootstrap.add_argument("--event-log-jsonl", required=True)
+        bootstrap.add_argument("--reason", default="operator_bootstrap")
+        bootstrap.add_argument("--dry-run", action="store_true")
+        add_output_flags(bootstrap)
+
         submit = sub.add_parser("submit", help="Validate and enqueue a tensorcore.job.v1 spec")
         submit.add_argument("--job-json", required=True)
         submit.add_argument("--jobs-json", required=True)
@@ -3149,7 +3201,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     if getattr(args, "control_command", None):
         try:
-            if args.control_command == "submit":
+            if args.control_command == "bootstrap":
+                payload = cmd_bootstrap(args)
+            elif args.control_command == "submit":
                 payload = cmd_submit(args)
             elif args.control_command == "status":
                 payload = cmd_status(args)

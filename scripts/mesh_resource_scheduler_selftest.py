@@ -1772,6 +1772,33 @@ def test_submit_dry_run_expands_tensorcore_job_v1() -> None:
     assert plan["quality_gates"] == [{"name": "size_ratio", "max": 0.30}]
 
 
+def test_bootstrap_binds_existing_queue_to_empty_event_log() -> None:
+    scheduler = load_scheduler()
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        queue_path = write_jobs(root, [job("existing", priority=10)])
+        event_log = root / "queue-events.jsonl"
+        args = argparse.Namespace(
+            jobs_json=str(queue_path),
+            event_log_jsonl=str(event_log),
+            reason="selftest",
+            dry_run=False,
+            control_command="bootstrap",
+        )
+        payload = scheduler.cmd_bootstrap(args)
+        integrity = scheduler.queue_event_integrity(
+            jobs_json=queue_path, event_log_jsonl=event_log,
+        )
+        assert payload["event_count"] == 1
+        assert integrity["ok"] is True
+        try:
+            scheduler.cmd_bootstrap(args)
+        except ValueError as exc:
+            assert "requires an empty event log" in str(exc)
+        else:
+            raise AssertionError("bootstrap overwrote an existing event log")
+
+
 def test_control_mutation_result_requires_dry_run_echo() -> None:
     scheduler = load_scheduler()
     args = argparse.Namespace(control_command="drain", dry_run=True)
@@ -2619,6 +2646,7 @@ def main() -> int:
     test_bounded_reconciliation_journal_keeps_latest_events()
     test_source_provenance_from_metadata_is_generic()
     test_submit_dry_run_expands_tensorcore_job_v1()
+    test_bootstrap_binds_existing_queue_to_empty_event_log()
     test_control_mutation_result_requires_dry_run_echo()
     test_submit_dry_run_renders_gpu_reconciliation_admission_args()
     test_submit_writes_queue_and_cancel_pauses_job()

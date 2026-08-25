@@ -52,6 +52,17 @@ loops should pass `--event-log-jsonl` and
 `--require-queue-event-log-integrity`; the gate rejects queue rows whose current
 hashes do not match the append-only submit/cancel log.
 
+For a one-time migration of an existing desired-state file, bootstrap a new
+empty event log explicitly; the command records one content hash per current
+job and refuses any non-empty history:
+
+```sh
+python3 scripts/mesh_resource_scheduler.py bootstrap \
+  --jobs-json /var/lib/tensorcore/mesh_resource_jobs.json \
+  --event-log-jsonl /var/lib/tensorcore/mesh_resource_queue_events.jsonl \
+  --reason initial_control_plane_migration --pretty-json
+```
+
 Production loops, submissions, and audits also require the signed topology
 authority artifact described in [topology_authority.md](topology_authority.md).
 Set `TC_TOPOLOGY_SNAPSHOT`, `TC_TOPOLOGY_MAX_AGE_SEC`, and a 0600

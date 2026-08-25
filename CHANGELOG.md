@@ -34,6 +34,9 @@
 - Added a scheduler-scoped topology declaration projection that requires every
   scheduler node while excluding unrelated retired declarations and explicitly
   accounting for accelerator instances in the current cloud observation.
+- Added an explicit queue `bootstrap` migration that hashes every existing
+  desired-state row into a new empty event log and refuses to overwrite prior
+  history.
 
 ### Runtime capability ABI
 
