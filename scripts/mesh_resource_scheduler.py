@@ -2367,22 +2367,36 @@ def schedule_once(args: argparse.Namespace) -> dict:
         }
     jobs = load_jobs(args.jobs_json, inventory=inventory)
     validate_jobs_against_inventory(jobs, inventory)
-    reconciliation_gate = gpu_reconciliation_gate(args, jobs)
-    probes = {job["id"]: probe_job(job, timeout=args.probe_timeout_sec) for job in jobs}
+    schedulable_jobs = [
+        job for job in jobs
+        if inventory.get(job["resource"], {}).get("status", "active") != "blocked"
+    ]
+    reconciliation_gate = gpu_reconciliation_gate(args, schedulable_jobs)
+    probes = {
+        job["id"]: probe_job(job, timeout=args.probe_timeout_sec)
+        for job in schedulable_jobs
+    }
     completions = {
         job["id"]: complete_job(job, timeout=args.probe_timeout_sec)
-        for job in jobs
+        for job in schedulable_jobs
     }
     admissions = {
         job["id"]: admit_job(job, timeout=args.admission_timeout_sec)
-        for job in jobs
+        for job in schedulable_jobs
     }
     status = run_json(arbiter_cmd + ["status", "--json"], timeout=args.timeout_sec)
     resources = sorted({job["resource"] for job in jobs})
-    counts = initial_scheduler_counts(jobs, probes, status)
+    counts = initial_scheduler_counts(schedulable_jobs, probes, status)
     results = []
     errors = []
     for resource in resources:
+        if inventory.get(resource, {}).get("status", "active") == "blocked":
+            results.append({
+                "resource": resource,
+                "action": "resource_blocked_by_inventory",
+                "ok": True,
+            })
+            continue
         try:
             resource_results, resource_errors = schedule_resource(
                 resource,

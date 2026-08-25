@@ -37,6 +37,8 @@
 - Added an explicit queue `bootstrap` migration that hashes every existing
   desired-state row into a new empty event log and refuses to overwrite prior
   history.
+- Blocked inventory resources now reconcile to an explicit safe state without
+  probing workers or requiring a GPU-admission receipt for paused work.
 
 ### Runtime capability ABI
 

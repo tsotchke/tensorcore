@@ -927,6 +927,45 @@ def test_inventory_blocks_running_job_on_blocked_resource() -> None:
         raise AssertionError("blocked resource accepted a running job")
 
 
+def test_paused_blocked_cuda_resource_is_not_probed_or_gpu_gated() -> None:
+    scheduler = load_scheduler()
+    runtime = FakeRuntime(live={})
+    scheduler.run_json = runtime.run_json
+    scheduler.run_capture = runtime.run_capture
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        inventory_path = write_inventory(root, [{
+            "id": "blocked:cuda",
+            "node": "blocked",
+            "backend": "cuda",
+            "class": "cuda-training",
+            "capacity": 1,
+            "status": "blocked",
+            "blocked_reason": "operator quarantine",
+            "control_plane": "tensorcore_scheduler",
+        }])
+        queue_path = write_jobs(root, [
+            job(
+                "paused-cuda", priority=1, resource="blocked:cuda",
+                desired_state="paused", resource_class="cuda_exclusive",
+                admission_cmd=True, post_start_probe_cmd=True,
+                worker_identity_cmd=True,
+            )
+        ])
+        args = args_for(queue_path, inventory_json=inventory_path)
+        args.gpu_reconciliation_audit_json = str(root / "missing-audit.json")
+        payload = scheduler.schedule_once(args)
+    assert payload["ok"] is True
+    assert payload["gpu_reconciliation_audit"]["ok"] is True
+    assert payload["gpu_reconciliation_audit"]["reason"] == "no_cuda_jobs"
+    assert payload["results"] == [{
+        "resource": "blocked:cuda",
+        "action": "resource_blocked_by_inventory",
+        "ok": True,
+    }]
+    assert runtime.events == [("status", "--json")]
+
+
 def test_inventory_rejects_bad_resource_rows() -> None:
     scheduler = load_scheduler()
     bad_rows = [
@@ -2620,6 +2659,7 @@ def main() -> int:
     test_inventory_rejects_reserved_resource_for_unlisted_owner()
     test_inventory_allows_reserved_resource_owner_prefix()
     test_inventory_blocks_running_job_on_blocked_resource()
+    test_paused_blocked_cuda_resource_is_not_probed_or_gpu_gated()
     test_inventory_rejects_bad_resource_rows()
     test_inventory_blocks_non_general_resource_without_allowlist()
     test_inventory_cuda_backend_infers_exclusive_resource_class()
