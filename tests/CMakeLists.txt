@@ -305,6 +305,12 @@ if(NOT TC_ENABLE_METAL)
         add_test(NAME test_mesh_collective COMMAND test_mesh_collective)
         set_tests_properties(test_mesh_collective PROPERTIES TIMEOUT 30)
 
+        add_executable(test_mesh_collective_three_rank test_mesh_collective_three_rank.c)
+        target_link_libraries(test_mesh_collective_three_rank PRIVATE tensorcore Threads::Threads)
+        target_include_directories(test_mesh_collective_three_rank PRIVATE ${CMAKE_SOURCE_DIR}/include)
+        add_test(NAME test_mesh_collective_three_rank COMMAND test_mesh_collective_three_rank)
+        set_tests_properties(test_mesh_collective_three_rank PROPERTIES TIMEOUT 45)
+
         add_executable(test_remote_tensor_fork test_remote_tensor_fork.c)
         target_link_libraries(test_remote_tensor_fork PRIVATE tensorcore Threads::Threads)
         target_include_directories(test_remote_tensor_fork PRIVATE ${CMAKE_SOURCE_DIR}/include)
@@ -376,6 +382,12 @@ target_link_libraries(test_mesh_collective PRIVATE tensorcore ${ACCELERATE_FRAME
 target_include_directories(test_mesh_collective PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME test_mesh_collective COMMAND test_mesh_collective)
 set_tests_properties(test_mesh_collective PROPERTIES TIMEOUT 30)
+
+add_executable(test_mesh_collective_three_rank test_mesh_collective_three_rank.c)
+target_link_libraries(test_mesh_collective_three_rank PRIVATE tensorcore ${ACCELERATE_FRAMEWORK})
+target_include_directories(test_mesh_collective_three_rank PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME test_mesh_collective_three_rank COMMAND test_mesh_collective_three_rank)
+set_tests_properties(test_mesh_collective_three_rank PROPERTIES TIMEOUT 45)
 
 # Fork-based 2-peer remote-shard smoke: register + owner-routed get over
 # the same tc_remote transport as the mesh collectives.

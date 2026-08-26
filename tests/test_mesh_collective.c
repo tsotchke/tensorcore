@@ -19,6 +19,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <math.h>
+#include <pthread.h>
 
 static int compare_f32(const float* a, const float* b, size_t n, float tol) {
     for (size_t i = 0; i < n; ++i) {
@@ -29,6 +30,22 @@ static int compare_f32(const float* a, const float* b, size_t n, float tol) {
         }
     }
     return 1;
+}
+
+typedef struct {
+    tc_mesh_group_t* group;
+    uint64_t tag;
+    float value;
+    float expected;
+    tc_status_t status;
+} tagged_reduce_case;
+
+static void* run_tagged_reduce(void* opaque) {
+    tagged_reduce_case* item = (tagged_reduce_case*)opaque;
+    item->status = tc_mesh_allreduce_tagged(
+        item->group, item->tag, &item->value, 1,
+        TC_COLL_DTYPE_F32, TC_REDUCE_SUM);
+    return NULL;
 }
 
 static int run_peer(int my_rank,
@@ -115,6 +132,95 @@ static int run_peer(int my_rank,
             fprintf(stderr, "rank %d: AG mismatch\n", my_rank); fails++;
         } else if (my_rank == 0) {
             printf("  PASS rank %d AllGather\n", my_rank);
+        }
+    }
+
+    /* ===== Long-running snapshot reclamation ===== */
+    for (int round = 0; round < 32; ++round) {
+        float buf[4] = {
+            (float)(my_rank + 1), (float)(round + my_rank),
+            1.0f, -1.0f,
+        };
+        tc_status_t s = tc_mesh_allreduce(
+            g, buf, 4, TC_COLL_DTYPE_F32, TC_REDUCE_SUM);
+        if (s != TC_OK) {
+            fprintf(stderr, "rank %d: reclamation round %d failed status=%d\n",
+                    my_rank, round, s);
+            fails++;
+            break;
+        }
+        const size_t retained = tc_mesh_retained_snapshot_count(g);
+        if (retained > 2) {
+            fprintf(stderr,
+                    "rank %d: snapshot cache grew to %zu in round %d\n",
+                    my_rank, retained, round);
+            fails++;
+            break;
+        }
+    }
+    if (my_rank == 0 && fails == 0) {
+        printf("  PASS rank %d bounded snapshot reclamation\n", my_rank);
+    }
+
+    /* ===== Explicit-ID concurrent ordering ===== */
+    {
+        tagged_reduce_case first = {
+            g, 100, my_rank == 0 ? 1.0f : 10.0f, 11.0f, TC_ERR_INTERNAL,
+        };
+        tagged_reduce_case second = {
+            g, 200, my_rank == 0 ? 2.0f : 20.0f, 22.0f, TC_ERR_INTERNAL,
+        };
+        pthread_t thread_first, thread_second;
+        if (my_rank == 0) {
+            pthread_create(&thread_first, NULL, run_tagged_reduce, &first);
+            usleep(20000);
+            pthread_create(&thread_second, NULL, run_tagged_reduce, &second);
+        } else {
+            pthread_create(&thread_second, NULL, run_tagged_reduce, &second);
+            usleep(20000);
+            pthread_create(&thread_first, NULL, run_tagged_reduce, &first);
+        }
+        pthread_join(thread_first, NULL);
+        pthread_join(thread_second, NULL);
+        if (first.status != TC_OK || second.status != TC_OK ||
+            fabsf(first.value - first.expected) > 1e-6f ||
+            fabsf(second.value - second.expected) > 1e-6f) {
+            fprintf(stderr, "rank %d: tagged concurrent ordering failed\n", my_rank);
+            fails++;
+        }
+        float duplicate = 0.0f;
+        if (tc_mesh_allreduce_tagged(
+                g, 100, &duplicate, 1,
+                TC_COLL_DTYPE_F32, TC_REDUCE_SUM) != TC_ERR_BUSY) {
+            fprintf(stderr, "rank %d: unreleased tagged ID was reusable\n", my_rank);
+            fails++;
+        }
+        float tagged_broadcast = my_rank == 0 ? 7.0f : 0.0f;
+        float tagged_send = (float)(30 + my_rank);
+        float tagged_recv[2] = {0.0f, 0.0f};
+        if (tc_mesh_broadcast_tagged(
+                g, 300, &tagged_broadcast, 1,
+                TC_COLL_DTYPE_F32, 0) != TC_OK ||
+            tagged_broadcast != 7.0f ||
+            tc_mesh_allgather_tagged(
+                g, 400, &tagged_send, 1, tagged_recv,
+                TC_COLL_DTYPE_F32) != TC_OK ||
+            tagged_recv[0] != 30.0f || tagged_recv[1] != 31.0f) {
+            fprintf(stderr, "rank %d: tagged broadcast/allgather failed\n", my_rank);
+            fails++;
+        }
+        float release_barrier = my_rank == 0 ? 1.0f : 0.0f;
+        if (tc_mesh_broadcast(
+                g, &release_barrier, 1, TC_COLL_DTYPE_F32, 0) != TC_OK ||
+            release_barrier != 1.0f ||
+            tc_mesh_collective_release_tag(g, 100) != TC_OK ||
+            tc_mesh_collective_release_tag(g, 200) != TC_OK ||
+            tc_mesh_collective_release_tag(g, 300) != TC_OK ||
+            tc_mesh_collective_release_tag(g, 400) != TC_OK) {
+            fprintf(stderr, "rank %d: tagged release barrier failed\n", my_rank);
+            fails++;
+        } else if (my_rank == 0) {
+            printf("  PASS rank %d tagged concurrent ordering\n", my_rank);
         }
     }
 

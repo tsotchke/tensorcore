@@ -149,6 +149,37 @@ extern "C" {
         out_size: size_t,
     ) -> c_int;
     pub fn tc_cuda_is_active() -> c_int;
+
+    pub fn tc_mesh_allreduce_tagged(
+        group: *mut c_void,
+        collective_id: u64,
+        buffer: *mut c_void,
+        count: size_t,
+        dtype: c_int,
+        op: c_int,
+    ) -> c_int;
+    pub fn tc_mesh_broadcast_tagged(
+        group: *mut c_void,
+        collective_id: u64,
+        buffer: *mut c_void,
+        count: size_t,
+        dtype: c_int,
+        root_rank: i32,
+    ) -> c_int;
+    pub fn tc_mesh_allgather_tagged(
+        group: *mut c_void,
+        collective_id: u64,
+        send_buffer: *const c_void,
+        send_count: size_t,
+        recv_buffer: *mut c_void,
+        dtype: c_int,
+    ) -> c_int;
+    pub fn tc_mesh_collective_release_tag(
+        group: *mut c_void,
+        collective_id: u64,
+    ) -> c_int;
+    pub fn tc_mesh_retained_snapshot_count(group: *const c_void) -> size_t;
+    pub fn tc_mesh_allreduce_algorithm(group: *const c_void) -> *const c_char;
 }
 
 // ---------- Authenticated distributed transports ----------

@@ -1243,12 +1243,27 @@ if _lib is not None:
     _lib.tc_mesh_group_shutdown.restype = c_int
     _lib.tc_mesh_allreduce.argtypes = [c_void_p, c_void_p, c_size_t, c_int, c_int]
     _lib.tc_mesh_allreduce.restype = c_int
+    _lib.tc_mesh_allreduce_tagged.argtypes = [
+        c_void_p, c_uint64, c_void_p, c_size_t, c_int, c_int]
+    _lib.tc_mesh_allreduce_tagged.restype = c_int
     _lib.tc_mesh_broadcast.argtypes = [c_void_p, c_void_p, c_size_t, c_int, c_int32]
     _lib.tc_mesh_broadcast.restype = c_int
+    _lib.tc_mesh_broadcast_tagged.argtypes = [
+        c_void_p, c_uint64, c_void_p, c_size_t, c_int, c_int32]
+    _lib.tc_mesh_broadcast_tagged.restype = c_int
     _lib.tc_mesh_allgather.argtypes = [c_void_p, c_void_p, c_size_t, c_void_p, c_int]
     _lib.tc_mesh_allgather.restype = c_int
+    _lib.tc_mesh_allgather_tagged.argtypes = [
+        c_void_p, c_uint64, c_void_p, c_size_t, c_void_p, c_int]
+    _lib.tc_mesh_allgather_tagged.restype = c_int
+    _lib.tc_mesh_collective_release_tag.argtypes = [c_void_p, c_uint64]
+    _lib.tc_mesh_collective_release_tag.restype = c_int
     _lib.tc_mesh_total_bytes.argtypes = [c_void_p]
     _lib.tc_mesh_total_bytes.restype = c_uint64
+    _lib.tc_mesh_retained_snapshot_count.argtypes = [c_void_p]
+    _lib.tc_mesh_retained_snapshot_count.restype = c_size_t
+    _lib.tc_mesh_allreduce_algorithm.argtypes = [c_void_p]
+    _lib.tc_mesh_allreduce_algorithm.restype = c_char_p
 
 
 # ---------------------------------------------------------------------------
@@ -4223,6 +4238,16 @@ def mesh_group_shutdown(group_handle):
 
 def mesh_total_bytes(group_handle):
     return int(_lib.tc_mesh_total_bytes(_as_handle(group_handle)))
+
+
+def mesh_retained_snapshot_count(group_handle):
+    """Return the bounded transient snapshot count for a mesh group."""
+    return int(_lib.tc_mesh_retained_snapshot_count(_as_handle(group_handle)))
+
+
+def mesh_allreduce_algorithm(group_handle):
+    """Return the selected mesh reduction topology."""
+    return _lib.tc_mesh_allreduce_algorithm(_as_handle(group_handle)).decode()
 
 
 def version():

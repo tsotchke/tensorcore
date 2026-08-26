@@ -184,6 +184,30 @@ tc_dist_finalize(d);
 `tc_allreduce` is a no-op when `world_size = 1`. Putting it in your training
 loop now means v0.5 will be a backend swap, not a code change.
 
+## Mesh-group ordering and recovery
+
+The `tc_mesh_*` group API has two ordering modes:
+
+- Ordered calls serialize per group and, like MPI collectives, must be invoked
+  in the same order on every rank.
+- `tc_mesh_*_tagged` calls carry an explicit 64-bit collective ID, so threads
+  on different ranks may enter independent collectives in different local
+  orders. IDs remain reserved until every rank returns and calls
+  `tc_mesh_collective_release_tag`.
+
+Every collective uses a completion-token barrier before unregistering payload
+snapshots. Ordered groups therefore retain only a bounded completion token,
+observable through `tc_mesh_retained_snapshot_count`, instead of one full
+payload per lifetime round. Broken peer sockets reconnect in place under the
+same bounded peer ID; authenticated groups repeat identity-bound HMAC
+negotiation before any retry proceeds.
+
+AllReduce selects `centralized` for one/two-rank groups and decentralized
+`all_to_all` reduction for three or more ranks. The selection is observable via
+`tc_mesh_allreduce_algorithm`; deployments may force `centralized`,
+`all_to_all`, or `auto` with `TC_MESH_ALLREDUCE_ALGORITHM` before group
+construction.
+
 ## Tests
 
 - `tests/test_distributed_ring.c`: pthreads + shared memory; algorithm
@@ -203,7 +227,13 @@ loop now means v0.5 will be a backend swap, not a code change.
 
 The ring and GLOO TCP fork smokes run in the default Apple suite. The same
 GLOO smokes also run in the portable CPU suite; Windows runs the split-rank
-launcher because `fork()` is not available there.
+  launcher because `fork()` is not available there.
+- `tests/test_mesh_collective.c`: opposite-order concurrent tagged allreduces,
+  explicit tag release, and 32-round snapshot-retention stress.
+- `tests/test_mesh_collective_three_rank.c`: three-rank decentralized
+  all-to-all reduction and topology-selection proof.
+- `tests/test_remote_tensor_adversarial.cpp`: in-place peer reconnection under
+  the original peer ID after concurrent framing stress.
 
 ## What's silicon-bound vs software-bound
 

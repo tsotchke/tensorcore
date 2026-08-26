@@ -47,6 +47,18 @@
   GEMM dtype without inferring support from symbols, versions, or backend
   names.
 
+### Distributed runtime hardening
+
+- Added in-place remote peer reconnection, including repeated authenticated
+  identity binding, without growing the client peer table.
+- Added completion barriers and bounded snapshot reclamation to mesh
+  collectives, plus a retained-snapshot diagnostic.
+- Added explicit-ID tagged AllReduce, Broadcast, and AllGather APIs for
+  cross-rank concurrent ordering, with fail-closed duplicate-ID retention and
+  explicit release after all ranks complete.
+- Added observable automatic AllReduce topology selection: centralized for up
+  to two ranks and decentralized all-to-all reduction for larger groups.
+
 ## v0.1.23 — DiLoCo capability query + SHA-256 state wire version
 
 Additive public surface only. Every call and wire format that existed in

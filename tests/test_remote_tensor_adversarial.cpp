@@ -2,6 +2,7 @@
 
 #include "tensorcore/remote_tensor.h"
 #include "tensorcore/tensorcore.h"
+#include "../lib/distributed/remote_tensor_internal.h"
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -243,6 +244,16 @@ int main() {
     std::printf("  concurrent same-peer framing: %s\n",
                 concurrent_ok ? "OK" : "FAIL");
     ok &= concurrent_ok;
+
+    std::vector<uint8_t> reconnected(kTensorBytes);
+    const bool reconnect_ok = peer >= 0 &&
+        tc_remote_internal_reconnect(client, peer, server_url, nullptr) == TC_OK &&
+        tc_remote_tensor_fetch(client, peer, "adversarial/tensor",
+                               reconnected.data(), reconnected.size()) == TC_OK &&
+        std::memcmp(reconnected.data(), source.data(), source.size()) == 0;
+    std::printf("  in-place peer reconnect:      %s\n",
+                reconnect_ok ? "OK" : "FAIL");
+    ok &= reconnect_ok;
 
     if (client) ok &= tc_remote_shutdown(client) == TC_OK;
 

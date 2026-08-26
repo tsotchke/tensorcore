@@ -6,11 +6,10 @@
  *
  * Builds on the TCP byte-fetch transport in lib/distributed/remote_tensor.cpp
  * to give callers MPI/NCCL-style group operations: AllReduce, AllGather,
- * Broadcast. The first implementation uses a centralized rank-0
- * coordinator (every rank registers its buffer; rank 0 fetches, reduces,
- * publishes; all ranks fetch the result). It's correct but rank 0 is
- * a bottleneck. A ring AllReduce can replace the inner reduce-scatter +
- * allgather without changing the public API.
+ * Broadcast. The ordered API serializes calls per group and requires every
+ * rank to invoke collectives in the same order. Each operation ends with an
+ * internal completion barrier, so transient payload snapshots are reclaimed
+ * safely instead of accumulating for the group lifetime.
  *
  * Group lifecycle:
  *   tc_mesh_group_init(ctx, n_peers, my_rank, peer_urls[]) → group
@@ -80,11 +79,27 @@ tc_status_t tc_mesh_allreduce(tc_mesh_group_t* group,
                                tc_coll_dtype_t dtype,
                                tc_reduce_op_t op);
 
+/* Explicit-ID variants permit independent threads to overlap collectives
+ * without relying on identical local thread scheduling across ranks. Every
+ * rank participating in one operation must use the same collective_id and
+ * operation. IDs remain reserved until every rank has returned and the caller
+ * invokes tc_mesh_collective_release_tag on every rank. */
+tc_status_t tc_mesh_allreduce_tagged(tc_mesh_group_t* group,
+                                      uint64_t collective_id,
+                                      void* buf, size_t count,
+                                      tc_coll_dtype_t dtype,
+                                      tc_reduce_op_t op);
+
 /* Broadcast `buf` from rank `root` to all peers. */
 tc_status_t tc_mesh_broadcast(tc_mesh_group_t* group,
                                void* buf, size_t count,
                                tc_coll_dtype_t dtype,
                                int32_t root_rank);
+tc_status_t tc_mesh_broadcast_tagged(tc_mesh_group_t* group,
+                                      uint64_t collective_id,
+                                      void* buf, size_t count,
+                                      tc_coll_dtype_t dtype,
+                                      int32_t root_rank);
 
 /* Concatenate each rank's send_buf into recv_buf. recv_buf must hold
  * n_peers * send_count elements; rank i's contribution is written to
@@ -93,9 +108,29 @@ tc_status_t tc_mesh_allgather(tc_mesh_group_t* group,
                                const void* send_buf, size_t send_count,
                                void* recv_buf,
                                tc_coll_dtype_t dtype);
+tc_status_t tc_mesh_allgather_tagged(tc_mesh_group_t* group,
+                                      uint64_t collective_id,
+                                      const void* send_buf,
+                                      size_t send_count,
+                                      void* recv_buf,
+                                      tc_coll_dtype_t dtype);
+
+tc_status_t tc_mesh_collective_release_tag(tc_mesh_group_t* group,
+                                            uint64_t collective_id);
 
 /* Total bytes shipped through this group (sum of all fetches). */
 uint64_t tc_mesh_total_bytes(const tc_mesh_group_t* group);
+
+/* Number of transient snapshots retained for late completion tokens. Ordered
+ * collectives keep this bounded and reclaim the previous round after the next
+ * round's completion barrier. */
+size_t tc_mesh_retained_snapshot_count(const tc_mesh_group_t* group);
+
+/* Selected reduction topology: "centralized" for one/two ranks and
+ * "all_to_all" for three or more ranks under the default auto policy.
+ * TC_MESH_ALLREDUCE_ALGORITHM may force centralized, all_to_all, or auto at
+ * group construction. */
+const char* tc_mesh_allreduce_algorithm(const tc_mesh_group_t* group);
 
 #ifdef __cplusplus
 }

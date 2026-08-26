@@ -768,6 +768,62 @@ extern "C" tc_status_t tc_remote_connect_authenticated(
     }
 }
 
+tc_status_t tc_remote_internal_reconnect(
+    tc_remote_ctx* h, int peer_id, const char* peer_url,
+    const char* expected_peer_identity) {
+    if (!h || h->role != TC_REMOTE_ROLE_COMPUTE_CLIENT || !peer_url)
+        return TC_ERR_INVALID_ARG;
+    std::shared_ptr<ClientPeer> peer;
+    {
+        std::lock_guard<std::mutex> lk(h->peers_mutex);
+        if (peer_id < 0 || static_cast<size_t>(peer_id) >= h->peers.size())
+            return TC_ERR_INVALID_ARG;
+        peer = h->peers[peer_id];
+    }
+    if (h->auth_required != (expected_peer_identity != nullptr))
+        return TC_ERR_INVALID_ARG;
+    std::string host;
+    uint16_t port = 0;
+    if (!parse_url(peer_url, &host, &port)) return TC_ERR_INVALID_ARG;
+    tc_socket_t replacement = tcp_connect(host, port, h->io_timeout_ms);
+    if (!socket_valid(replacement)) return TC_ERR_INTERNAL;
+
+    std::string identity;
+    uint64_t key_id = 0;
+    if (h->auth_required) {
+        tc_transport_auth_internal::Keyring keyring;
+        {
+            std::lock_guard<std::mutex> lk(h->auth_mutex);
+            keyring = h->auth_keyring;
+        }
+        tc_transport_auth_internal::Io io{&replacement, auth_read, auth_write};
+        tc_transport_auth_internal::PeerIdentity authenticated_peer;
+        const tc_status_t auth_status =
+            tc_transport_auth_internal::client_handshake(
+                io, keyring, expected_peer_identity,
+                "tensorcore/remote-tensor", nullptr, 0,
+                &authenticated_peer);
+        if (auth_status != TC_OK) {
+            h->auth_failures.fetch_add(1, std::memory_order_relaxed);
+            socket_shutdown(replacement);
+            socket_close(replacement);
+            return auth_status;
+        }
+        identity = authenticated_peer.identity;
+        key_id = authenticated_peer.key_id;
+    }
+
+    std::lock_guard<std::mutex> io_lk(peer->io_mutex);
+    if (socket_valid(peer->fd)) {
+        socket_shutdown(peer->fd);
+        socket_close(peer->fd);
+    }
+    peer->fd = replacement;
+    peer->identity = std::move(identity);
+    peer->key_id = key_id;
+    return TC_OK;
+}
+
 extern "C" tc_status_t tc_remote_auth_rotate(
     tc_remote_ctx* h, const tc_transport_auth_config* auth) {
     if (!h || !auth || !h->auth_required) return TC_ERR_INVALID_ARG;

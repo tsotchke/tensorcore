@@ -227,9 +227,15 @@ _tc_mesh_group_init
 _tc_mesh_group_init_authenticated
 _tc_mesh_group_shutdown
 _tc_mesh_allreduce
+_tc_mesh_allreduce_tagged
 _tc_mesh_broadcast
+_tc_mesh_broadcast_tagged
 _tc_mesh_allgather
+_tc_mesh_allgather_tagged
+_tc_mesh_collective_release_tag
 _tc_mesh_total_bytes
+_tc_mesh_retained_snapshot_count
+_tc_mesh_allreduce_algorithm
 _tc_remote_init
 _tc_remote_shutdown
 _tc_remote_register_tensor

@@ -1,6 +1,7 @@
 #include "tensorcore/tensorcore.h"
 #include "tensorcore/remote_tensor.h"
 #include "tensorcore/mesh_collective.h"
+#include "../lib/distributed/remote_tensor_internal.h"
 
 #if defined(_WIN32)
 int main() { return 77; }
@@ -228,6 +229,19 @@ int remote_auth_test() {
                                fetched.data(), fetched.size()) != TC_OK ||
         fetched != payload) {
         rc |= fail("authenticated remote fetch");
+    }
+    fetched.fill(0);
+    if (persistent_peer < 0 ||
+        tc_remote_internal_reconnect(
+            client, persistent_peer, server_url, "weights/server-a") != TC_OK ||
+        tc_remote_tensor_fetch(client, persistent_peer, "auth/tensor",
+                               fetched.data(), fetched.size()) != TC_OK ||
+        fetched != payload ||
+        !tc_remote_peer_identity(client, persistent_peer) ||
+        std::strcmp(tc_remote_peer_identity(client, persistent_peer),
+                    "weights/server-a") != 0 ||
+        tc_remote_peer_key_id(client, persistent_peer) != 101) {
+        rc |= fail("authenticated in-place reconnect");
     }
 
     int rejected_peer = 99;
@@ -648,7 +662,8 @@ int main() {
     if (!rc) std::puts("  Gloo rank binding, ring auth, rotation, and downgrade rejection: OK");
     const int remote = remote_auth_test();
     if (remote != 0) rc |= remote;
-    if (!remote) std::puts("  remote mutual auth, replay defense, and live rotation: OK");
+    if (!remote) std::puts(
+        "  remote mutual auth, replay defense, live rotation, and in-place reconnect: OK");
     std::puts(rc ? "FAIL" : "OK");
     return rc;
 }

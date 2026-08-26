@@ -1,6 +1,7 @@
 # Build outputs
 build/
 build-*/
+build-*-current
 *.o
 *.a
 *.dylib
@@ -31,6 +32,9 @@ compile_commands.json
 .claude/
 .cache/
 artifacts/
+.scratch/
+.swarm/
+state/
 *.json.lock
 configs/*.bak_*
 
