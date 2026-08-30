@@ -34,6 +34,11 @@ jobs:
       - name: Documentation links
         run: python3 scripts/check_docs_links.py
 
+      - name: tc-cuda v1 subset authority
+        run: |
+          python3 scripts/check_tc_cuda_subset.py
+          python3 scripts/check_tc_cuda_subset_selftest.py
+
       - name: Public release privacy
         run: |
           python3 scripts/check_release_privacy_selftest.py
