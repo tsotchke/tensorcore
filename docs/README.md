@@ -57,6 +57,9 @@ are the entry points; everything below goes deeper.
   per-dtype hardware gates, SDK gates, and how the dispatch picks a path.
 - **[cuda_comparison.md](cuda_comparison.md)** — direct
   cuBLAS / cuDNN / CUTLASS / NCCL / Triton ↔ tensorcore equivalents.
+- **[tc-cuda/README.md](tc-cuda/README.md)** — the tc-cuda v1 CUDA subset
+  authority: the 55-construct accept-list, the unsupported list, and the
+  fail-closed policy, all generated from `docs/tc-cuda/subset.v1.json`.
 
 ### Kernels
 

@@ -27,6 +27,12 @@ on macOS runners. Core gates include:
 5. **`scripts/ci_python_smoke.sh`** — sets up a venv, installs the binding
    editable, asserts `tc.version()`, the diagnostic helpers, and the
    tensorops kernel selector.
+6. **`scripts/check_tc_cuda_subset.py`** + **`scripts/check_tc_cuda_subset_selftest.py`**
+   — the tc-cuda v1 subset authority gate. The validator loads
+   `docs/tc-cuda/subset.v1.json` (the single source of truth for the accept-list)
+   and fails closed on duplicate ids, unknown categories, any status other than
+   `supported`/`unsupported`, or any construct that would be silently accepted.
+   The selftest proves the validator itself rejects those malformed manifests.
 
 This is the gate. PRs need it green to merge.
 
