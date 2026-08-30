@@ -105,6 +105,9 @@ are the entry points; everything below goes deeper.
   Eshkol, and Selene repository agents.
 - **[research/TENSORCORE_BEYOND_SOTA_CAMPAIGN_2026-07-14.md](research/TENSORCORE_BEYOND_SOTA_CAMPAIGN_2026-07-14.md)** —
   current primary-source frontier observatory and benchmark-gate policy.
+- **[research/cuda_on_metal_ecosystem_survey_20260828.md](research/cuda_on_metal_ecosystem_survey_20260828.md)** —
+  ICC-grounded ecosystem survey and build/borrow/reject decision for first-party
+  CUDA source/API compatibility on Apple Metal.
 - **[integrating_tensorcore.md](integrating_tensorcore.md)** — link tensorcore
   into another C / C++ / Python / CMake project.
 - **[eshkol_integration.md](eshkol_integration.md)** — the Eshkol FFI

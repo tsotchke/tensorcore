@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### CUDA compatibility research
+
+- Added an ICC-grounded CUDA-on-Metal ecosystem survey and committed to a
+  first-party, source-first `tc-cuda` direction: Clang CUDA parsing, typed MSL
+  lowering, TensorCore-backed Runtime and CUDA-X shims, fail-closed numerical
+  certification, and a separately gated post-v1 binary-compatibility track.
+
 ### PyTorch execution contract
 
 - Added a bounded process-local execution ledger for TensorCore-backed
