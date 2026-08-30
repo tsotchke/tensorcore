@@ -38,6 +38,7 @@ jobs:
         run: |
           python3 scripts/check_tc_cuda_subset.py
           python3 scripts/check_tc_cuda_subset_selftest.py
+          python3 scripts/tc_cuda_selftest.py
 
       - name: Public release privacy
         run: |

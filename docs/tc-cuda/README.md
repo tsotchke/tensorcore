@@ -59,3 +59,10 @@ deliberately rejected rather than silently ignored.
   `supported`/`unsupported` are validation failures.
 - **No silent acceptance.** A construct that is present in source but absent
   from the supported list is never accepted; it is named and rejected.
+
+## Source checker
+
+Run `python3 scripts/tc_cuda.py check SOURCE.cu --manifest-output manifest.json`.
+The emitted `checked` status proves source validation only. CUDA-to-Metal
+lowering and execution are not claimed until their separate conformance gates
+pass.
