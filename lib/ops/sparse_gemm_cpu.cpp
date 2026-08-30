@@ -29,12 +29,6 @@
 #include <omp.h>
 #endif
 
-#if defined(__GNUC__) || defined(__clang__)
-#  define TC_SPARSE_WEAK __attribute__((weak))
-#else
-#  define TC_SPARSE_WEAK
-#endif
-
 namespace {
 
 inline float read_elem(const void* base, int idx, tc_dtype_t dtype) {
@@ -143,10 +137,16 @@ extern "C" tc_status_t tc_sparse_24_check(tc_context* ctx,
                               TC_BACKEND_PORTABLE_CPU, TC_OK);
 }
 
-/* Weak default — the CUDA backend will override this when cusparseLt is
- * available. For now (and on any non-CUDA host) we do a correct dense
+/* Portable default — CUDA+cuSPARSELt builds omit this definition and compile
+ * the accelerator implementation instead. On every other host we do a correct dense
  * GEMM through tc_gemm; the zeros in B contribute zero to the output. */
-extern "C" TC_SPARSE_WEAK tc_status_t tc_sparse_24_gemm(
+/* Keep these definitions strong on every portable toolchain.  In particular,
+ * MinGW does not reliably extract weak definitions from a static archive when
+ * the first reference comes through the C API bridge.  CUDA+cuSPARSELt builds
+ * omit this fallback (see the guard below) and provide the strong accelerator
+ * implementation instead. */
+#if !defined(TC_ENABLE_CUSPARSELT)
+extern "C" tc_status_t tc_sparse_24_gemm(
         tc_context* ctx,
         const tc_buffer* A,
         const tc_buffer* B,
@@ -169,6 +169,7 @@ extern "C" TC_SPARSE_WEAK tc_status_t tc_sparse_24_gemm(
 }
 
 /* Default to 0 — CUDA + cusparseLt override sets to 1. */
-extern "C" TC_SPARSE_WEAK int tc_sparse_24_available(void) {
+extern "C" int tc_sparse_24_available(void) {
     return 0;
 }
+#endif
