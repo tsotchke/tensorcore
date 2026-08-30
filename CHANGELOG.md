@@ -205,9 +205,9 @@ header:
 - Negative coverage: every truncation length and every single-bit corruption
   of a valid blob is rejected, and the target is proven unchanged afterward.
 
-## Unreleased
+### Heterogeneous compute substrate
 
-Heterogeneous compute substrate validated end-to-end across **two
+Validated end-to-end across **two
 continents on four physically distinct machines, two GPU architectures
 (Apple Metal + NVIDIA CUDA tensor cores), two CPU ISAs (x86_64 + ARM),
 and a full DiLoCo training run with 528 bytes per outer-step over real
